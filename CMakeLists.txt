@@ -88,6 +88,18 @@ set(SILENT_APP_SOURCES
     src/modules/sp/AccountController.cpp
     src/modules/sp/AccountWidget.h
     src/modules/sp/AccountWidget.cpp
+    src/modules/hwi/HwiPlugin.h
+    src/modules/hwi/HwiPlugin.cpp
+    src/modules/hwi/HwiModule.h
+    src/modules/hwi/HwiModule.cpp
+    src/modules/hwi/HwiServiceInstance.h
+    src/modules/hwi/HwiServiceInstance.cpp
+    src/modules/hwi/HwiDeviceInstance.h
+    src/modules/hwi/HwiDeviceInstance.cpp
+    src/modules/hwi/HwiSigner.h
+    src/modules/hwi/HwiSigner.cpp
+    src/modules/hwi/HwiSettings.h
+    src/modules/hwi/HwiSettings.cpp
     src/modules/sp/SpPlugin.h
     src/modules/sp/SpPlugin.cpp
     src/modules/sp/SpModule.h

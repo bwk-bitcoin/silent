@@ -11,6 +11,9 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#if __cplusplus >= 201703L
+#include <string_view>
+#endif
 #if __cplusplus >= 202002L
 #include <ranges>
 #endif
@@ -112,6 +115,56 @@ private:
   std::array<std::uintptr_t, 3> repr;
 };
 #endif // CXXBRIDGE1_RUST_STRING
+
+#ifndef CXXBRIDGE1_RUST_STR
+#define CXXBRIDGE1_RUST_STR
+class Str final {
+public:
+  Str() noexcept;
+  Str(const String &) noexcept;
+  Str(const std::string &);
+  Str(const char *);
+  Str(const char *, std::size_t);
+
+  Str &operator=(const Str &) & noexcept = default;
+
+  explicit operator std::string() const;
+#if __cplusplus >= 201703L
+  explicit operator std::string_view() const;
+#endif
+
+  const char *data() const noexcept;
+  std::size_t size() const noexcept;
+  std::size_t length() const noexcept;
+  bool empty() const noexcept;
+
+  Str(const Str &) noexcept = default;
+  ~Str() noexcept = default;
+
+  using iterator = const char *;
+  using const_iterator = const char *;
+  const_iterator begin() const noexcept;
+  const_iterator end() const noexcept;
+  const_iterator cbegin() const noexcept;
+  const_iterator cend() const noexcept;
+
+  bool operator==(const Str &) const noexcept;
+  bool operator!=(const Str &) const noexcept;
+  bool operator<(const Str &) const noexcept;
+  bool operator<=(const Str &) const noexcept;
+  bool operator>(const Str &) const noexcept;
+  bool operator>=(const Str &) const noexcept;
+
+  void swap(Str &) noexcept;
+
+private:
+  class uninit;
+  Str(uninit) noexcept;
+  friend impl<Str>;
+
+  std::array<std::uintptr_t, 2> repr;
+};
+#endif // CXXBRIDGE1_RUST_STR
 
 #ifndef CXXBRIDGE1_RUST_SLICE
 #define CXXBRIDGE1_RUST_SLICE
@@ -915,6 +968,8 @@ std::size_t align_of() {
 enum class Network : ::std::uint8_t;
 enum class LogLevel : ::std::uint8_t;
 enum class NotificationFlag : ::std::uint8_t;
+enum class HwiDeviceState : ::std::uint8_t;
+enum class HwiEventFlag : ::std::uint8_t;
 struct Notification;
 struct RustCoin;
 struct CoinState;
@@ -927,12 +982,17 @@ struct ConnectionResult;
 struct RegtestDefaults;
 struct PsbtValidation;
 struct BackendInfo;
+struct HwiDevice;
+struct HwiEvent;
 struct Config;
 struct Account;
 struct Poll;
 struct PsbtResult;
 struct NotificationReceiver;
 struct SyncEstimator;
+struct HwiService;
+struct HwiReceiver;
+struct HwiPoll;
 
 #ifndef CXXBRIDGE1_ENUM_Network
 #define CXXBRIDGE1_ENUM_Network
@@ -983,6 +1043,30 @@ enum class NotificationFlag : ::std::uint8_t {
   ElectrumStopped = 18,
 };
 #endif // CXXBRIDGE1_ENUM_NotificationFlag
+
+#ifndef CXXBRIDGE1_ENUM_HwiDeviceState
+#define CXXBRIDGE1_ENUM_HwiDeviceState
+// State of a signing device the HWI service can see.
+enum class HwiDeviceState : ::std::uint8_t {
+  Supported = 0,
+  Locked = 1,
+  Unsupported = 2,
+};
+#endif // CXXBRIDGE1_ENUM_HwiDeviceState
+
+#ifndef CXXBRIDGE1_ENUM_HwiEventFlag
+#define CXXBRIDGE1_ENUM_HwiEventFlag
+// Kind of notification coming from the HWI service.
+enum class HwiEventFlag : ::std::uint8_t {
+  DevicesChanged = 0,
+  Xpub = 1,
+  Version = 2,
+  WalletRegistered = 3,
+  WalletIsRegistered = 4,
+  TransactionSigned = 5,
+  Error = 6,
+};
+#endif // CXXBRIDGE1_ENUM_HwiEventFlag
 
 #ifndef CXXBRIDGE1_STRUCT_Notification
 #define CXXBRIDGE1_STRUCT_Notification
@@ -1190,6 +1274,42 @@ struct BackendInfo final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_BackendInfo
+
+#ifndef CXXBRIDGE1_STRUCT_HwiDevice
+#define CXXBRIDGE1_STRUCT_HwiDevice
+// One signing device as the service currently sees it.
+struct HwiDevice final {
+  // Stable, serial-based where the device provides one.
+  ::rust::String id;
+  ::rust::String kind;
+  // Empty unless the device is Supported.
+  ::rust::String fingerprint;
+  // Empty when the device did not report one.
+  ::rust::String version;
+  ::HwiDeviceState state;
+  // Pairing code when Locked, the reason when Unsupported, else empty.
+  ::rust::String detail;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_HwiDevice
+
+#ifndef CXXBRIDGE1_STRUCT_HwiEvent
+#define CXXBRIDGE1_STRUCT_HwiEvent
+// A notification from the HWI service. `req_id` is the id the caller passed to the
+// request it answers, and 0 for an unsolicited push.
+struct HwiEvent final {
+  ::HwiEventFlag flag;
+  ::std::uint64_t req_id CXX_DEFAULT_VALUE(0);
+  ::rust::String fingerprint;
+  ::rust::String payload;
+  ::rust::String error;
+  // WalletIsRegistered answers with it; other kinds set it on success.
+  bool ok CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_HwiEvent
 
 #ifndef CXXBRIDGE1_STRUCT_Config
 #define CXXBRIDGE1_STRUCT_Config
@@ -1448,6 +1568,80 @@ private:
 };
 #endif // CXXBRIDGE1_STRUCT_SyncEstimator
 
+#ifndef CXXBRIDGE1_STRUCT_HwiService
+#define CXXBRIDGE1_STRUCT_HwiService
+// Hardware wallet device service.
+struct HwiService final : public ::rust::Opaque {
+  // Start polling for devices. Idempotent.
+  void start() noexcept;
+
+  // Stop polling. Idempotent.
+  void stop() noexcept;
+
+  // Stop for good and end the notification stream.
+  void shutdown() noexcept;
+
+  bool is_running() const noexcept;
+
+  // Take the receiver for a dedicated notification thread. Call once.
+  ::rust::Box<::HwiReceiver> take_receiver() noexcept;
+
+  // Every device the service can see, in whatever state.
+  ::rust::Vec<::HwiDevice> devices() const noexcept;
+
+  // Requests. Each returns whether it was dispatched; the result arrives on the
+  // notification carrying the same req_id.
+  bool get_xpub(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str path) const noexcept;
+
+  bool is_descriptor_registered(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str descriptor) const noexcept;
+  bool register_descriptor(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str descriptor) const noexcept;
+  bool sign_psbt(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str psbt_base64) const noexcept;
+  ~HwiService() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_HwiService
+
+#ifndef CXXBRIDGE1_STRUCT_HwiReceiver
+#define CXXBRIDGE1_STRUCT_HwiReceiver
+// Notification receiver for the HWI service.
+struct HwiReceiver final : public ::rust::Opaque {
+  // Blocking receive. Returns a poll with is_some()=false once shut down.
+  ::rust::Box<::HwiPoll> recv() const noexcept;
+
+  ~HwiReceiver() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_HwiReceiver
+
+#ifndef CXXBRIDGE1_STRUCT_HwiPoll
+#define CXXBRIDGE1_STRUCT_HwiPoll
+// Poll result for HWI notifications.
+struct HwiPoll final : public ::rust::Opaque {
+  bool is_some() const noexcept;
+  ::HwiEvent get_event() const noexcept;
+  ~HwiPoll() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_HwiPoll
+
 // Initialize logging with the specified level.
 // Call this once at application startup.
 void init_logging(::LogLevel level) noexcept;
@@ -1503,6 +1697,14 @@ bool delete_config(::rust::String account_name) noexcept;
 // Create a new account from an account name (loads config from file).
 // Check is_ok() before use; get_error() for failure reason.
 ::rust::Box<::Account> new_account(::rust::String account_name) noexcept;
+
+// Create the device service. Does not start polling.
+::rust::Box<::HwiService> new_hwi_service(::Network network) noexcept;
+
+// Network the device service runs on, persisted in the module's config file.
+::Network hwi_config_network() noexcept;
+
+void hwi_set_config_network(::Network network) noexcept;
 
 // Create a new SyncEstimator with default EMA alpha.
 ::rust::Box<::SyncEstimator> new_sync_estimator() noexcept;

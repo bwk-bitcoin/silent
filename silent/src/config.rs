@@ -15,7 +15,7 @@ use crate::ffi::Network;
 
 /// Internal Network type for serialization (since CXX enums don't support Serde).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-enum NetworkInternal {
+pub(crate) enum NetworkInternal {
     Regtest,
     Signet,
     Testnet,
@@ -90,7 +90,7 @@ fn default_plugin_id() -> String {
 const MAINNET_BIRTHDAY_HEIGHT: u32 = 899_300;
 
 /// Serde serialization helpers for Network.
-mod network_serde {
+pub(crate) mod network_serde {
     use super::*;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

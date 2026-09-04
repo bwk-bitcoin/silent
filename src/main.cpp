@@ -2,6 +2,7 @@
 #include "MainWindow.h"
 #include "i18n/I18nManager.h"
 #include "metatypes.h"
+#include "modules/hwi/HwiPlugin.h"
 #include "modules/sp/SpPlugin.h"
 #include "interfaces/types.h"
 #include "interfaces/host.h"
@@ -17,6 +18,7 @@
 
 #ifdef SILENT_STATIC_PLUGINS
 Q_IMPORT_PLUGIN(SpPlugin)
+Q_IMPORT_PLUGIN(HwiPlugin)
 #endif
 
 auto main(int argc, char *argv[]) -> int {
@@ -36,6 +38,8 @@ auto main(int argc, char *argv[]) -> int {
     qRegisterMetaType<ConnectionResult>();
     qRegisterMetaType<TxResult>();
     qRegisterMetaType<Notification>();
+    qRegisterMetaType<HwiEvent>();
+    qRegisterMetaType<HwiDevice>();
     qRegisterMetaType<std::optional<ReqId>>();
 
     // Initialize Rust logging (Debug level for verbose output)
@@ -55,6 +59,7 @@ auto main(int argc, char *argv[]) -> int {
     // Initialize host singleton and register built-in plugins before controller state setup.
     Host::get();
     controller->registerBuiltinPlugin(std::make_unique<SpPlugin>());
+    controller->registerBuiltinPlugin(std::make_unique<HwiPlugin>());
 
     // Create and show main window
     auto *window = new MainWindow();

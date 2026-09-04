@@ -5,6 +5,8 @@
 pub mod account;
 pub mod app_state;
 pub mod config;
+pub mod hwi;
+pub mod hwi_config;
 pub mod sync_estimator;
 
 use bwk_sp::bwk::ElectrumScheme;
@@ -55,6 +57,26 @@ mod ffi {
         ElectrumConnected,
         ElectrumError,
         ElectrumStopped,
+    }
+
+    /// State of a signing device the HWI service can see.
+    #[derive(Debug, Clone, Copy)]
+    pub enum HwiDeviceState {
+        Supported,
+        Locked,
+        Unsupported,
+    }
+
+    /// Kind of notification coming from the HWI service.
+    #[derive(Debug, Clone, Copy)]
+    pub enum HwiEventFlag {
+        DevicesChanged,
+        Xpub,
+        Version,
+        WalletRegistered,
+        WalletIsRegistered,
+        TransactionSigned,
+        Error,
     }
 
     // ===== Shared Structs =====
@@ -218,6 +240,34 @@ mod ffi {
         pub tweaks_cut_through_with_dust_filter: bool,
     }
 
+    /// One signing device as the service currently sees it.
+    #[derive(Debug, Clone)]
+    pub struct HwiDevice {
+        /// Stable, serial-based where the device provides one.
+        pub id: String,
+        pub kind: String,
+        /// Empty unless the device is Supported.
+        pub fingerprint: String,
+        /// Empty when the device did not report one.
+        pub version: String,
+        pub state: HwiDeviceState,
+        /// Pairing code when Locked, the reason when Unsupported, else empty.
+        pub detail: String,
+    }
+
+    /// A notification from the HWI service. `req_id` is the id the caller passed to the
+    /// request it answers, and 0 for an unsolicited push.
+    #[derive(Debug, Clone)]
+    pub struct HwiEvent {
+        pub flag: HwiEventFlag,
+        pub req_id: u64,
+        pub fingerprint: String,
+        pub payload: String,
+        pub error: String,
+        /// WalletIsRegistered answers with it; other kinds set it on success.
+        pub ok: bool,
+    }
+
     // ===== Opaque Rust Types =====
 
     extern "Rust" {
@@ -238,6 +288,15 @@ mod ffi {
 
         /// EMA-based sync time estimator.
         type SyncEstimator;
+
+        /// Hardware wallet device service.
+        type HwiService;
+
+        /// Notification receiver for the HWI service.
+        type HwiReceiver;
+
+        /// Poll result for HWI notifications.
+        type HwiPoll;
     }
 
     // ===== Utility Functions =====
@@ -475,6 +534,65 @@ mod ffi {
         /// Blocking receive — waits for the next notification.
         /// Returns Poll with is_some()=false when the channel disconnects.
         fn recv(self: &NotificationReceiver) -> Box<Poll>;
+    }
+
+    // ===== HWI Service Methods =====
+
+    extern "Rust" {
+        /// Create the device service. Does not start polling.
+        fn new_hwi_service(network: Network) -> Box<HwiService>;
+
+        /// Start polling for devices. Idempotent.
+        fn start(self: &mut HwiService);
+
+        /// Stop polling. Idempotent.
+        fn stop(self: &mut HwiService);
+
+        /// Stop for good and end the notification stream.
+        fn shutdown(self: &mut HwiService);
+
+        fn is_running(self: &HwiService) -> bool;
+
+        /// Take the receiver for a dedicated notification thread. Call once.
+        fn take_receiver(self: &mut HwiService) -> Box<HwiReceiver>;
+
+        /// Every device the service can see, in whatever state.
+        fn devices(self: &HwiService) -> Vec<HwiDevice>;
+
+        /// Requests. Each returns whether it was dispatched; the result arrives on the
+        /// notification carrying the same req_id.
+        fn get_xpub(self: &HwiService, req_id: u64, device_id: &str, path: &str) -> bool;
+        fn is_descriptor_registered(
+            self: &HwiService,
+            req_id: u64,
+            device_id: &str,
+            descriptor: &str,
+        ) -> bool;
+        fn register_descriptor(
+            self: &HwiService,
+            req_id: u64,
+            device_id: &str,
+            descriptor: &str,
+        ) -> bool;
+        fn sign_psbt(self: &HwiService, req_id: u64, device_id: &str, psbt_base64: &str) -> bool;
+    }
+
+    // ===== HwiReceiver / HwiPoll Methods =====
+
+    extern "Rust" {
+        /// Blocking receive. Returns a poll with is_some()=false once shut down.
+        fn recv(self: &HwiReceiver) -> Box<HwiPoll>;
+
+        fn is_some(self: &HwiPoll) -> bool;
+        fn get_event(self: &HwiPoll) -> HwiEvent;
+    }
+
+    // ===== HWI Config Methods =====
+
+    extern "Rust" {
+        /// Network the device service runs on, persisted in the module's config file.
+        fn hwi_config_network() -> Network;
+        fn hwi_set_config_network(network: Network);
     }
 
     // ===== PsbtResult Methods =====
@@ -755,6 +873,11 @@ pub use config::{config_from_file, delete_config, list_configs, new_config, set_
 pub use ffi::{
     BackendInfo, LogLevel, Network, Notification, NotificationFlag, Output, PsbtValidation,
     RegtestDefaults, TransactionSimulation, TransactionTemplate,
+};
+pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
+pub use hwi_config::{
+    hwi_config_network, hwi_set_config_network, BitboxSettings, HwiConfig, NoiseConfig,
+    NoiseConfigData, PersistedBitboxNoiseConfig,
 };
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};
 
