@@ -17,13 +17,19 @@ public:
     ~ISigner() override = default;
 
     [[nodiscard]] virtual bool implemented() const = 0;
-    // Immutable, set at construction. None of the three identifies the signer:
+    // Immutable, set at construction. None of the four identifies the signer:
     // id() is module-defined with no uniqueness guarantee and fingerprint() is
     // shared by every device holding the seed. Address a signer by the
     // instanceId that Host::signers() pairs with it.
     [[nodiscard]] virtual QString id() const = 0;
     [[nodiscard]] virtual QString fingerprint() const = 0;
     [[nodiscard]] virtual QString walletName() const = 0;
+    // Immutable too: a signer whose state changes is dropped and registered
+    // again, so a reader never sees it change underneath. Requests on anything
+    // but Ready answer with error(). stateDetail() says why, in one line the UI
+    // can show (a pairing code, "app is not open", "wrong network").
+    [[nodiscard]] virtual plugin::SignerState state() const = 0;
+    [[nodiscard]] virtual QString stateDetail() const = 0;
 
     virtual ReqId init() = 0;
     virtual ReqId info() = 0;

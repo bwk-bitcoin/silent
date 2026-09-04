@@ -28,6 +28,8 @@ signals:
     void instanceRegistered(QString id);
     void instanceRemoved(QString id);
     void settingSectionsChanged();
+    // The global "signers must poll" flag, emitted only when it flips.
+    void signerPollingChanged(bool enabled);
 };
 
 class Host {
@@ -52,6 +54,11 @@ public:
     virtual void retireInstance(IInstance *self) = 0;
     [[nodiscard]] virtual QList<IInstance*> instances() const = 0;
     [[nodiscard]] virtual QList<plugin::SignerEntry> signers() const = 0;
+
+    // A module states whether it currently needs signing devices polled. The host keeps
+    // one flag per module and polls while any of them is true, so asking twice is the
+    // same as asking once and there is nothing to balance.
+    virtual void requestSignerPolling(IModule *requester, bool enabled) = 0;
 
     virtual TabId openTab(QWidget *content, IInstance *owner) = 0;
     virtual void setTabTitle(TabId tab, const QString &title) = 0;

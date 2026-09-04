@@ -27,6 +27,14 @@ struct Balance {
     quint64 unconfirmed{};
 };
 
+// Whether a signer can be used right now. A device the host can see but cannot
+// use still gets listed, so the user learns there is something to unlock or fix.
+enum class SignerState {
+    Ready,       // usable: fingerprint known, requests work
+    Locked,      // seen, needs an unlock step (device pairing, PIN)
+    Unsupported, // seen, unusable as-is: wrong network, app not open, too old
+};
+
 // One live signer. A fingerprint identifies a seed, not a device, so several
 // entries can share one: instanceId says which entry this is, module says where
 // it came from.

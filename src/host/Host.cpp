@@ -54,6 +54,8 @@ HostImpl::HostImpl() : QObject(nullptr), m_i18n(new HostI18nImpl()) {
             qontrol::UNIQUE);
     connect(this, &HostImpl::retireInstanceRequested, this, &HostImpl::onRetireInstanceRequested,
             qontrol::UNIQUE);
+    connect(this, &HostImpl::signerPollingRequested, this, &HostImpl::onSignerPollingRequested,
+            qontrol::UNIQUE);
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
@@ -87,6 +89,10 @@ void HostImpl::removeInstance(const QString &id, IModule *owner) {
 
 void HostImpl::retireInstance(IInstance *self) {
     emit retireInstanceRequested(self);
+}
+
+void HostImpl::requestSignerPolling(IModule *requester, bool enabled) {
+    emit signerPollingRequested(requester, enabled);
 }
 
 void HostImpl::onRegisterInstanceRequested(const QString &id, IInstance *instance, IModule *owner) {
@@ -123,6 +129,27 @@ void HostImpl::onRetireInstanceRequested(IInstance *self) {
         return;
     }
     removeInstance(id);
+}
+
+void HostImpl::onSignerPollingRequested(IModule *requester, bool enabled) {
+    assertGuiThread();
+    if (requester == nullptr) {
+        qWarning() << "Host: ignoring a signer polling request from no module";
+        return;
+    }
+
+    if (enabled) {
+        m_signer_polling_requests.insert(requester, true);
+    } else {
+        m_signer_polling_requests.remove(requester);
+    }
+
+    bool polling = !m_signer_polling_requests.isEmpty();
+    if (polling == m_signer_polling) {
+        return;
+    }
+    m_signer_polling = polling;
+    emit m_events.signerPollingChanged(m_signer_polling);
 }
 
 QList<IInstance *> HostImpl::instances() const {

@@ -39,6 +39,12 @@ public:
     // Default: no-op (nothing persisted).
     virtual void deleteInstance(const QString & /*id*/) {}
 
+    // The host tells every module whether signing devices must be polled; it is on
+    // while any module has asked for it through Host::requestSignerPolling. A module
+    // that owns a device service starts or stops it here. Default: no-op for modules
+    // that poll nothing.
+    virtual void setSignerPolling(bool /*enabled*/) {}
+
 signals:
     void instances(ReqId req_id, QList<QPair<QString, QString>> instances);
     void autoStart(ReqId req_id, QStringList ids);

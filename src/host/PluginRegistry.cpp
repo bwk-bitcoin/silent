@@ -84,6 +84,8 @@ PluginRegistry::PluginRegistry(QObject *parent) : QObject(parent) {
                 &PluginRegistry::onHostInstanceRegistered, qontrol::UNIQUE);
         connect(host->events(), &HostEvents::instanceRemoved, this,
                 &PluginRegistry::onHostInstanceRemoved, qontrol::UNIQUE);
+        connect(host->events(), &HostEvents::signerPollingChanged, this,
+                &PluginRegistry::onSignerPollingChanged, qontrol::UNIQUE);
     }
     rescanDiscoveredPlugins();
     reloadEnabledPlugins();
@@ -706,6 +708,9 @@ void PluginRegistry::activateModule(IModule *module, IPlugin *plugin) {
     }
 
     m_module_owner.insert(module, plugin);
+    if (m_signer_polling) {
+        module->setSignerPolling(true);
+    }
     connect(module, &IModule::instances, this, &PluginRegistry::onModuleInstances,
             qontrol::UNIQUE);
     connect(module, QOverload<ReqId, QStringList>::of(&IModule::autoStart), this,
@@ -750,6 +755,12 @@ void PluginRegistry::deactivateModule(IModule *module) {
     m_sync_auto_start_responses.remove(module);
     m_launcher_instances.remove(module);
     m_module_owner.remove(module);
+
+    // A module that goes away must not leave a request pinning polling on forever.
+    if (auto *host = Host::get(); host != nullptr) {
+        host->requestSignerPolling(module, false);
+    }
+    module->setSignerPolling(false);
 }
 
 bool PluginRegistry::startOwnedInstance(IModule *module, const QString &instance_id) {
@@ -847,6 +858,17 @@ void PluginRegistry::onHostInstanceRegistered(const QString &id) {
         return;
     }
     m_instance_owner_by_id.insert(instanceId, ownerPluginId);
+}
+
+void PluginRegistry::onSignerPollingChanged(bool enabled) {
+    m_signer_polling = enabled;
+    // Every enabled module is told, not just the ones holding instances: a module
+    // that owns a device service must start it before it has any device to show.
+    for (auto it = m_module_owner.constBegin(); it != m_module_owner.constEnd(); ++it) {
+        if (it.key() != nullptr) {
+            it.key()->setSignerPolling(enabled);
+        }
+    }
 }
 
 void PluginRegistry::onHostInstanceRemoved(const QString &id) {

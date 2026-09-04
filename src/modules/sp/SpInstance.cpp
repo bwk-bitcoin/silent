@@ -31,6 +31,10 @@ public:
     [[nodiscard]] QString id() const override { return QString(); }
     [[nodiscard]] QString fingerprint() const override { return QString(); }
     [[nodiscard]] QString walletName() const override { return QString(); }
+    [[nodiscard]] plugin::SignerState state() const override {
+        return plugin::SignerState::Unsupported;
+    }
+    [[nodiscard]] QString stateDetail() const override { return QString(); }
     ReqId init() override { return 0; }
     ReqId info() override { return 0; }
     ReqId getXpub(const QString &path) override {

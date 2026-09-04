@@ -52,6 +52,7 @@ private slots:
     void onModuleError(std::optional<ReqId> req_id, const QString &message);
     void onHostInstanceRegistered(const QString &id);
     void onHostInstanceRemoved(const QString &id);
+    void onSignerPollingChanged(bool enabled);
 
 private:
     struct PluginRecord {
@@ -98,4 +99,5 @@ private:
     QHash<QString, QString> m_instance_owner_by_id;
     QHash<IModule *, QPair<ReqId, QList<QPair<QString, QString>>>> m_sync_list_responses;
     QHash<IModule *, QPair<ReqId, QStringList>> m_sync_auto_start_responses;
+    bool m_signer_polling = false;
 };

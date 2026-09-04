@@ -25,9 +25,10 @@ class MockSigner final : public ISigner {
     Q_OBJECT
 
 public:
-    MockSigner(QString id, bool implemented, QString fingerprint, QObject *parent = nullptr)
+    MockSigner(QString id, bool implemented, QString fingerprint, plugin::SignerState state,
+               QObject *parent = nullptr)
         : ISigner(parent), m_id(std::move(id)), m_fingerprint(std::move(fingerprint)),
-          m_implemented(implemented) {}
+          m_state(state), m_implemented(implemented) {}
     ~MockSigner() override = default;
 
     [[nodiscard]] bool implemented() const override {
@@ -44,6 +45,14 @@ public:
 
     [[nodiscard]] QString walletName() const override {
         return QString();
+    }
+
+    [[nodiscard]] plugin::SignerState state() const override {
+        return m_state;
+    }
+
+    [[nodiscard]] QString stateDetail() const override {
+        return m_state == plugin::SignerState::Ready ? QString() : QStringLiteral("mock detail");
     }
 
     auto init() -> ReqId override {
@@ -84,6 +93,7 @@ public:
 private:
     QString m_id;
     QString m_fingerprint;
+    plugin::SignerState m_state = plugin::SignerState::Ready;
     bool m_implemented = false;
 };
 
@@ -99,9 +109,9 @@ public:
     explicit MockInstance(QString id, QObject *parent = nullptr)
         : QObject(parent), m_id(std::move(id)) {}
     MockInstance(QString id, bool signer_implemented, QString fingerprint,
-                 QObject *parent = nullptr)
+                 plugin::SignerState state, QObject *parent = nullptr)
         : QObject(parent), m_id(std::move(id)),
-          m_signer(new MockSigner(m_id, signer_implemented, std::move(fingerprint), this)) {}
+          m_signer(new MockSigner(m_id, signer_implemented, std::move(fingerprint), state, this)) {}
     ~MockInstance() override = default;
 
     [[nodiscard]] QString id() const override {
@@ -201,15 +211,18 @@ public:
     // Builds and tracks an instance without registering it, so a test can register
     // it from another thread without parenting a QObject across threads.
     auto createInstance(const QString &id, bool signer_implemented,
-                        const QString &fingerprint = QString()) -> MockInstance * {
-        auto *instance = new MockInstance(id.trimmed(), signer_implemented, fingerprint, this);
+                        const QString &fingerprint = QString(),
+                        plugin::SignerState state = plugin::SignerState::Ready) -> MockInstance * {
+        auto *instance =
+            new MockInstance(id.trimmed(), signer_implemented, fingerprint, state, this);
         m_live_instances.append(instance);
         return instance;
     }
 
     auto registerLive(const QString &id, bool signer_implemented,
-                      const QString &fingerprint = QString()) -> MockInstance * {
-        auto *instance = createInstance(id, signer_implemented, fingerprint);
+                      const QString &fingerprint = QString(),
+                      plugin::SignerState state = plugin::SignerState::Ready) -> MockInstance * {
+        auto *instance = createInstance(id, signer_implemented, fingerprint, state);
         Host::get()->registerInstance(instance->id(), instance, this);
         return instance;
     }
@@ -221,6 +234,26 @@ public:
 
     void deleteInstance(const QString &id) override {
         m_deleted_ids.append(id.trimmed());
+    }
+
+    // The host's side of the switch: every enabled module is told, whether or not it
+    // asked for anything.
+    void setSignerPolling(bool enabled) override {
+        m_polling = enabled;
+        ++m_polling_calls;
+    }
+
+    // This module's side: it asks the host, like any consumer would.
+    void requestPolling(bool enabled) {
+        Host::get()->requestSignerPolling(this, enabled);
+    }
+
+    [[nodiscard]] auto polling() const -> bool {
+        return m_polling;
+    }
+
+    [[nodiscard]] auto pollingCalls() const -> int {
+        return m_polling_calls;
     }
 
     [[nodiscard]] auto deletedIds() const -> QStringList {
@@ -242,6 +275,8 @@ private:
     ReqId m_auto_start_req_id = 0;
     QList<MockInstance *> m_live_instances;
     QStringList m_deleted_ids;
+    bool m_polling = false;
+    int m_polling_calls = 0;
 };
 
 // Drives the three host lifecycle calls from whatever thread it lives in. The

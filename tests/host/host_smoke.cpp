@@ -194,17 +194,25 @@ auto main(int argc, char *argv[]) -> int {
     module->startInstance(QStringLiteral("inst-2"));      // signer() == nullptr
     // The same seed on a second device, exposed by the other module.
     plugin.otherModule()->registerLive(QStringLiteral("dev-6"), true, K_FINGERPRINT);
+    // A device the host can see but cannot use: it must still be listed, with its reason.
+    module->registerLive(QStringLiteral("dev-7"), true, QString(), plugin::SignerState::Locked);
 
     auto signers = Host::get()->signers();
-    check(signerIds() == QStringList{QStringLiteral("dev-1"), QStringLiteral("dev-6")},
+    check(signerIds() == QStringList{QStringLiteral("dev-1"), QStringLiteral("dev-6"),
+                                     QStringLiteral("dev-7")},
           "signers() should list every implemented signer, ordered by instance id");
-    check(signers.size() == 2 && signers.at(0).signer->fingerprint() == K_FINGERPRINT &&
+    check(signers.size() == 3 && signers.at(2).signer->state() == plugin::SignerState::Locked &&
+              !signers.at(2).signer->stateDetail().isEmpty(),
+          "an unusable device should be listed with its state and a reason, not hidden");
+    check(signers.size() == 3 && signers.at(0).signer->state() == plugin::SignerState::Ready,
+          "a usable device should report Ready");
+    check(signers.size() == 3 && signers.at(0).signer->fingerprint() == K_FINGERPRINT &&
               signers.at(1).signer->fingerprint() == K_FINGERPRINT,
           "two devices sharing a fingerprint should both be listed");
-    check(signers.size() == 2 && signers.at(0).module == module &&
+    check(signers.size() == 3 && signers.at(0).module == module &&
               signers.at(1).module == plugin.otherModule(),
           "each entry should name the module that registered it");
-    check(signers.size() == 2 && signers.at(0).signer == dev1->signer(),
+    check(signers.size() == 3 && signers.at(0).signer == dev1->signer(),
           "the entry should route to that instance's own signer capability");
 
     // ===== the owning module drops it: the device-disconnect shape =====
@@ -214,8 +222,8 @@ auto main(int argc, char *argv[]) -> int {
           "the owning module should be able to drop its instance");
     check(dev1 != nullptr && dev1->wasStopped(), "removeInstance should stop the instance");
     check(removedSpy.count() == removedBefore + 1, "instanceRemoved should fire on the drop");
-    check(signerIds() == QStringList{QStringLiteral("dev-6")},
-          "dropping one signer should leave the other module's entry alone");
+    check(signerIds() == QStringList{QStringLiteral("dev-6"), QStringLiteral("dev-7")},
+          "dropping one signer should leave the other entries alone");
 
     // ===== an instance retires itself =====
     auto *dev2 = module->registerLive(QStringLiteral("dev-2"), true);
@@ -262,6 +270,40 @@ auto main(int argc, char *argv[]) -> int {
 
     worker.quit();
     worker.wait();
+
+    // ===== polling: one flag per module, ORed into a global switch =====
+    auto *other = plugin.otherModule();
+    // Leave the second module holding no instance at all: the fan-out must still reach it,
+    // because a module has to start its service before it has any device to show.
+    other->dropLive(QStringLiteral("dev-6"));
+    check(signerIds() == QStringList{QStringLiteral("dev-7")},
+          "the second module should hold no signer once its device is dropped");
+
+    smoke::SignalSpy pollingSpy;
+    QObject::connect(Host::get()->events(), &HostEvents::signerPollingChanged, &pollingSpy,
+                     &smoke::SignalSpy::onSignal, qontrol::UNIQUE);
+    check(!module->polling() && !other->polling(), "nothing should poll before anyone asks");
+
+    module->requestPolling(true);
+    check(pollingSpy.count() == 1, "the first request should flip the global flag");
+    check(module->polling() && other->polling(),
+          "every module should be told to poll, including the one that asked for nothing");
+
+    int callsBefore = module->pollingCalls();
+    module->requestPolling(true);
+    check(pollingSpy.count() == 1, "asking twice should not flip the flag again");
+    check(module->pollingCalls() == callsBefore, "asking twice should not re-notify the modules");
+
+    other->requestPolling(true);
+    check(pollingSpy.count() == 1, "a second module asking should not flip an already-on flag");
+
+    module->requestPolling(false);
+    check(pollingSpy.count() == 1 && module->polling(),
+          "polling should stay on while another module still wants it");
+
+    other->requestPolling(false);
+    check(pollingSpy.count() == 2, "the last request going away should flip the flag off");
+    check(!module->polling() && !other->polling(), "every module should be told to stop");
 
     if (g_ok) {
         std::fprintf(stdout, "host smoke: OK\n");

@@ -263,7 +263,12 @@ public:
     QList<IInstance*> instances() const;
 
     // the live signers, sorted by instanceId: the pre-filtered form of that walk.
+    // Every device a module can see is listed, usable or not; check state().
     QList<plugin::SignerEntry> signers() const;
+
+    // a module states whether it needs signing devices polled. One flag per module,
+    // ORed: polling runs while any module wants it. Asking twice is asking once.
+    void requestSignerPolling(IModule *requester, bool enabled);
 
     // UI is PUSHED by the instance: it supplies a widget + itself, gets back an id,
     // and later updates or removes the widget by that id. The host owns the
@@ -299,6 +304,7 @@ signals:
     void instanceRegistered(QString id);
     void instanceRemoved(QString id);
     void settingSectionsChanged();   // a section was added or removed
+    void signerPollingChanged(bool enabled);  // the global flag, only when it flips
 };
 ```
 
@@ -384,6 +390,8 @@ public:
     virtual ReqId autoStart() = 0;          // -> autoStart(req, [id]) to start on load
     virtual void  startInstance(const QString &id) = 0;  // construct + register it
     virtual void  deleteInstance(const QString &id) {}   // drop persisted state (default no-op)
+    // the host's side of the polling switch; default no-op for modules that poll nothing
+    virtual void  setSignerPolling(bool enabled) {}
 signals:
     void instances(ReqId, QList<QPair<QString,QString>>);  // (id, name) it can start
     void autoStart(ReqId, QStringList);                    // ids to start immediately
@@ -453,6 +461,8 @@ public:
     virtual QString id()          const = 0;
     virtual QString fingerprint() const = 0;   // master fingerprint; NOT unique
     virtual QString walletName()  const = 0;
+    virtual plugin::SignerState state() const = 0;  // Ready / Locked / Unsupported
+    virtual QString stateDetail() const = 0;   // why it is not Ready, in one line
     // requests (touch the device): result on the matching signal
     virtual ReqId init() = 0;                                       // open/handshake
     virtual ReqId info() = 0;                                       // device kind, version...
@@ -517,6 +527,7 @@ namespace plugin {
 struct Coin    { QString outpoint; quint64 value; quint32 height;
                  QString label; bool spent; QString accountType; };
 struct Balance { quint64 confirmed; quint64 unconfirmed; };
+enum class SignerState { Ready, Locked, Unsupported };
 // one live signer: which entry it is, where it came from, how to reach it
 struct SignerEntry { QString instanceId; IModule *module; ISigner *signer; };
 }
@@ -571,6 +582,16 @@ entries can carry the same one:
 - two modules exposing the same physical device (a USB module and an airgap module);
 - one module holding several devices that share a seed.
 
+**Every device a module can see is listed, usable or not.** A locked device, one whose
+Bitcoin app is closed, one on the wrong network: leaving those out of `signers()` tells the
+user nothing, so they are listed and `state()` says why they cannot be used. A consumer that
+wants a signature keeps the `Ready` ones; a picker shows the rest disabled with
+`stateDetail()` next to them, which is how the user learns there is something to unlock.
+Requests on a signer that is not `Ready` answer with `error()` rather than going quiet.
+
+`state()` is immutable like the other accessors: a module whose device changes state drops
+the instance and registers a fresh one, so a reader never sees it change underneath.
+
 So a consumer that needs a signature filters `signers()` by `fingerprint()` to get
 **candidates**, expects more than one, picks one (asking the user when the choice is
 theirs, which is what a signer picker is for), and routes the PSBT plus the relevant
@@ -586,6 +607,21 @@ descriptor through that entry's `signer`. The three parts of an entry have three
 A signing-device module typically runs **one instance per connected device**: it registers
 an instance when a device shows up and drops it when the device goes away, so `signers()`
 tracks what is actually plugged in.
+
+### Polling is off until a module asks for it
+
+Watching a USB bus is expensive, so it does not run just because the app is open. Any module
+calls `Host::get()->requestSignerPolling(this, true)` while it needs devices and `false` when
+it stops. The host keeps **one flag per module** and ORs them: polling runs while any module
+wants it. Because the requester is named rather than counted, asking twice is the same as
+asking once and there is nothing to balance; a module that is disabled has its request
+dropped for it.
+
+When the global flag flips, **every** module is told through `IModule::setSignerPolling`,
+whether or not it asked for anything, and a module enabled later is told the current value as
+it activates. A module that owns a device service starts or stops it there; one that polls
+nothing leaves the default no-op alone. A module told to stop drops its device instances
+along with its service, so `signers()` never reports a device nobody is watching.
 
 `ISigner` mirrors bwk's **`Signer`** trait as implemented by `HwSigner` (which itself
 sits over the lower-level `HWI` device trait). It is **descriptor-based**:
