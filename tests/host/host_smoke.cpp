@@ -12,8 +12,12 @@
 #include <cstdio>
 
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QList>
 #include <QString>
+#include <QStringList>
+#include <QThread>
 
 #include <Qontrol>
 #include <common.h>
@@ -22,12 +26,16 @@
 #include <host/PluginRegistry.h>
 #include <interfaces/instance.h>
 #include <interfaces/module.h>
+#include <interfaces/signer.h>
 
 #include "MockPlugin.h"
 
 namespace {
 
 bool g_ok = true;
+
+// Shared by two devices holding the same seed, exposed by different modules.
+const QString K_FINGERPRINT = QStringLiteral("a4f9c821");
 
 void check(bool cond, const char *msg) {
     if (!cond) {
@@ -40,13 +48,48 @@ auto hostInstanceCount() -> int {
     return Host::get()->instances().size();
 }
 
-auto hostHasInstance(const QString &id) -> bool {
+auto hostInstance(const QString &id) -> IInstance * {
     for (auto *instance : Host::get()->instances()) {
         if (instance != nullptr && instance->id() == id) {
-            return true;
+            return instance;
         }
     }
-    return false;
+    return nullptr;
+}
+
+auto hostHasInstance(const QString &id) -> bool {
+    return hostInstance(id) != nullptr;
+}
+
+auto signerIds() -> QStringList {
+    QStringList ids;
+    for (const auto &entry : Host::get()->signers()) {
+        ids.append(entry.instanceId);
+    }
+    return ids;
+}
+
+// Waits for the worker to return from its host call WITHOUT running the GUI
+// thread's event loop. That separation is the point: once this returns, anything
+// the host still owes has to be sitting in the GUI thread's queue.
+auto waitForCalls(const smoke::ThreadedCaller &caller, int count, int timeout_ms) -> bool {
+    QElapsedTimer timer;
+    timer.start();
+    while (caller.callsDone() < count && timer.elapsed() < timeout_ms) {
+        QThread::msleep(1);
+    }
+    return caller.callsDone() >= count;
+}
+
+// Spins the GUI thread until the instance reaches the expected state, so a
+// regression fails on the check instead of hanging.
+auto waitForInstance(const QString &id, bool present, int timeout_ms) -> bool {
+    QElapsedTimer timer;
+    timer.start();
+    while (hostHasInstance(id) != present && timer.elapsed() < timeout_ms) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    return hostHasInstance(id) == present;
 }
 
 } // namespace
@@ -125,6 +168,100 @@ auto main(int argc, char *argv[]) -> int {
           "owning module deleteInstance should have been invoked");
     check(spy.count() > afterListCount,
           "enabledPluginsChanged should fire again on deleteInstance");
+
+    // ===== module registers outside startInstance: the device-connect shape =====
+    smoke::SignalSpy removedSpy;
+    QObject::connect(Host::get()->events(), &HostEvents::instanceRemoved, &removedSpy,
+                     &smoke::SignalSpy::onSignal, qontrol::UNIQUE);
+
+    auto *dev1 = module->registerLive(QStringLiteral("dev-1"), true, K_FINGERPRINT);
+    check(hostInstance(QStringLiteral("dev-1")) == dev1,
+          "host should hold an instance the module registered on its own");
+    check(registry.instanceOwnerPluginId(QStringLiteral("dev-1")) == QStringLiteral("mock.plugin"),
+          "a module-registered instance should be attributed to its plugin");
+
+    module->registerLive(QStringLiteral("dev-1"), true, K_FINGERPRINT);
+    check(hostInstance(QStringLiteral("dev-1")) == dev1,
+          "re-registering a live id should be refused and keep the first instance");
+
+    plugin.otherModule()->dropLive(QStringLiteral("dev-1"));
+    check(hostHasInstance(QStringLiteral("dev-1")),
+          "a module should not be able to drop an instance it does not own");
+    check(dev1 != nullptr && !dev1->wasStopped(), "a refused drop should not stop the instance");
+
+    // ===== signers(): implemented only, one entry per device =====
+    module->registerLive(QStringLiteral("dev-3"), false); // inert signer
+    module->startInstance(QStringLiteral("inst-2"));      // signer() == nullptr
+    // The same seed on a second device, exposed by the other module.
+    plugin.otherModule()->registerLive(QStringLiteral("dev-6"), true, K_FINGERPRINT);
+
+    auto signers = Host::get()->signers();
+    check(signerIds() == QStringList{QStringLiteral("dev-1"), QStringLiteral("dev-6")},
+          "signers() should list every implemented signer, ordered by instance id");
+    check(signers.size() == 2 && signers.at(0).signer->fingerprint() == K_FINGERPRINT &&
+              signers.at(1).signer->fingerprint() == K_FINGERPRINT,
+          "two devices sharing a fingerprint should both be listed");
+    check(signers.size() == 2 && signers.at(0).module == module &&
+              signers.at(1).module == plugin.otherModule(),
+          "each entry should name the module that registered it");
+    check(signers.size() == 2 && signers.at(0).signer == dev1->signer(),
+          "the entry should route to that instance's own signer capability");
+
+    // ===== the owning module drops it: the device-disconnect shape =====
+    int removedBefore = removedSpy.count();
+    module->dropLive(QStringLiteral("dev-1"));
+    check(!hostHasInstance(QStringLiteral("dev-1")),
+          "the owning module should be able to drop its instance");
+    check(dev1 != nullptr && dev1->wasStopped(), "removeInstance should stop the instance");
+    check(removedSpy.count() == removedBefore + 1, "instanceRemoved should fire on the drop");
+    check(signerIds() == QStringList{QStringLiteral("dev-6")},
+          "dropping one signer should leave the other module's entry alone");
+
+    // ===== an instance retires itself =====
+    auto *dev2 = module->registerLive(QStringLiteral("dev-2"), true);
+    dev2->retire();
+    check(!hostHasInstance(QStringLiteral("dev-2")),
+          "retireInstance should unregister the instance");
+    check(dev2->wasStopped(), "retireInstance should stop the instance");
+
+    // ===== the host takes lifecycle calls from any thread =====
+    auto *dev4 = module->createInstance(QStringLiteral("dev-4"), true);
+    auto *dev5 = module->createInstance(QStringLiteral("dev-5"), true);
+    QThread worker;
+    smoke::ThreadedCaller caller4(module, dev4);
+    smoke::ThreadedCaller caller5(module, dev5);
+    caller4.moveToThread(&worker);
+    caller5.moveToThread(&worker);
+    worker.start();
+
+    QMetaObject::invokeMethod(&caller4, "registerFromThread", Qt::QueuedConnection);
+    check(waitForCalls(caller4, 1, 2000), "the worker should have returned from registerInstance");
+    check(!hostHasInstance(QStringLiteral("dev-4")),
+          "a cross-thread register must not land before the GUI thread runs it");
+    check(waitForInstance(QStringLiteral("dev-4"), true, 2000),
+          "the host should marshal a cross-thread register onto the GUI thread");
+
+    QMetaObject::invokeMethod(&caller4, "dropFromThread", Qt::QueuedConnection);
+    check(waitForCalls(caller4, 2, 2000), "the worker should have returned from removeInstance");
+    check(hostHasInstance(QStringLiteral("dev-4")),
+          "a cross-thread drop must not land before the GUI thread runs it");
+    check(waitForInstance(QStringLiteral("dev-4"), false, 2000),
+          "the host should marshal a cross-thread drop onto the GUI thread");
+    check(dev4->wasStopped(), "a cross-thread drop should still stop the instance");
+
+    QMetaObject::invokeMethod(&caller5, "registerFromThread", Qt::QueuedConnection);
+    check(waitForInstance(QStringLiteral("dev-5"), true, 2000),
+          "the host should marshal the second cross-thread register");
+    QMetaObject::invokeMethod(&caller5, "retireFromThread", Qt::QueuedConnection);
+    check(waitForCalls(caller5, 2, 2000), "the worker should have returned from retireInstance");
+    check(hostHasInstance(QStringLiteral("dev-5")),
+          "a cross-thread retire must not land before the GUI thread runs it");
+    check(waitForInstance(QStringLiteral("dev-5"), false, 2000),
+          "the host should marshal a cross-thread retire onto the GUI thread");
+    check(dev5->wasStopped(), "a cross-thread retire should still stop the instance");
+
+    worker.quit();
+    worker.wait();
 
     if (g_ok) {
         std::fprintf(stdout, "host smoke: OK\n");

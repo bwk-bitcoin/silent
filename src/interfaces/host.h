@@ -5,8 +5,11 @@
 #include <QString>
 #include <QtGlobal>
 
+#include <interfaces/types.h>
+
 class QWidget;
 class IInstance;
+class IModule;
 
 class HostI18n {
 public:
@@ -42,8 +45,13 @@ public:
 
     static Host *get();
 
-    virtual void registerInstance(const QString &id, IInstance *instance) = 0;
+    virtual void registerInstance(const QString &id, IInstance *instance, IModule *owner) = 0;
+    // Drops one of the calling module's own instances; ignored for an id it did not register.
+    virtual void removeInstance(const QString &id, IModule *owner) = 0;
+    // An instance retires itself: it holds the device handle, so it sees the disconnect.
+    virtual void retireInstance(IInstance *self) = 0;
     [[nodiscard]] virtual QList<IInstance*> instances() const = 0;
+    [[nodiscard]] virtual QList<plugin::SignerEntry> signers() const = 0;
 
     virtual TabId openTab(QWidget *content, IInstance *owner) = 0;
     virtual void setTabTitle(TabId tab, const QString &title) = 0;

@@ -13,8 +13,11 @@ class HostImpl final : public QObject, public Host {
 public:
     HostImpl();
 
-    void registerInstance(const QString &id, IInstance *instance) override;
+    void registerInstance(const QString &id, IInstance *instance, IModule *owner) override;
+    void removeInstance(const QString &id, IModule *owner) override;
+    void retireInstance(IInstance *self) override;
     [[nodiscard]] QList<IInstance *> instances() const override;
+    [[nodiscard]] QList<plugin::SignerEntry> signers() const override;
 
     TabId openTab(QWidget *content, IInstance *owner) override;
     void setTabTitle(TabId tab, const QString &title) override;
@@ -32,10 +35,24 @@ public:
 
     void onInstanceStopped(const QString &id);
     void onInstanceStopped(IInstance *instance);
+    // Unrestricted teardown, kept off the Host interface so a plugin cannot drop
+    // an instance it does not own. Stops the instance, then unregisters it.
     void removeInstance(const QString &id);
+    [[nodiscard]] IModule *instanceOwner(const QString &id) const;
     [[nodiscard]] QList<SettingSectionView> settingSections() const override;
 
+signals:
+    // Emitted by the matching public method so the work always lands on the GUI
+    // thread: auto-connection runs the slot directly for a caller already there,
+    // and queues it otherwise. A module never has to marshal by hand.
+    void registerInstanceRequested(QString id, IInstance *instance, IModule *owner);
+    void removeInstanceRequested(QString id, IModule *owner);
+    void retireInstanceRequested(IInstance *self);
+
 private slots:
+    void onRegisterInstanceRequested(const QString &id, IInstance *instance, IModule *owner);
+    void onRemoveInstanceRequested(const QString &id, IModule *owner);
+    void onRetireInstanceRequested(IInstance *self);
     void onHostedTabCloseRequested(QWidget *content);
     void onWizardModalFinished(int result);
 
@@ -63,6 +80,7 @@ private:
     void closeOwnedUi(IInstance *owner);
 
     QHash<QString, IInstance *> m_instances;
+    QHash<QString, IModule *> m_instance_owner;
     QHash<TabId, TabEntry> m_tabs;
     QHash<IInstance *, TabId> m_tab_by_owner;
     QHash<SectionId, SectionEntry> m_sections;

@@ -4,8 +4,12 @@
 #include "i18n/I18nManager.h"
 #include "MainWindow.h"
 #include "interfaces/instance.h"
+#include "interfaces/signer.h"
+
+#include <algorithm>
 
 #include <QApplication>
+#include <QDebug>
 #include <QDialog>
 #include <QList>
 #include <QThread>
@@ -41,7 +45,16 @@ public:
 };
 } // namespace
 
-HostImpl::HostImpl() : QObject(nullptr), m_i18n(new HostI18nImpl()) {}
+HostImpl::HostImpl() : QObject(nullptr), m_i18n(new HostI18nImpl()) {
+    // IInstance is not a QObject, so Qt cannot register the pointer itself.
+    qRegisterMetaType<IInstance *>();
+    connect(this, &HostImpl::registerInstanceRequested, this,
+            &HostImpl::onRegisterInstanceRequested, qontrol::UNIQUE);
+    connect(this, &HostImpl::removeInstanceRequested, this, &HostImpl::onRemoveInstanceRequested,
+            qontrol::UNIQUE);
+    connect(this, &HostImpl::retireInstanceRequested, this, &HostImpl::onRetireInstanceRequested,
+            qontrol::UNIQUE);
+}
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 MainWindow *HostImpl::mainWindow() const {
@@ -62,18 +75,81 @@ void HostImpl::ensureMainWindowHooked() {
     m_main_window_hooked = true;
 }
 
-void HostImpl::registerInstance(const QString &id, IInstance *instance) {
+// The three lifecycle entry points are callable from any thread: each one only
+// emits, and the self-connection lands the work on the GUI thread.
+void HostImpl::registerInstance(const QString &id, IInstance *instance, IModule *owner) {
+    emit registerInstanceRequested(id, instance, owner);
+}
+
+void HostImpl::removeInstance(const QString &id, IModule *owner) {
+    emit removeInstanceRequested(id, owner);
+}
+
+void HostImpl::retireInstance(IInstance *self) {
+    emit retireInstanceRequested(self);
+}
+
+void HostImpl::onRegisterInstanceRequested(const QString &id, IInstance *instance, IModule *owner) {
     assertGuiThread();
-    if (instance == nullptr) {
+    if (instance == nullptr || owner == nullptr) {
+        return;
+    }
+    if (m_instances.contains(id)) {
+        qWarning() << "Host: instance id already registered, ignoring:" << id;
         return;
     }
     m_instances.insert(id, instance);
+    m_instance_owner.insert(id, owner);
     emit m_events.instanceRegistered(id);
+}
+
+void HostImpl::onRemoveInstanceRequested(const QString &id, IModule *owner) {
+    assertGuiThread();
+    if (owner == nullptr || m_instance_owner.value(id, nullptr) != owner) {
+        qWarning() << "Host: refusing to remove an instance the caller does not own:" << id;
+        return;
+    }
+    removeInstance(id);
+}
+
+void HostImpl::onRetireInstanceRequested(IInstance *self) {
+    assertGuiThread();
+    if (self == nullptr) {
+        return;
+    }
+    QString id = self->id();
+    if (m_instances.value(id, nullptr) != self) {
+        qWarning() << "Host: refusing to retire an unregistered instance:" << id;
+        return;
+    }
+    removeInstance(id);
 }
 
 QList<IInstance *> HostImpl::instances() const {
     assertGuiThread();
     return m_instances.values();
+}
+
+QList<plugin::SignerEntry> HostImpl::signers() const {
+    assertGuiThread();
+    QList<plugin::SignerEntry> signers;
+    for (auto it = m_instances.constBegin(); it != m_instances.constEnd(); ++it) {
+        auto *signer = it.value()->signer();
+        if (signer == nullptr || !signer->implemented()) {
+            continue;
+        }
+        signers.append(plugin::SignerEntry{
+            .instanceId = it.key(),
+            .module = m_instance_owner.value(it.key(), nullptr),
+            .signer = signer,
+        });
+    }
+    // m_instances is a QHash. Instance ids are unique, so this is a total order and
+    // the list keeps the same order between calls.
+    std::ranges::sort(signers, [](const plugin::SignerEntry &lhs, const plugin::SignerEntry &rhs) {
+        return lhs.instanceId < rhs.instanceId;
+    });
+    return signers;
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
@@ -229,9 +305,17 @@ void HostImpl::removeInstance(const QString &id) {
         return;
     }
     auto *instance = m_instances.value(id);
+    instance->stop();
     closeOwnedUi(instance);
     m_instances.remove(id);
+    m_instance_owner.remove(id);
+    // Emitted last: a module frees its own instance from this signal.
     emit m_events.instanceRemoved(id);
+}
+
+IModule *HostImpl::instanceOwner(const QString &id) const {
+    assertGuiThread();
+    return m_instance_owner.value(id, nullptr);
 }
 
 QList<Host::SettingSectionView> HostImpl::settingSections() const {
@@ -252,22 +336,20 @@ QList<Host::SettingSectionView> HostImpl::settingSections() const {
 
 void HostImpl::onHostedTabCloseRequested(QWidget *content) {
     assertGuiThread();
-    IInstance *ownerToStop = nullptr;
+    IInstance *owner = nullptr;
     for (auto it = m_tabs.constBegin(); it != m_tabs.constEnd(); ++it) {
         if (it.value().content == content) {
-            ownerToStop = it.value().owner;
+            owner = it.value().owner;
             break;
         }
     }
 
-    if (ownerToStop != nullptr) {
-        // Closing the tab tears the instance down completely: stop it, then remove
-        // it from the host so instanceRemoved fires (clearing open-account state and
-        // letting the owning module recycle the id). Without the removal the instance
-        // lingers registered and cannot be reopened from the launcher.
-        QString id = ownerToStop->id();
-        ownerToStop->stop();
-        removeInstance(id);
+    if (owner != nullptr) {
+        // Closing the tab tears the instance down completely: removeInstance stops it
+        // and fires instanceRemoved (clearing open-account state and letting the owning
+        // module recycle the id). Without the removal the instance lingers registered
+        // and cannot be reopened from the launcher.
+        removeInstance(owner->id());
     }
 }
 

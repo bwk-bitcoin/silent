@@ -34,6 +34,7 @@ public:
     [[nodiscard]] QList<IPlugin *> plugins() const;
     [[nodiscard]] QList<IModule *> enabledModulesForLauncher() const;
     [[nodiscard]] QList<QPair<QString, QString>> launcherInstancesForModule(const IModule *module) const;
+    [[nodiscard]] QString instanceOwnerPluginId(const QString &id) const;
     [[nodiscard]] QList<CreatorLauncher> externalCreatorLaunchers() const;
     bool startLauncherInstance(IModule *module, const QString &instance_id);
     void deleteInstance(IModule *module, const QString &instance_id);
@@ -97,5 +98,4 @@ private:
     QHash<QString, QString> m_instance_owner_by_id;
     QHash<IModule *, QPair<ReqId, QList<QPair<QString, QString>>>> m_sync_list_responses;
     QHash<IModule *, QPair<ReqId, QStringList>> m_sync_auto_start_responses;
-    QString m_pending_start_owner_plugin_id;
 };

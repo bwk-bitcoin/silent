@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QMetaType>
 #include <QString>
 
 #include <interfaces/account.h>
@@ -21,3 +22,7 @@ public:
 };
 
 Q_DECLARE_INTERFACE(IInstance, "dev.silent.IInstance/1.0")
+
+// Not a QObject, so Qt cannot register the pointer on its own: needed for the
+// queued hop the host does when a module calls it off the GUI thread.
+Q_DECLARE_METATYPE(IInstance *)

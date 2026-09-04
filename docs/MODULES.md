@@ -67,7 +67,7 @@ aggregated-graph instance has no data capability implemented, pushes a tab, and
    user clicks a button:
              module->startInstance(id)
              module constructs the IInstance and calls
-                 host->registerInstance(id, instance)
+                 host->registerInstance(id, instance, module)
              the instance then PUSHES any UI it wants:
                  host->openTab(widget, instance)            -> TabId
                  host->addSettingSection(widget, instance)  -> SectionId
@@ -195,7 +195,7 @@ keeps no instance state. The module exposes:
   loads**, delivered on the `autoStart(ReqId, ...)` signal (e.g. feeds, signing-device
   modules).
 - `startInstance(id)`: bring an instance up. The module constructs the `IInstance`
-  (on its own thread), calls `host->registerInstance(id, instance)`, and the instance
+  (on its own thread), calls `host->registerInstance(id, instance, this)`, and the instance
   then pushes any UI it wants and exposes its `implemented()` capabilities. The host
   starts launcher/auto-start instances through the registry so each is **attributed to
   its owning plugin**; that ownership is what lets the host tear them down cleanly on
@@ -205,6 +205,15 @@ keeps no instance state. The module exposes:
   own on-disk state (the module owns persistence). Default is a no-op for modules that
   persist nothing. The launcher offers a delete (trash) affordance for a module's
   startable instances; confirming it routes here.
+
+A module is **not limited to the host-driven path**: it may call
+`host->registerInstance(id, instance, this)` and `host->removeInstance(id, this)` at any
+time, for example one instance per connected device, registered on plug and dropped on
+unplug. Both calls are ownership-checked, so a module only ever drops its own instances,
+and an instance can retire itself with `host->retireInstance(this)`. Dropping an instance
+stops it and closes its pushed UI but **never touches persisted state**; `deleteInstance`
+stays the only thing that does. The module frees its own `IInstance` from its
+`instanceRemoved` handler.
 
 (`meta()` is `IModule`'s only synchronous method: a hardcoded `const`, like a
 capability's `implemented()`. Everything else on a module is a request, `ReqId` +
@@ -240,12 +249,21 @@ public:
     static Host *get();                       // singleton accessor
 
     // a module calls this when it instantiates an instance, so the host can
-    // track it. The module owns the id.
-    void registerInstance(const QString &id, IInstance *instance);
+    // track it. The module owns the id; the host records the owning module.
+    void registerInstance(const QString &id, IInstance *instance, IModule *owner);
+
+    // teardown, both ownership-checked: a module drops one of its own instances, or
+    // an instance retires itself. Either way the instance is stopped, its pushed UI
+    // closed, and instanceRemoved fired. Persisted state is untouched.
+    void removeInstance(const QString &id, IModule *owner);
+    void retireInstance(IInstance *self);
 
     // discovery: the live instances. A consumer gates each capability on its
     // implemented() (e.g. inst->account()->implemented()).
     QList<IInstance*> instances() const;
+
+    // the live signers, sorted by instanceId: the pre-filtered form of that walk.
+    QList<plugin::SignerEntry> signers() const;
 
     // UI is PUSHED by the instance: it supplies a widget + itself, gets back an id,
     // and later updates or removes the widget by that id. The host owns the
@@ -290,6 +308,13 @@ signals:
 blocks and no method returns mutable instance state synchronously** (reading that
 state from another thread would be a data race).
 
+- `registerInstance`, `removeInstance` and `retireInstance` are callable **from any
+  thread**. The host marshals to the GUI thread itself, so a module reacting to a device
+  thread (a hotplug event) just calls them. Off the GUI thread the call is asynchronous:
+  it returns before the work happens, so read the result on `instanceRegistered` /
+  `instanceRemoved`, never on return. The instance must outlive that hop: do not delete
+  an instance inside `retireInstance`, and do not free one you have just asked the host
+  to drop. Free it from `instanceRemoved`.
 - The **only** synchronous methods are the ones that never touch mutable state:
   `implemented()` on each capability, `meta()` on a plugin/module, `modules()` on a
   plugin, and `id()` on an instance (set once at instantiation, immutable thereafter).
@@ -417,14 +442,16 @@ signals:
 // A signer, the Qt/std projection of bwk's `Signer` trait as implemented by
 // `HwSigner` (over the lower-level `HWI` device trait). Descriptor-based, not
 // policy-based. id/fingerprint/wallet_name are set at construction and immutable
-// (sync-safe); everything else talks to the device and is a request.
+// (sync-safe); everything else talks to the device and is a request. None of the
+// three identifies the entry: several live signers can share a fingerprint, and
+// id() is module-defined. Host::signers() hands back the identity.
 class ISigner : public QObject {
     Q_OBJECT
 public:
     virtual bool    implemented() const = 0;
     // immutable accessors (set at construction; sync-safe)
     virtual QString id()          const = 0;
-    virtual QString fingerprint() const = 0;   // master fingerprint
+    virtual QString fingerprint() const = 0;   // master fingerprint; NOT unique
     virtual QString walletName()  const = 0;
     // requests (touch the device): result on the matching signal
     virtual ReqId init() = 0;                                       // open/handshake
@@ -490,6 +517,8 @@ namespace plugin {
 struct Coin    { QString outpoint; quint64 value; quint32 height;
                  QString label; bool spent; QString accountType; };
 struct Balance { quint64 confirmed; quint64 unconfirmed; };
+// one live signer: which entry it is, where it came from, how to reach it
+struct SignerEntry { QString instanceId; IModule *module; ISigner *signer; };
 }
 ```
 
@@ -530,14 +559,40 @@ UI that consumes them must degrade gracefully when none is present.
 ### Signing devices are a separate capability
 
 `ISigner` is the full interface to a signer, a distinct capability separate from
-`IAccount` (the account capability has no signing methods). A consumer that needs a
-signature walks `Host::get()->instances()` for ones whose `signer()->implemented()`
-is true, matches by `fingerprint()`, and routes the PSBT plus the relevant descriptor
-through `signWithDescriptor`.
+`IAccount` (the account capability has no signing methods). `Host::get()->signers()` is the
+pre-filtered form of the walk used for the other capabilities: one `plugin::SignerEntry` per
+live instance whose `signer()->implemented()` is true, sorted by `instanceId`. It is not
+cached; re-query it on `instanceRegistered` / `instanceRemoved`.
+
+**A fingerprint is not an identity.** It identifies a seed, not a device, so several live
+entries can carry the same one:
+
+- the same seed loaded on two devices, or a device and its backup;
+- two modules exposing the same physical device (a USB module and an airgap module);
+- one module holding several devices that share a seed.
+
+So a consumer that needs a signature filters `signers()` by `fingerprint()` to get
+**candidates**, expects more than one, picks one (asking the user when the choice is
+theirs, which is what a signer picker is for), and routes the PSBT plus the relevant
+descriptor through that entry's `signer`. The three parts of an entry have three jobs:
+
+- `instanceId` is the **identity**: unique across live instances, enforced by the host,
+  and the string to persist when a chosen device must be remembered across restarts;
+- `module` is the **discriminator**: it says which module produced the entry, which is what
+  separates two entries carrying the same key. `IModule::meta()` is synchronous, so a
+  picker can label the row with the module name without issuing a request;
+- `signer` is the **routing handle** for this session.
+
+A signing-device module typically runs **one instance per connected device**: it registers
+an instance when a device shows up and drops it when the device goes away, so `signers()`
+tracks what is actually plugged in.
 
 `ISigner` mirrors bwk's **`Signer`** trait as implemented by `HwSigner` (which itself
 sits over the lower-level `HWI` device trait). It is **descriptor-based**:
-- immutable accessors `id()`, `fingerprint()`, `walletName()` (set at construction);
+- `id()`, `fingerprint()` and `walletName()` are immutable, set at construction. None of
+  them is the entry's identity: `id()` is module-defined and carries no uniqueness
+  guarantee, `fingerprint()` is shared by every device holding the seed, and `walletName()`
+  is a label. Address an entry by its `instanceId`;
 - requests `init()`, `info()` (device kind / version), `getXpub(path)`,
   `isDescriptorRegistered(descriptor)`, `registerDescriptor(descriptor)`, and
   `signWithDescriptor(psbt, descriptor)`.
@@ -557,8 +612,8 @@ through one or more `ISigner` instances.
   (gated on `account()->implemented()`), call `account()->newReceiveAddress()`, and
   read the address off its `receiveAddress(ReqId, ...)` signal.
 - **Spend FROM a sibling**: call the source `account()->coins()`, assemble a PSBT
-  spanning the chosen UTXOs, then route the PSBT + descriptor to the `signer()`
-  instance(s) holding the keys via `signWithDescriptor` (the signed PSBT arrives on
+  spanning the chosen UTXOs, then route the PSBT + descriptor to the `Host::get()->signers()`
+  entries holding the keys via `signWithDescriptor` (the signed PSBT arrives on
   the `signed_` signal); combine partial signatures and broadcast. PSBTs cross the
   boundary as base64 strings.
 

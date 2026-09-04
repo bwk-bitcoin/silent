@@ -282,6 +282,10 @@ QList<QPair<QString, QString>> PluginRegistry::launcherInstancesForModule(
     return m_launcher_instances.value(nonConstModule);
 }
 
+QString PluginRegistry::instanceOwnerPluginId(const QString &id) const {
+    return m_instance_owner_by_id.value(id.trimmed());
+}
+
 bool PluginRegistry::isCreatorInstanceId(const QString &id) {
     QString trimmed = id.trimmed();
     return trimmed == QStringLiteral("create") || trimmed.endsWith(QStringLiteral(".create"));
@@ -318,16 +322,9 @@ void PluginRegistry::deleteInstance(IModule *module, const QString &instance_id)
         return;
     }
 
-    auto *host = Host::get();
-    auto *hostImpl = dynamic_cast<HostImpl *>(host);
-    if (host != nullptr && hostImpl != nullptr) {
-        for (auto *instance : host->instances()) {
-            if (instance != nullptr && instance->id() == trimmedId) {
-                instance->stop();
-                hostImpl->removeInstance(trimmedId);
-                break;
-            }
-        }
+    // removeInstance stops the instance and ignores an id the host does not hold.
+    if (auto *hostImpl = dynamic_cast<HostImpl *>(Host::get()); hostImpl != nullptr) {
+        hostImpl->removeInstance(trimmedId);
     }
     m_instance_owner_by_id.remove(trimmedId);
 
@@ -771,10 +768,7 @@ bool PluginRegistry::startOwnedInstance(IModule *module, const QString &instance
         return false;
     }
 
-    m_pending_start_owner_plugin_id = ownerPluginId;
     module->startInstance(trimmedInstanceId);
-    m_pending_start_owner_plugin_id.clear();
-    m_instance_owner_by_id.insert(trimmedInstanceId, ownerPluginId);
     return true;
 }
 
@@ -800,22 +794,8 @@ void PluginRegistry::stopPluginInstances(const QString &plugin_id) {
         return;
     }
 
-    auto liveInstances = host->instances();
-    QHash<QString, IInstance *> liveById;
-    liveById.reserve(liveInstances.size());
-    for (auto *instance : liveInstances) {
-        if (instance == nullptr) {
-            continue;
-        }
-        liveById.insert(instance->id(), instance);
-    }
-
     for (const auto &instanceId : ownedIds) {
-        auto *instance = liveById.value(instanceId, nullptr);
-        if (instance != nullptr) {
-            instance->stop();
-            hostImpl->removeInstance(instanceId);
-        }
+        hostImpl->removeInstance(instanceId);
 
         bool stillLive = false;
         auto afterRemove = host->instances();
@@ -851,12 +831,22 @@ void PluginRegistry::onHostInstanceRegistered(const QString &id) {
     if (instanceId.isEmpty()) {
         return;
     }
-    if (m_pending_start_owner_plugin_id.isEmpty()) {
+
+    // The host records the registering module, so an instance a module brings up on
+    // its own (a connected device) is attributed like a host-started one.
+    auto *hostImpl = dynamic_cast<HostImpl *>(Host::get());
+    if (hostImpl == nullptr) {
         return;
     }
-    if (!m_instance_owner_by_id.contains(instanceId)) {
-        m_instance_owner_by_id.insert(instanceId, m_pending_start_owner_plugin_id);
+    auto *ownerPlugin = m_module_owner.value(hostImpl->instanceOwner(instanceId), nullptr);
+    if (ownerPlugin == nullptr) {
+        return;
     }
+    QString ownerPluginId = pluginId(ownerPlugin);
+    if (ownerPluginId.isEmpty()) {
+        return;
+    }
+    m_instance_owner_by_id.insert(instanceId, ownerPluginId);
 }
 
 void PluginRegistry::onHostInstanceRemoved(const QString &id) {

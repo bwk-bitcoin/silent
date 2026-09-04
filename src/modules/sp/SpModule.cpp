@@ -77,7 +77,7 @@ void SpModule::startInstance(const QString &id) {
     }
 
     auto instance = std::make_unique<SpInstance>(id);
-    Host::get()->registerInstance(id, instance.get());
+    Host::get()->registerInstance(id, instance.get(), this);
     m_instances.push_back(std::move(instance));
 }
 

@@ -154,17 +154,9 @@ auto AppController::addAccount(const QString &name) -> void {
 }
 
 auto AppController::removeAccount(const QString &account) -> void {
-    if (m_host != nullptr) {
-        auto activeInstances = m_host->instances();
-        for (auto *instance : activeInstances) {
-            if (instance != nullptr && instance->id() == account) {
-                instance->stop();
-                if (auto *hostImpl = dynamic_cast<HostImpl *>(m_host); hostImpl != nullptr) {
-                    hostImpl->removeInstance(account);
-                }
-                break;
-            }
-        }
+    // removeInstance stops the instance and ignores an id the host does not hold.
+    if (auto *hostImpl = dynamic_cast<HostImpl *>(m_host); hostImpl != nullptr) {
+        hostImpl->removeInstance(account);
     }
 
     m_open_accounts.remove(account);

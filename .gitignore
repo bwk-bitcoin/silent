@@ -4,6 +4,7 @@
 __pycache__/
 build/
 build-local/
+build-smoke/
 compile_commands.json
 i18n/*.ts
 lib/*

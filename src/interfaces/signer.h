@@ -17,6 +17,10 @@ public:
     ~ISigner() override = default;
 
     [[nodiscard]] virtual bool implemented() const = 0;
+    // Immutable, set at construction. None of the three identifies the signer:
+    // id() is module-defined with no uniqueness guarantee and fingerprint() is
+    // shared by every device holding the seed. Address a signer by the
+    // instanceId that Host::signers() pairs with it.
     [[nodiscard]] virtual QString id() const = 0;
     [[nodiscard]] virtual QString fingerprint() const = 0;
     [[nodiscard]] virtual QString walletName() const = 0;
