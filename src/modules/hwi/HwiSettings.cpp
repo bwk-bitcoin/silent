@@ -24,8 +24,15 @@ using catalog::Label;
 using catalog::LabelRole;
 
 namespace {
-const QString K_DEFAULT_PATH = QStringLiteral("m/84'/0'/0'");
 const char *const K_DEVICE_ID = "hwiDeviceId";
+
+// A device only exports an xpub without asking the user to approve it when the path is a
+// standard one for the network it runs on, so the coin type has to follow the selector:
+// a mainnet path on a testnet device is refused.
+auto defaultXpubPath(Network network) -> QString {
+    int coinType = network == Network::Bitcoin ? 0 : 1;
+    return QStringLiteral("m/84'/%1'/0'").arg(coinType);
+}
 
 auto stateText(plugin::SignerState state) -> QString {
     switch (state) {
@@ -120,7 +127,7 @@ void HwiSettings::rebuildDevices() {
         DeviceRow row;
         row.device_id = deviceId;
         row.signer = instance;
-        row.path = new Input(K_DEFAULT_PATH);
+        row.path = new Input(defaultXpubPath(HwiModule::network()));
         row.path->setWidth(Size::M);
         row.result = new Label(QString(), LabelRole::Mono);
         row.result->setWordWrap(true);
@@ -236,11 +243,15 @@ void HwiSettings::onSignerError(std::optional<ReqId> req_id, const QString &mess
     if (row == nullptr) {
         return;
     }
-    if (req_id.has_value() && req_id.value() != row->pending_info &&
-        req_id.value() != row->pending_xpub) {
+    bool wasXpub = req_id.has_value() && req_id.value() == row->pending_xpub;
+    if (req_id.has_value() && req_id.value() != row->pending_info && !wasXpub) {
         return;
     }
     row->pending_info = 0;
     row->pending_xpub = 0;
-    row->result->setText(message);
+
+    // A device reports a raw status word for a refused xpub, which says nothing about
+    // what was asked for, so pair it with the path and why a path gets refused.
+    row->result->setText(wasXpub ? TR("hwi-xpub-error").arg(row->path->text().trimmed(), message)
+                                 : message);
 }

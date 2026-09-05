@@ -89,6 +89,9 @@ hwi-state-locked => "Locked" => "Locked"
 hwi-state-ready => "Ready" => "Ready"
 hwi-state-unsupported => "Unusable" => "Unusable"
 hwi-waiting => "Waiting for the device..." => "Waiting for the device..."
+hwi-xpub-error
+=> "Requested %1\n%2\nA device only exports an xpub for a standard path on the network it runs on."
+=> "Requested %1\n%2\nA device only exports an xpub for a standard path on the network it runs on.";;
 language-english => "English" => "Anglais"
 language-french => "French" => "Francais"
 language-german => "German" => "Allemand"
