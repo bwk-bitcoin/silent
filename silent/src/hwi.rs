@@ -20,13 +20,19 @@ use crossbeam::channel;
 use crate::ffi::{HwiDevice, HwiDeviceState, HwiEvent, HwiEventFlag, Network};
 use crate::hwi_config::PersistedBitboxNoiseConfig;
 
-/// The service is generic over its message type; this is ours.
+/// The service is generic over its message type; this is ours. `Shutdown` is ours
+/// alone: it wakes the blocking recv on the C++ side, which dropping the sender cannot
+/// do on its own because the service's listener thread holds a clone of it and keeps
+/// running until it notices its own shutdown flag.
 #[derive(Debug, Clone)]
-pub struct HwiMessage(SigningDeviceMsg<u64>);
+pub enum HwiMessage {
+    Device(Box<SigningDeviceMsg<u64>>),
+    Shutdown,
+}
 
 impl From<SigningDeviceMsg<u64>> for HwiMessage {
     fn from(msg: SigningDeviceMsg<u64>) -> Self {
-        HwiMessage(msg)
+        HwiMessage::Device(Box::new(msg))
     }
 }
 
@@ -34,18 +40,24 @@ type Service = BwkService<HwiMessage, u64>;
 
 pub struct HwiService {
     inner: Arc<Service>,
-    /// Dropped on shutdown, which is what ends the blocking recv on the C++ side.
+    network: BtcNetwork,
     sender: Option<channel::Sender<HwiMessage>>,
     receiver: Option<channel::Receiver<HwiMessage>>,
     running: bool,
 }
 
-pub fn new_hwi_service(network: Network) -> Box<HwiService> {
-    let inner = Service::new(BtcNetwork::from(network));
+fn build_service(network: BtcNetwork) -> Arc<Service> {
+    let inner = Service::new(network);
     inner.set_bitbox_noise_config(Arc::new(PersistedBitboxNoiseConfig));
+    Arc::new(inner)
+}
+
+pub fn new_hwi_service(network: Network) -> Box<HwiService> {
+    let network = BtcNetwork::from(network);
     let (sender, receiver) = channel::unbounded();
     Box::new(HwiService {
-        inner: Arc::new(inner),
+        inner: build_service(network),
+        network,
         sender: Some(sender),
         receiver: Some(receiver),
         running: false,
@@ -75,10 +87,30 @@ impl HwiService {
         self.inner.stop();
     }
 
+    /// Rebuild the service on another network, keeping the notification channel. The
+    /// old listener winds itself down; nothing here waits for it, so the caller's
+    /// thread is never blocked on a device that is mid-transfer.
+    pub fn set_network(&mut self, network: Network) {
+        let network = BtcNetwork::from(network);
+        if self.network == network {
+            return;
+        }
+        let was_running = self.running;
+        self.stop();
+        self.network = network;
+        self.inner = build_service(network);
+        if was_running {
+            self.start();
+        }
+    }
+
     /// Stop for good and end the notification stream.
     pub fn shutdown(&mut self) {
         self.stop();
-        self.sender = None;
+        if let Some(sender) = self.sender.take() {
+            // Wake the receiver rather than waiting for the listener to drop its clone.
+            let _ = sender.send(HwiMessage::Shutdown);
+        }
     }
 
     pub fn is_running(&self) -> bool {
@@ -304,12 +336,12 @@ impl HwiReceiver {
         };
         loop {
             match receiver.recv() {
-                Ok(HwiMessage(msg)) => {
-                    if let Some(event) = to_event(msg) {
+                Ok(HwiMessage::Device(msg)) => {
+                    if let Some(event) = to_event(*msg) {
                         return Box::new(HwiPoll::ok(event));
                     }
                 }
-                Err(_) => return Box::new(HwiPoll::none()),
+                Ok(HwiMessage::Shutdown) | Err(_) => return Box::new(HwiPoll::none()),
             }
         }
     }

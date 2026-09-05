@@ -548,6 +548,10 @@ mod ffi {
         /// Stop polling. Idempotent.
         fn stop(self: &mut HwiService);
 
+        /// Switch networks in place, keeping the notification channel. Does not block
+        /// on the old listener, so it is safe to call from the GUI thread.
+        fn set_network(self: &mut HwiService, network: Network);
+
         /// Stop for good and end the notification stream.
         fn shutdown(self: &mut HwiService);
 

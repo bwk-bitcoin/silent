@@ -1578,6 +1578,10 @@ struct HwiService final : public ::rust::Opaque {
   // Stop polling. Idempotent.
   void stop() noexcept;
 
+  // Switch networks in place, keeping the notification channel. Does not block
+  // on the old listener, so it is safe to call from the GUI thread.
+  void set_network(::Network network) noexcept;
+
   // Stop for good and end the notification stream.
   void shutdown() noexcept;
 

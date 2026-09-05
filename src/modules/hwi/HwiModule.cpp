@@ -85,7 +85,8 @@ void HwiModule::createService() {
 void HwiModule::teardownService() {
     dropAllDevices();
     if (m_service.has_value()) {
-        // Ends the blocking recv, which is what lets the thread finish.
+        // Wakes the blocking recv with a sentinel; waiting for the service's listener to
+        // drop its sender would hang here for as long as a device transfer takes.
         m_service.value()->shutdown();
     }
     if (m_notif_thread != nullptr) {
@@ -148,13 +149,15 @@ void HwiModule::setNetwork(Network network) {
         return;
     }
     ::hwi_set_config_network(network);
+    if (!m_service.has_value()) {
+        return;
+    }
 
-    // The service takes its network at construction, so it has to be rebuilt.
-    bool wasPolling = m_polling;
-    teardownService();
-    createService();
-    m_polling = false;
-    setSignerPolling(wasPolling);
+    // The service rebuilds itself around the same notification channel, so the
+    // notification thread stays put. Tearing it down here would block the GUI thread on
+    // a listener that can sit inside a device transfer for seconds.
+    dropAllDevices();
+    m_service.value()->set_network(network);
     emit devicesChanged();
 }
 
