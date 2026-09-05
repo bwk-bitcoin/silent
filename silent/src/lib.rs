@@ -646,6 +646,9 @@ pub fn init_logging(level: LogLevel) {
     env_logger::Builder::new()
         .filter_level(filter)
         .filter_module("ureq", log::LevelFilter::Info)
+        // RUST_LOG still wins, so a device that fails to enumerate can be traced without
+        // a rebuild:  RUST_LOG=bwk_hwi=trace ./build/silent
+        .parse_default_env()
         .init();
 }
 
