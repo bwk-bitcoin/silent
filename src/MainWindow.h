@@ -34,10 +34,12 @@ public slots:
 protected:
     auto closeEvent(QCloseEvent *event) -> void override;
     auto changeEvent(QEvent *event) -> void override;
+    auto resizeEvent(QResizeEvent *event) -> void override;
 
 protected:
     auto initWindow() -> void;
     auto retranslateUi() -> void;
+    auto positionSettingsButton() -> void;
 
 private:
     bool m_init = false;

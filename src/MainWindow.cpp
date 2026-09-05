@@ -36,21 +36,44 @@ auto MainWindow::initWindow() -> void {
     m_tab->setTabsClosable(true);
     m_tab->setMovable(true);
 
-    m_settings_btn = new catalog::Button(catalog::ButtonRole::InlineIcon);
+    // Floated over the tab widget rather than installed as its corner widget: the
+    // corner geometry is derived from the widget's size hint while the stylesheet
+    // paints it larger, which left the button laid out past the window's right edge.
+    m_settings_btn = new catalog::Button(catalog::ButtonRole::InlineIcon, m_tab);
     m_settings_btn->setIcon(icon::settings());
+    m_settings_btn->setIconSize(QSize(metric::ICON_SIZE, metric::ICON_SIZE));
+    // Sized to sit inside the tab strip rather than overhang it.
+    m_settings_btn->setFixedSize(metric::ICON_SIZE + 2 * resolve(Padding::XXS),
+                                 metric::ICON_SIZE + 2 * resolve(Padding::XXS));
     m_settings_btn->setToolTip(TR("settings-title"));
-    m_tab->setCornerWidget(m_settings_btn, Qt::TopRightCorner);
     connect(m_settings_btn, &QPushButton::clicked, AppController::get(),
             &AppController::openAppSettings, qontrol::UNIQUE);
 
     updateTabs();
 
     setCentralWidget(m_tab);
+    positionSettingsButton();
 
     connect(m_tab, &QTabWidget::tabCloseRequested, this, &MainWindow::onTabCloseRequested,
             qontrol::UNIQUE);
 
     m_init = true;
+}
+
+auto MainWindow::positionSettingsButton() -> void {
+    if (m_settings_btn == nullptr || m_tab == nullptr) {
+        return;
+    }
+    // Top-right of the tab strip, vertically centred on the tab bar.
+    int barHeight = m_tab->tabBar()->height();
+    int top = barHeight > m_settings_btn->height() ? (barHeight - m_settings_btn->height()) / 2 : 0;
+    m_settings_btn->move(m_tab->width() - m_settings_btn->width() - resolve(Spacing::XS), top);
+    m_settings_btn->raise();
+}
+
+auto MainWindow::resizeEvent(QResizeEvent *event) -> void {
+    qontrol::Window::resizeEvent(event);
+    positionSettingsButton();
 }
 
 auto MainWindow::updateTabs() -> void {
@@ -69,6 +92,9 @@ auto MainWindow::updateTabs() -> void {
     // Menu tab has no close button
     int menuIndex = m_tab->addTab(m_menu_tab, TR("main-menu-tab"));
     m_tab->tabBar()->setTabButton(menuIndex, QTabBar::RightSide, nullptr);
+
+    // Adding tabs resizes the tab bar, which the floating button is centred on.
+    positionSettingsButton();
 }
 
 auto MainWindow::tabExists(QWidget *content) const -> bool {
