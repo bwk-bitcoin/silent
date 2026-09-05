@@ -54,6 +54,15 @@ private slots:
     void onHostInstanceRemoved(const QString &id);
     void onSignerPollingChanged(bool enabled);
 
+protected:
+    // A module that answers from inside list()/autoStart() replies before the pending
+    // request is recorded, so the answer is parked and replayed by a direct call. The
+    // slots resolve sender() and forward here; the replay passes the module it holds,
+    // because sender() means nothing outside a signal delivery.
+    void applyModuleInstances(IModule *module, ReqId req_id,
+                              QList<QPair<QString, QString>> instances);
+    void applyModuleAutoStart(IModule *module, ReqId req_id, QStringList ids);
+
 private:
     struct PluginRecord {
         QString id;

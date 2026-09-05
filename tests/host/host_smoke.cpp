@@ -305,6 +305,27 @@ auto main(int argc, char *argv[]) -> int {
     check(pollingSpy.count() == 2, "the last request going away should flip the flag off");
     check(!module->polling() && !other->polling(), "every module should be told to stop");
 
+    // ===== a module that answers before returning is still heard =====
+    // The real built-in modules emit their list()/autoStart() results from inside the
+    // call, so the answer lands before the registry has recorded the pending request.
+    // The registry parks it and replays it; that replay must not be dropped.
+    smoke::MockSyncPlugin syncPlugin;
+    auto *syncModule = syncPlugin.module();
+    registry.registerBuiltin(&syncPlugin);
+
+    bool listed = false;
+    for (const auto &entry : registry.launcherInstancesForModule(syncModule)) {
+        if (entry.first == QStringLiteral("sync-1")) {
+            listed = true;
+            break;
+        }
+    }
+    check(listed, "a module answering list() before it returns should still be listed");
+    check(syncModule->started().contains(QStringLiteral("sync-auto")),
+          "a module answering autoStart() before it returns should still be started");
+    check(hostHasInstance(QStringLiteral("sync-auto")),
+          "the auto-started instance should be registered with the host");
+
     if (g_ok) {
         std::fprintf(stdout, "host smoke: OK\n");
         return 0;

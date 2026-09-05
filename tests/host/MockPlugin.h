@@ -279,6 +279,54 @@ private:
     int m_polling_calls = 0;
 };
 
+// Emits its list()/autoStart() answers BEFORE returning, which is what the real
+// built-in modules do. The registry has to cope with a response that arrives
+// before it has recorded the pending request.
+class MockSyncModule final : public IModule {
+    Q_OBJECT
+
+public:
+    explicit MockSyncModule(QObject *parent = nullptr) : IModule(parent) {}
+    ~MockSyncModule() override = default;
+
+    [[nodiscard]] QMap<QString, QString> meta() const override {
+        QMap<QString, QString> meta;
+        meta.insert(QStringLiteral("id"), QStringLiteral("mock.sync.module"));
+        meta.insert(QStringLiteral("name"), QStringLiteral("Mock Sync Module"));
+        return meta;
+    }
+
+    auto list() -> ReqId override {
+        ReqId req_id = ++m_next_req_id;
+        QList<QPair<QString, QString>> instances;
+        instances.append({QStringLiteral("sync-1"), QStringLiteral("Sync One")});
+        emit IModule::instances(req_id, instances);
+        return req_id;
+    }
+
+    auto autoStart() -> ReqId override {
+        ReqId req_id = ++m_next_req_id;
+        emit IModule::autoStart(req_id, QStringList{QStringLiteral("sync-auto")});
+        return req_id;
+    }
+
+    void startInstance(const QString &id) override {
+        m_started.append(id.trimmed());
+        auto *instance = new MockInstance(id.trimmed(), this);
+        m_live_instances.append(instance);
+        Host::get()->registerInstance(id.trimmed(), instance, this);
+    }
+
+    [[nodiscard]] auto started() const -> QStringList {
+        return m_started;
+    }
+
+private:
+    ReqId m_next_req_id = 0;
+    QStringList m_started;
+    QList<MockInstance *> m_live_instances;
+};
+
 // Drives the three host lifecycle calls from whatever thread it lives in. The
 // instance itself is built on the GUI thread; only the host calls are moved.
 class ThreadedCaller final : public QObject {
@@ -375,6 +423,35 @@ public:
 private:
     MockModule *m_module = nullptr;
     MockModule *m_other_module = nullptr;
+};
+
+// Builtin-style plugin exposing the synchronously-emitting module.
+class MockSyncPlugin final : public QObject, public IPlugin {
+    Q_OBJECT
+    Q_INTERFACES(IPlugin)
+
+public:
+    explicit MockSyncPlugin(QObject *parent = nullptr)
+        : QObject(parent), m_module(new MockSyncModule(this)) {}
+    ~MockSyncPlugin() override = default;
+
+    [[nodiscard]] QMap<QString, QString> meta() const override {
+        QMap<QString, QString> meta;
+        meta.insert(QStringLiteral("id"), QStringLiteral("mock.sync.plugin"));
+        meta.insert(QStringLiteral("name"), QStringLiteral("Mock Sync Plugin"));
+        return meta;
+    }
+
+    [[nodiscard]] QList<IModule *> modules() const override {
+        return {m_module};
+    }
+
+    [[nodiscard]] auto module() const -> MockSyncModule * {
+        return m_module;
+    }
+
+private:
+    MockSyncModule *m_module = nullptr;
 };
 
 } // namespace smoke

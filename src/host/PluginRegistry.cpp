@@ -408,7 +408,11 @@ void PluginRegistry::onModuleInstances(ReqId req_id, QList<QPair<QString, QStrin
     if (module == nullptr) {
         return;
     }
+    applyModuleInstances(module, req_id, std::move(instances));
+}
 
+void PluginRegistry::applyModuleInstances(IModule *module, ReqId req_id,
+                                          QList<QPair<QString, QString>> instances) {
     auto pendingIt = m_pending_list_requests.find(module);
     if (pendingIt == m_pending_list_requests.end() || !pendingIt->remove(req_id)) {
         if (req_id != 0 && m_module_owner.contains(module)) {
@@ -435,7 +439,10 @@ void PluginRegistry::onModuleAutoStart(ReqId req_id, QStringList ids) {
     if (module == nullptr) {
         return;
     }
+    applyModuleAutoStart(module, req_id, std::move(ids));
+}
 
+void PluginRegistry::applyModuleAutoStart(IModule *module, ReqId req_id, QStringList ids) {
     auto pendingIt = m_pending_auto_start_requests.find(module);
     if (pendingIt == m_pending_auto_start_requests.end() || !pendingIt->remove(req_id)) {
         if (req_id != 0 && m_module_owner.contains(module)) {
@@ -724,7 +731,7 @@ void PluginRegistry::activateModule(IModule *module, IPlugin *plugin) {
         if (m_sync_auto_start_responses.contains(module)
             && m_sync_auto_start_responses.value(module).first == autoReqId) {
             auto response = m_sync_auto_start_responses.take(module);
-            onModuleAutoStart(response.first, response.second);
+            applyModuleAutoStart(module, response.first, response.second);
         }
     }
 
@@ -734,7 +741,7 @@ void PluginRegistry::activateModule(IModule *module, IPlugin *plugin) {
         if (m_sync_list_responses.contains(module)
             && m_sync_list_responses.value(module).first == listReqId) {
             auto response = m_sync_list_responses.take(module);
-            onModuleInstances(response.first, response.second);
+            applyModuleInstances(module, response.first, response.second);
         }
     }
 }
