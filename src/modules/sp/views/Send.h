@@ -240,7 +240,6 @@ private:
     std::optional<TransactionTemplate> m_tx_template = std::nullopt;
     QString m_signed_tx_hex;
     /// SP change of m_signed_tx_hex, kept for broadcast once the psbt is dropped.
-    uint64_t m_change = 0;
     QList<RustCoin> m_selected_coins{};
     QStringList m_auto_selected_outpoints;
     CoinState m_last_coin_state{};

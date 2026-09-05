@@ -1339,7 +1339,6 @@ void Send::onProcess() {
     qDebug() << "Send::onProcess()";
     if (!m_signed_tx_hex.isEmpty()) {
         m_signed_tx_hex.clear();
-        m_change = 0;
         m_warning_label->clear();
         m_warning_label->setVisible(false);
     }
@@ -1596,9 +1595,6 @@ void Send::onSendConfirmed() {
         return;
     }
 
-    // The psbt is dropped once signed, so keep its SP change for the broadcast.
-    m_change = m_psbt_result.value()->get_change();
-
     // Sign on background thread (future-proofed for hardware signing devices)
     auto *thread = QThread::create([this]() {
         auto result = m_controller->getAccount().value()->sign_transaction(*m_psbt_result.value());
@@ -1632,10 +1628,9 @@ void Send::onBroadcastConfirmed() {
     m_warning_label->setText(TR("confirm-send-broadcasting"));
     m_warning_label->setVisible(true);
     auto signedHex = m_signed_tx_hex.toStdString();
-    auto change = m_change;
-    auto *thread = QThread::create([this, signedHex, change]() {
-        auto broadcastResult = m_controller->getAccount().value()->broadcast_transaction(
-            rust::String(signedHex), change);
+    auto *thread = QThread::create([this, signedHex]() {
+        auto broadcastResult =
+            m_controller->getAccount().value()->broadcast_transaction(rust::String(signedHex));
         emit broadcastReady(broadcastResult);
     });
     connect(thread, &QThread::finished, thread, &QThread::deleteLater);
@@ -1655,7 +1650,6 @@ void Send::onBroadcastResult(TxResult result) {
     }
 
     m_signed_tx_hex.clear();
-    m_change = 0;
     m_tx_template = std::nullopt;
 
     if (result.is_ok) {

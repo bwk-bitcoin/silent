@@ -87,7 +87,7 @@
         lockFile = ./silent/Cargo.lock;
         outputHashes = {
           "blindbitd-0.0.1" = "sha256-XfO7P9uVLbw8mpiqLZbUoKw8XsxqM1MyeBuq6TKeZ24=";
-          "bwk-sp-0.1.0" = "sha256-kRi2Tzj3j4rjV7EqydzYso1gboJupMxH0wcjqLYz1Hw=";
+          "bwk-sp-0.1.0" = "sha256-rM0/mN/eVof9vH2eWJGoHbehd6TzAeCdCf1IBQiPcbE=";
         };
       };
 
@@ -120,9 +120,9 @@
 [source.crates-io]
 replace-with = "vendored-sources"
 
-[source."git+https://github.com/pythcoiner/bwk.git?rev=a8e5ddf6d2dc49b47325152f4c1e58e27bb0934e"]
+[source."git+https://github.com/pythcoiner/bwk.git?rev=05db3d2d128be747fa10ea511634df6a09e7465b"]
 git = "https://github.com/pythcoiner/bwk.git"
-rev = "a8e5ddf6d2dc49b47325152f4c1e58e27bb0934e"
+rev = "05db3d2d128be747fa10ea511634df6a09e7465b"
 replace-with = "vendored-sources"
 
 [source."git+https://github.com/pythcoiner/blindbitd.git"]

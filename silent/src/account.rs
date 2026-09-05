@@ -538,12 +538,7 @@ impl Account {
 
     /// Prepare a transaction for signing.
     pub fn prepare_transaction(&self, tx_template: TransactionTemplate) -> Box<PsbtResult> {
-        let err_psbt = |e: String| {
-            Box::new(PsbtResult {
-                inner: Err(e),
-                change: 0,
-            })
-        };
+        let err_psbt = |e: String| Box::new(PsbtResult { inner: Err(e) });
 
         let Some(inner) = &self.inner else {
             return err_psbt("Account not initialized".to_string());
@@ -557,20 +552,8 @@ impl Account {
             }
         };
 
-        // Only the builder knows the SP change, and record_unconfirmed_spend needs
-        // it at broadcast time to net the send amount until the scan sees the
-        // change coin, so read it here and carry it on the result.
-        let change = builder
-            .simulate()
-            .change
-            .map(|amount| amount.to_sat())
-            .unwrap_or(0);
-
         match builder.generate() {
-            Ok(psbt) => Box::new(PsbtResult {
-                inner: Ok(psbt),
-                change,
-            }),
+            Ok(psbt) => Box::new(PsbtResult { inner: Ok(psbt) }),
             Err(e) => {
                 let error = format!("{e:?}");
                 log_failed_prepare(inner, &tx_template, &error);
@@ -618,9 +601,7 @@ impl Account {
 
     /// Broadcast a signed transaction to the network via Electrum.
     ///
-    /// `change` is the SP change from the PsbtResult the transaction was built
-    /// from (see PsbtResult::get_change), 0 if none.
-    pub fn broadcast_transaction(&self, signed_tx_hex: String, change: u64) -> TxResult {
+    pub fn broadcast_transaction(&self, signed_tx_hex: String) -> TxResult {
         use bitcoin::consensus::encode::deserialize_hex;
         use bitcoin::Transaction;
 
@@ -655,7 +636,7 @@ impl Account {
 
         // Reflect the spend locally so spent SP coins drop from spendable at once
         // (sub-account inputs are handled by their own Electrum listeners).
-        if let Err(e) = inner.account.record_unconfirmed_spend(&tx, change) {
+        if let Err(e) = inner.account.record_unconfirmed_spend(&tx) {
             log::warn!("record_unconfirmed_spend after broadcast failed: {e}");
         }
 
@@ -710,10 +691,7 @@ impl Account {
 
         // Reflect the spend locally so spent SP coins drop from spendable at once
         // (sub-account inputs are handled by their own Electrum listeners).
-        if let Err(e) = inner
-            .account
-            .record_unconfirmed_spend(&signed_tx, psbt_result.change)
-        {
+        if let Err(e) = inner.account.record_unconfirmed_spend(&signed_tx) {
             log::warn!("record_unconfirmed_spend after broadcast failed: {e}");
         }
 
@@ -1119,6 +1097,16 @@ fn convert_notification(notif: BwkNotification) -> Notification {
             flag: NotificationFlag::CoinUpdate,
             payload: String::new(),
         },
+        BwkNotification::PaymentHistoryUpdated => Notification {
+            flag: NotificationFlag::PaymentUpdated,
+            payload: String::new(),
+        },
+        // Nothing consumes header validation progress yet; it is carried across so the
+        // UI can pick it up without another bridge change.
+        BwkNotification::HeaderProgress(event) => Notification {
+            flag: NotificationFlag::HeaderProgress,
+            payload: format!("{event:?}"),
+        },
         BwkNotification::ValidationFailed(failure) => Notification {
             flag: NotificationFlag::ElectrumError,
             payload: format!("{failure:?}"),
@@ -1190,6 +1178,16 @@ fn convert_sp_notification(sp_notif: SpNotification) -> Notification {
         SpNotification::OutputSpent(outpoint) => Notification {
             flag: NotificationFlag::OutputSpent,
             payload: outpoint.to_string(),
+        },
+        // Silent broadcasts through its own Electrum path, so these only arrive when
+        // the account broadcasts on its own; both change local state.
+        SpNotification::Broadcasted { txid } => Notification {
+            flag: NotificationFlag::CoinUpdate,
+            payload: txid.to_string(),
+        },
+        SpNotification::FailBroadcast { message } => Notification {
+            flag: NotificationFlag::ElectrumError,
+            payload: message,
         },
         SpNotification::WaitingForBlocks { tip_height } => Notification {
             flag: NotificationFlag::WaitingForBlocks,
@@ -1332,20 +1330,12 @@ impl Poll {
 /// PsbtResult wrapper for CXX.
 pub struct PsbtResult {
     inner: Result<bitcoin::Psbt, String>,
-    /// SP change the builder assigned, 0 if none.
-    change: u64,
 }
 
 impl PsbtResult {
     /// Check if result is valid.
     pub fn is_ok(&self) -> bool {
         self.inner.is_ok()
-    }
-
-    /// Get the SP change (0 if none). Pass it back to broadcast_transaction so a
-    /// just-broadcast send nets its change before the scan records the coin.
-    pub fn get_change(&self) -> u64 {
-        self.change
     }
 
     /// Get error message (only valid if !is_ok()).
