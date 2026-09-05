@@ -38,6 +38,7 @@ public slots:
     void onThemeNames(ReqId req_id, const QStringList &themes);
     void onThemePalette(ReqId req_id, theme::Palette palette);
     void onHostSettingsSectionsChanged();
+    void onOpenSectionClicked();
     void onHostInstanceChanged(const QString &id);
 
 protected:

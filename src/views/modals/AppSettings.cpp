@@ -9,7 +9,6 @@
 #include "views/utils.h"
 #include "catalog/Button.h"
 #include "catalog/inputs/ComboBox.h"
-#include "catalog/containers/FoldSection.h"
 #include "catalog/display/Label.h"
 #include "catalog/containers/ScrollArea.h"
 #include "theme/Theme.h"
@@ -236,12 +235,6 @@ void AppSettings::rebuildSettingSectionRows() {
         return;
     }
 
-    for (auto *row : m_setting_section_rows) {
-        auto *section = dynamic_cast<catalog::FoldSection *>(row);
-        if (section != nullptr) {
-            section->detachContent();
-        }
-    }
     m_section_column->clear();
     m_setting_section_rows.clear();
 
@@ -268,14 +261,63 @@ void AppSettings::rebuildSettingSectionRows() {
         QString title = entry.title.trimmed().isEmpty()
             ? TR("settings-section-fallback").arg(entry.id)
             : entry.title.trimmed();
-        auto *section = new catalog::FoldSection(title);
-        section->setExpanded(false);
-        section->setContent(entry.content);
 
-        m_setting_section_rows.append(section);
-        m_section_column->push(section);
+        // The widget is shown only inside the modal the button opens, never parented
+        // here: a section that lives in this dialog dies with it, and the module owns it.
+        auto *openBtn = new Button(TR("settings-section-open"));
+        openBtn->setProperty("sectionId", QVariant::fromValue(entry.id));
+        connect(openBtn, &QPushButton::clicked, this, &AppSettings::onOpenSectionClicked,
+                qontrol::UNIQUE);
+
+        auto *row = (new qontrol::Row)
+                        ->push(new Label(title, LabelRole::Body))
+                        ->pushSpacer()
+                        ->push(openBtn);
+
+        m_setting_section_rows.append(row);
+        m_section_column->push(row);
         m_section_column->pushSpacer(resolve(Spacing::S));
     }
+}
+
+void AppSettings::onOpenSectionClicked() {
+    auto *button = qobject_cast<QPushButton *>(sender());
+    if (button == nullptr || m_host == nullptr) {
+        return;
+    }
+    auto sectionId = button->property("sectionId").value<Host::SectionId>();
+
+    // Re-query rather than capturing the widget: a module can drop its section while
+    // the settings dialog is open.
+    QWidget *content = nullptr;
+    QString title;
+    for (const auto &entry : m_host->settingSections()) {
+        if (entry.id == sectionId && entry.content != nullptr) {
+            content = entry.content;
+            title = entry.title.trimmed();
+            break;
+        }
+    }
+    if (content == nullptr) {
+        return;
+    }
+
+    auto *modal = new qontrol::Modal;
+    modal->setWindowTitle(title.isEmpty() ? TR("settings-section-fallback").arg(sectionId) : title);
+    auto *closeBtn = new Button(TR("common-close"));
+    connect(closeBtn, &QPushButton::clicked, modal, &QDialog::accept, qontrol::UNIQUE);
+
+    auto *column = (new qontrol::Column)
+                       ->push(content)
+                       ->pushSpacer(resolve(Spacing::M))
+                       ->push((new qontrol::Row)->pushSpacer()->push(closeBtn));
+    modal->setMainWidget(margin(column));
+    modal->exec();
+
+    // setMainWidget reparented the section into the modal; take it back before the
+    // modal is destroyed or the module's widget goes with it.
+    content->setParent(nullptr);
+    modal->deleteLater();
 }
 
 void AppSettings::refreshThemeProviders() {

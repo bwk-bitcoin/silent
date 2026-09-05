@@ -234,6 +234,7 @@ settings-registry-unavailable
 settings-save => "Save Settings" => "Enregistrer les parametres"
 settings-scan-plugins => "Scan for plugins" => "Rechercher des plugins"
 settings-section-fallback => "Section %1" => "Section %1"
+settings-section-open => "Open" => "Open"
 settings-status => "Status:" => "Statut:"
 settings-theme => "Theme:" => "Theme:"
 settings-theme-dark => "Dark" => "Sombre"

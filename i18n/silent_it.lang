@@ -230,6 +230,7 @@ settings-registry-unavailable
 settings-save => "Save Settings" => "Salva impostazioni"
 settings-scan-plugins => "Scan for plugins" => "Cerca plugin"
 settings-section-fallback => "Section %1" => "Sezione %1"
+settings-section-open => "Open" => "Open"
 settings-status => "Status:" => "Stato:"
 settings-theme => "Theme:" => "Tema:"
 settings-theme-dark => "Dark" => "Scuro"

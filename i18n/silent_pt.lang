@@ -232,6 +232,7 @@ settings-registry-unavailable
 settings-save => "Save Settings" => "Salvar configuracoes"
 settings-scan-plugins => "Scan for plugins" => "Procurar plugins"
 settings-section-fallback => "Section %1" => "Secao %1"
+settings-section-open => "Open" => "Open"
 settings-status => "Status:" => "Status:"
 settings-theme => "Theme:" => "Tema:"
 settings-theme-dark => "Dark" => "Escuro"

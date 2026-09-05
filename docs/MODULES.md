@@ -286,8 +286,10 @@ public:
     void      setTabTitle(TabId tab, const QString &title);          // dynamic, any time
     void      closeTab(TabId tab);
 
+    // global Settings lists the title with a button; the widget is shown only while
+    // the modal that button opens is up, so a section can gate work on being visible
     SectionId addSettingSection(QWidget *content, IInstance *owner,
-                                const QString &title = QString());  // global Settings
+                                const QString &title = QString());
     void      delSettingSection(SectionId section);
     QList<SettingSectionView> settingSections() const;              // live sections
 
