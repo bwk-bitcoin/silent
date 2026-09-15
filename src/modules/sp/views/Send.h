@@ -1,6 +1,7 @@
 #pragma once
 
 #include "theme/Palette.h"
+#include "interfaces/types.h"
 #include <Qontrol>
 #include <cstdint>
 #include <optional>
@@ -62,6 +63,7 @@ class QCheckBox;
 #include <silent.h>
 
 class AccountController;
+class ISigner;
 
 namespace modal {
 class ConfirmSend;
@@ -154,6 +156,8 @@ public slots:
     void onSendConfirmed();
     void onBroadcastConfirmed();
     void onSignResult(TxResult result);
+    void onSignerSigned(ReqId req_id, QString psbt_base64);
+    void onSignerError(std::optional<ReqId> req_id, QString message);
     void onBroadcastResult(TxResult result);
     void onCoinsUpdated(CoinState state);
 
@@ -239,6 +243,8 @@ private:
     std::optional<rust::Box<PsbtResult>> m_psbt_result = std::nullopt;
     std::optional<TransactionTemplate> m_tx_template = std::nullopt;
     QString m_signed_tx_hex;
+    ISigner *m_selected_signer = nullptr;
+    ReqId m_sign_req_id = 0;
     /// SP change of m_signed_tx_hex, kept for broadcast once the psbt is dropped.
     QList<RustCoin> m_selected_coins{};
     QStringList m_auto_selected_outpoints;

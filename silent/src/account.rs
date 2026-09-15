@@ -6,11 +6,12 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use bwk_sp::account::recipient::SpRecipientAddress;
-use bwk_sp::account::{Account as SpAccount, AccountError, ScanMode};
-use bwk_sp::bwk::coin_store::PaymentType;
-use bwk_sp::bwk::TxListenerNotif;
+use bwk_sp::account::{Account as SpAccount, ScanMode};
+use bwk_sp::bwk::bwk_electrum::{
+    coin_store::PaymentType,
+    notification::{Notification as BwkNotification, SpNotification, TxListenerNotif},
+};
 use bwk_sp::receiver::RecipientAddress;
-use bwk_sp::{Notification as BwkNotification, SpNotification};
 
 use crate::config::Config;
 use crate::ffi::{
@@ -35,7 +36,7 @@ pub struct Account {
 
 impl Account {
     /// Create a new Account from config (for Rust-side use / tests).
-    pub fn new(config: Config) -> Result<Self, AccountError> {
+    pub fn new(config: Config) -> Result<Self, String> {
         let inner = Self::new_inner(config)?;
         Ok(Account {
             inner: Some(inner),
@@ -44,7 +45,7 @@ impl Account {
     }
 
     /// Create a new AccountInner from config.
-    fn new_inner(config: Config) -> Result<AccountInner, AccountError> {
+    fn new_inner(config: Config) -> Result<AccountInner, String> {
         let network = match config.network {
             crate::ffi::Network::Regtest => bitcoin::Network::Regtest,
             crate::ffi::Network::Signet => bitcoin::Network::Signet,
@@ -53,8 +54,8 @@ impl Account {
             _ => unreachable!("CXX enum type safety guarantees no other variants exist"),
         };
 
-        let sp_config = config.to_sp_config();
-        let mut account = SpAccount::new(sp_config)?;
+        let sp_config = config.to_sp_config()?;
+        let mut account = SpAccount::new(sp_config).map_err(|e| e.to_string())?;
         let receiver = account.receiver();
 
         Ok(AccountInner {
@@ -188,7 +189,7 @@ impl Account {
     /// Check if the account has sub-accounts (segwit + taproot).
     pub fn has_sub_accounts(&self) -> bool {
         match &self.inner {
-            Some(inner) => inner.account.sub_accounts().len() >= 2,
+            Some(inner) => inner.account.scanners().count() >= 2,
             None => false,
         }
     }
@@ -196,7 +197,7 @@ impl Account {
     /// Get the number of sub-accounts.
     pub fn sub_account_count(&self) -> u32 {
         match &self.inner {
-            Some(inner) => inner.account.sub_accounts().len() as u32,
+            Some(inner) => inner.account.scanners().count() as u32,
             None => 0,
         }
     }
@@ -206,11 +207,10 @@ impl Account {
         let Some(inner) = &mut self.inner else {
             return String::new();
         };
-        let subs = inner.account.sub_accounts_mut();
-        if subs.is_empty() {
+        let Some(scanner) = inner.account.scanners_mut().nth(0) else {
             return String::new();
-        }
-        subs[0].new_addr().address.assume_checked().to_string()
+        };
+        scanner.new_addr().address.assume_checked().to_string()
     }
 
     /// Generate a new taproot receiving address from sub-account index 1.
@@ -218,79 +218,53 @@ impl Account {
         let Some(inner) = &mut self.inner else {
             return String::new();
         };
-        let subs = inner.account.sub_accounts_mut();
-        if subs.len() < 2 {
+        let Some(scanner) = inner.account.scanners_mut().nth(1) else {
             return String::new();
-        }
-        subs[1].new_addr().address.assume_checked().to_string()
+        };
+        scanner.new_addr().address.assume_checked().to_string()
     }
 
     /// Get all coins (both spent and unspent, SP + sub-accounts).
     pub fn coins(&self) -> Vec<RustCoin> {
+        use bwk_sp::account::unified::CoinOrigin;
+
         let Some(inner) = &self.inner else {
             return vec![];
         };
-        // SP coins
-        let mut all_coins: Vec<RustCoin> = inner
+        inner
             .account
-            .coins()
-            .into_iter()
-            .map(|(outpoint, entry)| RustCoin {
-                outpoint: format!("{}:{}", outpoint.txid, outpoint.vout),
-                value: entry.amount_sat(),
-                height: entry.height(),
-                label: inner.account.get_coin_label(&outpoint).unwrap_or_default(),
-                spent: !entry.is_spendable(),
-                account_type: "SP".into(),
+            .all_coins()
+            .into_values()
+            .map(|coin| {
+                let account_type = match coin.origin {
+                    CoinOrigin::Sp => "SP",
+                    CoinOrigin::SubAccount(0) => "Segwit",
+                    CoinOrigin::SubAccount(1) => "Taproot",
+                    CoinOrigin::SubAccount(_) => "Unknown",
+                }
+                .to_string();
+                RustCoin {
+                    outpoint: format!("{}:{}", coin.outpoint.txid, coin.outpoint.vout),
+                    value: coin.amount.to_sat(),
+                    height: coin.height.unwrap_or(0),
+                    label: coin.label.unwrap_or_default(),
+                    spent: !coin.spendable,
+                    account_type,
+                }
             })
-            .collect();
-        // Sub-account coins (segwit, taproot)
-        for (sub_idx, sub) in inner.account.sub_accounts().iter().enumerate() {
-            let acct_type: String = match sub_idx {
-                0 => "Segwit",
-                1 => "Taproot",
-                _ => "Unknown",
-            }
-            .into();
-            for (outpoint, entry) in sub.coins() {
-                all_coins.push(RustCoin {
-                    outpoint: format!("{}:{}", outpoint.txid, outpoint.vout),
-                    value: entry.amount_sat(),
-                    height: entry.height().unwrap_or(0) as u32,
-                    label: inner.account.get_coin_label(&outpoint).unwrap_or_default(),
-                    spent: matches!(
-                        entry.status(),
-                        bwk_sp::bwk_tx::CoinStatus::Spent | bwk_sp::bwk_tx::CoinStatus::BeingSpend
-                    ),
-                    account_type: acct_type.clone(),
-                });
-            }
-        }
-        all_coins
+            .collect()
     }
 
     /// Get spendable coins summary (SP + sub-accounts).
     pub fn spendable_coins(&self) -> CoinState {
         match &self.inner {
             Some(inner) => {
-                let sp_state = inner.account.spendable_coins();
-                let mut confirmed_count = sp_state.confirmed_coins as u64;
-                let mut confirmed_balance = sp_state.confirmed_balance;
-                let mut unconfirmed_count = sp_state.unconfirmed_coins as u64;
-                let mut unconfirmed_balance = sp_state.unconfirmed_balance;
-                // Add sub-account coins
-                for sub in inner.account.sub_accounts() {
-                    let sub_state = sub.spendable_coins();
-                    confirmed_count += sub_state.confirmed_coins as u64;
-                    confirmed_balance += sub_state.confirmed_balance;
-                    unconfirmed_count += sub_state.unconfirmed_coins as u64;
-                    unconfirmed_balance += sub_state.unconfirmed_balance;
-                }
+                let summary = inner.account.all_spendable_coins();
                 CoinState {
-                    confirmed_count,
-                    confirmed_balance,
-                    unconfirmed_count,
-                    unconfirmed_balance,
+                    confirmed_count: summary.confirmed_count,
+                    confirmed_balance: summary.confirmed_balance.to_sat(),
+                    unconfirmed_count: summary.unconfirmed_count,
+                    unconfirmed_balance: summary.unconfirmed_balance.to_sat(),
                 }
             }
             None => CoinState {
@@ -365,11 +339,25 @@ impl Account {
         txs
     }
 
+    /// Get the account SP descriptor.
+    pub fn descriptor(&self) -> String {
+        let Some(inner) = &self.inner else {
+            return String::new();
+        };
+        match crate::config::Config::from_file(inner.account.name().to_string()) {
+            Ok(config) => config.get_descriptor(),
+            Err(e) => {
+                log::error!("failed to load descriptor: {e}");
+                String::new()
+            }
+        }
+    }
+
     /// Build a configured TxBuilder from a TransactionTemplate.
     fn build_tx_builder(
         inner: &AccountInner,
         tx_template: &TransactionTemplate,
-    ) -> Result<bwk_sp::bwk_tx::TxBuilder, TemplateError> {
+    ) -> Result<bwk_sp::bwk_tx::tx_builder::TxBuilder, TemplateError> {
         let network = inner.network;
         let mut has_max = false;
         let mut max_addr = None;
@@ -409,7 +397,7 @@ impl Account {
         if has_max {
             let addr = max_addr.unwrap();
             let mut recip = SpRecipientAddress::new(addr, 0, network);
-            recip.amount = bwk_sp::bwk_tx::Amount::Max(None);
+            recip.amount = bwk_sp::bwk_tx::transaction::Amount::Max(None);
             builder.add_output(recip);
         }
 
@@ -428,13 +416,13 @@ impl Account {
                 } else {
                     // Try sub-account coins
                     let mut found = false;
-                    for sub in inner.account.sub_accounts() {
+                    for sub in inner.account.scanners() {
                         let sub_coins = sub.coins();
                         if let Some(entry) = sub_coins.get(&outpoint) {
                             if matches!(
                                 entry.status(),
-                                bwk_sp::bwk_tx::CoinStatus::Spent
-                                    | bwk_sp::bwk_tx::CoinStatus::BeingSpend
+                                bwk_sp::bwk::bwk_coin::CoinStatus::Spent
+                                    | bwk_sp::bwk::bwk_coin::CoinStatus::BeingSpend
                             ) {
                                 return Err(TemplateError::NotSpendable(outpoint_str.clone()));
                             }
@@ -552,8 +540,23 @@ impl Account {
             }
         };
 
-        match builder.generate() {
-            Ok(psbt) => Box::new(PsbtResult { inner: Ok(psbt) }),
+        match builder.generate_v2() {
+            Ok(psbt) => match psbt.to_bitcoin_psbt_with_empty_sp_outputs() {
+                Ok(psbt_v0) => Box::new(PsbtResult {
+                    inner: Ok(PreparedPsbt {
+                        bytes: psbt_v0.serialize(),
+                        txid: psbt
+                            .unsigned_tx()
+                            .map(|tx| tx.compute_txid().to_string())
+                            .unwrap_or_default(),
+                    }),
+                }),
+                Err(e) => {
+                    let error = format!("{e:?}");
+                    log_failed_prepare(inner, &tx_template, &error);
+                    err_psbt(error)
+                }
+            },
             Err(e) => {
                 let error = format!("{e:?}");
                 log_failed_prepare(inner, &tx_template, &error);
@@ -564,9 +567,7 @@ impl Account {
 
     /// Sign a prepared transaction.
     pub fn sign_transaction(&self, psbt_result: &PsbtResult) -> TxResult {
-        use bitcoin::consensus::encode::serialize_hex;
-
-        let Some(inner) = &self.inner else {
+        if self.inner.is_none() {
             return TxResult {
                 is_ok: false,
                 error: "Account not initialized".to_string(),
@@ -574,28 +575,18 @@ impl Account {
             };
         };
 
-        let mut psbt = match &psbt_result.inner {
-            Ok(psbt) => psbt.clone(),
-            Err(e) => {
-                return TxResult {
-                    is_ok: false,
-                    error: format!("Cannot sign invalid transaction: {e}"),
-                    value: String::new(),
-                }
-            }
+        if let Err(e) = &psbt_result.inner {
+            return TxResult {
+                is_ok: false,
+                error: format!("Cannot sign invalid transaction: {e}"),
+                value: String::new(),
+            };
         };
 
-        match inner.account.sign_and_finalize(&mut psbt) {
-            Ok(signed_tx) => TxResult {
-                is_ok: true,
-                error: String::new(),
-                value: serialize_hex(&signed_tx),
-            },
-            Err(e) => TxResult {
-                is_ok: false,
-                error: format!("Signing failed: {e}"),
-                value: String::new(),
-            },
+        TxResult {
+            is_ok: false,
+            error: "External signer required".to_string(),
+            value: String::new(),
         }
     }
 
@@ -647,8 +638,11 @@ impl Account {
         }
     }
 
-    /// Sign and broadcast a transaction in one step.
-    pub fn sign_and_broadcast(&self, psbt_result: &PsbtResult) -> TxResult {
+    /// Finalize a signed PSBT and return transaction hex.
+    pub fn finalize_psbt(&self, signed_psbt_base64: String) -> TxResult {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        use bitcoin::consensus::encode::serialize_hex;
+
         let Some(inner) = &self.inner else {
             return TxResult {
                 is_ok: false,
@@ -657,48 +651,53 @@ impl Account {
             };
         };
 
-        let mut psbt = match &psbt_result.inner {
-            Ok(psbt) => psbt.clone(),
+        let psbt = match STANDARD.decode(signed_psbt_base64.trim()) {
+            Ok(psbt) => psbt,
             Err(e) => {
                 return TxResult {
                     is_ok: false,
-                    error: format!("Cannot sign invalid transaction: {e}"),
+                    error: format!("Invalid PSBT base64: {e}"),
                     value: String::new(),
                 }
             }
         };
 
-        let signed_tx = match inner.account.sign_and_finalize(&mut psbt) {
-            Ok(tx) => tx,
-            Err(e) => {
-                return TxResult {
-                    is_ok: false,
-                    error: format!("Signing failed: {e}"),
-                    value: String::new(),
-                }
-            }
-        };
+        match inner.account.finalize(&psbt) {
+            Ok(tx) => TxResult {
+                is_ok: true,
+                error: String::new(),
+                value: serialize_hex(&tx),
+            },
+            Err(e) => TxResult {
+                is_ok: false,
+                error: format!("Failed to finalize PSBT: {e}"),
+                value: String::new(),
+            },
+        }
+    }
 
-        let txid = signed_tx.compute_txid();
-
-        if let Err(e) = broadcast_via_electrum(&inner.electrum_url, &signed_tx) {
+    /// Sign and broadcast a transaction in one step.
+    pub fn sign_and_broadcast(&self, psbt_result: &PsbtResult) -> TxResult {
+        if self.inner.is_none() {
             return TxResult {
                 is_ok: false,
-                error: e,
+                error: "Account not initialized".to_string(),
                 value: String::new(),
             };
-        }
+        };
 
-        // Reflect the spend locally so spent SP coins drop from spendable at once
-        // (sub-account inputs are handled by their own Electrum listeners).
-        if let Err(e) = inner.account.record_unconfirmed_spend(&signed_tx) {
-            log::warn!("record_unconfirmed_spend after broadcast failed: {e}");
-        }
+        if let Err(e) = &psbt_result.inner {
+            return TxResult {
+                is_ok: false,
+                error: format!("Cannot sign invalid transaction: {e}"),
+                value: String::new(),
+            };
+        };
 
         TxResult {
-            is_ok: true,
-            error: String::new(),
-            value: txid.to_string(),
+            is_ok: false,
+            error: "External signer required".to_string(),
+            value: String::new(),
         }
     }
     /// Validate a prepared transaction via Electrum before signing.
@@ -713,38 +712,15 @@ impl Account {
             spent_input_count: 0,
         };
 
-        let Some(inner) = &self.inner else {
+        if self.inner.is_none() {
             return err_validation("Account not initialized".to_string());
         };
 
-        let psbt = match &psbt_result.inner {
-            Ok(psbt) => psbt,
-            Err(e) => return err_validation(format!("Invalid PSBT: {e}")),
-        };
-
-        match validate_psbt_via_electrum(psbt, &inner.electrum_url) {
-            Ok(issue) => {
-                let mut issues = Vec::new();
-                for (idx, addr) in &issue.reused_outputs {
-                    issues.push(format!("Output #{idx}: address {addr} already used"));
-                }
-                for (idx, outpoint, spending_txid) in &issue.spent_inputs {
-                    issues.push(format!(
-                        "Input #{idx}: {outpoint} already spent in {spending_txid}"
-                    ));
-                }
-                let is_valid = issue.reused_outputs.is_empty() && issue.spent_inputs.is_empty();
-                crate::ffi::PsbtValidation {
-                    is_ok: true,
-                    error: String::new(),
-                    is_valid,
-                    issues: issues.join("\n"),
-                    reused_output_count: issue.reused_outputs.len() as u32,
-                    spent_input_count: issue.spent_inputs.len() as u32,
-                }
-            }
-            Err(e) => err_validation(e),
+        if let Err(e) = &psbt_result.inner {
+            return err_validation(format!("Invalid PSBT: {e}"));
         }
+
+        err_validation("PSBT v2 Electrum validation is not available yet".to_string())
     }
 
     /// Log all details of a failed broadcast for debugging/reproduction.
@@ -778,7 +754,7 @@ fn log_failed_prepare(inner: &AccountInner, tx_template: &TransactionTemplate, e
     log::error!("tx_template: {tx_template:#?}");
 
     log::error!("sp_coins: {:#?}", inner.account.coins());
-    for (sub_idx, sub) in inner.account.sub_accounts().iter().enumerate() {
+    for (sub_idx, sub) in inner.account.scanners().enumerate() {
         let name = match sub_idx {
             0 => "segwit",
             1 => "taproot",
@@ -798,7 +774,7 @@ fn log_failed_broadcast_impl(
     tx_template: &TransactionTemplate,
 ) {
     let sp_coins = inner.account.coins();
-    let subs = inner.account.sub_accounts();
+    let subs: Vec<_> = inner.account.scanners().collect();
 
     log::error!("=== BROADCAST FAILED ===");
 
@@ -893,138 +869,6 @@ fn log_failed_broadcast_impl(
     log::error!("=== END BROADCAST FAILED ===");
 }
 
-/// Issues found during PSBT validation.
-#[derive(Debug, Clone)]
-struct PsbtValidationIssue {
-    reused_outputs: Vec<(usize, String)>, // (output_index, address_string)
-    spent_inputs: Vec<(usize, String, String)>, // (input_index, outpoint, spending_txid)
-}
-
-/// Validate a PSBT via Electrum before signing.
-/// Checks for output address reuse and already-spent inputs.
-fn validate_psbt_via_electrum(
-    psbt: &bitcoin::Psbt,
-    electrum_url: &str,
-) -> Result<PsbtValidationIssue, String> {
-    use std::collections::HashMap;
-
-    if electrum_url.is_empty() {
-        return Err("Electrum server address not configured".to_string());
-    }
-
-    let (host, port) = crate::config::parse_electrum_url(electrum_url);
-    let host = host.ok_or("Invalid electrum URL: missing host")?;
-    let port = port.ok_or("Invalid electrum URL: missing port")?;
-
-    let mut client = bwk_sp::bwk::bwk_electrum::client::Client::new(&host, port)
-        .map_err(|e| format!("Connection to {electrum_url} failed: {e}"))?;
-
-    let mut reused_outputs = Vec::new();
-    let mut spent_inputs = Vec::new();
-
-    // Check outputs: any destination address already used?
-    for (idx, output) in psbt.unsigned_tx.output.iter().enumerate() {
-        let spk = &output.script_pubkey;
-
-        // Skip OP_RETURN outputs
-        if spk.is_op_return() {
-            continue;
-        }
-
-        match client.get_coins_tx_at(spk) {
-            Ok(txids) => {
-                if !txids.is_empty() {
-                    let addr = bitcoin::Address::from_script(spk, bitcoin::Network::Bitcoin)
-                        .map(|a| a.to_string())
-                        .unwrap_or_else(|_| spk.to_hex_string());
-                    reused_outputs.push((idx, addr));
-                }
-            }
-            Err(e) => {
-                log::warn!("validate_psbt: failed to check output #{idx}: {e}");
-            }
-        }
-    }
-
-    // Check inputs: any coin already spent?
-    let mut tx_cache: HashMap<bitcoin::Txid, bitcoin::Transaction> = HashMap::new();
-
-    for (idx, input) in psbt.unsigned_tx.input.iter().enumerate() {
-        let outpoint = input.previous_output;
-
-        // Get the script pubkey for this input from PSBT data
-        let spk = if let Some(ref witness_utxo) = psbt.inputs[idx].witness_utxo {
-            witness_utxo.script_pubkey.clone()
-        } else if let Some(ref non_witness_utxo) = psbt.inputs[idx].non_witness_utxo {
-            non_witness_utxo.output[outpoint.vout as usize]
-                .script_pubkey
-                .clone()
-        } else {
-            // Fetch the previous tx to get the script pubkey
-            match fetch_or_cache_tx(&mut client, &mut tx_cache, outpoint.txid) {
-                Ok(tx) => tx.output[outpoint.vout as usize].script_pubkey.clone(),
-                Err(e) => {
-                    log::warn!("validate_psbt: failed to fetch prev tx for input #{idx}: {e}");
-                    continue;
-                }
-            }
-        };
-
-        // Get history for this script pubkey
-        let txids = match client.get_coins_tx_at(&spk) {
-            Ok(txids) => txids,
-            Err(e) => {
-                log::warn!("validate_psbt: failed to get history for input #{idx}: {e}");
-                continue;
-            }
-        };
-
-        // Check if any tx in the history spends our outpoint
-        for txid in &txids {
-            // Skip the funding transaction itself
-            if *txid == outpoint.txid {
-                continue;
-            }
-
-            let tx = match fetch_or_cache_tx(&mut client, &mut tx_cache, *txid) {
-                Ok(tx) => tx,
-                Err(e) => {
-                    log::warn!("validate_psbt: failed to fetch tx {txid} for input #{idx}: {e}");
-                    continue;
-                }
-            };
-
-            for tx_input in &tx.input {
-                if tx_input.previous_output == outpoint {
-                    spent_inputs.push((idx, outpoint.to_string(), txid.to_string()));
-                    break;
-                }
-            }
-        }
-    }
-
-    Ok(PsbtValidationIssue {
-        reused_outputs,
-        spent_inputs,
-    })
-}
-
-/// Fetch a transaction, using cache to avoid duplicate requests.
-fn fetch_or_cache_tx(
-    client: &mut bwk_sp::bwk::bwk_electrum::client::Client,
-    cache: &mut std::collections::HashMap<bitcoin::Txid, bitcoin::Transaction>,
-    txid: bitcoin::Txid,
-) -> Result<bitcoin::Transaction, String> {
-    if let Some(tx) = cache.get(&txid) {
-        return Ok(tx.clone());
-    }
-    let tx = client
-        .get_tx(txid)
-        .map_err(|e| format!("Failed to fetch tx {txid}: {e}"))?;
-    cache.insert(txid, tx.clone());
-    Ok(tx)
-}
-
 /// Broadcast a transaction via Electrum server.
 fn broadcast_via_electrum(electrum_url: &str, tx: &bitcoin::Transaction) -> Result<(), String> {
     use bitcoin::consensus::encode::serialize_hex;
@@ -1035,12 +879,12 @@ fn broadcast_via_electrum(electrum_url: &str, tx: &bitcoin::Transaction) -> Resu
         return Err("Electrum server address not configured".to_string());
     }
 
-    let (host, port, scheme) = bwk_sp::bwk::parse_electrum_url(electrum_url)
+    let (host, port, scheme) = bwk_sp::bwk::bwk_electrum::url::parse_electrum_url(electrum_url)
         .map_err(|e| format!("Invalid electrum URL '{electrum_url}': {e}"))?;
     let host = host.ok_or("Invalid electrum URL: missing host")?;
     let port = port.ok_or("Invalid electrum URL: missing port")?;
 
-    let ssl = matches!(scheme, bwk_sp::bwk::ElectrumScheme::Ssl);
+    let ssl = matches!(scheme, bwk_sp::bwk::bwk_electrum::url::ElectrumScheme::Ssl);
     let mut client = bwk_sp::bwk::bwk_electrum::raw_client::Client::new_ssl_maybe(&host, port, ssl);
     client
         .try_connect(Some(Duration::from_secs(10)))
@@ -1112,17 +956,25 @@ fn convert_notification(notif: BwkNotification) -> Notification {
             payload: format!("{failure:?}"),
         },
         BwkNotification::Electrum(e) => convert_electrum_notification(e),
+        BwkNotification::Signer(e) => Notification {
+            flag: NotificationFlag::ElectrumError,
+            payload: format!("{e:?}"),
+        },
         BwkNotification::AddressTipChanged => Notification {
             flag: NotificationFlag::AddressTipChanged,
             payload: String::new(),
         },
-        BwkNotification::Error(e) => Notification {
+        // The header store could not be restarted against its endpoint, so the
+        // chain it promotes against stops advancing.
+        BwkNotification::HeaderStoreRestart => Notification {
             flag: NotificationFlag::ElectrumError,
-            payload: format!("{e:?}"),
+            payload: "Header store restart failed".to_string(),
         },
-        BwkNotification::Stopped => Notification {
-            flag: NotificationFlag::ElectrumStopped,
-            payload: String::new(),
+        // The merkle client ended, so confirmed entries stay unverified until
+        // the header store is restarted.
+        BwkNotification::MerkleFetchStopped => Notification {
+            flag: NotificationFlag::ElectrumError,
+            payload: "Merkle proof fetching stopped".to_string(),
         },
         BwkNotification::InvalidElectrumConfig => Notification {
             flag: NotificationFlag::ElectrumError,
@@ -1329,7 +1181,13 @@ impl Poll {
 
 /// PsbtResult wrapper for CXX.
 pub struct PsbtResult {
-    inner: Result<bitcoin::Psbt, String>,
+    inner: Result<PreparedPsbt, String>,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedPsbt {
+    bytes: Vec<u8>,
+    txid: String,
 }
 
 impl PsbtResult {
@@ -1349,10 +1207,27 @@ impl PsbtResult {
     /// Get transaction ID preview (only valid if is_ok()).
     pub fn get_txid_preview(&self) -> String {
         match &self.inner {
-            Ok(psbt) => psbt.unsigned_tx.compute_txid().to_string(),
+            Ok(psbt) => psbt.txid.clone(),
             Err(_) => String::new(),
         }
     }
+
+    /// Get the serialized PSBT as hex (only valid if is_ok()).
+    pub fn bytes_hex(&self) -> String {
+        match &self.inner {
+            Ok(psbt) => bytes_to_hex(&psbt.bytes),
+            Err(_) => String::new(),
+        }
+    }
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+
+    bytes.iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    })
 }
 
 /// Errors from validating a TransactionTemplate before handing it to the builder.
@@ -1391,13 +1266,13 @@ fn parse_outpoint(s: &str) -> Result<bitcoin::OutPoint, TemplateError> {
     Ok(bitcoin::OutPoint { txid, vout })
 }
 
-/// Convert an SpCoinEntry to a bwk_sp::bwk_tx::Coin for use with TxBuilder.
+/// Convert an SpCoinEntry to a bwk_sp::bwk::bwk_coin::Coin for use with TxBuilder.
 fn sp_coin_entry_to_coin(
     outpoint: bitcoin::OutPoint,
     entry: &bwk_sp::account::coin_store::SpCoinEntry,
-) -> bwk_sp::bwk_tx::Coin {
+) -> bwk_sp::bwk::bwk_coin::Coin {
     const TR_KEYSPEND_SATISFACTION_WEIGHT: u64 = 66;
-    bwk_sp::bwk_tx::Coin {
+    bwk_sp::bwk::bwk_coin::Coin {
         txout: bitcoin::TxOut {
             value: entry.amount(),
             script_pubkey: entry.script().clone(),
@@ -1405,11 +1280,10 @@ fn sp_coin_entry_to_coin(
         outpoint,
         height: Some(entry.height() as u64),
         sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
-        status: bwk_sp::bwk_tx::CoinStatus::Confirmed,
+        status: bwk_sp::bwk::bwk_coin::CoinStatus::Confirmed,
         label: None,
         satisfaction_size: TR_KEYSPEND_SATISFACTION_WEIGHT,
-        spend_info: bwk_sp::bwk_tx::CoinSpendInfo::Sp {
-            derivation: bitcoin::bip32::DerivationPath::default(),
+        spend_info: bwk_sp::bwk::bwk_coin::CoinSpendInfo::Sp {
             tweak: *entry.tweak(),
         },
     }

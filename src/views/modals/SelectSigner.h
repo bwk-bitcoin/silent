@@ -6,6 +6,8 @@ namespace catalog {
 class Button;
 }
 
+class ISigner;
+
 namespace modal {
 
 class SelectSigner : public qontrol::Modal {
@@ -15,6 +17,7 @@ public:
     explicit SelectSigner(const QString &title, bool include_sd = true, QWidget *parent = nullptr);
     [[nodiscard]] auto selectedName() const -> QString;
     [[nodiscard]] auto selectedKind() const -> QString;
+    [[nodiscard]] auto selectedSigner() const -> ISigner *;
 
 public slots:
     void onSignerClicked();
@@ -28,6 +31,7 @@ private:
     QString m_title;
     QString m_selected_name;
     QString m_selected_kind;
+    ISigner *m_selected_signer = nullptr;
     bool m_include_sd = true;
     catalog::Button *m_cancel_btn = nullptr;
 };

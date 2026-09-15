@@ -25,6 +25,7 @@ public:
     virtual auto newSegwitAddr() -> rust::String;
     virtual auto newTaprootAddr() -> rust::String;
     virtual auto hasSubAccounts() -> bool;
+    virtual auto getDescriptor() -> rust::String;
     auto coins() -> qontrol::Screen *;
     auto getAccount() -> std::optional<rust::Box<Account>> &;
 

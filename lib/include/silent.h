@@ -978,6 +978,8 @@ struct Output;
 struct TransactionTemplate;
 struct TransactionSimulation;
 struct TxResult;
+struct SpDescriptorResult;
+struct QrImageResult;
 struct ConnectionResult;
 struct RegtestDefaults;
 struct PsbtValidation;
@@ -1196,6 +1198,38 @@ struct TxResult final {
 };
 #endif // CXXBRIDGE1_STRUCT_TxResult
 
+#ifndef CXXBRIDGE1_STRUCT_SpDescriptorResult
+#define CXXBRIDGE1_STRUCT_SpDescriptorResult
+// Result of decoding an SP descriptor QR response.
+struct SpDescriptorResult final {
+  // Whether the decode succeeded.
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Error message (empty if is_ok is true).
+  ::rust::String error;
+  // Decoded SP descriptor (empty on error).
+  ::rust::String descriptor;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SpDescriptorResult
+
+#ifndef CXXBRIDGE1_STRUCT_QrImageResult
+#define CXXBRIDGE1_STRUCT_QrImageResult
+// Grayscale QR image for the C++ UI.
+struct QrImageResult final {
+  // Whether rendering succeeded.
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Error message (empty if is_ok is true).
+  ::rust::String error;
+  // One byte per pixel: 0 is black, 255 is white.
+  ::rust::Vec<::std::uint8_t> data;
+  ::std::uint32_t width CXX_DEFAULT_VALUE(0);
+  ::std::uint32_t height CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_QrImageResult
+
 #ifndef CXXBRIDGE1_STRUCT_ConnectionResult
 #define CXXBRIDGE1_STRUCT_ConnectionResult
 // Result of a connection test.
@@ -1325,11 +1359,11 @@ struct Config final : public ::rust::Opaque {
   // Save config to file.
   void to_file() const noexcept;
 
-  // Get mnemonic.
-  ::rust::String get_mnemonic() const noexcept;
+  // Get SP descriptor.
+  ::rust::String get_descriptor() const noexcept;
 
-  // Set mnemonic.
-  void set_mnemonic(::rust::String mnemonic) noexcept;
+  // Set SP descriptor.
+  void set_descriptor(::rust::String descriptor) noexcept;
 
   // Get network.
   ::Network get_network() const noexcept;
@@ -1433,6 +1467,9 @@ struct Account final : public ::rust::Opaque {
   // Get payment history.
   ::rust::Vec<::RustTx> payment_history() const noexcept;
 
+  // Get the account SP descriptor.
+  ::rust::String descriptor() const noexcept;
+
   // Simulate a transaction to check feasibility and estimate fees.
   // Returns simulation result with fee, weight, and validity info.
   ::TransactionSimulation simulate_transaction(::TransactionTemplate tx_template) const noexcept;
@@ -1449,6 +1486,9 @@ struct Account final : public ::rust::Opaque {
   // Broadcast a signed transaction (hex string) to the network.
   // Returns TxResult with txid in value.
   ::TxResult broadcast_transaction(::rust::String signed_tx_hex) const noexcept;
+
+  // Finalize a signed PSBT and return transaction hex.
+  ::TxResult finalize_psbt(::rust::String signed_psbt_base64) const noexcept;
 
   // Sign and broadcast a transaction in one step.
   // Returns TxResult with txid in value.
@@ -1510,6 +1550,9 @@ struct PsbtResult final : public ::rust::Opaque {
 
   // Get transaction ID preview (only valid if is_ok()).
   ::rust::String get_txid_preview() const noexcept;
+
+  // Get the serialized PSBT as hex (only valid if is_ok()).
+  ::rust::String bytes_hex() const noexcept;
 
   ~PsbtResult() = delete;
 
@@ -1647,17 +1690,23 @@ private:
 // Call this once at application startup.
 void init_logging(::LogLevel level) noexcept;
 
-// Generate a new 12-word BIP39 mnemonic.
-::rust::String generate_mnemonic() noexcept;
-
 ::rust::String notification_to_string(::Notification const &notif) noexcept;
 
 // Query backend server info (network, height, capabilities).
 // Blocking HTTP call - may take up to 30s on timeout.
 ::BackendInfo get_backend_info(::rust::String blindbit_url) noexcept;
 
-// Validate a BIP39 mnemonic string.
-bool validate_mnemonic(::rust::String mnemonic) noexcept;
+// Validate a BIP392 Silent Payments descriptor.
+bool validate_sp_descriptor(::rust::String descriptor) noexcept;
+
+// Encode a GetSpDescriptor QR request as base64.
+::rust::String qr_get_sp_descriptor_request() noexcept;
+
+// Render a GetSpDescriptor QR request.
+::QrImageResult qr_get_sp_descriptor_request_image() noexcept;
+
+// Decode a base64 SpDescriptor QR response.
+::SpDescriptorResult qr_decode_sp_descriptor_response(::rust::String payload) noexcept;
 
 // Validate a recipient address (SP address, legacy Bitcoin address, or hex data).
 // Returns empty string if valid, or error message if invalid.
@@ -1684,7 +1733,7 @@ void app_set_plugin_enabled(::rust::String id, bool enabled) noexcept;
 void app_set_active_theme(::rust::String name) noexcept;
 
 // Create a new config.
-::rust::Box<::Config> new_config(::rust::String account_name, ::Network network, ::rust::String mnemonic, ::rust::String blindbit_url, ::rust::String electrum_url, ::std::uint64_t dust_limit, ::rust::String plugin_id) noexcept;
+::rust::Box<::Config> new_config(::rust::String account_name, ::Network network, ::rust::String descriptor, ::rust::String blindbit_url, ::rust::String electrum_url, ::std::uint64_t dust_limit, ::rust::String plugin_id) noexcept;
 
 // Load config from file.
 ::rust::Box<::Config> config_from_file(::rust::String account_name) noexcept;

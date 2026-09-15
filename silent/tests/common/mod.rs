@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
@@ -11,9 +12,13 @@ use std::time::Duration;
 use bitcoin::bip32::ChildNumber;
 use bitcoin::{Amount, OutPoint, ScriptBuf, TxOut, XOnlyPublicKey};
 use blindbitd::BlindbitD;
-use bwk_sp::bwk_sign::bwk_descriptor::{descriptor::DescriptorDerivator, tr_path};
-use bwk_sp::bwk_sign::HotSigner;
-use bwk_sp::receiver::{bip39, SpReceiver};
+use bwk_sp::{
+    bwk_sign::{
+        bwk_descriptor::descriptor::{tr_path, DescriptorDerivator},
+        hot_signer::HotSigner,
+    },
+    receiver::{bip39, SpReceiver},
+};
 use bwk_utils::test as bwk_test;
 use bwk_utils::test::corepc_node;
 
@@ -27,6 +32,26 @@ pub const TEST_MNEMONIC: &str =
 
 /// Dust threshold for SP outputs.
 const DUST: u64 = 330;
+
+pub fn descriptor_from_mnemonic(mnemonic: &str, network: Network) -> String {
+    let network = match network {
+        Network::Regtest => bitcoin::Network::Regtest,
+        Network::Signet => bitcoin::Network::Signet,
+        Network::Testnet => bitcoin::Network::Testnet,
+        Network::Bitcoin => bitcoin::Network::Bitcoin,
+        _ => unreachable!("CXX enum type safety guarantees no other variants exist"),
+    };
+    bwk_sp::account::config::Config::new(
+        "test".to_string(),
+        network,
+        mnemonic.to_string(),
+        String::new(),
+        PathBuf::new(),
+    )
+    .unwrap()
+    .descriptor
+    .to_string()
+}
 
 // ===== Setup Helpers =====
 
@@ -43,7 +68,7 @@ pub fn create_test_account(account_name: &str, blindbit_url: &str) -> Account {
     let config = Config::new(
         account_name.to_string(),
         Network::Regtest,
-        TEST_MNEMONIC.to_string(),
+        descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest),
         blindbit_url.to_string(),
         String::new(),
         Some(546),
@@ -175,7 +200,7 @@ fn generate_recipient_pubkey(
 
     let sp_sk = keypair.secret_key();
     let input_keys = vec![(sp_sk, true)];
-    let outpoints = vec![(outpoint.txid.to_string(), outpoint.vout)];
+    let outpoints = vec![outpoint];
 
     let partial_secret =
         bwk_sp::core::sending::calculate_partial_secret(&input_keys, &outpoints).ok()?;
@@ -259,7 +284,7 @@ fn swap_to_sp(
 /// 3. Build SP transaction to the wallet's SP address
 /// 4. Broadcast and mine
 pub fn fund_sp_wallet(
-    bitcoind: &mut bwk_utils::test::Client,
+    bitcoind: &mut corepc_node::Client,
     bbd_url: &str,
     mnemonic: &str,
     amount_btc: f64,
@@ -281,6 +306,8 @@ pub fn fund_sp_wallet(
         .into_iter()
         .next()
         .expect("descriptor")
+        .as_miniscript()
+        .expect("miniscript descriptor")
         .spk_derivator(network)
         .expect("derivator");
     let taproot_addr = tr_derivator.receive_at(0);
@@ -380,7 +407,7 @@ pub fn create_test_account_with_electrum_mnemonic(
     let config = Config::new(
         account_name.to_string(),
         Network::Regtest,
-        mnemonic.to_string(),
+        descriptor_from_mnemonic(mnemonic, Network::Regtest),
         blindbit_url.to_string(),
         electrum_url.to_string(),
         Some(546),
@@ -391,7 +418,7 @@ pub fn create_test_account_with_electrum_mnemonic(
 /// Fund an SP wallet a second time at a different derivation index.
 /// Used for tests requiring multiple UTXOs.
 pub fn fund_sp_wallet_at_index(
-    bitcoind: &mut bwk_utils::test::Client,
+    bitcoind: &mut corepc_node::Client,
     bbd_url: &str,
     mnemonic: &str,
     amount_btc: f64,
@@ -412,6 +439,8 @@ pub fn fund_sp_wallet_at_index(
         .into_iter()
         .next()
         .expect("descriptor")
+        .as_miniscript()
+        .expect("miniscript descriptor")
         .spk_derivator(network)
         .expect("derivator");
     let taproot_addr = tr_derivator.receive_at(derivation_index);

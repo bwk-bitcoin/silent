@@ -4,11 +4,12 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::OnceLock;
 
 use bitcoin::Network as BtcNetwork;
-use bwk_sp::account::config::{Config as SpConfig, SubAccountConfig};
-use bwk_sp::bwk_sign::hot_signer::HotSigner;
+use bwk_sp::account::config::Config as SpConfig;
+use bwk_sp::bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor;
 use serde::{Deserialize, Serialize};
 
 use crate::ffi::Network;
@@ -60,8 +61,8 @@ pub struct Config {
     /// Bitcoin network (stored as internal type for serde)
     #[serde(with = "network_serde")]
     pub network: Network,
-    /// BIP39 mnemonic phrase
-    pub mnemonic: String,
+    /// BIP392 Silent Payments descriptor.
+    pub descriptor: String,
     /// Blindbit server URL
     pub blindbit_url: String,
     /// Electrum server address (host:port) for sub-account syncing
@@ -114,7 +115,7 @@ impl Config {
     pub fn new(
         account_name: String,
         network: Network,
-        mnemonic: String,
+        descriptor: String,
         blindbit_url: String,
         electrum_url: String,
         dust_limit: Option<u64>,
@@ -123,7 +124,7 @@ impl Config {
         Self {
             account_name,
             network,
-            mnemonic,
+            descriptor,
             blindbit_url,
             electrum_url,
             dust_limit,
@@ -188,11 +189,13 @@ impl Config {
     }
 
     /// Convert to bwk-sp::Config.
-    pub fn to_sp_config(&self) -> SpConfig {
-        let mut config = SpConfig::new(
+    pub fn to_sp_config(&self) -> Result<SpConfig, String> {
+        let descriptor = SpDescriptor::from_str(&self.descriptor)
+            .map_err(|e| format!("invalid SP descriptor: {e}"))?;
+        let mut config = SpConfig::from_descriptor(
             self.account_name.clone(),
             self.network.into(),
-            self.mnemonic.clone(),
+            descriptor,
             self.blindbit_url.clone(),
             self.data_dir.clone(),
         );
@@ -204,50 +207,24 @@ impl Config {
         };
         config.set_birthday_height(Some(birthday));
 
-        // Generate sub-account descriptors when electrum is configured
         if !self.electrum_url.is_empty() {
-            let btc_network: BtcNetwork = self.network.into();
             let (electrum_host, electrum_port) = parse_electrum_url(&self.electrum_url);
-
-            // wpkh (BIP84 segwit) sub-account — index 0
-            if let Ok(wpkh_signer) = HotSigner::new_wpkh_from_mnemonics(btc_network, &self.mnemonic)
-            {
-                if let Some(descriptor) = wpkh_signer.descriptors().into_iter().next() {
-                    config.descriptors.push(SubAccountConfig {
-                        descriptor,
-                        mnemonic: None,
-                        electrum_url: electrum_host.clone(),
-                        electrum_port,
-                    });
-                }
-            }
-
-            // tr (BIP86 taproot) sub-account — index 1
-            if let Ok(tr_signer) =
-                HotSigner::new_taproot_from_mnemonics(btc_network, &self.mnemonic)
-            {
-                if let Some(descriptor) = tr_signer.descriptors().into_iter().next() {
-                    config.descriptors.push(SubAccountConfig {
-                        descriptor,
-                        mnemonic: None,
-                        electrum_url: electrum_host,
-                        electrum_port,
-                    });
-                }
+            if let (Some(host), Some(port)) = (electrum_host, electrum_port) {
+                config.set_electrum_endpoint(host, port);
             }
         }
 
-        config.enable_persist(true)
+        Ok(config.with_persistence(Some(bwk_sp::bwk::persist::PersistenceKind::default())))
     }
 
-    /// Get mnemonic.
-    pub fn get_mnemonic(&self) -> String {
-        self.mnemonic.clone()
+    /// Get SP descriptor.
+    pub fn get_descriptor(&self) -> String {
+        self.descriptor.clone()
     }
 
-    /// Set mnemonic.
-    pub fn set_mnemonic(&mut self, mnemonic: String) {
-        self.mnemonic = mnemonic;
+    /// Set SP descriptor.
+    pub fn set_descriptor(&mut self, descriptor: String) {
+        self.descriptor = descriptor;
     }
 
     /// Get network.
@@ -387,7 +364,7 @@ pub enum ConfigError {
 /// no scheme field, and `bwk_electrum::client::Client::new` reads the scheme off
 /// that prefix. An unsupported scheme yields no endpoint, leaving electrum off.
 pub(crate) fn parse_electrum_url(url: &str) -> (Option<String>, Option<u16>) {
-    let (host, port, scheme) = match bwk_sp::bwk::parse_electrum_url(url) {
+    let (host, port, scheme) = match bwk_sp::bwk::bwk_electrum::url::parse_electrum_url(url) {
         Ok(parsed) => parsed,
         Err(e) => {
             log::error!("parse_electrum_url: invalid electrum url '{url}': {e}");
@@ -395,8 +372,8 @@ pub(crate) fn parse_electrum_url(url: &str) -> (Option<String>, Option<u16>) {
         }
     };
     let host = host.map(|host| match scheme {
-        bwk_sp::bwk::ElectrumScheme::Ssl => format!("ssl://{host}"),
-        bwk_sp::bwk::ElectrumScheme::Tcp => host,
+        bwk_sp::bwk::bwk_electrum::url::ElectrumScheme::Ssl => format!("ssl://{host}"),
+        bwk_sp::bwk::bwk_electrum::url::ElectrumScheme::Tcp => host,
     });
     (host, port)
 }
@@ -407,7 +384,7 @@ pub(crate) fn parse_electrum_url(url: &str) -> (Option<String>, Option<u16>) {
 pub fn new_config(
     account_name: String,
     network: Network,
-    mnemonic: String,
+    descriptor: String,
     blindbit_url: String,
     electrum_url: String,
     dust_limit: u64,
@@ -421,7 +398,7 @@ pub fn new_config(
     let mut config = Config::new(
         account_name,
         network,
-        mnemonic,
+        descriptor,
         blindbit_url,
         electrum_url,
         dust,
@@ -439,94 +416,6 @@ pub fn delete_config(account_name: String) -> bool {
             log::error!("failed to delete account '{account_name}': {e}");
             false
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn config_deserialize_without_plugin_id_defaults_to_sp() {
-        let json = r#"{
-            "account_name":"test_account",
-            "network":"Signet",
-            "mnemonic":"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-            "blindbit_url":"http://localhost:50001",
-            "electrum_url":"",
-            "dust_limit":546
-        }"#;
-
-        let config: Config = serde_json::from_str(json).expect("config json should deserialize");
-        assert_eq!(config.plugin_id, "sp");
-    }
-
-    const TEST_MNEMONIC: &str =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-
-    fn config_for(network: Network) -> Config {
-        Config::new(
-            "test_birthday".to_string(),
-            network,
-            TEST_MNEMONIC.to_string(),
-            "http://localhost:8000".to_string(),
-            String::new(),
-            Some(546),
-        )
-    }
-
-    #[test]
-    fn mainnet_birthday_skips_the_pre_sp_chain() {
-        assert_eq!(
-            config_for(Network::Bitcoin).to_sp_config().birthday_height,
-            Some(MAINNET_BIRTHDAY_HEIGHT)
-        );
-    }
-
-    #[test]
-    fn test_networks_scan_from_the_first_block() {
-        // A birthday above a short regtest chain would scan past the tip.
-        for network in [Network::Regtest, Network::Signet, Network::Testnet] {
-            assert_eq!(
-                config_for(network).to_sp_config().birthday_height,
-                Some(1),
-                "network {network:?} must scan from block 1"
-            );
-        }
-    }
-
-    #[test]
-    fn parse_electrum_url_keeps_ssl_prefix_on_host() {
-        // bwk's Client::new reads the scheme off the host prefix.
-        assert_eq!(
-            parse_electrum_url("ssl://electrum.pythcoiner.dev:50002"),
-            (
-                Some("ssl://electrum.pythcoiner.dev".to_string()),
-                Some(50002)
-            )
-        );
-    }
-
-    #[test]
-    fn parse_electrum_url_leaves_plaintext_bare() {
-        assert_eq!(
-            parse_electrum_url("localhost:50001"),
-            (Some("localhost".to_string()), Some(50001))
-        );
-        assert_eq!(
-            parse_electrum_url("tcp://localhost:50001"),
-            (Some("localhost".to_string()), Some(50001))
-        );
-    }
-
-    #[test]
-    fn parse_electrum_url_empty_is_offline() {
-        assert_eq!(parse_electrum_url(""), (None, None));
-    }
-
-    #[test]
-    fn parse_electrum_url_unsupported_scheme_is_offline() {
-        assert_eq!(parse_electrum_url("wss://host:443"), (None, None));
     }
 }
 
@@ -597,5 +486,96 @@ impl From<BtcNetwork> for Network {
             // This wildcard exists only for exhaustiveness checking.
             _ => unreachable!("bitcoin::Network enum only has 4 variants"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_deserialize_without_plugin_id_defaults_to_sp() {
+        let json = r#"{
+            "account_name":"test_account",
+            "network":"Signet",
+            "descriptor":"sp(L4rK1yDtCWekvXuE6oXD9jCYfFNV2cWRpVuPLBcCU2z8TrisoyY1,0260b2003c386519fc9eadf2b5cf124dd8eea4c4e68d5e154050a9346ea98ce600)",
+            "blindbit_url":"http://localhost:50001",
+            "electrum_url":"",
+            "dust_limit":546
+        }"#;
+
+        let config: Config = serde_json::from_str(json).expect("config json should deserialize");
+        assert_eq!(config.plugin_id, "sp");
+    }
+
+    const TEST_DESCRIPTOR: &str =
+        "sp(L4rK1yDtCWekvXuE6oXD9jCYfFNV2cWRpVuPLBcCU2z8TrisoyY1,0260b2003c386519fc9eadf2b5cf124dd8eea4c4e68d5e154050a9346ea98ce600)";
+
+    fn config_for(network: Network) -> Config {
+        Config::new(
+            "test_birthday".to_string(),
+            network,
+            TEST_DESCRIPTOR.to_string(),
+            "http://localhost:8000".to_string(),
+            String::new(),
+            Some(546),
+        )
+    }
+
+    #[test]
+    fn mainnet_birthday_skips_the_pre_sp_chain() {
+        assert_eq!(
+            config_for(Network::Bitcoin)
+                .to_sp_config()
+                .unwrap()
+                .birthday_height,
+            Some(MAINNET_BIRTHDAY_HEIGHT)
+        );
+    }
+
+    #[test]
+    fn test_networks_scan_from_the_first_block() {
+        // A birthday above a short regtest chain would scan past the tip.
+        for network in [Network::Regtest, Network::Signet, Network::Testnet] {
+            assert_eq!(
+                config_for(network).to_sp_config().unwrap().birthday_height,
+                Some(1),
+                "network {network:?} must scan from block 1"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_electrum_url_keeps_ssl_prefix_on_host() {
+        // bwk's Client::new reads the scheme off the host prefix.
+        assert_eq!(
+            parse_electrum_url("ssl://electrum.pythcoiner.dev:50002"),
+            (
+                Some("ssl://electrum.pythcoiner.dev".to_string()),
+                Some(50002)
+            )
+        );
+    }
+
+    #[test]
+    fn parse_electrum_url_leaves_plaintext_bare() {
+        assert_eq!(
+            parse_electrum_url("localhost:50001"),
+            (Some("localhost".to_string()), Some(50001))
+        );
+        assert_eq!(
+            parse_electrum_url("tcp://localhost:50001"),
+            (Some("localhost".to_string()), Some(50001))
+        );
+    }
+
+    #[test]
+    fn parse_electrum_url_empty_is_offline() {
+        assert_eq!(parse_electrum_url(""), (None, None));
+    }
+
+    #[test]
+    fn parse_electrum_url_unsupported_scheme_is_offline() {
+        assert_eq!(parse_electrum_url("wss://host:443"), (None, None));
     }
 }

@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use common::{
     cleanup_test_account, create_test_account, create_test_account_with_electrum,
-    create_test_account_with_electrum_mnemonic, fund_sp_wallet, setup_blindbitd,
-    setup_blindbitd_with_electrum, test_account_name, wait_for_notification,
+    create_test_account_with_electrum_mnemonic, descriptor_from_mnemonic, fund_sp_wallet,
+    setup_blindbitd, setup_blindbitd_with_electrum, test_account_name, wait_for_notification,
     wait_for_scan_complete, wait_for_sync_and_index, TEST_MNEMONIC,
 };
 
@@ -24,7 +24,7 @@ fn create_test_config(account_name: String) -> Config {
     Config::new(
         account_name,
         Network::Regtest,
-        TEST_MNEMONIC.to_string(),
+        descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest),
         "http://localhost:50001".to_string(),
         String::new(),
         Some(546),
@@ -34,13 +34,13 @@ fn create_test_config(account_name: String) -> Config {
 // ===== Wallet Creation and Config Tests =====
 
 #[test]
-fn test_wallet_creation_from_mnemonic() {
+fn test_wallet_creation_from_descriptor() {
     let account_name = test_account_name();
     let config = create_test_config(account_name.clone());
 
     assert_eq!(config.account_name, account_name);
     assert_eq!(config.get_network(), Network::Regtest);
-    assert!(!config.get_mnemonic().is_empty());
+    assert!(!config.get_descriptor().is_empty());
 
     let account_result = Account::new(config.clone());
     assert!(account_result.is_ok(), "Account creation should succeed");
@@ -65,7 +65,10 @@ fn test_config_save_load_roundtrip() {
 
     assert_eq!(loaded_config.account_name, original_config.account_name);
     assert_eq!(loaded_config.get_network(), original_config.get_network());
-    assert_eq!(loaded_config.get_mnemonic(), original_config.get_mnemonic());
+    assert_eq!(
+        loaded_config.get_descriptor(),
+        original_config.get_descriptor()
+    );
     assert_eq!(
         loaded_config.get_blindbit_url(),
         original_config.get_blindbit_url()
@@ -100,13 +103,13 @@ fn test_sp_address_generation() {
     );
 
     // Verify address is deterministic
-    let account_name2 = format!("{}_2", account_name);
+    let account_name2 = format!("{account_name}_2");
     let config2 = create_test_config(account_name2.clone());
     let account2 = Account::new(config2).expect("Account creation should succeed");
     assert_eq!(
         account2.sp_address(),
         sp_addr,
-        "Same mnemonic should produce same address"
+        "Same descriptor should produce same address"
     );
 
     cleanup_test_account(&account_name);
@@ -207,8 +210,7 @@ fn test_send_receive_sp_flow() {
     let new_balance = account.balance();
     assert!(
         new_balance > 0,
-        "Balance should increase after receiving funds, got {}",
-        new_balance
+        "Balance should increase after receiving funds, got {new_balance}"
     );
 
     // Create send transaction (send back to same address)
@@ -256,13 +258,13 @@ fn test_send_receive_sp_flow() {
 // ===== Wallet Restore Tests =====
 
 #[test]
-fn test_wallet_restore_from_mnemonic() {
+fn test_wallet_restore_from_descriptor() {
     let account_name = test_account_name();
 
     let config1 = Config::new(
         account_name.clone(),
         Network::Regtest,
-        TEST_MNEMONIC.to_string(),
+        descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest),
         "http://localhost:50001".to_string(),
         String::new(),
         Some(546),
@@ -278,7 +280,7 @@ fn test_wallet_restore_from_mnemonic() {
     let config2 = Config::new(
         account_name.clone(),
         Network::Regtest,
-        TEST_MNEMONIC.to_string(),
+        descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest),
         "http://localhost:50001".to_string(),
         String::new(),
         Some(546),
@@ -363,126 +365,14 @@ fn test_self_send_produces_two_coins() {
         psbt.get_psbt_error()
     );
 
-    // Sign
+    assert!(
+        !psbt.bytes_hex().is_empty(),
+        "Prepared PSBT should be serialized"
+    );
+
     let signed = account.sign_transaction(&psbt);
-    assert!(signed.is_ok, "Sign should succeed: {}", signed.error);
-
-    // === SPENDING CHECK ===
-    // Deserialize the signed tx and inspect outputs
-    let tx: bitcoin::Transaction =
-        bitcoin::consensus::encode::deserialize_hex(&signed.value).expect("valid tx hex");
-    assert_eq!(
-        tx.output.len(),
-        2,
-        "SPENDING BUG: self-send transaction should have 2 outputs (receive + change), got {}",
-        tx.output.len()
-    );
-
-    // Verify both outputs are valid P2TR scripts with distinct keys
-    for (i, out) in tx.output.iter().enumerate() {
-        let script = out.script_pubkey.as_bytes();
-        assert!(
-            out.script_pubkey.is_p2tr(),
-            "Output {i} is not P2TR: {:?}",
-            out.script_pubkey
-        );
-        assert!(
-            out.value.to_sat() > 330,
-            "Output {i} is dust: {} sats",
-            out.value.to_sat()
-        );
-        eprintln!(
-            "Output {i}: value={} sats, script={:?}, pubkey={:x?}",
-            out.value.to_sat(),
-            out.script_pubkey,
-            &script[2..34],
-        );
-    }
-
-    // Both outputs should have different script pubkeys
-    assert_ne!(
-        tx.output[0].script_pubkey, tx.output[1].script_pubkey,
-        "Both outputs have the same script_pubkey — SP derivation may be broken"
-    );
-
-    // Broadcast via bitcoind and mine
-    bitcoind
-        .send_raw_transaction(&tx)
-        .expect("broadcast should succeed");
-    bwk_test::generate_blocks(bitcoind, 1);
-
-    let tx_height =
-        bwk_test::get_tx_height(bitcoind, tx.compute_txid()).expect("get tx height") as u32;
-    wait_for_sync_and_index(&url, tx_height);
-
-    // Wait for scanner to detect the new outputs
-    let mut new_output_count = 0;
-    let start = std::time::Instant::now();
-    let timeout = Duration::from_secs(30);
-    loop {
-        if start.elapsed() > timeout {
-            break;
-        }
-        let poll = account.try_recv();
-        if poll.is_some() {
-            let notif = poll.get_notification();
-            if notif.flag == NotificationFlag::NewOutput {
-                new_output_count += 1;
-                if new_output_count >= 2 {
-                    break;
-                }
-            }
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-
-    // === RESULTS ===
-    let coins_after = account.coins();
-    let unspent_after: Vec<_> = coins_after.iter().filter(|c| !c.spent).collect();
-
-    // Report what the scanner found vs what the tx contains
-    let expected_change = balance - send_amount - 1000; // balance - send - fee
-    eprintln!("Transaction txid: {}", tx.compute_txid());
-    eprintln!("Send amount: {send_amount}, Expected change: {expected_change}");
-    eprintln!(
-        "Tx outputs: [0]={} sats, [1]={} sats",
-        tx.output[0].value.to_sat(),
-        tx.output[1].value.to_sat()
-    );
-    eprintln!("NewOutput notifications received: {new_output_count}");
-    eprintln!("Coins after scan:");
-    for coin in &coins_after {
-        eprintln!(
-            "  {} value={} spent={} height={}",
-            coin.outpoint, coin.value, coin.spent, coin.height
-        );
-    }
-    if unspent_after.len() == 1 {
-        let found = &unspent_after[0];
-        let found_is_receive = found.value == send_amount;
-        let found_is_change = found.value == expected_change;
-        eprintln!(
-            "Scanner found: {} sats (is_receive={}, is_change={})",
-            found.value, found_is_receive, found_is_change
-        );
-        if found_is_receive {
-            eprintln!("MISSING: change output ({expected_change} sats) — change address derivation may be wrong");
-        } else if found_is_change {
-            eprintln!("MISSING: receive output ({send_amount} sats) — receive address derivation may be wrong");
-        } else {
-            eprintln!(
-                "MISSING: found value {} matches neither receive nor change",
-                found.value
-            );
-        }
-    }
-
-    assert_eq!(
-        unspent_after.len(),
-        2,
-        "Should have 2 unspent coins after self-send, got {}",
-        unspent_after.len(),
-    );
+    assert!(!signed.is_ok, "Hot signing should be unavailable");
+    assert_eq!(signed.error, "External signer required");
 
     account.stop_scanner();
     cleanup_test_account(&account_name);
@@ -492,6 +382,7 @@ fn test_self_send_produces_two_coins() {
 // ===== Multi-Address-Type Send Tests =====
 
 #[test]
+#[ignore = "hot segwit/taproot sub-accounts were removed"]
 fn test_send_to_sp_segwit_taproot() {
     let (bbd, mut bitcoind_node, electrum_url) = setup_blindbitd_with_electrum();
     let url = bbd.url();
@@ -684,6 +575,7 @@ fn test_send_to_sp_segwit_taproot() {
 /// Bug: segwit sub-account inputs were not being signed, resulting in empty witnesses
 /// and "Witness program hash mismatch" rejection on broadcast.
 #[test]
+#[ignore = "hot segwit/taproot sub-accounts were removed"]
 fn test_mixed_input_signing() {
     let mnemonic =
         "vehicle priority voice index lunch exact whale decrease doctor column enter lobster";
@@ -883,6 +775,7 @@ fn test_mixed_input_signing() {
 /// `builder.generate()` fails because it cannot compute the SP partial secret
 /// needed for the SP output when sub-account (non-SP) inputs are involved.
 #[test]
+#[ignore = "hot segwit/taproot sub-accounts were removed"]
 fn test_max_send_to_sp_with_mixed_inputs() {
     let mnemonic =
         "vehicle priority voice index lunch exact whale decrease doctor column enter lobster";
@@ -1410,7 +1303,7 @@ fn test_signet_connection() {
     let config = Config::new(
         account_name.clone(),
         Network::Signet,
-        TEST_MNEMONIC.to_string(),
+        descriptor_from_mnemonic(TEST_MNEMONIC, Network::Signet),
         "https://blindbit-signet.example.com".to_string(),
         String::new(),
         Some(546),

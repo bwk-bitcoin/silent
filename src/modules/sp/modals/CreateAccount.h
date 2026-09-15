@@ -13,6 +13,10 @@ class TextEdit;
 }
 
 namespace catalog {
+class QrCode;
+}
+
+namespace catalog {
 class ComboBox;
 }
 
@@ -32,18 +36,18 @@ public:
     explicit CreateAccount(QWidget *parent = nullptr);
 
 signals:
-    void createAccount(const QString &name, const QString &mnemonic, Network network,
+    void createAccount(const QString &name, const QString &descriptor, Network network,
                        const QString &blindbit_url, const QString &electrum_url);
     void backendInfoReady(BackendInfo info);
     void electrumTestReady(ConnectionResult result);
 
 public slots:
-    void onGenerate();
     void onCreate();
     void onNetworkChanged();
     void onTestBackend();
     void onTestElectrum();
     void onUpdateCreateButton();
+    void onImportQrResponse();
     void onBackendInfoReady(BackendInfo info);
     void onElectrumTestReady(ConnectionResult result);
 
@@ -55,12 +59,14 @@ protected:
     auto applyRegtestDefaults() -> bool;
     void invalidateBackendTest();
     void invalidateElectrumTest();
-    auto generateMnemonic() -> QString;
 
 private:
     catalog::Input *m_name_input = nullptr;
-    catalog::TextEdit *m_mnemonic_input = nullptr;
-    catalog::Button *m_generate_btn = nullptr;
+    catalog::QrCode *m_qr_code = nullptr;
+    catalog::TextEdit *m_qr_request = nullptr;
+    catalog::TextEdit *m_qr_response = nullptr;
+    catalog::Button *m_qr_import_btn = nullptr;
+    catalog::TextEdit *m_descriptor_input = nullptr;
     catalog::ComboBox *m_network_combo = nullptr;
     catalog::Input *m_blindbit_input = nullptr;
     catalog::Button *m_test_btn = nullptr;

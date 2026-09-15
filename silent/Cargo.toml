@@ -10,8 +10,10 @@ doctest = false
 [dependencies]
 # When changing rev, also update flake.lock:
 #   nix --extra-experimental-features 'nix-command flakes' flake update bwk
-bwk-sp = { git = "https://github.com/pythcoiner/bwk.git", rev = "05db3d2d128be747fa10ea511634df6a09e7465b" }
-bwk-hwi = { git = "https://github.com/pythcoiner/bwk.git", rev = "05db3d2d128be747fa10ea511634df6a09e7465b", features = ["service"] }
+bwk-sp = { git = "https://github.com/pythcoiner/bwk.git", rev = "912eb7cd3e1d8a8b52bfc3ff0052cb51a3c647fe" }
+bwk-hwi = { git = "https://github.com/pythcoiner/bwk.git", rev = "912eb7cd3e1d8a8b52bfc3ff0052cb51a3c647fe", features = ["service"] }
+bwk-qr = { git = "https://github.com/pythcoiner/bwk.git", rev = "912eb7cd3e1d8a8b52bfc3ff0052cb51a3c647fe" }
+bwk-qr-protocol = { git = "https://github.com/pythcoiner/bwk.git", rev = "912eb7cd3e1d8a8b52bfc3ff0052cb51a3c647fe", features = ["bitcoin"] }
 crossbeam = "0.8"
 # `log` feature: bwk-hwi reports device detection through `tracing`, and this forwards
 # those events into the `log` crate so env_logger prints them. Without it every device
@@ -19,6 +21,7 @@ crossbeam = "0.8"
 tracing = { version = "0.1", features = ["log"] }
 fs2 = "0.4"
 bitcoin = "0.32"
+base64 = "0.22"
 cxx = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -31,7 +34,7 @@ ureq = { version = "3.3", default-features = false, features = ["gzip", "native-
 
 [dev-dependencies]
 blindbitd = { git = "https://github.com/pythcoiner/blindbitd.git", features = ["electrum"] }
-bwk-utils = { git = "https://github.com/pythcoiner/bwk.git", rev = "05db3d2d128be747fa10ea511634df6a09e7465b", features = ["test"] }
+bwk-utils = { git = "https://github.com/pythcoiner/bwk.git", rev = "912eb7cd3e1d8a8b52bfc3ff0052cb51a3c647fe", features = ["test"] }
 temp-dir = "0.1"
 
 [build-dependencies]

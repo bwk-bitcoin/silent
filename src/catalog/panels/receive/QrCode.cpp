@@ -3,6 +3,7 @@
 #include "theme/Palette.h"
 #include "theme/Theme.h"
 
+#include <QImage>
 #include <QPainter>
 
 namespace catalog {
@@ -14,6 +15,11 @@ QrCode::QrCode(QWidget *parent) : QWidget(parent) {
 
 void QrCode::setData(const QString &data) {
     m_data = data;
+    update();
+}
+
+void QrCode::setImage(const QImage &image) {
+    m_image = image;
     update();
 }
 
@@ -38,6 +44,10 @@ void QrCode::paintEvent([[maybe_unused]] QPaintEvent *event) {
     painter.setPen(QPen(palette.border, 1));
     painter.setBrush(Qt::white);
     painter.drawRect(square);
+
+    if (!m_image.isNull()) {
+        painter.drawImage(square, m_image);
+    }
 }
 
 auto QrCode::sizeHint() const -> QSize {

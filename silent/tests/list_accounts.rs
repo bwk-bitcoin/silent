@@ -1,6 +1,6 @@
 mod common;
 
-use common::TEST_MNEMONIC;
+use common::{descriptor_from_mnemonic, TEST_MNEMONIC};
 use silent::{delete_config, list_configs, set_datadir, Config, Network};
 use temp_dir::TempDir;
 
@@ -16,7 +16,7 @@ fn test_list_accounts_after_create_delete() {
     let alice_config = Config::new(
         "alice".to_string(),
         Network::Regtest,
-        TEST_MNEMONIC.to_string(),
+        descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest),
         "http://localhost:50001".to_string(),
         String::new(),
         Some(546),
@@ -28,7 +28,7 @@ fn test_list_accounts_after_create_delete() {
     let bob_config = Config::new(
         "bob".to_string(),
         Network::Regtest,
-        TEST_MNEMONIC.to_string(),
+        descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest),
         "http://localhost:50001".to_string(),
         String::new(),
         Some(546),

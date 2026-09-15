@@ -220,11 +220,11 @@ auto AppController::onPluginRegistryChanged() -> void {
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-auto AppController::createAccount(const QString &name, const QString &mnemonic, Network network,
+auto AppController::createAccount(const QString &name, const QString &descriptor, Network network,
                                   const QString &blindbit_url,
                                   const QString &electrum_url) -> void {
     Q_UNUSED(name);
-    Q_UNUSED(mnemonic);
+    Q_UNUSED(descriptor);
     Q_UNUSED(network);
     Q_UNUSED(blindbit_url);
     Q_UNUSED(electrum_url);

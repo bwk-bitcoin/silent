@@ -17,6 +17,7 @@
 #include "catalog/inputs/Toggle.h"
 #include "catalog/panels/send/TxFlow.h"
 #include "i18n/Tr.h"
+#include "interfaces/signer.h"
 #include "theme/Icon.h"
 #include "theme/Palette.h"
 #include "theme/Theme.h"
@@ -1549,6 +1550,7 @@ void Send::showSignerStep() {
     int dialogResult = picker->exec();
     auto signerName = picker->selectedName();
     auto signerKind = picker->selectedKind();
+    auto *signer = picker->selectedSigner();
     delete picker;
     if (dialogResult != QDialog::Accepted) {
         m_psbt_result = std::nullopt;
@@ -1583,25 +1585,52 @@ void Send::showSignerStep() {
         m_tx_template = std::nullopt;
         return;
     }
+    m_selected_signer = signer;
     onSendConfirmed();
 }
 
 void Send::onSendConfirmed() {
     qDebug() << "Send::onSendConfirmed()";
     auto &account = m_controller->getAccount();
-    if (!account.has_value() || !m_psbt_result.has_value()) {
+    if (!account.has_value() || !m_psbt_result.has_value() || m_selected_signer == nullptr) {
         AppController::execModal(
             new qontrol::Modal(TR("common-error"), TR("send-transaction-state-lost")));
         return;
     }
 
-    // Sign on background thread (future-proofed for hardware signing devices)
-    auto *thread = QThread::create([this]() {
-        auto result = m_controller->getAccount().value()->sign_transaction(*m_psbt_result.value());
+    auto descriptor = QString::fromStdString(std::string(m_controller->getDescriptor().c_str()));
+    auto psbtHex = QString::fromStdString(std::string(m_psbt_result.value()->bytes_hex().c_str()));
+    auto psbtBase64 = QString::fromLatin1(QByteArray::fromHex(psbtHex.toLatin1()).toBase64());
+
+    connect(m_selected_signer, &ISigner::signed_, this, &Send::onSignerSigned, qontrol::UNIQUE);
+    connect(m_selected_signer, &ISigner::error, this, &Send::onSignerError, qontrol::UNIQUE);
+    m_sign_req_id = m_selected_signer->signWithDescriptor(psbtBase64, descriptor);
+}
+
+void Send::onSignerSigned(ReqId req_id, QString psbt_base64) {
+    if (req_id != m_sign_req_id) {
+        return;
+    }
+
+    auto signedPsbt = psbt_base64.toStdString();
+    auto *thread = QThread::create([this, signedPsbt]() {
+        auto result = m_controller->getAccount().value()->finalize_psbt(rust::String(signedPsbt));
         emit signReady(result);
     });
     connect(thread, &QThread::finished, thread, &QThread::deleteLater);
     thread->start();
+}
+
+void Send::onSignerError(std::optional<ReqId> req_id, QString message) {
+    if (!req_id.has_value() || req_id.value() != m_sign_req_id) {
+        return;
+    }
+
+    TxResult result;
+    result.is_ok = false;
+    result.error = rust::String(message.toStdString());
+    result.value = rust::String();
+    onSignResult(result);
 }
 
 void Send::onSignResult(TxResult result) {
@@ -1610,6 +1639,8 @@ void Send::onSignResult(TxResult result) {
         auto error = QString::fromStdString(std::string(result.error.c_str()));
         m_psbt_result = std::nullopt;
         m_tx_template = std::nullopt;
+        m_selected_signer = nullptr;
+        m_sign_req_id = 0;
         AppController::execModal(
             new qontrol::Modal(TR("common-error"), TR("send-signing-failed") + "\n\n" +
                                                        formatBackendErrorDetails(error)));
@@ -1618,6 +1649,8 @@ void Send::onSignResult(TxResult result) {
 
     m_signed_tx_hex = QString::fromStdString(std::string(result.value.c_str()));
     m_psbt_result = std::nullopt;
+    m_selected_signer = nullptr;
+    m_sign_req_id = 0;
     m_warning_label->setText(TR("confirm-send-signed"));
     m_warning_label->setVisible(true);
     view();

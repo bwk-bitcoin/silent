@@ -9,7 +9,7 @@ pub mod hwi;
 pub mod hwi_config;
 pub mod sync_estimator;
 
-use bwk_sp::bwk::ElectrumScheme;
+use bwk_sp::bwk::bwk_electrum::url::ElectrumScheme;
 
 #[cxx::bridge]
 mod ffi {
@@ -177,6 +177,30 @@ mod ffi {
         pub value: String,
     }
 
+    /// Result of decoding an SP descriptor QR response.
+    #[derive(Debug, Clone)]
+    pub struct SpDescriptorResult {
+        /// Whether the decode succeeded.
+        pub is_ok: bool,
+        /// Error message (empty if is_ok is true).
+        pub error: String,
+        /// Decoded SP descriptor (empty on error).
+        pub descriptor: String,
+    }
+
+    /// Grayscale QR image for the C++ UI.
+    #[derive(Debug, Clone)]
+    pub struct QrImageResult {
+        /// Whether rendering succeeded.
+        pub is_ok: bool,
+        /// Error message (empty if is_ok is true).
+        pub error: String,
+        /// One byte per pixel: 0 is black, 255 is white.
+        pub data: Vec<u8>,
+        pub width: u32,
+        pub height: u32,
+    }
+
     /// Result of a connection test.
     #[derive(Debug, Clone)]
     pub struct ConnectionResult {
@@ -307,16 +331,23 @@ mod ffi {
         /// Call this once at application startup.
         fn init_logging(level: LogLevel);
 
-        /// Generate a new 12-word BIP39 mnemonic.
-        fn generate_mnemonic() -> String;
         fn notification_to_string(notif: &Notification) -> String;
 
         /// Query backend server info (network, height, capabilities).
         /// Blocking HTTP call - may take up to 30s on timeout.
         fn get_backend_info(blindbit_url: String) -> BackendInfo;
 
-        /// Validate a BIP39 mnemonic string.
-        fn validate_mnemonic(mnemonic: String) -> bool;
+        /// Validate a BIP392 Silent Payments descriptor.
+        fn validate_sp_descriptor(descriptor: String) -> bool;
+
+        /// Encode a GetSpDescriptor QR request as base64.
+        fn qr_get_sp_descriptor_request() -> String;
+
+        /// Render a GetSpDescriptor QR request.
+        fn qr_get_sp_descriptor_request_image() -> QrImageResult;
+
+        /// Decode a base64 SpDescriptor QR response.
+        fn qr_decode_sp_descriptor_response(payload: String) -> SpDescriptorResult;
 
         /// Validate a recipient address (SP address, legacy Bitcoin address, or hex data).
         /// Returns empty string if valid, or error message if invalid.
@@ -350,7 +381,7 @@ mod ffi {
         fn new_config(
             account_name: String,
             network: Network,
-            mnemonic: String,
+            descriptor: String,
             blindbit_url: String,
             electrum_url: String,
             dust_limit: u64,
@@ -375,11 +406,11 @@ mod ffi {
         /// Save config to file.
         fn to_file(self: &Config);
 
-        /// Get mnemonic.
-        fn get_mnemonic(self: &Config) -> String;
+        /// Get SP descriptor.
+        fn get_descriptor(self: &Config) -> String;
 
-        /// Set mnemonic.
-        fn set_mnemonic(self: &mut Config, mnemonic: String);
+        /// Set SP descriptor.
+        fn set_descriptor(self: &mut Config, descriptor: String);
 
         /// Get network.
         fn get_network(self: &Config) -> Network;
@@ -476,6 +507,9 @@ mod ffi {
         /// Get payment history.
         fn payment_history(self: &Account) -> Vec<RustTx>;
 
+        /// Get the account SP descriptor.
+        fn descriptor(self: &Account) -> String;
+
         /// Simulate a transaction to check feasibility and estimate fees.
         /// Returns simulation result with fee, weight, and validity info.
         fn simulate_transaction(
@@ -496,6 +530,9 @@ mod ffi {
         /// Broadcast a signed transaction (hex string) to the network.
         /// Returns TxResult with txid in value.
         fn broadcast_transaction(self: &Account, signed_tx_hex: String) -> TxResult;
+
+        /// Finalize a signed PSBT and return transaction hex.
+        fn finalize_psbt(self: &Account, signed_psbt_base64: String) -> TxResult;
 
         /// Sign and broadcast a transaction in one step.
         /// Returns TxResult with txid in value.
@@ -610,6 +647,9 @@ mod ffi {
 
         /// Get transaction ID preview (only valid if is_ok()).
         fn get_txid_preview(self: &PsbtResult) -> String;
+
+        /// Get the serialized PSBT as hex (only valid if is_ok()).
+        fn bytes_hex(self: &PsbtResult) -> String;
     }
 
     // ===== SyncEstimator Methods =====
@@ -649,15 +689,6 @@ pub fn init_logging(level: LogLevel) {
         .init();
 }
 
-/// Generate a new 12-word BIP39 mnemonic.
-pub fn generate_mnemonic() -> String {
-    let mut entropy = [0u8; 16]; // 128 bits = 12 words
-    getrandom::getrandom(&mut entropy).expect("failed to generate random entropy");
-    bwk_sp::receiver::bip39::Mnemonic::from_entropy(&entropy)
-        .expect("mnemonic generation from 128-bit entropy should not fail")
-        .to_string()
-}
-
 pub fn notification_to_string(notif: &Notification) -> String {
     format!("{notif:?}")
 }
@@ -690,9 +721,142 @@ pub fn get_backend_info(blindbit_url: String) -> BackendInfo {
     }
 }
 
-/// Validate a BIP39 mnemonic string.
-pub fn validate_mnemonic(mnemonic: String) -> bool {
-    bwk_sp::receiver::bip39::Mnemonic::parse(&mnemonic).is_ok()
+/// Validate a BIP392 Silent Payments descriptor.
+pub fn validate_sp_descriptor(descriptor: String) -> bool {
+    use std::str::FromStr;
+
+    bwk_sp::bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor::from_str(&descriptor).is_ok()
+}
+
+fn get_sp_descriptor_request() -> bwk_qr_protocol::Request {
+    use bwk_qr_protocol::{request, Request, RequestId};
+
+    Request {
+        id: RequestId([0, 0]),
+        body: request::Body::GetSpDescriptor(request::GetSpDescriptor {}),
+    }
+}
+
+/// Encode a GetSpDescriptor QR request as base64.
+pub fn qr_get_sp_descriptor_request() -> String {
+    use base64::prelude::*;
+
+    let request = get_sp_descriptor_request();
+
+    match bwk_qr_protocol::encode_request(&request) {
+        Ok(bytes) => BASE64_STANDARD.encode(bytes),
+        Err(e) => {
+            log::error!("failed to encode GetSpDescriptor request: {e}");
+            String::new()
+        }
+    }
+}
+
+/// Render a GetSpDescriptor QR request.
+pub fn qr_get_sp_descriptor_request_image() -> ffi::QrImageResult {
+    let encoder = match bwk_qr::encoder::Encoder::new(bwk_qr::config::Config::default()) {
+        Ok(encoder) => encoder,
+        Err(e) => {
+            return ffi::QrImageResult {
+                is_ok: false,
+                error: format!("failed to create QR encoder: {e}"),
+                data: Vec::new(),
+                width: 0,
+                height: 0,
+            }
+        }
+    };
+    let images = match encoder.encode_request(&get_sp_descriptor_request()) {
+        Ok(images) => images,
+        Err(e) => {
+            return ffi::QrImageResult {
+                is_ok: false,
+                error: format!("failed to render GetSpDescriptor request: {e}"),
+                data: Vec::new(),
+                width: 0,
+                height: 0,
+            }
+        }
+    };
+    match images.into_iter().next() {
+        Some(image) => ffi::QrImageResult {
+            is_ok: true,
+            error: String::new(),
+            data: image.data,
+            width: image.width,
+            height: image.height,
+        },
+        None => ffi::QrImageResult {
+            is_ok: false,
+            error: "QR renderer returned no image".to_string(),
+            data: Vec::new(),
+            width: 0,
+            height: 0,
+        },
+    }
+}
+
+/// Decode a base64 SpDescriptor QR response.
+pub fn qr_decode_sp_descriptor_response(payload: String) -> ffi::SpDescriptorResult {
+    use base64::prelude::*;
+    use bwk_qr_protocol::{response, Message};
+
+    let bytes = match BASE64_STANDARD.decode(payload.trim()) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return ffi::SpDescriptorResult {
+                is_ok: false,
+                error: format!("invalid base64: {e}"),
+                descriptor: String::new(),
+            }
+        }
+    };
+
+    let message = match bwk_qr_protocol::decode(&bytes) {
+        Ok(message) => message,
+        Err(e) => {
+            return ffi::SpDescriptorResult {
+                is_ok: false,
+                error: format!("invalid QR message: {e}"),
+                descriptor: String::new(),
+            }
+        }
+    };
+
+    match message {
+        Message::Response(response) => match response.body {
+            response::Body::SpDescriptor(response) => {
+                if validate_sp_descriptor(response.descriptor.clone()) {
+                    ffi::SpDescriptorResult {
+                        is_ok: true,
+                        error: String::new(),
+                        descriptor: response.descriptor,
+                    }
+                } else {
+                    ffi::SpDescriptorResult {
+                        is_ok: false,
+                        error: "invalid SP descriptor".to_string(),
+                        descriptor: String::new(),
+                    }
+                }
+            }
+            response::Body::Error(response) => ffi::SpDescriptorResult {
+                is_ok: false,
+                error: response.message,
+                descriptor: String::new(),
+            },
+            _ => ffi::SpDescriptorResult {
+                is_ok: false,
+                error: "QR response does not contain an SP descriptor".to_string(),
+                descriptor: String::new(),
+            },
+        },
+        Message::Request(_) => ffi::SpDescriptorResult {
+            is_ok: false,
+            error: "QR payload is a request, not a response".to_string(),
+            descriptor: String::new(),
+        },
+    }
 }
 
 /// Validate a recipient address (SP address, legacy Bitcoin address, or hex data).
@@ -764,7 +928,7 @@ pub fn test_electrum(address: String) -> ffi::ConnectionResult {
         url: String::new(),
     };
 
-    let (host, port, scheme) = match bwk_sp::bwk::parse_electrum_url(&address) {
+    let (host, port, scheme) = match bwk_sp::bwk::bwk_electrum::url::parse_electrum_url(&address) {
         Ok(parsed) => parsed,
         Err(e) => return err_conn(format!("Invalid address '{address}': {e}")),
     };
@@ -935,5 +1099,63 @@ mod tests {
             "unexpected error: {}",
             result.error
         );
+    }
+
+    #[test]
+    fn qr_get_sp_descriptor_request_is_decodable() {
+        use base64::prelude::*;
+        use bwk_qr_protocol::{request, Message};
+
+        let payload = qr_get_sp_descriptor_request();
+        let bytes = BASE64_STANDARD
+            .decode(payload)
+            .expect("request payload should be base64");
+        let message = bwk_qr_protocol::decode(&bytes).expect("request should decode");
+
+        match message {
+            Message::Request(request) => {
+                assert!(matches!(request.body, request::Body::GetSpDescriptor(_)));
+            }
+            Message::Response(_) => panic!("expected GetSpDescriptor request"),
+        }
+    }
+
+    #[test]
+    fn qr_get_sp_descriptor_request_image_is_valid() {
+        let result = qr_get_sp_descriptor_request_image();
+
+        assert!(result.is_ok, "unexpected error: {}", result.error);
+        assert!(result.width > 0);
+        assert!(result.height > 0);
+        assert_eq!(result.data.len(), (result.width * result.height) as usize);
+    }
+
+    #[test]
+    fn qr_decode_sp_descriptor_response_extracts_descriptor() {
+        use base64::prelude::*;
+        use bwk_qr_protocol::{response, RequestId, Response};
+
+        let descriptor = "sp(L4rK1yDtCWekvXuE6oXD9jCYfFNV2cWRpVuPLBcCU2z8TrisoyY1,0260b2003c386519fc9eadf2b5cf124dd8eea4c4e68d5e154050a9346ea98ce600)";
+
+        let response = Response {
+            id: RequestId([0, 0]),
+            body: response::Body::SpDescriptor(response::SpDescriptor {
+                descriptor: descriptor.to_string(),
+            }),
+        };
+        let bytes = bwk_qr_protocol::encode_response(&response).expect("response should encode");
+        let result = qr_decode_sp_descriptor_response(BASE64_STANDARD.encode(bytes));
+
+        assert!(result.is_ok, "unexpected error: {}", result.error);
+        assert_eq!(result.descriptor, descriptor);
+    }
+
+    #[test]
+    fn qr_decode_sp_descriptor_response_rejects_request() {
+        let result = qr_decode_sp_descriptor_response(qr_get_sp_descriptor_request());
+
+        assert!(!result.is_ok);
+        assert_eq!(result.error, "QR payload is a request, not a response");
+        assert!(result.descriptor.is_empty());
     }
 }

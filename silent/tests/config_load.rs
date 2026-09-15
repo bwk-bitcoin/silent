@@ -10,7 +10,7 @@ mod common;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use common::TEST_MNEMONIC;
+use common::{descriptor_from_mnemonic, TEST_MNEMONIC};
 use silent::{config_from_file, set_datadir, Config, Network};
 use temp_dir::TempDir;
 
@@ -32,7 +32,7 @@ fn write_valid_config(account_name: &str) {
     let config = Config::new(
         account_name.to_string(),
         Network::Regtest,
-        TEST_MNEMONIC.to_string(),
+        descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest),
         "http://localhost:50001".to_string(),
         String::new(),
         Some(546),
@@ -119,11 +119,12 @@ fn config_from_file_defaults_plugin_id_to_sp() {
         r#"{{
             "account_name":"{account_name}",
             "network":"Regtest",
-            "mnemonic":"{TEST_MNEMONIC}",
+            "descriptor":"{}",
             "blindbit_url":"http://localhost:50001",
             "electrum_url":"",
             "dust_limit":546
-        }}"#
+        }}"#,
+        descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest)
     );
     std::fs::write(account_dir.join("config.json"), json).expect("write config without plugin_id");
 

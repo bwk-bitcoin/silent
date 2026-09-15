@@ -49,7 +49,7 @@ public slots:
     auto addAccount(const QString &name) -> void;
     auto removeAccount(const QString &account) -> void;
     auto listAccounts() -> void;
-    auto createAccount(const QString &name, const QString &mnemonic, Network network,
+    auto createAccount(const QString &name, const QString &descriptor, Network network,
                        const QString &blindbit_url, const QString &electrum_url) -> void;
     auto onAccountCreated(const QString &name) -> void;
     auto openAccount(const QString &name) -> void;

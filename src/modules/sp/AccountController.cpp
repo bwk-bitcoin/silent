@@ -331,6 +331,13 @@ auto AccountController::hasSubAccounts() -> bool {
     return m_account.has_value() && m_account.value()->has_sub_accounts();
 }
 
+auto AccountController::getDescriptor() -> rust::String {
+    if (m_account.has_value()) {
+        return m_account.value()->descriptor();
+    }
+    return rust::String("");
+}
+
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 auto AccountController::coins() -> qontrol::Screen * {
     auto scr = screen("coins");

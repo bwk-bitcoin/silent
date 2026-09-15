@@ -56,13 +56,17 @@ create-account-electrum-empty
 => "Electrum address cannot be empty."
 => "L'indirizzo Electrum non puo essere vuoto.";;
 create-account-invalid-input => "Invalid Input" => "Input non valido"
-create-account-mnemonic => "Mnemonic:" => "Frase mnemonica:"
+create-account-descriptor => "SP Descriptor:" => "Descrittore SP:"
+create-account-import-qr-response => "Import" => "Importa"
 create-account-name => "Account Name:" => "Nome account:"
 create-account-placeholder-blindbit
 => "http://localhost:8080"
 => "http://localhost:8080";;
-create-account-placeholder-mnemonic => "Mnemonic phrase" => "Frase mnemonica"
+create-account-placeholder-descriptor => "sp(scan,spend)" => "sp(scan,spend)"
 create-account-placeholder-name => "Enter account name" => "Inserisci nome account"
+create-account-placeholder-qr-response => "Paste signer response" => "Incolla risposta del firmatario"
+create-account-qr-request => "QR Request:" => "Richiesta QR:"
+create-account-qr-response => "QR Response:" => "Risposta QR:"
 create-account-title => "Create Account" => "Crea account"
 delete-wallet-confirmation
 => "Delete wallet '%1'? This cannot be undone."
@@ -163,6 +167,7 @@ send-label => "Description:" => "Etichetta:"
 send-max => "MAX" => "MAX"
 send-max-suffix => "(max)" => "(max)"
 send-no-account-loaded => "No account loaded." => "Nessun account caricato."
+send-no-signers => "No ready signers found." => "Nessun firmatario pronto trovato."
 send-placeholder-address => "Address" => "Indirizzo"
 send-placeholder-amount => "0.002" => "0.002"
 send-placeholder-label => "Label" => "Etichetta"

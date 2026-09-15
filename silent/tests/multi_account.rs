@@ -11,9 +11,9 @@ use std::thread;
 use std::time::Duration;
 
 use common::{
-    cleanup_test_account, create_test_account, fund_sp_wallet, fund_sp_wallet_at_index,
-    setup_blindbitd, test_account_name, wait_for_scan_complete, wait_for_sync_and_index,
-    TEST_MNEMONIC,
+    cleanup_test_account, create_test_account, descriptor_from_mnemonic, fund_sp_wallet,
+    fund_sp_wallet_at_index, setup_blindbitd, test_account_name, wait_for_scan_complete,
+    wait_for_sync_and_index, TEST_MNEMONIC,
 };
 
 // ===== Test Helpers =====
@@ -23,7 +23,7 @@ fn create_test_config(account_name: String) -> Config {
     Config::new(
         account_name,
         Network::Regtest,
-        TEST_MNEMONIC.to_string(),
+        descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest),
         "http://localhost:50001".to_string(),
         String::new(),
         Some(546),
@@ -37,13 +37,16 @@ fn test_multiple_accounts_independent_state() {
     let account1_name = format!("test_account_1_{}", std::process::id());
     let account2_name = format!("test_account_2_{}", std::process::id());
 
-    let mnemonic1 = TEST_MNEMONIC;
-    let mnemonic2 = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
+    let descriptor1 = descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest);
+    let descriptor2 = descriptor_from_mnemonic(
+        "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong",
+        Network::Signet,
+    );
 
     let config1 = Config::new(
         account1_name.clone(),
         Network::Regtest,
-        mnemonic1.to_string(),
+        descriptor1,
         "http://localhost:50001".to_string(),
         String::new(),
         Some(546),
@@ -52,7 +55,7 @@ fn test_multiple_accounts_independent_state() {
     let config2 = Config::new(
         account2_name.clone(),
         Network::Signet,
-        mnemonic2.to_string(),
+        descriptor2,
         "http://localhost:50002".to_string(),
         String::new(),
         Some(1000),
@@ -91,7 +94,7 @@ fn test_account_config_isolation() {
     let config1 = Config::new(
         account1_name.clone(),
         Network::Regtest,
-        "test mnemonic 1".to_string(),
+        descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest),
         "http://localhost:50001".to_string(),
         String::new(),
         Some(546),
@@ -100,7 +103,10 @@ fn test_account_config_isolation() {
     let config2 = Config::new(
         account2_name.clone(),
         Network::Testnet,
-        "test mnemonic 2".to_string(),
+        descriptor_from_mnemonic(
+            "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong",
+            Network::Testnet,
+        ),
         "http://localhost:50002".to_string(),
         String::new(),
         Some(1000),
@@ -110,12 +116,12 @@ fn test_account_config_isolation() {
     config2.to_file();
 
     let loaded1 = Config::from_file(account1_name.clone()).expect("Load should succeed");
-    assert_eq!(loaded1.get_mnemonic(), "test mnemonic 1");
+    assert!(loaded1.get_descriptor().starts_with("sp("));
     assert_eq!(loaded1.get_network(), Network::Regtest);
     assert_eq!(loaded1.get_blindbit_url(), "http://localhost:50001");
 
     let loaded2 = Config::from_file(account2_name.clone()).expect("Load should succeed");
-    assert_eq!(loaded2.get_mnemonic(), "test mnemonic 2");
+    assert!(loaded2.get_descriptor().starts_with("sp("));
     assert_eq!(loaded2.get_network(), Network::Testnet);
     assert_eq!(loaded2.get_blindbit_url(), "http://localhost:50002");
 
@@ -135,7 +141,7 @@ fn test_invalid_blindbit_url_error() {
     let config = Config::new(
         account_name.clone(),
         Network::Regtest,
-        TEST_MNEMONIC.to_string(),
+        descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest),
         url,
         String::new(),
         Some(546),
@@ -174,12 +180,12 @@ fn test_invalid_blindbit_url_error() {
 }
 
 #[test]
-fn test_invalid_mnemonic_error() {
+fn test_invalid_descriptor_error() {
     let account_name = test_account_name();
     let config = Config::new(
         account_name.clone(),
         Network::Regtest,
-        "invalid mnemonic phrase that is not bip39 compliant".to_string(),
+        "not an sp descriptor".to_string(),
         "http://localhost:50001".to_string(),
         String::new(),
         Some(546),
@@ -188,15 +194,14 @@ fn test_invalid_mnemonic_error() {
     let account_result = Account::new(config);
     assert!(
         account_result.is_err(),
-        "Account creation should fail with invalid mnemonic"
+        "Account creation should fail with invalid descriptor"
     );
 
     if let Err(error) = account_result {
         let error_msg = error.to_string();
         assert!(
-            error_msg.contains("mnemonic") || error_msg.contains("Mnemonic"),
-            "Error should mention mnemonic: {}",
-            error_msg
+            error_msg.contains("descriptor"),
+            "Error should mention descriptor: {error_msg}"
         );
     }
 
@@ -255,13 +260,11 @@ fn test_invalid_sp_address_error() {
         let simulation = account.simulate_transaction(tx_template.clone());
         assert!(
             !simulation.is_valid,
-            "Simulation should fail with invalid address: {}",
-            invalid_addr
+            "Simulation should fail with invalid address: {invalid_addr}"
         );
         assert!(
             !simulation.error.is_empty(),
-            "Should have error message for invalid address: {}",
-            invalid_addr
+            "Should have error message for invalid address: {invalid_addr}"
         );
     }
 

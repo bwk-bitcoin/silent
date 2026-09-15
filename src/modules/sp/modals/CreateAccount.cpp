@@ -1,14 +1,18 @@
 #include "CreateAccount.h"
-#include "views/utils.h"
+
 #include "AppController.h"
-#include "common.h"
-#include "i18n/Tr.h"
 #include "catalog/Button.h"
-#include "catalog/inputs/ComboBox.h"
-#include "catalog/inputs/Input.h"
 #include "catalog/display/Label.h"
 #include "catalog/form/ValidationMark.h"
+#include "catalog/inputs/ComboBox.h"
+#include "catalog/inputs/Input.h"
 #include "catalog/inputs/TextEdit.h"
+#include "catalog/panels/receive/QrCode.h"
+#include "common.h"
+#include "i18n/Tr.h"
+#include "views/utils.h"
+
+#include <QImage>
 #include <qthread.h>
 
 namespace modal {
@@ -20,6 +24,7 @@ using catalog::Input;
 using catalog::InputRole;
 using catalog::Label;
 using catalog::LabelRole;
+using catalog::QrCode;
 using catalog::TextEdit;
 using catalog::ValidationMark;
 
@@ -40,12 +45,33 @@ void CreateAccount::init() {
     m_name_input = new Input;
     m_name_input->setPlaceholderText(TR("create-account-placeholder-name"));
 
-    m_mnemonic_input = new TextEdit;
-    m_mnemonic_input->setPlaceholderText(TR("create-account-placeholder-mnemonic"));
-    m_mnemonic_input->setMaximumHeight(50);
-    m_mnemonic_input->setMinimumWidth(200);
+    m_qr_code = new QrCode;
+    auto qrImage = ::qr_get_sp_descriptor_request_image();
+    if (qrImage.is_ok) {
+        auto image = QImage(qrImage.data.data(), static_cast<int>(qrImage.width),
+                            static_cast<int>(qrImage.height), static_cast<int>(qrImage.width),
+                            QImage::Format_Grayscale8);
+        m_qr_code->setImage(image.copy());
+    }
 
-    m_generate_btn = new Button(TR("common-generate"));
+    m_qr_request = new TextEdit;
+    m_qr_request->setText(
+        QString::fromStdString(std::string(::qr_get_sp_descriptor_request().c_str())));
+    m_qr_request->textEdit()->setReadOnly(true);
+    m_qr_request->setMaximumHeight(60);
+    m_qr_request->setMinimumWidth(260);
+
+    m_qr_response = new TextEdit;
+    m_qr_response->setPlaceholderText(TR("create-account-placeholder-qr-response"));
+    m_qr_response->setMaximumHeight(60);
+    m_qr_response->setMinimumWidth(260);
+
+    m_qr_import_btn = new Button(TR("create-account-import-qr-response"));
+
+    m_descriptor_input = new TextEdit;
+    m_descriptor_input->setPlaceholderText(TR("create-account-placeholder-descriptor"));
+    m_descriptor_input->setMaximumHeight(70);
+    m_descriptor_input->setMinimumWidth(260);
 
     m_network_combo = new ComboBox;
     m_network_combo->addItem(TR("network-regtest"), static_cast<int>(Network::Regtest));
@@ -76,9 +102,9 @@ void CreateAccount::init() {
 void CreateAccount::doConnect() {
     connect(m_name_input, &QLineEdit::textChanged, this, &CreateAccount::onUpdateCreateButton,
             qontrol::UNIQUE);
-    connect(m_mnemonic_input, &TextEdit::textChanged, this, &CreateAccount::onUpdateCreateButton,
+    connect(m_descriptor_input, &TextEdit::textChanged, this, &CreateAccount::onUpdateCreateButton,
             qontrol::UNIQUE);
-    connect(m_generate_btn, &QPushButton::clicked, this, &CreateAccount::onGenerate,
+    connect(m_qr_import_btn, &QPushButton::clicked, this, &CreateAccount::onImportQrResponse,
             qontrol::UNIQUE);
     connect(m_network_combo, &QComboBox::currentIndexChanged, this,
             &CreateAccount::onNetworkChanged, qontrol::UNIQUE);
@@ -104,12 +130,27 @@ void CreateAccount::view() {
                         ->pushSpacer(resolve(Spacing::XS))
                         ->push(m_name_input);
 
-    auto *mnemonicRow = (new qontrol::Row)
-                            ->push(new Label(TR("create-account-mnemonic"), LabelRole::InputLabel))
-                            ->pushSpacer(resolve(Spacing::XS))
-                            ->push(m_mnemonic_input);
+    auto *descriptorRow =
+        (new qontrol::Row)
+            ->push(new Label(TR("create-account-descriptor"), LabelRole::InputLabel))
+            ->pushSpacer(resolve(Spacing::XS))
+            ->push(m_descriptor_input);
 
-    auto *generateRow = (new qontrol::Row)->pushSpacer()->push(m_generate_btn)->pushSpacer();
+    auto *qrRequestRow =
+        (new qontrol::Row)
+            ->push(new Label(TR("create-account-qr-request"), LabelRole::InputLabel))
+            ->pushSpacer(resolve(Spacing::XS))
+            ->push(m_qr_code)
+            ->pushSpacer(resolve(Spacing::XS))
+            ->push(m_qr_request);
+
+    auto *qrResponseRow =
+        (new qontrol::Row)
+            ->push(new Label(TR("create-account-qr-response"), LabelRole::InputLabel))
+            ->pushSpacer(resolve(Spacing::XS))
+            ->push(m_qr_response)
+            ->pushSpacer(resolve(Spacing::XS))
+            ->push(m_qr_import_btn);
 
     auto *networkRow = (new qontrol::Row)
                            ->push(new Label(TR("settings-network"), LabelRole::InputLabel))
@@ -144,9 +185,11 @@ void CreateAccount::view() {
     auto *col = (new qontrol::Column)
                     ->push(nameRow)
                     ->pushSpacer(resolve(Spacing::XS))
-                    ->push(mnemonicRow)
+                    ->push(qrRequestRow)
                     ->pushSpacer(resolve(Spacing::XS))
-                    ->push(generateRow)
+                    ->push(qrResponseRow)
+                    ->pushSpacer(resolve(Spacing::XS))
+                    ->push(descriptorRow)
                     ->pushSpacer(resolve(Spacing::XS))
                     ->push(networkRow)
                     ->pushSpacer(resolve(Spacing::XS))
@@ -159,20 +202,15 @@ void CreateAccount::view() {
     setMainWidget(margin(col));
 }
 
-void CreateAccount::onGenerate() {
-    auto mnemonic = generateMnemonic();
-    m_mnemonic_input->setText(mnemonic);
-}
-
 void CreateAccount::onCreate() {
     auto name = m_name_input->text().trimmed();
-    auto mnemonic = m_mnemonic_input->toPlainText().trimmed();
+    auto descriptor = m_descriptor_input->toPlainText().trimmed();
     auto blindbitUrl = m_blindbit_input->text().trimmed();
     auto electrumUrl = m_electrum_input->text().trimmed();
     auto network = static_cast<Network>(m_network_combo->currentData().toInt());
 
     auto config =
-        new_config(rust::String(name.toStdString()), network, rust::String(mnemonic.toStdString()),
+        new_config(rust::String(name.toStdString()), network, rust::String(descriptor.toStdString()),
                    rust::String(blindbitUrl.toStdString()), rust::String(electrumUrl.toStdString()),
                    546, rust::String("sp"));
     config->to_file();
@@ -186,10 +224,22 @@ void CreateAccount::onNetworkChanged() {
     isMainnet =
         static_cast<Network>(m_network_combo->currentData().toInt()) == Network::Bitcoin;
 
-    m_generate_btn->setEnabled(!isMainnet);
     invalidateBackendTest();
     invalidateElectrumTest();
     applyNetworkDefaults();
+}
+
+void CreateAccount::onImportQrResponse() {
+    auto payload = m_qr_response->toPlainText().trimmed();
+    auto result = ::qr_decode_sp_descriptor_response(rust::String(payload.toStdString()));
+    if (!result.is_ok) {
+        auto error = QString::fromStdString(std::string(result.error.c_str()));
+        AppController::execModal(new qontrol::Modal(TR("create-account-invalid-input"), error));
+        return;
+    }
+
+    m_descriptor_input->setText(QString::fromStdString(std::string(result.descriptor.c_str())));
+    onUpdateCreateButton();
 }
 
 void CreateAccount::onTestBackend() {
@@ -328,7 +378,7 @@ void CreateAccount::invalidateElectrumTest() {
 
 void CreateAccount::onUpdateCreateButton() {
     auto name = m_name_input->text().trimmed();
-    auto mnemonic = m_mnemonic_input->toPlainText().trimmed();
+    auto descriptor = m_descriptor_input->toPlainText().trimmed();
 
     if (name.isEmpty() || name.contains(" ")) {
         m_create_btn->setEnabled(false);
@@ -344,17 +394,12 @@ void CreateAccount::onUpdateCreateButton() {
         }
     }
 
-    if (mnemonic.isEmpty() || !::validate_mnemonic(rust::String(mnemonic.toStdString()))) {
+    if (descriptor.isEmpty() || !::validate_sp_descriptor(rust::String(descriptor.toStdString()))) {
         m_create_btn->setEnabled(false);
         return;
     }
 
     m_create_btn->setEnabled(m_backend_verified && m_electrum_verified);
-}
-
-auto CreateAccount::generateMnemonic() -> QString { // NOLINT
-    auto mnemonic = ::generate_mnemonic();
-    return QString::fromStdString(std::string(mnemonic));
 }
 
 } // namespace modal

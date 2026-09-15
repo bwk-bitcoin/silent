@@ -10,8 +10,8 @@ use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use bwk_hwi::bitbox::{api::Threading, ConfigError};
-pub use bwk_hwi::bitbox::{NoiseConfig, NoiseConfigData};
+pub use bwk_hwi::bitbox::api::noise::{NoiseConfig, NoiseConfigData};
+use bwk_hwi::bitbox::api::{noise::ConfigError, util::Threading};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
