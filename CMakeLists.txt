@@ -58,6 +58,7 @@ set(SILENT_APP_SOURCES
     src/interfaces/module.h
     src/interfaces/account.h
     src/interfaces/feed.h
+    src/interfaces/keys.h
     src/interfaces/signer.h
     src/interfaces/theme.h
     src/interfaces/instance.h

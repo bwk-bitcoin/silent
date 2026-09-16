@@ -9,6 +9,7 @@
 
 class QWidget;
 class IInstance;
+class IKeys;
 class IModule;
 
 class HostI18n {
@@ -54,6 +55,12 @@ public:
     virtual void retireInstance(IInstance *self) = 0;
     [[nodiscard]] virtual QList<IInstance*> instances() const = 0;
     [[nodiscard]] virtual QList<plugin::SignerEntry> signers() const = 0;
+
+    // The keys module registers itself once. A second registration from a different
+    // module is refused, the way a duplicate instance id is. keys() answers null until
+    // the module has registered, so every caller checks.
+    virtual void setKeys(IKeys *keys, IModule *owner) = 0;
+    [[nodiscard]] virtual IKeys *keys() const = 0;
 
     // A module states whether it currently needs signing devices polled. The host keeps
     // one flag per module and polls while any of them is true, so asking twice is the

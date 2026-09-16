@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QPointer>
 
+class IKeys;
 class MainWindow;
 
 class HostImpl final : public QObject, public Host {
@@ -18,6 +19,8 @@ public:
     void retireInstance(IInstance *self) override;
     [[nodiscard]] QList<IInstance *> instances() const override;
     [[nodiscard]] QList<plugin::SignerEntry> signers() const override;
+    void setKeys(IKeys *keys, IModule *owner) override;
+    [[nodiscard]] IKeys *keys() const override;
     void requestSignerPolling(IModule *requester, bool enabled) override;
 
     TabId openTab(QWidget *content, IInstance *owner) override;
@@ -49,12 +52,14 @@ signals:
     void registerInstanceRequested(QString id, IInstance *instance, IModule *owner);
     void removeInstanceRequested(QString id, IModule *owner);
     void retireInstanceRequested(IInstance *self);
+    void setKeysRequested(IKeys *keys, IModule *owner);
     void signerPollingRequested(IModule *requester, bool enabled);
 
 private slots:
     void onRegisterInstanceRequested(const QString &id, IInstance *instance, IModule *owner);
     void onRemoveInstanceRequested(const QString &id, IModule *owner);
     void onRetireInstanceRequested(IInstance *self);
+    void onSetKeysRequested(IKeys *keys, IModule *owner);
     void onSignerPollingRequested(IModule *requester, bool enabled);
     void onHostedTabCloseRequested(QWidget *content);
     void onWizardModalFinished(int result);
@@ -84,6 +89,8 @@ private:
 
     QHash<QString, IInstance *> m_instances;
     QHash<QString, IModule *> m_instance_owner;
+    IKeys *m_keys = nullptr;
+    IModule *m_keys_owner = nullptr;
     QHash<IModule *, bool> m_signer_polling_requests;
     bool m_signer_polling = false;
     QHash<TabId, TabEntry> m_tabs;

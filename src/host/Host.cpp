@@ -1,9 +1,10 @@
 #include "Host.h"
 
 #include "AppController.h"
-#include "i18n/I18nManager.h"
 #include "MainWindow.h"
+#include "i18n/I18nManager.h"
 #include "interfaces/instance.h"
+#include "interfaces/keys.h"
 #include "interfaces/signer.h"
 
 #include <algorithm>
@@ -54,6 +55,8 @@ HostImpl::HostImpl() : QObject(nullptr), m_i18n(new HostI18nImpl()) {
             qontrol::UNIQUE);
     connect(this, &HostImpl::retireInstanceRequested, this, &HostImpl::onRetireInstanceRequested,
             qontrol::UNIQUE);
+    connect(this, &HostImpl::setKeysRequested, this, &HostImpl::onSetKeysRequested,
+            qontrol::UNIQUE);
     connect(this, &HostImpl::signerPollingRequested, this, &HostImpl::onSignerPollingRequested,
             qontrol::UNIQUE);
 }
@@ -89,6 +92,10 @@ void HostImpl::removeInstance(const QString &id, IModule *owner) {
 
 void HostImpl::retireInstance(IInstance *self) {
     emit retireInstanceRequested(self);
+}
+
+void HostImpl::setKeys(IKeys *keys, IModule *owner) {
+    emit setKeysRequested(keys, owner);
 }
 
 void HostImpl::requestSignerPolling(IModule *requester, bool enabled) {
@@ -129,6 +136,19 @@ void HostImpl::onRetireInstanceRequested(IInstance *self) {
         return;
     }
     removeInstance(id);
+}
+
+void HostImpl::onSetKeysRequested(IKeys *keys, IModule *owner) {
+    assertGuiThread();
+    if (keys == nullptr || owner == nullptr) {
+        return;
+    }
+    if (m_keys != nullptr && m_keys_owner != owner) {
+        qWarning() << "Host: a keys implementation is already registered, ignoring";
+        return;
+    }
+    m_keys = keys;
+    m_keys_owner = owner;
 }
 
 void HostImpl::onSignerPollingRequested(IModule *requester, bool enabled) {
@@ -177,6 +197,11 @@ QList<plugin::SignerEntry> HostImpl::signers() const {
         return lhs.instanceId < rhs.instanceId;
     });
     return signers;
+}
+
+IKeys *HostImpl::keys() const {
+    assertGuiThread();
+    return m_keys;
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
