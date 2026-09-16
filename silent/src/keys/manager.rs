@@ -5,7 +5,7 @@
 //! live device list, such as whether a key is connected, is computed at call time and
 //! never cached.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use bitcoin::{
@@ -18,6 +18,7 @@ use bwk_sp::bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor;
 use crate::keys::{
     error::Error,
     network_name,
+    psbt::{inspect_bytes, PsbtArtifacts},
     record::{DescriptorEntry, DeviceRecord, KeyRecord, RouteKind, XpubEntry},
     store::KeyStore,
 };
@@ -45,6 +46,64 @@ impl LiveDevice {
             module: self.module.clone(),
         }
     }
+}
+
+/// Why a candidate cannot sign right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnusableReason {
+    /// No key record exists for this fingerprint on this network.
+    NotRegistered,
+    /// The key exists but has no route at all.
+    NoRoute,
+    /// The only routes are USB and no matching device is connected.
+    DeviceNotConnected,
+    /// The only route is Hot and the record carries no secret.
+    NoHotSecret,
+    /// The SP key has not completed the output scripts yet.
+    SpOutputsPending,
+}
+
+/// One fingerprint the PSBT requires, whether or not a key is registered for it and
+/// whether or not it has a usable route right now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SigningCandidate {
+    pub fingerprint: Fingerprint,
+    /// Empty when the key is not registered: there is no alias to show yet.
+    pub alias: String,
+    pub registered: bool,
+    /// The route the signing flow would take, None when the key is unusable.
+    pub route: Option<RouteKind>,
+    /// The live device id, set only when `route` is `RouteKind::Usb`.
+    pub device_id: String,
+    /// This key completes the SP output scripts, so it acts before the others.
+    pub must_sign_first: bool,
+    /// None when the candidate can sign right now.
+    pub unusable: Option<UnusableReason>,
+}
+
+/// What the signer picker is built from for one PSBT.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SigningPlan {
+    /// One entry per fingerprint the PSBT requires, SP first when it must sign first,
+    /// then in fingerprint order.
+    pub candidates: Vec<SigningCandidate>,
+    /// Connected devices whose fingerprint this PSBT does not need, so the UI can warn
+    /// about a wrong device.
+    pub unrelated_live: Vec<LiveDevice>,
+    pub sp_fingerprint: Option<Fingerprint>,
+    pub sp_outputs_pending: bool,
+}
+
+/// Names the exact cause instead of a catch-all: empty routes, hot with no secret, or
+/// the remaining case of a route that needs a device that is not connected.
+fn unusable_reason(record: &KeyRecord) -> UnusableReason {
+    if record.routes.is_empty() {
+        return UnusableReason::NoRoute;
+    }
+    if record.routes.as_slice() == [RouteKind::Hot] && record.secret.is_none() {
+        return UnusableReason::NoHotSecret;
+    }
+    UnusableReason::DeviceNotConnected
 }
 
 pub trait KeyManagerImpl {
@@ -94,6 +153,17 @@ pub trait KeyManagerImpl {
     ) -> Result<(), Error>;
     fn registered_descriptors(&self, fingerprint: Fingerprint) -> &[DescriptorEntry];
     fn keys_for_descriptor(&self, descriptor: &str) -> Vec<Fingerprint>;
+
+    fn required_fingerprints(
+        &self,
+        psbt_bytes: &[u8],
+        sp_descriptor: Option<&SpDescriptor>,
+    ) -> Result<BTreeSet<Fingerprint>, Error>;
+    fn signing_plan(
+        &self,
+        psbt_bytes: &[u8],
+        sp_descriptor: Option<&SpDescriptor>,
+    ) -> Result<SigningPlan, Error>;
 }
 
 /// Owns the in-memory view of every registered key on one network.
@@ -171,6 +241,108 @@ impl KeyManager {
         self.live
             .iter()
             .find(|device| device.fingerprint == Some(fingerprint))
+    }
+
+    fn candidate_for(
+        &self,
+        fingerprint: Fingerprint,
+        artifacts: &PsbtArtifacts,
+    ) -> SigningCandidate {
+        let is_sp = artifacts.sp_fingerprint == Some(fingerprint);
+        let must_sign_first = is_sp && artifacts.sp_outputs_pending;
+
+        let record = match self.records.get(&fingerprint) {
+            Some(record) => record,
+            None => {
+                return SigningCandidate {
+                    fingerprint,
+                    alias: String::new(),
+                    registered: false,
+                    route: None,
+                    device_id: String::new(),
+                    must_sign_first,
+                    unusable: Some(UnusableReason::NotRegistered),
+                };
+            }
+        };
+
+        if artifacts.sp_outputs_pending && !is_sp {
+            return SigningCandidate {
+                fingerprint,
+                alias: record.alias.clone(),
+                registered: true,
+                route: None,
+                device_id: String::new(),
+                must_sign_first: false,
+                unusable: Some(UnusableReason::SpOutputsPending),
+            };
+        }
+
+        match self.best_route(fingerprint) {
+            Some(route) => {
+                let device_id = if route == RouteKind::Usb {
+                    self.live_device_for(fingerprint)
+                        .map(|device| device.id.clone())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                SigningCandidate {
+                    fingerprint,
+                    alias: record.alias.clone(),
+                    registered: true,
+                    route: Some(route),
+                    device_id,
+                    must_sign_first,
+                    unusable: None,
+                }
+            }
+            None => SigningCandidate {
+                fingerprint,
+                alias: record.alias.clone(),
+                registered: true,
+                route: None,
+                device_id: String::new(),
+                must_sign_first,
+                unusable: Some(unusable_reason(record)),
+            },
+        }
+    }
+
+    /// Splitting this from `signing_plan` keeps the plan testable without building a
+    /// PSBT for every ordering case.
+    pub fn plan_from_artifacts(&self, artifacts: &PsbtArtifacts) -> SigningPlan {
+        let mut candidates: Vec<SigningCandidate> = artifacts
+            .required
+            .iter()
+            .map(|fingerprint| self.candidate_for(*fingerprint, artifacts))
+            .collect();
+
+        if let Some(index) = candidates
+            .iter()
+            .position(|candidate| candidate.must_sign_first)
+        {
+            let sp_candidate = candidates.remove(index);
+            candidates.insert(0, sp_candidate);
+        }
+
+        let unrelated_live = self
+            .live
+            .iter()
+            .filter(|device| {
+                device
+                    .fingerprint
+                    .is_some_and(|fingerprint| !artifacts.required.contains(&fingerprint))
+            })
+            .cloned()
+            .collect();
+
+        SigningPlan {
+            candidates,
+            unrelated_live,
+            sp_fingerprint: artifacts.sp_fingerprint,
+            sp_outputs_pending: artifacts.sp_outputs_pending,
+        }
     }
 }
 
@@ -404,6 +576,24 @@ impl KeyManagerImpl for KeyManager {
             })
             .map(|(fingerprint, _)| *fingerprint)
             .collect()
+    }
+
+    fn required_fingerprints(
+        &self,
+        psbt_bytes: &[u8],
+        sp_descriptor: Option<&SpDescriptor>,
+    ) -> Result<BTreeSet<Fingerprint>, Error> {
+        let artifacts = inspect_bytes(psbt_bytes, sp_descriptor)?;
+        Ok(artifacts.required)
+    }
+
+    fn signing_plan(
+        &self,
+        psbt_bytes: &[u8],
+        sp_descriptor: Option<&SpDescriptor>,
+    ) -> Result<SigningPlan, Error> {
+        let artifacts = inspect_bytes(psbt_bytes, sp_descriptor)?;
+        Ok(self.plan_from_artifacts(&artifacts))
     }
 }
 
@@ -1070,6 +1260,463 @@ mod tests {
         assert!(
             descriptors.is_empty(),
             "expected an empty slice for an unknown fingerprint, got {descriptors:?}"
+        );
+    }
+
+    fn live_device(id: &str, serial: &str, fp: Option<Fingerprint>) -> LiveDevice {
+        LiveDevice {
+            id: id.to_string(),
+            kind: "hardware".to_string(),
+            model: "model".to_string(),
+            serial: serial.to_string(),
+            module: "hwi".to_string(),
+            fingerprint: fp,
+        }
+    }
+
+    /// One SP fingerprint and two other registered, USB-connected fingerprints, with
+    /// `sp_outputs_pending` true. Shared by the tests that check the SP-first rule.
+    fn sp_pending_scenario() -> (KeyManager, PsbtArtifacts) {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let sp_fp = fingerprint(1);
+        let other_a = fingerprint(2);
+        let other_b = fingerprint(3);
+
+        for fp in [sp_fp, other_a, other_b] {
+            manager
+                .add_key(KeyRecord::new(fp, Network::Regtest, "alias".to_string()))
+                .expect("add key");
+        }
+        for fp in [other_a, other_b] {
+            manager
+                .add_route(fp, RouteKind::Usb)
+                .expect("add usb route");
+        }
+        manager.set_live_devices(vec![
+            live_device("dev-a", "serial-a", Some(other_a)),
+            live_device("dev-b", "serial-b", Some(other_b)),
+        ]);
+
+        let artifacts = PsbtArtifacts {
+            required: BTreeSet::from([sp_fp, other_a, other_b]),
+            sp_fingerprint: Some(sp_fp),
+            sp_inputs: true,
+            sp_outputs: true,
+            sp_outputs_pending: true,
+        };
+
+        (manager, artifacts)
+    }
+
+    #[test]
+    fn every_required_fingerprint_gets_a_candidate() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        manager
+            .add_key(KeyRecord::new(
+                fingerprint(1),
+                Network::Regtest,
+                "alias".to_string(),
+            ))
+            .expect("add key");
+
+        let artifacts = PsbtArtifacts {
+            required: BTreeSet::from([fingerprint(1), fingerprint(2)]),
+            sp_fingerprint: None,
+            sp_inputs: false,
+            sp_outputs: false,
+            sp_outputs_pending: false,
+        };
+        let plan = manager.plan_from_artifacts(&artifacts);
+        assert_eq!(
+            plan.candidates.len(),
+            2,
+            "expected one candidate per required fingerprint, got {:?}",
+            plan.candidates
+        );
+
+        let unregistered = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.fingerprint == fingerprint(2))
+            .expect("unregistered candidate present");
+        assert_eq!(
+            unregistered.unusable,
+            Some(UnusableReason::NotRegistered),
+            "expected NotRegistered for the unregistered fingerprint, got {:?}",
+            unregistered.unusable
+        );
+        assert!(
+            !unregistered.registered,
+            "expected registered to be false for the unregistered fingerprint, got {unregistered:?}"
+        );
+    }
+
+    #[test]
+    fn sp_outputs_pending_blocks_every_other_key() {
+        let (manager, artifacts) = sp_pending_scenario();
+        let plan = manager.plan_from_artifacts(&artifacts);
+        let sp_fp = artifacts.sp_fingerprint.expect("sp fingerprint set");
+
+        for candidate in plan
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.fingerprint != sp_fp)
+        {
+            assert_eq!(
+                candidate.unusable,
+                Some(UnusableReason::SpOutputsPending),
+                "expected SpOutputsPending for {candidate:?}"
+            );
+            assert_eq!(
+                candidate.route, None,
+                "expected no route while sp outputs are pending, got {candidate:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_sp_key_must_sign_first_and_is_listed_first() {
+        let (manager, artifacts) = sp_pending_scenario();
+        let plan = manager.plan_from_artifacts(&artifacts);
+        let sp_fp = artifacts.sp_fingerprint.expect("sp fingerprint set");
+
+        assert_eq!(
+            plan.candidates[0].fingerprint, sp_fp,
+            "expected the sp candidate first, got {:?}",
+            plan.candidates
+        );
+        assert!(
+            plan.candidates[0].must_sign_first,
+            "expected the sp candidate to have must_sign_first set, got {:?}",
+            plan.candidates[0]
+        );
+        let other_must_sign_first = plan.candidates[1..]
+            .iter()
+            .filter(|candidate| candidate.must_sign_first)
+            .count();
+        assert_eq!(
+            other_must_sign_first, 0,
+            "expected no other candidate with must_sign_first set, got {:?}",
+            plan.candidates
+        );
+    }
+
+    #[test]
+    fn once_the_outputs_are_derived_everyone_can_sign() {
+        let (manager, mut artifacts) = sp_pending_scenario();
+        artifacts.sp_outputs_pending = false;
+        let plan = manager.plan_from_artifacts(&artifacts);
+
+        for candidate in &plan.candidates {
+            assert_ne!(
+                candidate.unusable,
+                Some(UnusableReason::SpOutputsPending),
+                "expected no SpOutputsPending once outputs are derived, got {candidate:?}"
+            );
+            assert!(
+                !candidate.must_sign_first,
+                "expected no must_sign_first once outputs are derived, got {candidate:?}"
+            );
+        }
+
+        let order: Vec<Fingerprint> = plan.candidates.iter().map(|c| c.fingerprint).collect();
+        let mut sorted = order.clone();
+        sorted.sort();
+        assert_eq!(
+            order, sorted,
+            "expected plain fingerprint order, got {order:?}"
+        );
+    }
+
+    #[test]
+    fn a_usb_candidate_names_the_device() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let fp = fingerprint(1);
+        manager
+            .add_key(KeyRecord::new(fp, Network::Regtest, "alias".to_string()))
+            .expect("add key");
+        manager
+            .add_route(fp, RouteKind::Usb)
+            .expect("add usb route");
+        manager.set_live_devices(vec![live_device("dev-1", "serial", Some(fp))]);
+
+        let artifacts = PsbtArtifacts {
+            required: BTreeSet::from([fp]),
+            sp_fingerprint: None,
+            sp_inputs: false,
+            sp_outputs: false,
+            sp_outputs_pending: false,
+        };
+        let plan = manager.plan_from_artifacts(&artifacts);
+        let candidate = &plan.candidates[0];
+        assert_eq!(
+            candidate.route,
+            Some(RouteKind::Usb),
+            "expected a usb route, got {:?}",
+            candidate.route
+        );
+        assert!(
+            !candidate.device_id.is_empty(),
+            "expected a non-empty device id for a usb candidate, got {candidate:?}"
+        );
+    }
+
+    #[test]
+    fn a_non_usb_candidate_leaves_the_device_id_empty() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let fp = fingerprint(1);
+        manager
+            .add_key(KeyRecord::new(fp, Network::Regtest, "alias".to_string()))
+            .expect("add key");
+        manager.add_route(fp, RouteKind::Qr).expect("add qr route");
+
+        let artifacts = PsbtArtifacts {
+            required: BTreeSet::from([fp]),
+            sp_fingerprint: None,
+            sp_inputs: false,
+            sp_outputs: false,
+            sp_outputs_pending: false,
+        };
+        let plan = manager.plan_from_artifacts(&artifacts);
+        let candidate = &plan.candidates[0];
+        assert_eq!(
+            candidate.route,
+            Some(RouteKind::Qr),
+            "expected a qr route, got {:?}",
+            candidate.route
+        );
+        assert!(
+            candidate.device_id.is_empty(),
+            "expected an empty device id for a non-usb candidate, got {}",
+            candidate.device_id
+        );
+    }
+
+    #[test]
+    fn each_unusable_reason_is_named_exactly() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let no_route = fingerprint(1);
+        let no_hot_secret = fingerprint(2);
+        let device_not_connected = fingerprint(3);
+
+        manager
+            .add_key(KeyRecord::new(
+                no_route,
+                Network::Regtest,
+                "alias".to_string(),
+            ))
+            .expect("add no route key");
+        manager
+            .add_key(KeyRecord::new(
+                no_hot_secret,
+                Network::Regtest,
+                "alias".to_string(),
+            ))
+            .expect("add hot key");
+        manager
+            .add_route(no_hot_secret, RouteKind::Hot)
+            .expect("add hot route");
+        manager
+            .add_key(KeyRecord::new(
+                device_not_connected,
+                Network::Regtest,
+                "alias".to_string(),
+            ))
+            .expect("add usb key");
+        manager
+            .add_route(device_not_connected, RouteKind::Usb)
+            .expect("add usb route");
+
+        let artifacts = PsbtArtifacts {
+            required: BTreeSet::from([no_route, no_hot_secret, device_not_connected]),
+            sp_fingerprint: None,
+            sp_inputs: false,
+            sp_outputs: false,
+            sp_outputs_pending: false,
+        };
+        let plan = manager.plan_from_artifacts(&artifacts);
+
+        let reason_for = |fp: Fingerprint| {
+            plan.candidates
+                .iter()
+                .find(|candidate| candidate.fingerprint == fp)
+                .expect("candidate present")
+                .unusable
+        };
+        assert_eq!(
+            reason_for(no_route),
+            Some(UnusableReason::NoRoute),
+            "expected NoRoute for a key with no routes"
+        );
+        assert_eq!(
+            reason_for(no_hot_secret),
+            Some(UnusableReason::NoHotSecret),
+            "expected NoHotSecret for a hot-only key with no secret"
+        );
+        assert_eq!(
+            reason_for(device_not_connected),
+            Some(UnusableReason::DeviceNotConnected),
+            "expected DeviceNotConnected for a usb key with no live device"
+        );
+    }
+
+    #[test]
+    fn route_and_unusable_are_mutually_exclusive() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let usable = fingerprint(1);
+        let unregistered = fingerprint(2);
+        let no_route = fingerprint(3);
+
+        manager
+            .add_key(KeyRecord::new(
+                usable,
+                Network::Regtest,
+                "alias".to_string(),
+            ))
+            .expect("add usable key");
+        manager
+            .add_route(usable, RouteKind::Qr)
+            .expect("add qr route");
+        manager
+            .add_key(KeyRecord::new(
+                no_route,
+                Network::Regtest,
+                "alias".to_string(),
+            ))
+            .expect("add no route key");
+
+        let artifacts = PsbtArtifacts {
+            required: BTreeSet::from([usable, unregistered, no_route]),
+            sp_fingerprint: None,
+            sp_inputs: false,
+            sp_outputs: false,
+            sp_outputs_pending: false,
+        };
+        let plan = manager.plan_from_artifacts(&artifacts);
+
+        let (sp_manager, sp_artifacts) = sp_pending_scenario();
+        let sp_plan = sp_manager.plan_from_artifacts(&sp_artifacts);
+
+        for candidate in plan.candidates.iter().chain(sp_plan.candidates.iter()) {
+            assert!(
+                candidate.route.is_some() != candidate.unusable.is_some(),
+                "expected exactly one of route/unusable set, got {candidate:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_live_devices_are_listed() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let required_fp = fingerprint(1);
+        let unrelated_fp = fingerprint(2);
+        manager.set_live_devices(vec![
+            live_device("dev-required", "serial-required", Some(required_fp)),
+            live_device("dev-unrelated", "serial-unrelated", Some(unrelated_fp)),
+        ]);
+
+        let artifacts = PsbtArtifacts {
+            required: BTreeSet::from([required_fp]),
+            sp_fingerprint: None,
+            sp_inputs: false,
+            sp_outputs: false,
+            sp_outputs_pending: false,
+        };
+        let plan = manager.plan_from_artifacts(&artifacts);
+        assert_eq!(
+            plan.unrelated_live.len(),
+            1,
+            "expected only the unrelated device listed, got {:?}",
+            plan.unrelated_live
+        );
+        assert_eq!(
+            plan.unrelated_live[0].fingerprint,
+            Some(unrelated_fp),
+            "expected the unrelated device's fingerprint, got {:?}",
+            plan.unrelated_live[0]
+        );
+    }
+
+    #[test]
+    fn a_live_device_with_no_fingerprint_is_not_unrelated() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        manager.set_live_devices(vec![live_device("dev-locked", "serial", None)]);
+
+        let artifacts = PsbtArtifacts {
+            required: BTreeSet::from([fingerprint(1)]),
+            sp_fingerprint: None,
+            sp_inputs: false,
+            sp_outputs: false,
+            sp_outputs_pending: false,
+        };
+        let plan = manager.plan_from_artifacts(&artifacts);
+        assert!(
+            plan.unrelated_live.is_empty(),
+            "expected a fingerprint-less device to be excluded from unrelated_live, got {:?}",
+            plan.unrelated_live
+        );
+    }
+
+    #[test]
+    fn signing_plan_from_bytes_matches_plan_from_artifacts() {
+        use bitcoin::hashes::Hash;
+        use bwk_sp::bwk_tx::bwk_psbt::{Input as PsbtInput, PsbtV2};
+
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let fp = fingerprint(1);
+        manager
+            .add_key(KeyRecord::new(fp, Network::Regtest, "alias".to_string()))
+            .expect("add key");
+
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let public_key = bitcoin::secp256k1::PublicKey::from_secret_key(
+            &secp,
+            &bitcoin::secp256k1::SecretKey::from_slice(&[0x21; 32]).expect("valid key"),
+        );
+        let path = (
+            fp,
+            DerivationPath::from(vec![
+                bitcoin::bip32::ChildNumber::from_hardened_idx(0).expect("valid index")
+            ]),
+        );
+        let mut input = PsbtInput {
+            previous_output: bitcoin::OutPoint::new(bitcoin::Txid::from_byte_array([0x11; 32]), 0),
+            sequence: bitcoin::Sequence::MAX,
+            required_time_lock_time: None,
+            required_height_lock_time: None,
+            psbt: bitcoin::psbt::Input::default(),
+        };
+        input.psbt.bip32_derivation.insert(public_key, path);
+
+        let psbt = PsbtV2 {
+            tx_version: bitcoin::transaction::Version::TWO,
+            fallback_lock_time: Some(bitcoin::absolute::LockTime::ZERO),
+            tx_modifiable: None,
+            xpub: Default::default(),
+            proprietary: Default::default(),
+            unknown: Default::default(),
+            inputs: vec![input],
+            outputs: Vec::new(),
+        };
+        let bytes = psbt.serialize().expect("serialize psbt");
+
+        let artifacts = inspect_bytes(&bytes, None).expect("inspect bytes");
+        let expected = manager.plan_from_artifacts(&artifacts);
+        let found = manager
+            .signing_plan(&bytes, None)
+            .expect("signing plan from bytes");
+        assert_eq!(
+            found, expected,
+            "signing_plan from bytes must match plan_from_artifacts, got {found:?} expected {expected:?}"
         );
     }
 }
