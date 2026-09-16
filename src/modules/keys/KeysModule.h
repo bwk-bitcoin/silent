@@ -5,6 +5,7 @@
 
 #include <QList>
 #include <QMap>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 
@@ -15,6 +16,7 @@
 
 class HwiModule;
 class QThread;
+class QWidget;
 
 namespace keys {
 
@@ -23,6 +25,7 @@ namespace keys {
 using RustKeys = ::KeysModule;
 
 class KeysModule;
+class KeysTab;
 
 // IModule and IKeys are both QObjects, so one class cannot be both. KeysModule owns
 // this bus, registers it with the host, and answers every call through it.
@@ -79,6 +82,9 @@ public:
     [[nodiscard]] HwiModule *hwi() const;
     [[nodiscard]] KeysBus *bus() const;
     ReqId nextReqId();
+    // The Keys tab widget. Built on first call and reused afterwards; a QPointer
+    // leaves this null again if the host that owns the widget deletes it.
+    [[nodiscard]] auto tab() -> QWidget *;
 
     [[nodiscard]] static auto toQt(const rust::String &value) -> QString;
 
@@ -109,6 +115,7 @@ private:
     QThread *m_notif_thread = nullptr;
     std::unique_ptr<KeysBus> m_bus;
     HwiModule *m_hwi = nullptr;
+    QPointer<KeysTab> m_tab;
     ReqId m_next_req_id = 0;
     // The network the Rust manager was last synced to. Guards setNetwork() against its
     // own state rather than ::hwi_config_network(), which HwiModule::setNetwork also

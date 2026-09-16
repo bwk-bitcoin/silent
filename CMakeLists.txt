@@ -103,6 +103,8 @@ set(SILENT_APP_SOURCES
     src/modules/hwi/HwiSettings.cpp
     src/modules/keys/KeysModule.h
     src/modules/keys/KeysModule.cpp
+    src/modules/keys/KeysTab.h
+    src/modules/keys/KeysTab.cpp
     src/modules/sp/SpPlugin.h
     src/modules/sp/SpPlugin.cpp
     src/modules/sp/SpModule.h

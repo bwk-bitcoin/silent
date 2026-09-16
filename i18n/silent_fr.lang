@@ -49,20 +49,22 @@ create-account-blindbit-empty
 => "BlindBit URL cannot be empty."
 => "L'URL BlindBit ne peut pas etre vide.";;
 create-account-default-blindbit => "http://localhost:8080" => "http://localhost:8080"
+create-account-descriptor => "SP Descriptor:" => "Descripteur SP:"
 create-account-electrum => "Electrum:" => "Electrum:"
 create-account-electrum-empty
 => "Electrum address cannot be empty."
 => "L'adresse Electrum ne peut pas etre vide.";;
-create-account-invalid-input => "Invalid Input" => "Entree invalide"
-create-account-descriptor => "SP Descriptor:" => "Descripteur SP:"
 create-account-import-qr-response => "Import" => "Importer"
+create-account-invalid-input => "Invalid Input" => "Entree invalide"
 create-account-name => "Account Name:" => "Nom du compte:"
 create-account-placeholder-blindbit
 => "http://localhost:8080"
 => "http://localhost:8080";;
 create-account-placeholder-descriptor => "sp(scan,spend)" => "sp(scan,spend)"
 create-account-placeholder-name => "Enter account name" => "Entrez le nom du compte"
-create-account-placeholder-qr-response => "Paste signer response" => "Coller la reponse du signataire"
+create-account-placeholder-qr-response
+=> "Paste signer response"
+=> "Coller la reponse du signataire";;
 create-account-qr-request => "QR Request:" => "Requete QR:"
 create-account-qr-response => "QR Response:" => "Reponse QR:"
 create-account-title => "Create Account" => "Creer un compte"
@@ -96,6 +98,11 @@ hwi-waiting => "Waiting for the device..." => "Waiting for the device..."
 hwi-xpub-error
 => "Requested %1\n%2\nA device only exports an xpub for a standard path on the network it runs on."
 => "Requested %1\n%2\nA device only exports an xpub for a standard path on the network it runs on.";;
+keys-devices => "Devices" => "NONE"
+keys-network => "Network:" => "NONE"
+keys-no-devices => "No device connected." => "NONE"
+keys-register => "Register a key for this device" => "NONE"
+keys-register-failed => "Could not register the key: %1" => "NONE"
 language-english => "English" => "Anglais"
 language-french => "French" => "Francais"
 language-german => "German" => "Allemand"

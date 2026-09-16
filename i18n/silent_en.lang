@@ -210,3 +210,13 @@ status-not-configured => "Not configured"
 status-scanning => "Scanning..."
 status-scanning-progress => "Scanning... %1 / %2"
 status-synced-watching => "Synced at block %1 - Watching..."
+
+keys-network => "Network:"
+
+keys-devices => "Devices"
+
+keys-no-devices => "No device connected."
+
+keys-register => "Register a key for this device"
+
+keys-register-failed => "Could not register the key: %1"

@@ -1,5 +1,6 @@
 #include "KeysModule.h"
 
+#include "KeysTab.h"
 #include "modules/hwi/HwiModule.h"
 
 #include "interfaces/host.h"
@@ -214,6 +215,13 @@ HwiModule *KeysModule::hwi() const {
 
 KeysBus *KeysModule::bus() const {
     return m_bus.get();
+}
+
+auto KeysModule::tab() -> QWidget * {
+    if (m_tab.isNull()) {
+        m_tab = new KeysTab(this);
+    }
+    return m_tab.data();
 }
 
 ReqId KeysModule::nextReqId() {
