@@ -11,6 +11,7 @@ pub mod manager;
 pub mod psbt;
 pub mod qr;
 pub mod record;
+pub mod sdcard;
 pub mod store;
 
 pub use crypto::Password;
