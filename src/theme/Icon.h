@@ -47,5 +47,6 @@ auto silentMark(IconColor color = IconColor::Default) -> QIcon;
 auto key(IconColor color = IconColor::Default) -> QIcon;
 auto lock(IconColor color = IconColor::Default) -> QIcon;
 auto sdCard(IconColor color = IconColor::Default) -> QIcon;
+auto memoryStick(IconColor color = IconColor::Default) -> QIcon;
 
 } // namespace icon

@@ -119,6 +119,8 @@ set(SILENT_APP_SOURCES
     src/modules/keys/modals/KeyModal.cpp
     src/modules/keys/modals/PasswordPrompt.h
     src/modules/keys/modals/PasswordPrompt.cpp
+    src/modules/keys/modals/SignerPicker.h
+    src/modules/keys/modals/SignerPicker.cpp
     src/modules/sp/SpPlugin.h
     src/modules/sp/SpPlugin.cpp
     src/modules/sp/SpModule.h

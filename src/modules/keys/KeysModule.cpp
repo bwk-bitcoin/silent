@@ -3,6 +3,7 @@
 #include "KeysTab.h"
 #include "modules/hwi/HwiModule.h"
 #include "modules/keys/modals/PasswordPrompt.h"
+#include "modules/keys/modals/SignerPicker.h"
 #include "modules/keys/signers/OfflineSigner.h"
 #include "modules/keys/signers/RouteSigner.h"
 
@@ -319,6 +320,32 @@ auto KeysModule::offlineSignerFor(const QString &fingerprint, const KeyInfo &inf
 auto KeysModule::hasPendingRequests(const ISigner *signer) const -> bool {
     return std::ranges::any_of(m_pending_requests,
                                [signer](const ISigner *pending) { return pending == signer; });
+}
+
+auto KeysModule::showSignerPicker(const QString &title, const SigningPlan &plan) -> QString {
+    auto *picker = new modal::SignerPicker(title, plan);
+    connect(picker, &modal::SignerPicker::picked, this, &KeysModule::onSignerPicked,
+            qontrol::UNIQUE);
+    m_picked_fingerprint.clear();
+    AppController::execModal(picker);
+    return m_picked_fingerprint;
+}
+
+auto KeysModule::signingPlanFor(const QString &psbt_v2_hex) const -> SigningPlan {
+    if (rust() == nullptr) {
+        SigningPlan plan;
+        plan.is_ok = false;
+        plan.error = rust::String("keys: module not ready");
+        AppController::execModal(new qontrol::Modal(TR("common-error"), toQt(plan.error)));
+        return plan;
+    }
+    // signing_plan() blocks on nothing (no device I/O), so calling it from the GUI
+    // thread is safe: see its doc comment in lib/include/silent.h.
+    auto plan = rust()->signing_plan(rust::String(psbt_v2_hex.toStdString()));
+    if (!plan.is_ok) {
+        AppController::execModal(new qontrol::Modal(TR("common-error"), toQt(plan.error)));
+    }
+    return plan;
 }
 
 void KeysModule::generateMnemonic(ReqId req_id, std::uint32_t word_count) {
@@ -668,6 +695,10 @@ void KeysModule::onRouteDisplayRequested(ReqId req_id, [[maybe_unused]] const QS
     // The interactive QR and SD card flows are wired in a later task.
     signer->deliverError(req_id, TR("keys-route-unavailable"));
     m_pending_requests.remove(req_id);
+}
+
+void KeysModule::onSignerPicked(QString fingerprint) {
+    m_picked_fingerprint = std::move(fingerprint);
 }
 
 } // namespace keys

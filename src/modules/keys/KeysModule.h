@@ -155,6 +155,7 @@ public slots:
     void onRouteDisplayRequested(ReqId req_id, const QString &fingerprint,
                                  const QString &descriptor, const QString &path,
                                  const QString &address);
+    void onSignerPicked(QString fingerprint);
 
 private slots:
     void onKeyEventReceived(const KeyEvent &event);
@@ -183,6 +184,13 @@ protected:
     // Whether `signer` has a request in flight through the module (the interactive
     // route flows), so a rebuild never deletes an instance out from under a caller.
     [[nodiscard]] auto hasPendingRequests(const ISigner *signer) const -> bool;
+    // Shows the PSBT-driven signer picker and answers with the fingerprint the user
+    // picked, or an empty string on cancel. Reads the answer back through
+    // onSignerPicked(), never off the modal after execModal() returns.
+    auto showSignerPicker(const QString &title, const SigningPlan &plan) -> QString;
+    // Builds the signer picker plan for `psbt_v2_hex`. Shows an error modal and
+    // still returns the (is_ok false) plan on failure, never a fabricated one.
+    [[nodiscard]] auto signingPlanFor(const QString &psbt_v2_hex) const -> SigningPlan;
     // Translates a RouteSigner/device signer's own ReqId back to the caller's
     // request id via m_signer_to_request, removing the entry. Falls back to
     // `signer_req_id` unchanged when no mapping was recorded: some requests
@@ -225,6 +233,9 @@ private:
     QHash<ReqId, ReqId> m_signer_to_request;
     // Password prompts currently open, keyed by the modal instance.
     QHash<QObject *, PasswordRequest> m_password_requests;
+    // The fingerprint picked in the signer picker last shown, set by onSignerPicked()
+    // while showSignerPicker()'s execModal() call is still on the stack.
+    QString m_picked_fingerprint;
 };
 
 } // namespace keys

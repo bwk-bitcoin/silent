@@ -395,3 +395,21 @@ keys-route-unavailable => "This signing route is not available yet."
 keys-module-not-ready => "The keys module is not ready."
 
 keys-address-display-failed => "The address could not be displayed on the device."
+
+keys-picker-must-sign-first => "Must sign first"
+
+keys-picker-waiting-for-sp => "Waiting for the silent payment key to sign"
+
+keys-picker-required => "Required to sign"
+
+keys-picker-other-devices => "Other connected devices"
+
+keys-picker-unrelated => "Not needed by this transaction"
+
+keys-picker-not-registered => "Not registered as a key"
+
+keys-picker-no-route => "No usable signing route"
+
+keys-picker-device-offline => "Device is not connected"
+
+keys-picker-unknown-reason => "Unusable"

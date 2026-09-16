@@ -16,6 +16,7 @@
 #include "resources/icon/layout_dashboard.h"
 #include "resources/icon/lock.h"
 #include "resources/icon/lock_open.h"
+#include "resources/icon/memory_stick.h"
 #include "resources/icon/minus.h"
 #include "resources/icon/network.h"
 #include "resources/icon/pencil.h"
@@ -153,6 +154,10 @@ auto lock(IconColor color) -> QIcon { return renderIcon(embedded_icon::LOCK, def
 // Lucide ships no sd card glyph, a hard drive is the closest storage stand-in.
 auto sdCard(IconColor color) -> QIcon {
     return renderIcon(embedded_icon::HARD_DRIVE, defaultStroke(), color);
+}
+
+auto memoryStick(IconColor color) -> QIcon {
+    return renderIcon(embedded_icon::MEMORY_STICK, defaultStroke(), color);
 }
 
 } // namespace icon
