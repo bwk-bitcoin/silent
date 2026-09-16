@@ -27,6 +27,7 @@ public slots:
     void onDevicesChanged();
     void onKeysChanged();
     void onRegisterDeviceClicked();
+    void onDeviceClicked();
 
 protected:
     void init() override;

@@ -238,3 +238,5 @@ keys-route-usb => "USB"
 keys-route-qr => "QR code"
 
 keys-route-sd => "SD card"
+
+keys-device-title => "Device"

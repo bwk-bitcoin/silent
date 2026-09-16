@@ -2,8 +2,10 @@
 
 #include "KeysModule.h"
 
+#include "modals/DeviceModal.h"
 #include "modules/hwi/HwiModule.h"
 
+#include "AppController.h"
 #include "catalog/Button.h"
 #include "catalog/SelectRow.h"
 #include "catalog/containers/Separator.h"
@@ -36,6 +38,7 @@ namespace keys {
 namespace {
 const char *const K_FINGERPRINT = "keyFingerprint";
 const char *const K_ALIAS = "keyAlias";
+const char *const K_DEVICE_INSTANCE_ID = "deviceInstanceId";
 
 auto stateText(plugin::SignerState state) -> QString {
     switch (state) {
@@ -207,6 +210,9 @@ void KeysTab::rebuildDevices() {
         row->setIcon(icon::usb(IconColor::Accent));
         row->setTitle(title);
         row->setMetadata(parts.join(QStringLiteral("  ")));
+        row->setProperty(K_DEVICE_INSTANCE_ID, entry.instanceId);
+        connect(row, &catalog::SelectRow::clicked, this, &KeysTab::onDeviceClicked,
+                qontrol::UNIQUE);
 
         auto *deviceRow = (new qontrol::Row)->push(row)->pushSpacer();
 
@@ -294,6 +300,23 @@ void KeysTab::onRegisterDeviceClicked() {
 
     m_error_label->setVisible(false);
     rebuildDevices();
+}
+
+void KeysTab::onDeviceClicked() {
+    auto *row = qobject_cast<QObject *>(sender());
+    if (row == nullptr) {
+        return;
+    }
+    QString instanceId = row->property(K_DEVICE_INSTANCE_ID).toString();
+
+    // Re-query rather than capturing the signer pointer: a device can vanish between the
+    // rebuild and the click.
+    for (const auto &entry : Host::get()->signers()) {
+        if (entry.instanceId == instanceId && entry.signer != nullptr) {
+            AppController::execModal(new modal::DeviceModal(entry.signer, KeysModule::network()));
+            return;
+        }
+    }
 }
 
 void KeysTab::showError(const QString &message) {

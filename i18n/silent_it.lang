@@ -102,6 +102,7 @@ hwi-xpub-error
 => "Requested %1\n%2\nA device only exports an xpub for a standard path on the network it runs on.";;
 keys-add-key => "Add a key" => "NONE"
 keys-connected => "Connected" => "NONE"
+keys-device-title => "Device" => "NONE"
 keys-devices => "Devices" => "NONE"
 keys-keys => "Keys" => "NONE"
 keys-network => "Network:" => "NONE"

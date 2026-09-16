@@ -1,17 +1,13 @@
 #include "HwiServiceInstance.h"
 
-#include "HwiSettings.h"
-
-#include "i18n/Tr.h"
 #include "interfaces/account.h"
 #include "interfaces/feed.h"
 #include "interfaces/signer.h"
 #include "interfaces/theme.h"
 
-#include <QDebug>
-
 namespace {
-// The service instance carries no data capability: it exists to own the settings page.
+// The service instance carries no data capability: it exists so the device service is
+// started and auto restarted.
 class InertAccount final : public IAccount {
 public:
     using IAccount::IAccount;
@@ -110,12 +106,7 @@ HwiServiceInstance::HwiServiceInstance(HwiModule *module, QString instance_id)
     , m_feed(std::make_unique<InertFeed>())
     , m_signer(std::make_unique<InertSigner>())
     , m_theme(std::make_unique<InertThemeProvider>()) {
-    m_settings = new HwiSettings(module);
-    m_section_id = Host::get()->addSettingSection(m_settings, this, TR("hwi-settings-title"));
-    if (m_section_id == 0) {
-        qCritical() << "HwiServiceInstance: failed to add the settings section";
-        m_settings->deleteLater();
-    }
+    Q_UNUSED(module);
 }
 
 HwiServiceInstance::~HwiServiceInstance() {
@@ -132,11 +123,7 @@ void HwiServiceInstance::stop() {
     }
     m_stopped = true;
 
-    // The host owns the section's widget and deletes it with the section.
-    if (m_section_id != 0) {
-        Host::get()->delSettingSection(m_section_id);
-        m_section_id = 0;
-    }
+    // Nothing to tear down: the instance owns no UI and no device handle.
 }
 
 IAccount *HwiServiceInstance::account() {

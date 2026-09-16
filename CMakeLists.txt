@@ -99,12 +99,12 @@ set(SILENT_APP_SOURCES
     src/modules/hwi/HwiDeviceInstance.cpp
     src/modules/hwi/HwiSigner.h
     src/modules/hwi/HwiSigner.cpp
-    src/modules/hwi/HwiSettings.h
-    src/modules/hwi/HwiSettings.cpp
     src/modules/keys/KeysModule.h
     src/modules/keys/KeysModule.cpp
     src/modules/keys/KeysTab.h
     src/modules/keys/KeysTab.cpp
+    src/modules/keys/modals/DeviceModal.h
+    src/modules/keys/modals/DeviceModal.cpp
     src/modules/sp/SpPlugin.h
     src/modules/sp/SpPlugin.cpp
     src/modules/sp/SpModule.h
