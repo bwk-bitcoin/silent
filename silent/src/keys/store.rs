@@ -210,6 +210,19 @@ impl KeyStore {
         self.with_lock(|dir| self.save_locked(dir, record))
     }
 
+    /// Create-only insert: refuses under the lock if a record already exists on disk
+    /// for this fingerprint, so a caller acting on stale in-memory state can never
+    /// overwrite a record another process wrote in the meantime.
+    pub fn insert(&self, record: &KeyRecord) -> Result<(), Error> {
+        self.with_lock(|dir| {
+            let path = dir.join(Self::file_name(record.fingerprint));
+            if path.exists() {
+                return Err(Error::DuplicateKey(record.fingerprint));
+            }
+            self.save_locked(dir, record)
+        })
+    }
+
     fn save_locked(&self, dir: &Path, record: &KeyRecord) -> Result<(), Error> {
         let expected_network = network_name(self.network)?;
         let found_network = network_name(record.network)?;
@@ -536,6 +549,31 @@ mod tests {
         assert!(
             listed.is_empty(),
             "expected the mismatched file to be skipped, got {listed:?}"
+        );
+    }
+
+    #[test]
+    fn insert_refuses_an_existing_record_and_leaves_it_unchanged() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let store = KeyStore::new(tmp.path().to_path_buf(), Network::Regtest);
+        let record = full_record(fingerprint(12), Network::Regtest);
+        store.insert(&record).expect("first insert should succeed");
+
+        let path = store.record_path(fingerprint(12)).expect("record path");
+        let bytes_before = std::fs::read(&path).expect("read file before");
+
+        let mut duplicate = record.clone();
+        duplicate.alias = "other alias".to_string();
+        let result = store.insert(&duplicate);
+        assert!(
+            matches!(result, Err(Error::DuplicateKey(fp)) if fp == fingerprint(12)),
+            "expected DuplicateKey on the second insert, got {result:?}"
+        );
+
+        let bytes_after = std::fs::read(&path).expect("read file after");
+        assert_eq!(
+            bytes_before, bytes_after,
+            "the file on disk must be unchanged after the refused insert"
         );
     }
 

@@ -66,4 +66,13 @@ pub enum Error {
         "secret envelope version {found} is not supported, this build supports up to {supported}"
     )]
     UnsupportedEnvelopeVersion { found: u32, supported: u32 },
+    #[error("key '{0}' is already registered")]
+    DuplicateKey(Fingerprint),
+    #[error("key '{0}' is not registered")]
+    UnknownKey(Fingerprint),
+    #[error("key '{fingerprint}' has {count} descriptor(s) registered")]
+    DescriptorsRegistered {
+        fingerprint: Fingerprint,
+        count: usize,
+    },
 }
