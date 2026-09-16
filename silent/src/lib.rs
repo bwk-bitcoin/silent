@@ -82,12 +82,16 @@ mod ffi {
     }
 
     /// How a key can be reached, in priority order. Hot always outranks the others.
+    /// `Unknown` never appears in `add_route`/`remove_route`/`set_route_order` calls;
+    /// it only shows up in a `SigningCandidate.route` for a fingerprint with no
+    /// configured route, where `can_sign` is false.
     #[derive(Debug, Clone, Copy)]
     pub enum KeyRouteKind {
         Hot,
         Usb,
         Qr,
         SdCard,
+        Unknown,
     }
 
     /// Why a key cannot sign the PSBT in hand. `None` means it can.
@@ -207,6 +211,8 @@ mod ffi {
         pub error: String,
         /// Decoded SP descriptor (empty on error).
         pub descriptor: String,
+        /// Origin fingerprint of the sp() descriptor (empty on error).
+        pub fingerprint: String,
     }
 
     /// Grayscale QR image for the C++ UI.
@@ -394,6 +400,83 @@ mod ffi {
         pub key: KeyInfo,
     }
 
+    /// One row of the signer picker. The picker is PSBT driven: every fingerprint the
+    /// PSBT needs gets an entry. Connected devices unrelated to the PSBT are not listed
+    /// here; the C++ picker derives those hints from its live signers.
+    #[derive(Debug, Clone)]
+    pub struct SigningCandidate {
+        pub fingerprint: String,
+        pub alias: String,
+        /// Meaningless when `can_sign` is false; `Unknown` is the sentinel value.
+        pub route: KeyRouteKind,
+        /// Set only when `route` is Usb: the id C++ passes to the device's own ISigner.
+        pub device_id: String,
+        pub can_sign: bool,
+        /// Why not, when `can_sign` is false. `None` otherwise.
+        pub unusable: KeyUnusableReason,
+        /// The SP key, which completes the output scripts before anyone else signs.
+        pub must_sign_first: bool,
+        pub registered: bool,
+    }
+
+    /// Signer picker for one PSBT, built by `KeysModule::signing_plan`.
+    #[derive(Debug, Clone)]
+    pub struct SigningPlan {
+        /// Whether the plan could be built at all (false on a malformed PSBT, for
+        /// example). Unrelated to whether any candidate `can_sign`.
+        pub is_ok: bool,
+        /// Error message (empty if is_ok is true).
+        pub error: String,
+        /// Ordered: `must_sign_first` first, then usable, then unusable.
+        pub candidates: Vec<SigningCandidate>,
+        /// An output script is still underived, so only the SP key may sign now.
+        pub sp_outputs_pending: bool,
+    }
+
+    /// Result of a fingerprint lookup carrying no key/module state.
+    #[derive(Debug, Clone)]
+    pub struct FingerprintsResult {
+        /// Whether the lookup succeeded.
+        pub is_ok: bool,
+        /// Error message (empty if is_ok is true).
+        pub error: String,
+        pub fingerprints: Vec<String>,
+    }
+
+    /// Result of a mnemonic operation (generation or reveal).
+    #[derive(Debug, Clone)]
+    pub struct MnemonicResult {
+        /// Whether the operation succeeded.
+        pub is_ok: bool,
+        /// Error message (empty if is_ok is true).
+        pub error: String,
+        /// Empty on error. Never holds a partial or placeholder phrase.
+        pub mnemonic: String,
+    }
+
+    /// Result of a hot signing operation.
+    #[derive(Debug, Clone)]
+    pub struct SignResult {
+        /// Whether the signing operation succeeded.
+        pub is_ok: bool,
+        /// Error message (empty if is_ok is true).
+        pub error: String,
+        /// The signed PSBT, serialized v2 and hex encoded. Empty on error.
+        pub psbt_v2_hex: String,
+    }
+
+    /// Result of converting a PSBT v2 into its v0 base64 payload for a USB signing
+    /// device.
+    #[derive(Debug, Clone)]
+    pub struct PsbtPayloadResult {
+        /// Whether the conversion succeeded.
+        pub is_ok: bool,
+        /// Error message (empty if is_ok is true).
+        pub error: String,
+        /// The v0 PSBT, base64 encoded. Empty on error.
+        pub psbt_base64: String,
+    }
+
     // ===== Opaque Rust Types =====
 
     extern "Rust" {
@@ -427,6 +510,13 @@ mod ffi {
         /// Owns the key manager for one network: records, routes, devices, the xpub
         /// cache and registered descriptors.
         type KeysModule;
+
+        /// GUI-thread copy of one key's record and the manager's network, for the
+        /// free hot-key worker functions to sign/reveal/derive from off-thread.
+        type HotMaterial;
+
+        /// A mnemonic sealed by `hot_seal`, committed by `KeysModule::commit_hot_key`.
+        type SealedHotKey;
     }
 
     // ===== Utility Functions =====
@@ -453,6 +543,15 @@ mod ffi {
 
         /// Decode a base64 SpDescriptor QR response.
         fn qr_decode_sp_descriptor_response(payload: String) -> SpDescriptorResult;
+
+        /// Parses an sp() descriptor and requires an origin. Returns the descriptor
+        /// unchanged plus its fingerprint, or an error saying the origin is missing.
+        fn validate_sp_descriptor_origin(descriptor: String) -> SpDescriptorResult;
+
+        /// Every fingerprint the PSBT needs a signature from, lowercase hex,
+        /// deduplicated and sorted. Walks bip32_derivation, tap_key_origins and the
+        /// silent payment spend derivation.
+        fn psbt_required_fingerprints(psbt_v2_hex: &str) -> FingerprintsResult;
 
         /// Validate a recipient address (SP address, legacy Bitcoin address, or hex data).
         /// Returns empty string if valid, or error message if invalid.
@@ -808,6 +907,67 @@ mod ffi {
         fn key_descriptors(self: &KeysModule, fingerprint: &str) -> Vec<KeyDescriptor>;
         /// Every registered key whose descriptor list contains this descriptor.
         fn keys_for_descriptor(self: &KeysModule, descriptor: &str) -> Vec<KeyInfo>;
+
+        /// Builds the signer picker for this PSBT. Blocks on nothing; safe to call
+        /// from the GUI thread.
+        fn signing_plan(self: &KeysModule, psbt_v2_hex: &str) -> SigningPlan;
+
+        /// 12 or 24 words. Any other count is an error. Fast: only draws entropy and
+        /// encodes a mnemonic, no password involved, so unlike the other hot
+        /// functions below it does not block on Argon2id and is safe to call from
+        /// the GUI thread.
+        fn generate_mnemonic(word_count: u32) -> MnemonicResult;
+
+        /// Copies out the record and the manager's network for the free hot-key
+        /// worker functions below, so a `set_network` or route change afterward
+        /// cannot race a worker already in flight against the copy. Fails for an
+        /// unknown key or a key without a secret.
+        fn hot_material(self: &KeysModule, fingerprint: &str) -> Box<HotMaterial>;
+        fn is_ok(self: &HotMaterial) -> bool;
+        fn get_error(self: &HotMaterial) -> String;
+
+        /// Derives the fingerprint and seals `mnemonic` under `password` for
+        /// `network`, touching no `KeysModule` state. Blocks on Argon2id: call from
+        /// a QThread, never from the GUI thread.
+        fn hot_seal(mnemonic: &str, password: &str, network: Network) -> Box<SealedHotKey>;
+        fn is_ok(self: &SealedHotKey) -> bool;
+        fn get_error(self: &SealedHotKey) -> String;
+        /// Empty on error.
+        fn fingerprint(self: &SealedHotKey) -> String;
+
+        /// Commits a key `hot_seal` built into the store, adding the Hot route in
+        /// the same update. Refuses a sealed key whose network does not match the
+        /// manager's.
+        fn commit_hot_key(
+            self: &mut KeysModule,
+            sealed: &SealedHotKey,
+            alias: &str,
+        ) -> KeyInfoResult;
+
+        /// Blocks on Argon2id while opening the envelope: call from a QThread,
+        /// never from the GUI thread.
+        fn hot_reveal(material: &HotMaterial, password: &str) -> MnemonicResult;
+
+        /// Signs `psbt_v2_hex` with `material`'s hot secret and returns the signed
+        /// PSBT as v2 hex. Blocks on Argon2id while opening the envelope: call from
+        /// a QThread, never from the GUI thread.
+        fn hot_sign(material: &HotMaterial, password: &str, psbt_v2_hex: &str) -> SignResult;
+
+        /// The BIP392 sp() descriptor of `material`'s hot key, origin included, for
+        /// account creation. Blocks on Argon2id while opening the envelope: call
+        /// from a QThread, never from the GUI thread.
+        fn hot_sp_descriptor(material: &HotMaterial, password: &str) -> SpDescriptorResult;
+
+        /// Converts a v2 PSBT into its v0 base64 payload for a USB signing device.
+        /// Cheap; safe to call from the GUI thread. Refuses a PSBT with a pending SP
+        /// output: a signing device only ever signs its own bip32 inputs, and the
+        /// signing plan already blocks every other candidate while one is pending.
+        fn usb_sign_payload(psbt_v2_hex: &str) -> PsbtPayloadResult;
+
+        /// Merges a USB device's v0 signed answer back into the original v2 PSBT,
+        /// keeping its silent-payment input tweaks and ECDH shares. Only signature
+        /// fields are copied. Cheap; safe to call from the GUI thread.
+        fn usb_merge_signed(original_v2_hex: &str, signed_v0_base64: &str) -> SignResult;
     }
 
     // ===== PsbtResult Methods =====
@@ -990,6 +1150,7 @@ pub fn qr_decode_sp_descriptor_response(payload: String) -> ffi::SpDescriptorRes
                 is_ok: false,
                 error: format!("failed to create QR session: {e}"),
                 descriptor: String::new(),
+                fingerprint: String::new(),
             }
         }
     };
@@ -998,6 +1159,7 @@ pub fn qr_decode_sp_descriptor_response(payload: String) -> ffi::SpDescriptorRes
             is_ok: false,
             error: format!("failed to build GetSpDescriptor request: {e}"),
             descriptor: String::new(),
+            fingerprint: String::new(),
         };
     }
 
@@ -1008,25 +1170,138 @@ pub fn qr_decode_sp_descriptor_response(payload: String) -> ffi::SpDescriptorRes
                 is_ok: false,
                 error: format!("invalid base64: {e}"),
                 descriptor: String::new(),
+                fingerprint: String::new(),
             }
         }
     };
 
     match session.decode_response(&bytes) {
-        Ok(keys::qr::QrResponse::SpDescriptor { descriptor, .. }) => ffi::SpDescriptorResult {
-            is_ok: true,
-            error: String::new(),
-            descriptor,
-        },
+        Ok(keys::qr::QrResponse::SpDescriptor { descriptor, .. }) => {
+            validate_sp_descriptor_origin(descriptor)
+        }
         Ok(_) => ffi::SpDescriptorResult {
             is_ok: false,
             error: "QR response does not contain an SP descriptor".to_string(),
             descriptor: String::new(),
+            fingerprint: String::new(),
         },
         Err(e) => ffi::SpDescriptorResult {
             is_ok: false,
             error: e.to_string(),
             descriptor: String::new(),
+            fingerprint: String::new(),
+        },
+    }
+}
+
+/// Parses an sp() descriptor and requires an origin. Returns the descriptor
+/// unchanged plus its fingerprint, or an error saying the origin is missing.
+pub fn validate_sp_descriptor_origin(descriptor: String) -> ffi::SpDescriptorResult {
+    use bitcoin::secp256k1::Secp256k1;
+    use std::str::FromStr;
+
+    let parsed = match bwk_sp::bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor::from_str(
+        &descriptor,
+    ) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return ffi::SpDescriptorResult {
+                is_ok: false,
+                error: format!("invalid sp() descriptor: {e}"),
+                descriptor: String::new(),
+                fingerprint: String::new(),
+            }
+        }
+    };
+
+    match parsed.spend_secret_key(&Secp256k1::new()) {
+        Ok(Some(_)) => {
+            return ffi::SpDescriptorResult {
+                is_ok: false,
+                error: crate::keys::error::Error::SpSpendDescriptor.to_string(),
+                descriptor: String::new(),
+                fingerprint: String::new(),
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            return ffi::SpDescriptorResult {
+                is_ok: false,
+                error: format!("invalid sp() descriptor: {e}"),
+                descriptor: String::new(),
+                fingerprint: String::new(),
+            }
+        }
+    }
+
+    match parsed.fingerprint() {
+        Some(fp) => ffi::SpDescriptorResult {
+            is_ok: true,
+            error: String::new(),
+            descriptor,
+            fingerprint: fp.to_string(),
+        },
+        None => ffi::SpDescriptorResult {
+            is_ok: false,
+            error: "sp() descriptor has no key origin".to_string(),
+            descriptor: String::new(),
+            fingerprint: String::new(),
+        },
+    }
+}
+
+/// Every fingerprint the PSBT needs a signature from, lowercase hex, deduplicated
+/// and sorted. Walks bip32_derivation, tap_key_origins and the silent payment spend
+/// derivation.
+pub fn psbt_required_fingerprints(psbt_v2_hex: &str) -> ffi::FingerprintsResult {
+    let bytes = match hex::decode(psbt_v2_hex) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return ffi::FingerprintsResult {
+                is_ok: false,
+                error: format!("invalid psbt hex: {e}"),
+                fingerprints: Vec::new(),
+            }
+        }
+    };
+    let psbt = match keys::psbt::parse_v2(&bytes) {
+        Ok(psbt) => psbt,
+        Err(e) => {
+            return ffi::FingerprintsResult {
+                is_ok: false,
+                error: e.to_string(),
+                fingerprints: Vec::new(),
+            }
+        }
+    };
+    match keys::psbt::required_fingerprints(&psbt) {
+        Ok(required) => ffi::FingerprintsResult {
+            is_ok: true,
+            error: String::new(),
+            fingerprints: required.iter().map(ToString::to_string).collect(),
+        },
+        Err(e) => ffi::FingerprintsResult {
+            is_ok: false,
+            error: e.to_string(),
+            fingerprints: Vec::new(),
+        },
+    }
+}
+
+/// 12 or 24 words. Any other count is an error. Fast: only draws entropy and encodes
+/// a mnemonic, no password involved, so unlike the other hot functions it does not
+/// block on Argon2id and is safe to call from the GUI thread.
+pub fn generate_mnemonic(word_count: u32) -> ffi::MnemonicResult {
+    match keys::hot::generate_mnemonic(word_count as usize) {
+        Ok(mnemonic) => ffi::MnemonicResult {
+            is_ok: true,
+            error: String::new(),
+            mnemonic: mnemonic.to_string(),
+        },
+        Err(e) => ffi::MnemonicResult {
+            is_ok: false,
+            error: e.to_string(),
+            mnemonic: String::new(),
         },
     }
 }
@@ -1211,16 +1486,20 @@ pub use app_state::{
 };
 pub use config::{config_from_file, delete_config, list_configs, new_config, set_datadir, Config};
 pub use ffi::{
-    BackendInfo, KeyDescriptor, KeyDevice, KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind,
-    KeyUnusableReason, KeyXpub, LiveDevice, LogLevel, Network, Notification, NotificationFlag,
-    Output, PsbtValidation, RegtestDefaults, TransactionSimulation, TransactionTemplate,
+    BackendInfo, FingerprintsResult, KeyDescriptor, KeyDevice, KeyInfo, KeyInfoResult, KeyOpResult,
+    KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice, LogLevel, MnemonicResult, Network,
+    Notification, NotificationFlag, Output, PsbtValidation, RegtestDefaults, SignResult,
+    SigningCandidate, SigningPlan, TransactionSimulation, TransactionTemplate,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{
     hwi_config_network, hwi_set_config_network, BitboxSettings, HwiConfig, NoiseConfig,
     NoiseConfigData, PersistedBitboxNoiseConfig,
 };
-pub use keys::bridge::{new_keys_module, KeysModule};
+pub use keys::bridge::{
+    hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, new_keys_module, usb_merge_signed,
+    usb_sign_payload, HotMaterial, KeysModule, SealedHotKey,
+};
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};
 
 #[cfg(test)]

@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
+use bitcoin::{
+    bip32::{DerivationPath, Fingerprint, Xpub},
+    Txid,
+};
 
 use crate::keys::record::RouteKind;
 
@@ -93,10 +96,12 @@ pub enum Error {
     PsbtSerialize(String),
     #[error("malformed silent payment PSBT field: {0}")]
     SpField(String),
-    #[error("PSBT carries silent payment artifacts but no sp() descriptor was supplied")]
-    MissingSpDescriptor,
-    #[error("sp() descriptor '{0}' has no key origin")]
-    MissingSpOrigin(String),
+    #[error("the psbt's sp inputs disagree on which key must sign")]
+    SpInputsDisagree,
+    #[error("no registered sp() key matches{}", fmt_sp_key_unknown(.0))]
+    SpKeyUnknown(Option<Fingerprint>),
+    #[error("the psbt has a pending sp output but no sp input data to resolve its signer")]
+    SpOutputsUnresolvable,
     #[error("unsupported mnemonic word count {0}")]
     InvalidWordCount(usize),
     #[error("invalid mnemonic: {0}")]
@@ -118,6 +123,8 @@ pub enum Error {
          derive it"
     )]
     SpOutputsPending,
+    #[error("signed psbt is for a different transaction: expected {expected}, got {got}")]
+    SignedPsbtMismatch { expected: Txid, got: Txid },
     #[error("no input was signed with this key")]
     NothingSigned,
     #[error("QR frame index {index} is out of range: only {count} frame(s) available")]
@@ -181,4 +188,11 @@ pub enum Error {
     Decode(#[from] bwk_qr_protocol::decode::Error),
     #[error(transparent)]
     XpubConvert(#[from] bwk_qr_protocol::types::Error),
+}
+
+fn fmt_sp_key_unknown(fingerprint: &Option<Fingerprint>) -> String {
+    match fingerprint {
+        Some(fingerprint) => format!(" fingerprint '{fingerprint}'"),
+        None => " the psbt's input tweaks".to_string(),
+    }
 }

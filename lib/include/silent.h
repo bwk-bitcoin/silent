@@ -995,6 +995,12 @@ struct KeyXpub;
 struct KeyDescriptor;
 struct KeyOpResult;
 struct KeyInfoResult;
+struct SigningCandidate;
+struct SigningPlan;
+struct FingerprintsResult;
+struct MnemonicResult;
+struct SignResult;
+struct PsbtPayloadResult;
 struct Config;
 struct Account;
 struct Poll;
@@ -1005,6 +1011,8 @@ struct HwiService;
 struct HwiReceiver;
 struct HwiPoll;
 struct KeysModule;
+struct HotMaterial;
+struct SealedHotKey;
 
 #ifndef CXXBRIDGE1_ENUM_Network
 #define CXXBRIDGE1_ENUM_Network
@@ -1084,11 +1092,15 @@ enum class HwiEventFlag : ::std::uint8_t {
 #ifndef CXXBRIDGE1_ENUM_KeyRouteKind
 #define CXXBRIDGE1_ENUM_KeyRouteKind
 // How a key can be reached, in priority order. Hot always outranks the others.
+// `Unknown` never appears in `add_route`/`remove_route`/`set_route_order` calls;
+// it only shows up in a `SigningCandidate.route` for a fingerprint with no
+// configured route, where `can_sign` is false.
 enum class KeyRouteKind : ::std::uint8_t {
   Hot = 0,
   Usb = 1,
   Qr = 2,
   SdCard = 3,
+  Unknown = 4,
 };
 #endif // CXXBRIDGE1_ENUM_KeyRouteKind
 
@@ -1242,6 +1254,8 @@ struct SpDescriptorResult final {
   ::rust::String error;
   // Decoded SP descriptor (empty on error).
   ::rust::String descriptor;
+  // Origin fingerprint of the sp() descriptor (empty on error).
+  ::rust::String fingerprint;
 
   using IsRelocatable = ::std::true_type;
 };
@@ -1487,6 +1501,107 @@ struct KeyInfoResult final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_KeyInfoResult
+
+#ifndef CXXBRIDGE1_STRUCT_SigningCandidate
+#define CXXBRIDGE1_STRUCT_SigningCandidate
+// One row of the signer picker. The picker is PSBT driven: every fingerprint the
+// PSBT needs gets an entry. Connected devices unrelated to the PSBT are not listed
+// here; the C++ picker derives those hints from its live signers.
+struct SigningCandidate final {
+  ::rust::String fingerprint;
+  ::rust::String alias;
+  // Meaningless when `can_sign` is false; `Unknown` is the sentinel value.
+  ::KeyRouteKind route;
+  // Set only when `route` is Usb: the id C++ passes to the device's own ISigner.
+  ::rust::String device_id;
+  bool can_sign CXX_DEFAULT_VALUE(false);
+  // Why not, when `can_sign` is false. `None` otherwise.
+  ::KeyUnusableReason unusable;
+  // The SP key, which completes the output scripts before anyone else signs.
+  bool must_sign_first CXX_DEFAULT_VALUE(false);
+  bool registered CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SigningCandidate
+
+#ifndef CXXBRIDGE1_STRUCT_SigningPlan
+#define CXXBRIDGE1_STRUCT_SigningPlan
+// Signer picker for one PSBT, built by `KeysModule::signing_plan`.
+struct SigningPlan final {
+  // Whether the plan could be built at all (false on a malformed PSBT, for
+  // example). Unrelated to whether any candidate `can_sign`.
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Error message (empty if is_ok is true).
+  ::rust::String error;
+  // Ordered: `must_sign_first` first, then usable, then unusable.
+  ::rust::Vec<::SigningCandidate> candidates;
+  // An output script is still underived, so only the SP key may sign now.
+  bool sp_outputs_pending CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SigningPlan
+
+#ifndef CXXBRIDGE1_STRUCT_FingerprintsResult
+#define CXXBRIDGE1_STRUCT_FingerprintsResult
+// Result of a fingerprint lookup carrying no key/module state.
+struct FingerprintsResult final {
+  // Whether the lookup succeeded.
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Error message (empty if is_ok is true).
+  ::rust::String error;
+  ::rust::Vec<::rust::String> fingerprints;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_FingerprintsResult
+
+#ifndef CXXBRIDGE1_STRUCT_MnemonicResult
+#define CXXBRIDGE1_STRUCT_MnemonicResult
+// Result of a mnemonic operation (generation or reveal).
+struct MnemonicResult final {
+  // Whether the operation succeeded.
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Error message (empty if is_ok is true).
+  ::rust::String error;
+  // Empty on error. Never holds a partial or placeholder phrase.
+  ::rust::String mnemonic;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_MnemonicResult
+
+#ifndef CXXBRIDGE1_STRUCT_SignResult
+#define CXXBRIDGE1_STRUCT_SignResult
+// Result of a hot signing operation.
+struct SignResult final {
+  // Whether the signing operation succeeded.
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Error message (empty if is_ok is true).
+  ::rust::String error;
+  // The signed PSBT, serialized v2 and hex encoded. Empty on error.
+  ::rust::String psbt_v2_hex;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SignResult
+
+#ifndef CXXBRIDGE1_STRUCT_PsbtPayloadResult
+#define CXXBRIDGE1_STRUCT_PsbtPayloadResult
+// Result of converting a PSBT v2 into its v0 base64 payload for a USB signing
+// device.
+struct PsbtPayloadResult final {
+  // Whether the conversion succeeded.
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Error message (empty if is_ok is true).
+  ::rust::String error;
+  // The v0 PSBT, base64 encoded. Empty on error.
+  ::rust::String psbt_base64;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PsbtPayloadResult
 
 #ifndef CXXBRIDGE1_STRUCT_Config
 #define CXXBRIDGE1_STRUCT_Config
@@ -1882,6 +1997,21 @@ struct KeysModule final : public ::rust::Opaque {
   // Every registered key whose descriptor list contains this descriptor.
   ::rust::Vec<::KeyInfo> keys_for_descriptor(::rust::Str descriptor) const noexcept;
 
+  // Builds the signer picker for this PSBT. Blocks on nothing; safe to call
+  // from the GUI thread.
+  ::SigningPlan signing_plan(::rust::Str psbt_v2_hex) const noexcept;
+
+  // Copies out the record and the manager's network for the free hot-key
+  // worker functions below, so a `set_network` or route change afterward
+  // cannot race a worker already in flight against the copy. Fails for an
+  // unknown key or a key without a secret.
+  ::rust::Box<::HotMaterial> hot_material(::rust::Str fingerprint) const noexcept;
+
+  // Commits a key `hot_seal` built into the store, adding the Hot route in
+  // the same update. Refuses a sealed key whose network does not match the
+  // manager's.
+  ::KeyInfoResult commit_hot_key(::SealedHotKey const &sealed, ::rust::Str alias) noexcept;
+
   ~KeysModule() = delete;
 
 private:
@@ -1892,6 +2022,45 @@ private:
   };
 };
 #endif // CXXBRIDGE1_STRUCT_KeysModule
+
+#ifndef CXXBRIDGE1_STRUCT_HotMaterial
+#define CXXBRIDGE1_STRUCT_HotMaterial
+// GUI-thread copy of one key's record and the manager's network, for the
+// free hot-key worker functions to sign/reveal/derive from off-thread.
+struct HotMaterial final : public ::rust::Opaque {
+  bool is_ok() const noexcept;
+  ::rust::String get_error() const noexcept;
+  ~HotMaterial() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_HotMaterial
+
+#ifndef CXXBRIDGE1_STRUCT_SealedHotKey
+#define CXXBRIDGE1_STRUCT_SealedHotKey
+// A mnemonic sealed by `hot_seal`, committed by `KeysModule::commit_hot_key`.
+struct SealedHotKey final : public ::rust::Opaque {
+  bool is_ok() const noexcept;
+  ::rust::String get_error() const noexcept;
+
+  // Empty on error.
+  ::rust::String fingerprint() const noexcept;
+
+  ~SealedHotKey() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_SealedHotKey
 
 // Initialize logging with the specified level.
 // Call this once at application startup.
@@ -1914,6 +2083,15 @@ bool validate_sp_descriptor(::rust::String descriptor) noexcept;
 
 // Decode a base64 SpDescriptor QR response.
 ::SpDescriptorResult qr_decode_sp_descriptor_response(::rust::String payload) noexcept;
+
+// Parses an sp() descriptor and requires an origin. Returns the descriptor
+// unchanged plus its fingerprint, or an error saying the origin is missing.
+::SpDescriptorResult validate_sp_descriptor_origin(::rust::String descriptor) noexcept;
+
+// Every fingerprint the PSBT needs a signature from, lowercase hex,
+// deduplicated and sorted. Walks bip32_derivation, tap_key_origins and the
+// silent payment spend derivation.
+::FingerprintsResult psbt_required_fingerprints(::rust::Str psbt_v2_hex) noexcept;
 
 // Validate a recipient address (SP address, legacy Bitcoin address, or hex data).
 // Returns empty string if valid, or error message if invalid.
@@ -1964,6 +2142,42 @@ bool delete_config(::rust::String account_name) noexcept;
 void hwi_set_config_network(::Network network) noexcept;
 
 ::rust::Box<::KeysModule> new_keys_module(::Network network) noexcept;
+
+// 12 or 24 words. Any other count is an error. Fast: only draws entropy and
+// encodes a mnemonic, no password involved, so unlike the other hot
+// functions below it does not block on Argon2id and is safe to call from
+// the GUI thread.
+::MnemonicResult generate_mnemonic(::std::uint32_t word_count) noexcept;
+
+// Derives the fingerprint and seals `mnemonic` under `password` for
+// `network`, touching no `KeysModule` state. Blocks on Argon2id: call from
+// a QThread, never from the GUI thread.
+::rust::Box<::SealedHotKey> hot_seal(::rust::Str mnemonic, ::rust::Str password, ::Network network) noexcept;
+
+// Blocks on Argon2id while opening the envelope: call from a QThread,
+// never from the GUI thread.
+::MnemonicResult hot_reveal(::HotMaterial const &material, ::rust::Str password) noexcept;
+
+// Signs `psbt_v2_hex` with `material`'s hot secret and returns the signed
+// PSBT as v2 hex. Blocks on Argon2id while opening the envelope: call from
+// a QThread, never from the GUI thread.
+::SignResult hot_sign(::HotMaterial const &material, ::rust::Str password, ::rust::Str psbt_v2_hex) noexcept;
+
+// The BIP392 sp() descriptor of `material`'s hot key, origin included, for
+// account creation. Blocks on Argon2id while opening the envelope: call
+// from a QThread, never from the GUI thread.
+::SpDescriptorResult hot_sp_descriptor(::HotMaterial const &material, ::rust::Str password) noexcept;
+
+// Converts a v2 PSBT into its v0 base64 payload for a USB signing device.
+// Cheap; safe to call from the GUI thread. Refuses a PSBT with a pending SP
+// output: a signing device only ever signs its own bip32 inputs, and the
+// signing plan already blocks every other candidate while one is pending.
+::PsbtPayloadResult usb_sign_payload(::rust::Str psbt_v2_hex) noexcept;
+
+// Merges a USB device's v0 signed answer back into the original v2 PSBT,
+// keeping its silent-payment input tweaks and ECDH shares. Only signature
+// fields are copied. Cheap; safe to call from the GUI thread.
+::SignResult usb_merge_signed(::rust::Str original_v2_hex, ::rust::Str signed_v0_base64) noexcept;
 
 // Create a new SyncEstimator with default EMA alpha.
 ::rust::Box<::SyncEstimator> new_sync_estimator() noexcept;

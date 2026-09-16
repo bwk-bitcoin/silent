@@ -8,18 +8,24 @@
 
 use std::str::FromStr;
 
+use base64::{prelude::BASE64_STANDARD, Engine};
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
 use bitcoin::Network as BtcNetwork;
 use bwk_sp::bwk_sign::bwk_descriptor::descriptor::Descriptor;
 use bwk_sp::bwk_sign::miniscript::{DescriptorPublicKey, ForEachKey};
+use bwk_sp::bwk_tx::bwk_psbt::Error as PsbtV2Error;
+use zeroize::Zeroizing;
 
 use crate::config::datadir;
 use crate::ffi;
 use crate::hwi::wallet_name;
-use crate::keys::manager::{KeyManager, KeyManagerImpl, LiveDevice};
-use crate::keys::record::{KeyRecord, RouteKind};
+use crate::keys::crypto::{open_mnemonic, Password};
+use crate::keys::hot::{seal_mnemonic, sign_hot, sp_descriptor};
+use crate::keys::manager::{KeyManager, KeyManagerImpl, LiveDevice, SigningCandidate};
+use crate::keys::psbt;
+use crate::keys::record::{KeyRecord, RouteKind, SecretEnvelope};
 use crate::keys::store::KeyStore;
-use crate::keys::KEYS_DIR_NAME;
+use crate::keys::{Error, KEYS_DIR_NAME};
 
 /// Owns the manager and, from the next tasks on, the QR session, the camera and
 /// the event channel. The only file in `keys/` that names `cxx` or `crate::ffi`.
@@ -163,7 +169,11 @@ impl KeysModule {
             Ok(fp) => fp,
             Err(e) => return failed_op(&e),
         };
-        match manager.add_route(fp, RouteKind::from(kind)) {
+        let kind = match RouteKind::try_from(kind) {
+            Ok(kind) => kind,
+            Err(e) => return failed_op(&e),
+        };
+        match manager.add_route(fp, kind) {
             Ok(()) => ok_op(),
             Err(e) => failed_op(&format!("add_route {fingerprint}: {e}")),
         }
@@ -177,7 +187,11 @@ impl KeysModule {
             Ok(fp) => fp,
             Err(e) => return failed_op(&e),
         };
-        match manager.remove_route(fp, RouteKind::from(kind)) {
+        let kind = match RouteKind::try_from(kind) {
+            Ok(kind) => kind,
+            Err(e) => return failed_op(&e),
+        };
+        match manager.remove_route(fp, kind) {
             Ok(()) => ok_op(),
             Err(e) => failed_op(&format!("remove_route {fingerprint}: {e}")),
         }
@@ -195,7 +209,10 @@ impl KeysModule {
             Ok(fp) => fp,
             Err(e) => return failed_op(&e),
         };
-        let order: Vec<RouteKind> = order.into_iter().map(RouteKind::from).collect();
+        let order: Vec<RouteKind> = match order.into_iter().map(RouteKind::try_from).collect() {
+            Ok(order) => order,
+            Err(e) => return failed_op(&e),
+        };
         match manager.set_route_order(fp, order) {
             Ok(()) => ok_op(),
             Err(e) => failed_op(&format!("set_route_order {fingerprint}: {e}")),
@@ -419,6 +436,252 @@ impl KeysModule {
             .map(|record| to_key_info(record, manager))
             .collect()
     }
+
+    /// Builds the signer picker for `psbt_v2_hex`. The PSBT's own SP fields (spend
+    /// derivation, tweak) name which registered key must sign first; the manager
+    /// cross-checks that against every `sp(` descriptor registered on any key.
+    pub fn signing_plan(&self, psbt_v2_hex: &str) -> ffi::SigningPlan {
+        let Some(manager) = self.inner.as_ref() else {
+            return failed_signing_plan(&self.error);
+        };
+        let bytes = match hex::decode(psbt_v2_hex) {
+            Ok(bytes) => bytes,
+            Err(e) => return failed_signing_plan(&format!("invalid psbt hex: {e}")),
+        };
+        match manager.signing_plan(&bytes) {
+            Ok(plan) => {
+                let candidates: Vec<ffi::SigningCandidate> = plan
+                    .candidates
+                    .iter()
+                    .map(to_ffi_signing_candidate)
+                    .collect();
+                ffi::SigningPlan {
+                    is_ok: true,
+                    error: String::new(),
+                    candidates,
+                    sp_outputs_pending: plan.sp_outputs_pending,
+                }
+            }
+            Err(e) => failed_signing_plan(&format!("signing_plan: {e}")),
+        }
+    }
+
+    /// Copies out the record and the manager's network for the free hot-key worker
+    /// functions below, so a `set_network` or route change happening after this call
+    /// cannot race a worker already in flight against the copy. Fails for an unknown
+    /// key or a key without a secret.
+    pub fn hot_material(&self, fingerprint: &str) -> Box<HotMaterial> {
+        let Some(manager) = self.inner.as_ref() else {
+            return Box::new(HotMaterial {
+                inner: Err(self.error.clone()),
+            });
+        };
+        let fp = match parse_fingerprint(fingerprint) {
+            Ok(fp) => fp,
+            Err(e) => return Box::new(HotMaterial { inner: Err(e) }),
+        };
+        let Some(record) = manager.key(fp) else {
+            return Box::new(HotMaterial {
+                inner: Err(format!("key '{fingerprint}' is not registered")),
+            });
+        };
+        if record.secret.is_none() {
+            return Box::new(HotMaterial {
+                inner: Err(format!("key '{fingerprint}' has no hot secret")),
+            });
+        }
+        Box::new(HotMaterial {
+            inner: Ok((record.clone(), manager.network())),
+        })
+    }
+
+    /// Commits a key `hot_seal` built into the store, adding the Hot route in the
+    /// same update as `KeyManagerImpl::commit_hot_key`. Refuses a sealed key whose
+    /// network does not match the manager's.
+    pub fn commit_hot_key(&mut self, sealed: &SealedHotKey, alias: &str) -> ffi::KeyInfoResult {
+        let (fingerprint, envelope, network) = match sealed.inner.as_ref() {
+            Ok(sealed) => sealed.clone(),
+            Err(e) => return failed_key_info(e),
+        };
+        let Some(manager) = self.inner.as_mut() else {
+            return failed_key_info(&self.error);
+        };
+        if network != manager.network() {
+            return failed_key_info("sealed key network does not match the manager's network");
+        }
+        if let Err(e) = manager.commit_hot_key(fingerprint, envelope, alias.to_string()) {
+            return failed_key_info(&format!("commit_hot_key {alias}: {e}"));
+        }
+        match manager.key(fingerprint) {
+            Some(record) => ok_key_info(to_key_info(record, manager)),
+            None => failed_key_info("key vanished immediately after being imported"),
+        }
+    }
+}
+
+/// A GUI-thread copy of one key's record and the manager's network, built by
+/// `KeysModule::hot_material`. The free hot-key worker functions below take this
+/// instead of a fingerprint, so they touch no `KeysModule` state and are safe to run
+/// off the GUI thread even while the module is mutated concurrently.
+pub struct HotMaterial {
+    inner: Result<(KeyRecord, BtcNetwork), String>,
+}
+
+impl HotMaterial {
+    pub fn is_ok(&self) -> bool {
+        self.inner.is_ok()
+    }
+
+    pub fn get_error(&self) -> String {
+        self.inner.as_ref().err().cloned().unwrap_or_default()
+    }
+}
+
+/// A mnemonic sealed by the free `hot_seal`, or the error that refused it. Committed
+/// to the store by `KeysModule::commit_hot_key` on the GUI thread.
+pub struct SealedHotKey {
+    inner: Result<(Fingerprint, SecretEnvelope, BtcNetwork), String>,
+}
+
+impl SealedHotKey {
+    pub fn is_ok(&self) -> bool {
+        self.inner.is_ok()
+    }
+
+    pub fn get_error(&self) -> String {
+        self.inner.as_ref().err().cloned().unwrap_or_default()
+    }
+
+    /// Empty on error.
+    pub fn fingerprint(&self) -> String {
+        match self.inner.as_ref() {
+            Ok((fingerprint, ..)) => fingerprint.to_string(),
+            Err(_) => String::new(),
+        }
+    }
+}
+
+/// Derives the fingerprint and seals `mnemonic` under `password` for `network`,
+/// touching no `KeysModule` state. Blocks on Argon2id: call from a QThread, never
+/// from the GUI thread.
+pub fn hot_seal(mnemonic: &str, password: &str, network: ffi::Network) -> Box<SealedHotKey> {
+    let network = BtcNetwork::from(network);
+    let mnemonic = Zeroizing::new(mnemonic.to_string());
+    let password = Password::new(password.to_string());
+    let inner = seal_mnemonic(&mnemonic, network, password)
+        .map(|(fingerprint, envelope)| (fingerprint, envelope, network))
+        .map_err(|e| e.to_string());
+    Box::new(SealedHotKey { inner })
+}
+
+/// Blocks on Argon2id while opening the envelope: call from a QThread, never from the
+/// GUI thread.
+pub fn hot_reveal(material: &HotMaterial, password: &str) -> ffi::MnemonicResult {
+    let password = Password::new(password.to_string());
+    let (record, network) = match material.inner.as_ref() {
+        Ok(pair) => pair,
+        Err(e) => return failed_mnemonic(e),
+    };
+    match open_mnemonic(record, *network, password) {
+        Ok(mnemonic) => ffi::MnemonicResult {
+            is_ok: true,
+            error: String::new(),
+            mnemonic: mnemonic.to_string(),
+        },
+        Err(e) => failed_mnemonic(&format!("reveal {}: {e}", record.fingerprint)),
+    }
+}
+
+/// Signs `psbt_v2_hex` with `material`'s hot secret and returns the signed PSBT as v2
+/// hex. Blocks on Argon2id while opening the envelope: call from a QThread, never
+/// from the GUI thread.
+pub fn hot_sign(material: &HotMaterial, password: &str, psbt_v2_hex: &str) -> ffi::SignResult {
+    let password = Password::new(password.to_string());
+    let (record, network) = match material.inner.as_ref() {
+        Ok(pair) => pair,
+        Err(e) => return failed_sign(e),
+    };
+    let psbt_bytes = match hex::decode(psbt_v2_hex) {
+        Ok(bytes) => bytes,
+        Err(e) => return failed_sign(&format!("invalid psbt hex: {e}")),
+    };
+    match sign_hot(record, *network, password, &psbt_bytes) {
+        Ok(signed) => ffi::SignResult {
+            is_ok: true,
+            error: String::new(),
+            psbt_v2_hex: hex::encode(signed),
+        },
+        Err(e) => failed_sign(&format!("sign_hot {}: {e}", record.fingerprint)),
+    }
+}
+
+/// The BIP392 sp() descriptor of `material`'s hot key, origin included, for account
+/// creation. Blocks on Argon2id while opening the envelope: call from a QThread,
+/// never from the GUI thread.
+pub fn hot_sp_descriptor(material: &HotMaterial, password: &str) -> ffi::SpDescriptorResult {
+    let password = Password::new(password.to_string());
+    let (record, network) = match material.inner.as_ref() {
+        Ok(pair) => pair,
+        Err(e) => return failed_sp_descriptor(e),
+    };
+    match sp_descriptor(record, *network, password) {
+        Ok(descriptor) => ffi::SpDescriptorResult {
+            is_ok: true,
+            error: String::new(),
+            descriptor: descriptor.to_string(),
+            fingerprint: record.fingerprint.to_string(),
+        },
+        Err(e) => failed_sp_descriptor(&format!("hot_sp_descriptor {}: {e}", record.fingerprint)),
+    }
+}
+
+/// Converts `psbt_v2_hex` into its v0 base64 payload for a USB signing device.
+/// Cheap; safe to call from the GUI thread. Refuses a PSBT with a pending SP
+/// output: a signing device only ever signs its own bip32 inputs, and the signing
+/// plan already blocks every other candidate while one is pending.
+pub fn usb_sign_payload(psbt_v2_hex: &str) -> ffi::PsbtPayloadResult {
+    let bytes = match hex::decode(psbt_v2_hex) {
+        Ok(bytes) => bytes,
+        Err(e) => return failed_psbt_payload(&format!("invalid psbt hex: {e}")),
+    };
+    let parsed = match psbt::parse_v2(&bytes) {
+        Ok(parsed) => parsed,
+        Err(e) => return failed_psbt_payload(&e.to_string()),
+    };
+    let v0 = match parsed.into_bitcoin_psbt() {
+        Ok(v0) => v0,
+        Err(PsbtV2Error::MissingOutputScript) => {
+            return failed_psbt_payload(&Error::SpOutputsPending.to_string())
+        }
+        Err(e) => return failed_psbt_payload(&Error::PsbtParse(e.to_string()).to_string()),
+    };
+    ffi::PsbtPayloadResult {
+        is_ok: true,
+        error: String::new(),
+        psbt_base64: BASE64_STANDARD.encode(v0.serialize()),
+    }
+}
+
+/// Merges a USB device's v0 signed answer back into `original_v2_hex`, keeping its
+/// silent-payment input tweaks and ECDH shares. Only signature fields are copied.
+/// Cheap; safe to call from the GUI thread.
+pub fn usb_merge_signed(original_v2_hex: &str, signed_v0_base64: &str) -> ffi::SignResult {
+    let original_bytes = match hex::decode(original_v2_hex) {
+        Ok(bytes) => bytes,
+        Err(e) => return failed_sign(&format!("invalid psbt hex: {e}")),
+    };
+    let signed_bytes = match BASE64_STANDARD.decode(signed_v0_base64.trim()) {
+        Ok(bytes) => bytes,
+        Err(e) => return failed_sign(&format!("invalid base64: {e}")),
+    };
+    match psbt::merge_signatures_bytes(&original_bytes, &signed_bytes) {
+        Ok(merged) => ffi::SignResult {
+            is_ok: true,
+            error: String::new(),
+            psbt_v2_hex: hex::encode(merged),
+        },
+        Err(e) => failed_sign(&e.to_string()),
+    }
 }
 
 /// Parsed once here: every other function in this module takes the fingerprint as a
@@ -546,13 +809,78 @@ fn empty_key_info() -> ffi::KeyInfo {
     }
 }
 
-impl From<ffi::KeyRouteKind> for RouteKind {
-    fn from(kind: ffi::KeyRouteKind) -> Self {
+fn failed_signing_plan(error: &str) -> ffi::SigningPlan {
+    ffi::SigningPlan {
+        is_ok: false,
+        error: error.to_string(),
+        candidates: Vec::new(),
+        sp_outputs_pending: false,
+    }
+}
+
+fn failed_mnemonic(error: &str) -> ffi::MnemonicResult {
+    ffi::MnemonicResult {
+        is_ok: false,
+        error: error.to_string(),
+        mnemonic: String::new(),
+    }
+}
+
+fn failed_sign(error: &str) -> ffi::SignResult {
+    ffi::SignResult {
+        is_ok: false,
+        error: error.to_string(),
+        psbt_v2_hex: String::new(),
+    }
+}
+
+fn failed_psbt_payload(error: &str) -> ffi::PsbtPayloadResult {
+    ffi::PsbtPayloadResult {
+        is_ok: false,
+        error: error.to_string(),
+        psbt_base64: String::new(),
+    }
+}
+
+fn failed_sp_descriptor(error: &str) -> ffi::SpDescriptorResult {
+    ffi::SpDescriptorResult {
+        is_ok: false,
+        error: error.to_string(),
+        descriptor: String::new(),
+        fingerprint: String::new(),
+    }
+}
+
+/// The manager only ever builds a candidate for a fingerprint the PSBT needs.
+fn to_ffi_signing_candidate(candidate: &SigningCandidate) -> ffi::SigningCandidate {
+    ffi::SigningCandidate {
+        fingerprint: candidate.fingerprint.to_string(),
+        alias: candidate.alias.clone(),
+        route: candidate
+            .route
+            .map(ffi::KeyRouteKind::from)
+            .unwrap_or(ffi::KeyRouteKind::Unknown),
+        device_id: candidate.device_id.clone(),
+        can_sign: candidate.unusable.is_none(),
+        unusable: ffi::KeyUnusableReason::from(candidate.unusable),
+        must_sign_first: candidate.must_sign_first,
+        registered: candidate.registered,
+    }
+}
+
+impl TryFrom<ffi::KeyRouteKind> for RouteKind {
+    type Error = String;
+
+    /// `Unknown` is only ever produced for a `SigningCandidate`; `add_route`,
+    /// `remove_route` and `set_route_order` reject it instead of panicking, since
+    /// C++ input reaches this conversion.
+    fn try_from(kind: ffi::KeyRouteKind) -> Result<Self, Self::Error> {
         match kind {
-            ffi::KeyRouteKind::Hot => RouteKind::Hot,
-            ffi::KeyRouteKind::Usb => RouteKind::Usb,
-            ffi::KeyRouteKind::Qr => RouteKind::Qr,
-            ffi::KeyRouteKind::SdCard => RouteKind::SdCard,
+            ffi::KeyRouteKind::Hot => Ok(RouteKind::Hot),
+            ffi::KeyRouteKind::Usb => Ok(RouteKind::Usb),
+            ffi::KeyRouteKind::Qr => Ok(RouteKind::Qr),
+            ffi::KeyRouteKind::SdCard => Ok(RouteKind::SdCard),
+            ffi::KeyRouteKind::Unknown => Err("unknown route kind".to_string()),
             _ => unreachable!("CXX enum type safety guarantees no other variants exist"),
         }
     }

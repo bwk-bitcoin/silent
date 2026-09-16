@@ -177,16 +177,8 @@ pub trait KeyManagerImpl {
     fn registered_descriptors(&self, fingerprint: Fingerprint) -> &[DescriptorEntry];
     fn keys_for_descriptor(&self, descriptor: &str) -> Vec<Fingerprint>;
 
-    fn required_fingerprints(
-        &self,
-        psbt_bytes: &[u8],
-        sp_descriptor: Option<&SpDescriptor>,
-    ) -> Result<BTreeSet<Fingerprint>, Error>;
-    fn signing_plan(
-        &self,
-        psbt_bytes: &[u8],
-        sp_descriptor: Option<&SpDescriptor>,
-    ) -> Result<SigningPlan, Error>;
+    fn required_fingerprints(&self, psbt_bytes: &[u8]) -> Result<BTreeSet<Fingerprint>, Error>;
+    fn signing_plan(&self, psbt_bytes: &[u8]) -> Result<SigningPlan, Error>;
 }
 
 /// Owns the in-memory view of every registered key on one network.
@@ -330,6 +322,21 @@ impl KeyManager {
                 unusable: Some(unusable_reason(record)),
             },
         }
+    }
+
+    /// Every `sp(` descriptor registered on any key on this network, parsed. A
+    /// descriptor that fails to parse is refused outright rather than skipped: a
+    /// broken registration must not silently vanish from the signing plan.
+    pub fn registered_sp_descriptors(&self) -> Result<Vec<SpDescriptor>, Error> {
+        self.records
+            .values()
+            .flat_map(|record| record.descriptors.iter())
+            .filter(|entry| entry.descriptor.starts_with("sp("))
+            .map(|entry| {
+                SpDescriptor::from_str(&entry.descriptor)
+                    .map_err(|e| Error::DescriptorParse(e.to_string()))
+            })
+            .collect()
     }
 
     /// Splitting this from `signing_plan` keeps the plan testable without building a
@@ -650,21 +657,15 @@ impl KeyManagerImpl for KeyManager {
             .collect()
     }
 
-    fn required_fingerprints(
-        &self,
-        psbt_bytes: &[u8],
-        sp_descriptor: Option<&SpDescriptor>,
-    ) -> Result<BTreeSet<Fingerprint>, Error> {
-        let artifacts = inspect_bytes(psbt_bytes, sp_descriptor)?;
+    fn required_fingerprints(&self, psbt_bytes: &[u8]) -> Result<BTreeSet<Fingerprint>, Error> {
+        let descriptors = self.registered_sp_descriptors()?;
+        let artifacts = inspect_bytes(psbt_bytes, &descriptors, &self.secp)?;
         Ok(artifacts.required)
     }
 
-    fn signing_plan(
-        &self,
-        psbt_bytes: &[u8],
-        sp_descriptor: Option<&SpDescriptor>,
-    ) -> Result<SigningPlan, Error> {
-        let artifacts = inspect_bytes(psbt_bytes, sp_descriptor)?;
+    fn signing_plan(&self, psbt_bytes: &[u8]) -> Result<SigningPlan, Error> {
+        let descriptors = self.registered_sp_descriptors()?;
+        let artifacts = inspect_bytes(psbt_bytes, &descriptors, &self.secp)?;
         Ok(self.plan_from_artifacts(&artifacts))
     }
 }
@@ -2003,14 +2004,112 @@ mod tests {
         };
         let bytes = psbt.serialize().expect("serialize psbt");
 
-        let artifacts = inspect_bytes(&bytes, None).expect("inspect bytes");
+        let artifacts = inspect_bytes(&bytes, &[], &manager.secp).expect("inspect bytes");
         let expected = manager.plan_from_artifacts(&artifacts);
         let found = manager
-            .signing_plan(&bytes, None)
+            .signing_plan(&bytes)
             .expect("signing plan from bytes");
         assert_eq!(
             found, expected,
             "signing_plan from bytes must match plan_from_artifacts, got {found:?} expected {expected:?}"
+        );
+    }
+
+    #[test]
+    fn set_descriptor_registered_refuses_a_spend_descriptor_but_accepts_watch_only() {
+        use bitcoin::bip32::DerivationPath;
+        use bwk_sp::bwk_sign::bwk_descriptor::sp_key::{SpKey, SpSpendKey};
+        use bwk_sp::bwk_sign::hot_signer::HotSigner;
+        use bwk_sp::receiver::{bip352_base_derivation, scan_path, spend_path};
+
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let fp = import_test_mnemonic(&mut manager, "alias", "password").expect("import");
+
+        let signer =
+            HotSigner::new_from_mnemonics(Network::Regtest, TEST_MNEMONIC).expect("signer builds");
+        let account = hot::sp_account().expect("sp account index");
+        let origin = (
+            signer.fingerprint(),
+            DerivationPath::from(bip352_base_derivation(Network::Regtest, account)),
+        );
+        let spend_descriptor = SpDescriptor::Packed {
+            origin: Some(origin),
+            key: SpKey::Spend(SpSpendKey {
+                scan_key: signer.private_key_at(&scan_path(Network::Regtest, account)),
+                spend_key: signer.private_key_at(&spend_path(Network::Regtest, account)),
+                network: bitcoin::NetworkKind::Test,
+            }),
+        }
+        .to_string();
+
+        let result = manager.set_descriptor_registered(fp, "alias".to_string(), spend_descriptor);
+        assert!(
+            matches!(result, Err(Error::SpSpendDescriptor)),
+            "expected SpSpendDescriptor, got {result:?}"
+        );
+        assert!(
+            manager.registered_descriptors(fp).is_empty(),
+            "expected nothing written for a refused spend descriptor, got {:?}",
+            manager.registered_descriptors(fp)
+        );
+
+        let watch_only_descriptor = hot::sp_descriptor(
+            manager.key(fp).expect("key present"),
+            Network::Regtest,
+            Password::new("password".to_string()),
+        )
+        .expect("watch-only descriptor builds")
+        .to_string();
+
+        manager
+            .set_descriptor_registered(fp, "alias".to_string(), watch_only_descriptor.clone())
+            .expect("watch-only descriptor is accepted");
+        assert_eq!(
+            manager.registered_descriptors(fp),
+            &[DescriptorEntry {
+                alias: "alias".to_string(),
+                descriptor: watch_only_descriptor,
+            }],
+            "expected the watch-only descriptor to register"
+        );
+    }
+
+    #[test]
+    fn required_fingerprints_errors_on_a_malformed_registered_sp_descriptor() {
+        use bwk_sp::bwk_tx::bwk_psbt::PsbtV2;
+
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let fp = fingerprint(1);
+        manager
+            .add_key(KeyRecord::new(fp, Network::Regtest, "alias".to_string()))
+            .expect("add key");
+        manager
+            .set_descriptor_registered(
+                fp,
+                "alias".to_string(),
+                "sp(not a valid descriptor".to_string(),
+            )
+            .expect("registration itself does not validate parseability");
+
+        let psbt = PsbtV2 {
+            tx_version: bitcoin::transaction::Version::TWO,
+            fallback_lock_time: Some(bitcoin::absolute::LockTime::ZERO),
+            tx_modifiable: None,
+            xpub: Default::default(),
+            proprietary: Default::default(),
+            unknown: Default::default(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        };
+        let bytes = psbt.serialize().expect("serialize psbt");
+
+        let result = manager.required_fingerprints(&bytes);
+        assert!(
+            matches!(result, Err(Error::DescriptorParse(_))),
+            "expected DescriptorParse rather than silently skipping the malformed \
+             descriptor, got {result:?}"
         );
     }
 }

@@ -5,15 +5,22 @@
 use std::str::FromStr;
 
 use bitcoin::{
-    bip32::{ChildNumber, Fingerprint},
-    Network,
+    bip32::{ChildNumber, DerivationPath, Fingerprint},
+    Network, NetworkKind,
 };
 use bwk_sp::{
     bwk_sign::{
-        bip39, bwk_descriptor::descriptor::Descriptor, error::Error as HotSignerError,
+        bip39,
+        bwk_descriptor::{
+            descriptor::Descriptor,
+            sp_descriptor::SpDescriptor,
+            sp_key::{SpKey, SpScanKey},
+        },
+        error::Error as HotSignerError,
         hot_signer::HotSigner,
     },
     bwk_tx::bwk_psbt::{PsbtV2, TxModifiable},
+    receiver::{bip352_base_derivation, scan_path, spend_path},
     signer::SpSigner,
 };
 use zeroize::Zeroizing;
@@ -78,8 +85,40 @@ fn tap_key_sig_count(psbt: &PsbtV2) -> usize {
 }
 
 /// The hardened account index the silent-payment spend key is derived at.
-fn sp_account() -> Result<ChildNumber, Error> {
+pub(crate) fn sp_account() -> Result<ChildNumber, Error> {
     ChildNumber::from_hardened_idx(SP_ACCOUNT_INDEX).map_err(|e| Error::SpSign(e.to_string()))
+}
+
+/// Builds this hot key's BIP392 sp() descriptor, origin included, for account
+/// creation. The descriptor is watch-only: it carries the private scan key and the
+/// public spend key only, never the spend secret. Signing re-opens the sealed
+/// envelope (`sign_hot`) instead of relying on a spend secret in the descriptor.
+/// Blocks on Argon2id while opening the envelope, so it must not run on a GUI
+/// thread.
+pub fn sp_descriptor(
+    record: &KeyRecord,
+    network: Network,
+    password: Password,
+) -> Result<SpDescriptor, Error> {
+    let mnemonic = crypto::open_mnemonic(record, network, password)?;
+    let signer = HotSigner::new_from_mnemonics(network, mnemonic.as_str())
+        .map_err(|e| Error::Signer(e.to_string()))?;
+    let account = sp_account()?;
+
+    // FIXME: bwk's Config::new builds this descriptor with origin: None, so it is
+    // rebuilt here. Upstream ask: a watch-only sp() builder that sets the origin.
+    let origin = (
+        signer.fingerprint(),
+        DerivationPath::from(bip352_base_derivation(network, account)),
+    );
+    Ok(SpDescriptor::Packed {
+        origin: Some(origin),
+        key: SpKey::Scan(SpScanKey {
+            scan_key: signer.private_key_at(&scan_path(network, account)),
+            spend_key: signer.public_key_at(&spend_path(network, account)),
+            network: NetworkKind::from(network),
+        }),
+    })
 }
 
 /// Signs `psbt_v2_bytes` with this key's hot secret and returns the re-serialized
@@ -238,6 +277,59 @@ mod tests {
             fingerprint,
             Fingerprint::from(TEST_FINGERPRINT_BYTES),
             "expected the standard test vector's fingerprint, got {fingerprint}"
+        );
+    }
+
+    fn test_record() -> KeyRecord {
+        let fingerprint = Fingerprint::from(TEST_FINGERPRINT_BYTES);
+        let mut record = KeyRecord::new(fingerprint, Network::Regtest, "alias".to_string());
+        record.secret = Some(
+            crypto::seal(
+                TEST_MNEMONIC.as_bytes(),
+                fingerprint,
+                Network::Regtest,
+                Password::new("password".to_string()),
+            )
+            .expect("seal succeeds"),
+        );
+        record
+    }
+
+    #[test]
+    fn sp_descriptor_is_watch_only_and_keeps_the_origin_fingerprint() {
+        use bitcoin::secp256k1::Secp256k1;
+
+        let record = test_record();
+        let descriptor = sp_descriptor(
+            &record,
+            Network::Regtest,
+            Password::new("password".to_string()),
+        )
+        .expect("sp_descriptor succeeds");
+
+        let secp = Secp256k1::new();
+        assert!(
+            descriptor
+                .is_watch_only(&secp)
+                .expect("is_watch_only succeeds"),
+            "expected a watch-only descriptor, got {descriptor:?}"
+        );
+        assert_eq!(
+            descriptor.fingerprint(),
+            Some(Fingerprint::from(TEST_FINGERPRINT_BYTES)),
+            "expected the origin fingerprint to match the signer's"
+        );
+
+        let signer =
+            HotSigner::new_from_mnemonics(Network::Regtest, TEST_MNEMONIC).expect("signer builds");
+        let account = sp_account().expect("sp account index");
+        let expected_spend_key = signer.public_key_at(&spend_path(Network::Regtest, account));
+        assert_eq!(
+            descriptor
+                .spend_public_key(&secp)
+                .expect("spend_public_key succeeds"),
+            expected_spend_key,
+            "expected the descriptor's spend key to match the derived one"
         );
     }
 }
