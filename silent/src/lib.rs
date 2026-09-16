@@ -651,6 +651,9 @@ mod ffi {
 
         /// Get the serialized PSBT as hex (only valid if is_ok()).
         fn bytes_hex(self: &PsbtResult) -> String;
+
+        /// Get the serialized PSBT v2 as hex (only valid if is_ok()).
+        fn bytes_v2_hex(self: &PsbtResult) -> String;
     }
 
     // ===== SyncEstimator Methods =====

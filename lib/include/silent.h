@@ -1554,6 +1554,9 @@ struct PsbtResult final : public ::rust::Opaque {
   // Get the serialized PSBT as hex (only valid if is_ok()).
   ::rust::String bytes_hex() const noexcept;
 
+  // Get the serialized PSBT v2 as hex (only valid if is_ok()).
+  ::rust::String bytes_v2_hex() const noexcept;
+
   ~PsbtResult() = delete;
 
 private:

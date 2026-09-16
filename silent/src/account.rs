@@ -541,22 +541,33 @@ impl Account {
         };
 
         match builder.generate_v2() {
-            Ok(psbt) => match psbt.to_bitcoin_psbt_with_empty_sp_outputs() {
-                Ok(psbt_v0) => Box::new(PsbtResult {
-                    inner: Ok(PreparedPsbt {
-                        bytes: psbt_v0.serialize(),
-                        txid: psbt
-                            .unsigned_tx()
-                            .map(|tx| tx.compute_txid().to_string())
-                            .unwrap_or_default(),
+            Ok(psbt) => {
+                let bytes_v2 = match psbt.serialize() {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        let error = format!("{e:?}");
+                        log_failed_prepare(inner, &tx_template, &error);
+                        return err_psbt(error);
+                    }
+                };
+                match psbt.to_bitcoin_psbt_with_empty_sp_outputs() {
+                    Ok(psbt_v0) => Box::new(PsbtResult {
+                        inner: Ok(PreparedPsbt {
+                            bytes: psbt_v0.serialize(),
+                            bytes_v2,
+                            txid: psbt
+                                .unsigned_tx()
+                                .map(|tx| tx.compute_txid().to_string())
+                                .unwrap_or_default(),
+                        }),
                     }),
-                }),
-                Err(e) => {
-                    let error = format!("{e:?}");
-                    log_failed_prepare(inner, &tx_template, &error);
-                    err_psbt(error)
+                    Err(e) => {
+                        let error = format!("{e:?}");
+                        log_failed_prepare(inner, &tx_template, &error);
+                        err_psbt(error)
+                    }
                 }
-            },
+            }
             Err(e) => {
                 let error = format!("{e:?}");
                 log_failed_prepare(inner, &tx_template, &error);
@@ -712,15 +723,43 @@ impl Account {
             spent_input_count: 0,
         };
 
-        if self.inner.is_none() {
+        let Some(inner) = &self.inner else {
             return err_validation("Account not initialized".to_string());
         };
 
-        if let Err(e) = &psbt_result.inner {
-            return err_validation(format!("Invalid PSBT: {e}"));
-        }
+        let prepared = match &psbt_result.inner {
+            Ok(prepared) => prepared,
+            Err(e) => return err_validation(format!("Invalid PSBT: {e}")),
+        };
 
-        err_validation("PSBT v2 Electrum validation is not available yet".to_string())
+        let psbt = match crate::keys::psbt::parse_v2(&prepared.bytes_v2) {
+            Ok(psbt) => psbt,
+            Err(e) => return err_validation(format!("Invalid PSBT: {e}")),
+        };
+
+        match validate_psbt_via_electrum(&psbt, &inner.electrum_url) {
+            Ok(issue) => {
+                let mut issues = Vec::new();
+                for (idx, addr) in &issue.reused_outputs {
+                    issues.push(format!("Output #{idx}: address {addr} already used"));
+                }
+                for (idx, outpoint, spending_txid) in &issue.spent_inputs {
+                    issues.push(format!(
+                        "Input #{idx}: {outpoint} already spent in {spending_txid}"
+                    ));
+                }
+                let is_valid = issue.reused_outputs.is_empty() && issue.spent_inputs.is_empty();
+                crate::ffi::PsbtValidation {
+                    is_ok: true,
+                    error: String::new(),
+                    is_valid,
+                    issues: issues.join("\n"),
+                    reused_output_count: issue.reused_outputs.len() as u32,
+                    spent_input_count: issue.spent_inputs.len() as u32,
+                }
+            }
+            Err(e) => err_validation(e),
+        }
     }
 
     /// Log all details of a failed broadcast for debugging/reproduction.
@@ -867,6 +906,178 @@ fn log_failed_broadcast_impl(
     // Raw hex
     log::error!("signed_tx_hex: {signed_tx_hex}");
     log::error!("=== END BROADCAST FAILED ===");
+}
+
+/// Issues found during PSBT validation.
+#[derive(Debug, Clone)]
+struct PsbtValidationIssue {
+    reused_outputs: Vec<(usize, String)>, // (output_index, address_string)
+    spent_inputs: Vec<(usize, String, String)>, // (input_index, outpoint, spending_txid)
+}
+
+/// Outputs worth checking for address reuse: SP outputs without a derived script
+/// are skipped (a fresh ECDH-derived script cannot be reused), and so are
+/// OP_RETURN outputs.
+fn outputs_to_check(psbt: &bwk_sp::bwk_tx::bwk_psbt::PsbtV2) -> Vec<(usize, bitcoin::ScriptBuf)> {
+    psbt.outputs
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, output)| {
+            let spk = output.script_pubkey.clone()?;
+            if spk.is_op_return() {
+                return None;
+            }
+            Some((idx, spk))
+        })
+        .collect()
+}
+
+/// Inputs to check for a double-spend, paired with the outpoint they consume.
+fn inputs_to_check(psbt: &bwk_sp::bwk_tx::bwk_psbt::PsbtV2) -> Vec<(usize, bitcoin::OutPoint)> {
+    psbt.inputs
+        .iter()
+        .enumerate()
+        .map(|(idx, input)| (idx, input.previous_output))
+        .collect()
+}
+
+/// Validate a PSBT via Electrum before signing.
+/// Checks for output address reuse and already-spent inputs.
+fn validate_psbt_via_electrum(
+    psbt: &bwk_sp::bwk_tx::bwk_psbt::PsbtV2,
+    electrum_url: &str,
+) -> Result<PsbtValidationIssue, String> {
+    use std::collections::HashMap;
+
+    if electrum_url.is_empty() {
+        return Err("Electrum server address not configured".to_string());
+    }
+
+    let (host, port) = crate::config::parse_electrum_url(electrum_url);
+    let host = host.ok_or("Invalid electrum URL: missing host")?;
+    let port = port.ok_or("Invalid electrum URL: missing port")?;
+
+    // AccountInner does not carry the account's configured CertificateCheck policy,
+    // so this always validates the certificate chain. Accounts pointed at a
+    // self-signed or onion electrum server (DangerAcceptInvalid) will not be able
+    // to run this check until that policy is threaded through from the config.
+    let mut client = bwk_sp::bwk::bwk_electrum::client::Client::new(
+        &host,
+        port,
+        bwk_sp::bwk::bwk_electrum::raw_client::CertificateCheck::Validate,
+    )
+    .map_err(|e| format!("Connection to {electrum_url} failed: {e}"))?;
+
+    let mut reused_outputs = Vec::new();
+    let mut spent_inputs = Vec::new();
+
+    // Check outputs: any destination address already used?
+    for (idx, spk) in outputs_to_check(psbt) {
+        match client.get_coins_tx_at(&spk) {
+            Ok(txids) => {
+                if !txids.is_empty() {
+                    let addr = bitcoin::Address::from_script(&spk, bitcoin::Network::Bitcoin)
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|_| spk.to_hex_string());
+                    reused_outputs.push((idx, addr));
+                }
+            }
+            Err(e) => {
+                log::warn!("validate_psbt: failed to check output #{idx}: {e}");
+            }
+        }
+    }
+
+    // Check inputs: any coin already spent?
+    let mut tx_cache: HashMap<bitcoin::Txid, bitcoin::Transaction> = HashMap::new();
+
+    for (idx, outpoint) in inputs_to_check(psbt) {
+        let Some(psbt_input) = psbt.inputs.get(idx) else {
+            log::warn!("validate_psbt: missing psbt input data for input #{idx}");
+            continue;
+        };
+
+        // Get the script pubkey for this input from PSBT data.
+        let spk = if let Some(ref witness_utxo) = psbt_input.psbt.witness_utxo {
+            witness_utxo.script_pubkey.clone()
+        } else if let Some(ref non_witness_utxo) = psbt_input.psbt.non_witness_utxo {
+            match non_witness_utxo.output.get(outpoint.vout as usize) {
+                Some(prev_out) => prev_out.script_pubkey.clone(),
+                None => {
+                    log::warn!("validate_psbt: malformed prevout for input #{idx}");
+                    continue;
+                }
+            }
+        } else {
+            // Fetch the previous tx to get the script pubkey.
+            match fetch_or_cache_tx(&mut client, &mut tx_cache, outpoint.txid) {
+                Ok(tx) => match tx.output.get(outpoint.vout as usize) {
+                    Some(prev_out) => prev_out.script_pubkey.clone(),
+                    None => {
+                        log::warn!("validate_psbt: malformed prevout for input #{idx}");
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    log::warn!("validate_psbt: failed to fetch prev tx for input #{idx}: {e}");
+                    continue;
+                }
+            }
+        };
+
+        // Get history for this script pubkey.
+        let txids = match client.get_coins_tx_at(&spk) {
+            Ok(txids) => txids,
+            Err(e) => {
+                log::warn!("validate_psbt: failed to get history for input #{idx}: {e}");
+                continue;
+            }
+        };
+
+        // Check if any tx in the history spends our outpoint.
+        for txid in &txids {
+            // Skip the funding transaction itself.
+            if *txid == outpoint.txid {
+                continue;
+            }
+
+            let tx = match fetch_or_cache_tx(&mut client, &mut tx_cache, *txid) {
+                Ok(tx) => tx,
+                Err(e) => {
+                    log::warn!("validate_psbt: failed to fetch tx {txid} for input #{idx}: {e}");
+                    continue;
+                }
+            };
+
+            for tx_input in &tx.input {
+                if tx_input.previous_output == outpoint {
+                    spent_inputs.push((idx, outpoint.to_string(), txid.to_string()));
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(PsbtValidationIssue {
+        reused_outputs,
+        spent_inputs,
+    })
+}
+
+/// Fetch a transaction, using cache to avoid duplicate requests.
+fn fetch_or_cache_tx(
+    client: &mut bwk_sp::bwk::bwk_electrum::client::Client,
+    cache: &mut std::collections::HashMap<bitcoin::Txid, bitcoin::Transaction>,
+    txid: bitcoin::Txid,
+) -> Result<bitcoin::Transaction, String> {
+    if let Some(tx) = cache.get(&txid) {
+        return Ok(tx.clone());
+    }
+    let tx = client
+        .get_tx(txid)
+        .map_err(|e| format!("Failed to fetch tx {txid}: {e}"))?;
+    cache.insert(txid, tx.clone());
+    Ok(tx)
 }
 
 /// Broadcast a transaction via Electrum server.
@@ -1186,7 +1397,10 @@ pub struct PsbtResult {
 
 #[derive(Debug, Clone)]
 struct PreparedPsbt {
+    /// v0 serialization, with an empty script for every underived SP output.
     bytes: Vec<u8>,
+    /// v2 serialization of the same PSBT, which keeps the SP output information.
+    bytes_v2: Vec<u8>,
     txid: String,
 }
 
@@ -1216,6 +1430,14 @@ impl PsbtResult {
     pub fn bytes_hex(&self) -> String {
         match &self.inner {
             Ok(psbt) => bytes_to_hex(&psbt.bytes),
+            Err(_) => String::new(),
+        }
+    }
+
+    /// Get the serialized PSBT v2 as hex (only valid if is_ok()).
+    pub fn bytes_v2_hex(&self) -> String {
+        match &self.inner {
+            Ok(psbt) => bytes_to_hex(&psbt.bytes_v2),
             Err(_) => String::new(),
         }
     }
@@ -1286,5 +1508,77 @@ fn sp_coin_entry_to_coin(
         spend_info: bwk_sp::bwk::bwk_coin::CoinSpendInfo::Sp {
             tweak: *entry.tweak(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::{
+        absolute::LockTime, hashes::Hash, opcodes::all::OP_RETURN, script::Builder, transaction,
+        OutPoint, ScriptBuf, Sequence, Txid,
+    };
+    use bwk_sp::bwk_tx::bwk_psbt::{Input as PsbtInput, Output as PsbtOutput, PsbtV2};
+
+    use crate::account::{inputs_to_check, outputs_to_check};
+
+    fn input_at(vout: u32) -> PsbtInput {
+        PsbtInput {
+            previous_output: OutPoint::new(Txid::from_byte_array([0x22; 32]), vout),
+            sequence: Sequence::MAX,
+            required_time_lock_time: None,
+            required_height_lock_time: None,
+            psbt: bitcoin::psbt::Input::default(),
+        }
+    }
+
+    fn output_with_script(script_pubkey: Option<ScriptBuf>) -> PsbtOutput {
+        PsbtOutput {
+            amount: bitcoin::Amount::from_sat(1_000),
+            script_pubkey,
+            psbt: bitcoin::psbt::Output::default(),
+        }
+    }
+
+    fn psbt_fixture(inputs: Vec<PsbtInput>, outputs: Vec<PsbtOutput>) -> PsbtV2 {
+        PsbtV2 {
+            tx_version: transaction::Version::TWO,
+            fallback_lock_time: Some(LockTime::ZERO),
+            tx_modifiable: None,
+            xpub: Default::default(),
+            proprietary: Default::default(),
+            unknown: Default::default(),
+            inputs,
+            outputs,
+        }
+    }
+
+    #[test]
+    fn outputs_to_check_skips_pending_sp_and_op_return() {
+        let scripted = ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::from_byte_array([0x33; 20]));
+        let op_return = Builder::new().push_opcode(OP_RETURN).into_script();
+        let psbt = psbt_fixture(
+            vec![],
+            vec![
+                output_with_script(Some(scripted.clone())),
+                output_with_script(None),
+                output_with_script(Some(op_return)),
+            ],
+        );
+
+        let checked = outputs_to_check(&psbt);
+
+        assert_eq!(checked, vec![(0, scripted)]);
+    }
+
+    #[test]
+    fn inputs_to_check_returns_every_previous_output() {
+        let first = input_at(0);
+        let second = input_at(1);
+        let expected = [first.previous_output, second.previous_output];
+        let psbt = psbt_fixture(vec![first, second], vec![]);
+
+        let checked = inputs_to_check(&psbt);
+
+        assert_eq!(checked, vec![(0, expected[0]), (1, expected[1])]);
     }
 }
