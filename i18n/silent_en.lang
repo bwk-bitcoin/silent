@@ -333,3 +333,47 @@ keys-file-invalid => "This is not a valid key file."
 keys-file-missing-fingerprint => "This key file is missing a fingerprint."
 
 keys-file-unknown-route => "This key file has an unknown route type."
+
+keys-hot-title => "Hot key"
+
+keys-mode-hot => "Generate or import a hot key"
+
+keys-mode-hot-hint
+=> "A hot key is a mnemonic kept on this computer, sealed with a password.";;
+
+keys-hot-generate => "Generate a mnemonic"
+
+keys-hot-import => "Import a mnemonic"
+
+keys-words-12 => "12 words"
+
+keys-words-24 => "24 words"
+
+keys-mnemonic-placeholder => "Type the words, separated by spaces"
+
+keys-mnemonic-bad-length => "A mnemonic has 12 or 24 words."
+
+keys-backup-confirm => "I have written these words down"
+
+keys-backup-warning
+=> "These words are shown once. Anyone holding them holds the coins.";;
+
+keys-hot-failed => "Could not create the hot key: %1"
+
+keys-hot-working => "Sealing the key, this takes a moment..."
+
+keys-password-create => "Choose a password for this key"
+
+keys-password-use => "Password for this key"
+
+keys-password-mismatch => "The two passwords do not match."
+
+keys-password-short => "Use at least 8 characters."
+
+keys-reveal => "Reveal the mnemonic"
+
+keys-reveal-failed => "Could not open the key: %1"
+
+keys-password => "Password"
+
+keys-password-confirm => "Confirm password"

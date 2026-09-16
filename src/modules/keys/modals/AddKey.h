@@ -28,7 +28,7 @@ class AddKey final : public qontrol::Modal {
     Q_OBJECT
 
 public:
-    enum class Mode { AirgapQr, AirgapSd, ImportXpub, ImportFile };
+    enum class Mode { AirgapQr, AirgapSd, ImportXpub, ImportFile, HotKey };
 
     explicit AddKey(KeysModule *module, QWidget *parent = nullptr);
     ~AddKey() override = default;
@@ -43,6 +43,7 @@ public slots:
     void onDecodeQrClicked();
     void onBrowseFileClicked();
     void onRegisterClicked();
+    void onHotKeyAdded(const QString &fingerprint);
 
 protected:
     void init();
@@ -68,9 +69,11 @@ private:
     catalog::Button *m_decode_qr_btn = nullptr;
     catalog::Button *m_browse_btn = nullptr;
     catalog::Label *m_file_label = nullptr;
+    catalog::Label *m_hot_caption = nullptr;
     catalog::Label *m_error_label = nullptr;
     catalog::Button *m_register_btn = nullptr;
     catalog::Button *m_cancel_btn = nullptr;
+    QWidget *m_alias_row = nullptr;
     QWidget *m_origin_row = nullptr;
     QWidget *m_xpub_row = nullptr;
     QWidget *m_qr_row = nullptr;

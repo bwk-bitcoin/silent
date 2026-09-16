@@ -1,5 +1,7 @@
 #include "KeyModal.h"
 
+#include "PasswordPrompt.h"
+
 #include "modules/keys/KeysModule.h"
 #include "modules/keys/RouteDisplay.h"
 
@@ -121,6 +123,10 @@ KeyModal::KeyModal(KeysModule *module, QString fingerprint, QWidget *parent)
     view();
 }
 
+KeyModal::~KeyModal() {
+    clearRevealedMnemonic();
+}
+
 void KeyModal::init() {
     auto info = fetchKeyInfo(m_module, m_fingerprint);
     QString alias = info.has_value() ? KeysModule::toQt(info->alias) : QString();
@@ -136,6 +142,11 @@ void KeyModal::init() {
     m_route_picker->addItem(TR("keys-route-sd"), static_cast<int>(KeyRouteKind::SdCard));
 
     m_add_route_btn = new Button(TR("keys-add-route"));
+    m_reveal_btn = new Button(TR("keys-reveal"));
+    m_reveal_btn->setVisible(info.has_value() && info->has_hot_secret);
+    m_revealed_mnemonic_label = new Label(QString(), LabelRole::Mono);
+    m_revealed_mnemonic_label->setWordWrap(true);
+    m_revealed_mnemonic_label->setVisible(false);
     m_remove_key_btn = new Button(TR("keys-remove-key"), ButtonRole::Destructive);
     m_close_btn = new Button(TR("common-close"));
 
@@ -162,9 +173,12 @@ void KeyModal::doConnect() {
             qontrol::UNIQUE);
     connect(m_add_route_btn, &QPushButton::clicked, this, &KeyModal::onAddRouteClicked,
             qontrol::UNIQUE);
+    connect(m_reveal_btn, &QPushButton::clicked, this, &KeyModal::onRevealClicked, qontrol::UNIQUE);
     connect(m_remove_key_btn, &QPushButton::clicked, this, &KeyModal::onRemoveKeyClicked,
             qontrol::UNIQUE);
     connect(m_close_btn, &QPushButton::clicked, this, &QDialog::accept, qontrol::UNIQUE);
+    connect(m_module, &KeysModule::mnemonicRevealed, this, &KeyModal::onMnemonicRevealed,
+            qontrol::UNIQUE);
 }
 
 void KeyModal::view() {
@@ -179,7 +193,11 @@ void KeyModal::view() {
                                ->push(m_add_route_btn)
                                ->pushSpacer();
 
-    auto *bottomRow = (new qontrol::Row)->push(m_remove_key_btn)->pushSpacer()->push(m_close_btn);
+    auto *bottomRow = (new qontrol::Row)
+                          ->push(m_remove_key_btn)
+                          ->push(m_reveal_btn)
+                          ->pushSpacer()
+                          ->push(m_close_btn);
 
     auto *content = (new qontrol::Column)
                         ->push(new Label(m_fingerprint, LabelRole::Mono))
@@ -187,6 +205,8 @@ void KeyModal::view() {
                         ->push(m_error_label)
                         ->pushSpacer(resolve(Spacing::M))
                         ->push(aliasRow)
+                        ->pushSpacer(resolve(Spacing::S))
+                        ->push(m_revealed_mnemonic_label)
                         ->pushSpacer(resolve(Spacing::M))
                         ->push(new catalog::Separator)
                         ->pushSpacer(resolve(Spacing::M))
@@ -416,6 +436,15 @@ void KeyModal::showError(const QString &message) {
     m_error_label->setVisible(!message.isEmpty());
 }
 
+void KeyModal::clearRevealedMnemonic() {
+    // A QString cannot be zeroized: fill()+clear() is best effort. Rust owns the
+    // real wiping of the mnemonic it handed back.
+    m_revealed_mnemonic.fill(QChar());
+    m_revealed_mnemonic.clear();
+    m_revealed_mnemonic_label->setText(QString());
+    m_revealed_mnemonic_label->setVisible(false);
+}
+
 void KeyModal::onSaveAliasClicked() {
     if (m_module == nullptr || m_module->rust() == nullptr) {
         return;
@@ -510,6 +539,44 @@ void KeyModal::onRemoveKeyConfirmed() {
         return;
     }
     accept();
+}
+
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void KeyModal::onRevealClicked() {
+    auto *prompt = new PasswordPrompt(PasswordPrompt::Mode::Use, TR("keys-password-use"));
+    connect(prompt, &PasswordPrompt::passwordEntered, this, &KeyModal::onRevealPasswordEntered,
+            qontrol::UNIQUE);
+    AppController::execModal(prompt);
+}
+
+void KeyModal::onRevealPasswordEntered(QString password) {
+    if (m_module == nullptr || m_module->rust() == nullptr) {
+        password.fill(QChar());
+        password.clear();
+        return;
+    }
+
+    m_reveal_btn->setEnabled(false);
+    m_reveal_req_id = m_module->nextReqId();
+    m_module->revealMnemonic(m_reveal_req_id, m_fingerprint, password);
+
+    password.fill(QChar());
+    password.clear();
+}
+
+void KeyModal::onMnemonicRevealed(ReqId req_id, MnemonicResult result) {
+    if (req_id != m_reveal_req_id) {
+        return;
+    }
+    m_reveal_btn->setEnabled(true);
+    if (!result.is_ok) {
+        showError(TR("keys-reveal-failed").arg(KeysModule::toQt(result.error)));
+        return;
+    }
+    m_error_label->setVisible(false);
+    m_revealed_mnemonic = KeysModule::toQt(result.mnemonic);
+    m_revealed_mnemonic_label->setText(m_revealed_mnemonic);
+    m_revealed_mnemonic_label->setVisible(true);
 }
 
 } // namespace keys::modal

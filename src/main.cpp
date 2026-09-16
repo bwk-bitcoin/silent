@@ -42,6 +42,8 @@ auto main(int argc, char *argv[]) -> int {
     qRegisterMetaType<HwiEvent>();
     qRegisterMetaType<HwiDevice>();
     qRegisterMetaType<KeyEvent>();
+    qRegisterMetaType<MnemonicResult>();
+    qRegisterMetaType<KeyInfoResult>();
     qRegisterMetaType<std::optional<ReqId>>();
 
     // Initialize Rust logging (Debug level for verbose output)

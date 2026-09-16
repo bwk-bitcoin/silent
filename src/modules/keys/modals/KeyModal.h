@@ -53,7 +53,7 @@ class KeyModal final : public qontrol::Modal {
 
 public:
     explicit KeyModal(KeysModule *module, QString fingerprint, QWidget *parent = nullptr);
-    ~KeyModal() override = default;
+    ~KeyModal() override;
 
 public slots:
     void onSaveAliasClicked();
@@ -63,6 +63,9 @@ public slots:
     void onMoveRouteDownClicked();
     void onRemoveKeyClicked();
     void onRemoveKeyConfirmed();
+    void onRevealClicked();
+    void onRevealPasswordEntered(QString password);
+    void onMnemonicRevealed(ReqId req_id, MnemonicResult result);
 
 protected:
     void init();
@@ -76,15 +79,22 @@ protected:
     void updateRemoveState();
     void moveRoute(int from_index, int to_index);
     void showError(const QString &message);
+    void clearRevealedMnemonic();
     [[nodiscard]] auto routeAt(int index) const -> KeyRouteKind;
 
 private:
     KeysModule *m_module = nullptr;
     QString m_fingerprint;
+    QString m_revealed_mnemonic;
+    // The id of the outstanding revealMnemonic() request, so a stale answer (from a
+    // request this modal already moved past) is ignored.
+    ReqId m_reveal_req_id = 0;
     catalog::Input *m_alias_input = nullptr;
     catalog::Button *m_save_alias_btn = nullptr;
     catalog::ComboBox *m_route_picker = nullptr;
     catalog::Button *m_add_route_btn = nullptr;
+    catalog::Button *m_reveal_btn = nullptr;
+    catalog::Label *m_revealed_mnemonic_label = nullptr;
     catalog::Button *m_remove_key_btn = nullptr;
     catalog::Button *m_close_btn = nullptr;
     catalog::Label *m_remove_hint = nullptr;

@@ -79,6 +79,11 @@ KeysModule::KeysModule(QObject *parent) : IModule(parent) {
             &KeysModule::onInstanceRegistered, qontrol::UNIQUE);
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
             &KeysModule::onInstanceRemoved, qontrol::UNIQUE);
+    connect(this, &KeysModule::mnemonicGenerationFinished, this,
+            &KeysModule::onMnemonicGenerationFinished, qontrol::UNIQUE);
+    connect(this, &KeysModule::hotKeySealed, this, &KeysModule::onHotKeySealed, qontrol::UNIQUE);
+    connect(this, &KeysModule::mnemonicRevealFinished, this, &KeysModule::onMnemonicRevealFinished,
+            qontrol::UNIQUE);
     createModule();
     m_bus = std::make_unique<KeysBus>(this);
     Host::get()->setKeys(m_bus.get(), this);
@@ -203,6 +208,87 @@ bool KeysModule::hasKey(const QString &fingerprint) const {
         }
     }
     return false;
+}
+
+void KeysModule::generateMnemonic(ReqId req_id, std::uint32_t word_count) {
+    auto *thread = QThread::create([this, req_id, word_count]() {
+        emit mnemonicGenerationFinished(req_id, ::generate_mnemonic(word_count));
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
+void KeysModule::onMnemonicGenerationFinished(ReqId req_id, MnemonicResult result) {
+    emit mnemonicGenerated(req_id, result);
+}
+
+void KeysModule::importHotKey(ReqId req_id, QString mnemonic, QString alias, QString password) {
+    Network network = KeysModule::network();
+    auto *thread = QThread::create([this, req_id, mnemonic = mnemonic.toStdString(),
+                                    password = password.toStdString(), alias, network]() mutable {
+        auto sealed = ::hot_seal(rust::String(mnemonic), rust::String(password), network);
+        mnemonic.assign(mnemonic.size(), '\0');
+        mnemonic.clear();
+        password.assign(password.size(), '\0');
+        password.clear();
+        emit hotKeySealed(req_id, sealed.into_raw(), alias);
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
+void KeysModule::onHotKeySealed(ReqId req_id, SealedHotKey *sealed, QString alias) {
+    auto box = rust::Box<SealedHotKey>::from_raw(sealed);
+    KeyInfoResult result;
+    if (!box->is_ok()) {
+        result.is_ok = false;
+        result.error = box->get_error();
+        emit hotKeyImported(req_id, result);
+        return;
+    }
+    if (rust() == nullptr) {
+        result.is_ok = false;
+        result.error = rust::String("keys: module not ready");
+        emit hotKeyImported(req_id, result);
+        return;
+    }
+    result = rust()->commit_hot_key(*box, rust::String(alias.toStdString()));
+    if (result.is_ok) {
+        emit keysChanged();
+    }
+    emit hotKeyImported(req_id, result);
+}
+
+void KeysModule::revealMnemonic(ReqId req_id, QString fingerprint, QString password) {
+    if (rust() == nullptr) {
+        MnemonicResult result;
+        result.is_ok = false;
+        result.error = rust::String("keys: module not ready");
+        emit mnemonicRevealFinished(req_id, result);
+        return;
+    }
+    auto material = rust()->hot_material(rust::String(fingerprint.toStdString()));
+    if (!material->is_ok()) {
+        MnemonicResult result;
+        result.is_ok = false;
+        result.error = material->get_error();
+        emit mnemonicRevealFinished(req_id, result);
+        return;
+    }
+    auto *thread = QThread::create([this, req_id, material = material.into_raw(),
+                                    password = password.toStdString()]() mutable {
+        auto box = rust::Box<HotMaterial>::from_raw(material);
+        auto result = ::hot_reveal(*box, rust::String(password));
+        password.assign(password.size(), '\0');
+        password.clear();
+        emit mnemonicRevealFinished(req_id, result);
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
+void KeysModule::onMnemonicRevealFinished(ReqId req_id, MnemonicResult result) {
+    emit mnemonicRevealed(req_id, result);
 }
 
 auto KeysModule::setAlias(const QString &fingerprint, const QString &alias) -> KeyOpResult {

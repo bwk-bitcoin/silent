@@ -94,6 +94,16 @@ public:
     // leaves this null again if the host that owns the widget deletes it.
     [[nodiscard]] auto tab() -> QWidget *;
 
+    // Worker jobs owned by this module, so a thread never outlives the modal or
+    // signer that asked for it. Each starts a QThread::create lambda that captures
+    // only copied data plus this module's `this`, and answers through the matching
+    // result signal below, matched by the caller-allocated `req_id`.
+    void generateMnemonic(ReqId req_id, std::uint32_t word_count);
+    // The GUI slot always calls commit_hot_key(), even if every caller (HotKey) has
+    // already closed: a close during sealing still finishes the import.
+    void importHotKey(ReqId req_id, QString mnemonic, QString alias, QString password);
+    void revealMnemonic(ReqId req_id, QString fingerprint, QString password);
+
     [[nodiscard]] static auto toQt(const rust::String &value) -> QString;
 
 signals:
@@ -104,11 +114,27 @@ signals:
     // The live device set changed and the Rust handle already has it.
     void liveDevicesChanged();
 
+    // Worker job results. Each pair below is: emitted from the background thread,
+    // re-owned by the matching private slot, which re-emits the second (public)
+    // signal that callers connect to.
+    void mnemonicGenerationFinished(ReqId req_id, MnemonicResult result);
+    void mnemonicGenerated(ReqId req_id, MnemonicResult result);
+    // The sealed key's raw pointer is re-owned by onHotKeySealed(), along with the
+    // alias importHotKey() was called with, so the commit still has it once the
+    // worker answers.
+    void hotKeySealed(ReqId req_id, SealedHotKey *sealed, QString alias);
+    void hotKeyImported(ReqId req_id, KeyInfoResult result);
+    void mnemonicRevealFinished(ReqId req_id, MnemonicResult result);
+    void mnemonicRevealed(ReqId req_id, MnemonicResult result);
+
 private slots:
     void onKeyEventReceived(const KeyEvent &event);
     void onInstanceRegistered(const QString &id);
     void onInstanceRemoved(const QString &id);
     void onDevicesChanged();
+    void onMnemonicGenerationFinished(ReqId req_id, MnemonicResult result);
+    void onHotKeySealed(ReqId req_id, SealedHotKey *sealed, QString alias);
+    void onMnemonicRevealFinished(ReqId req_id, MnemonicResult result);
 
 protected:
     void createModule();

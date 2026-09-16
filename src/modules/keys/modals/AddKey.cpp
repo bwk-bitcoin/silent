@@ -1,7 +1,10 @@
 #include "AddKey.h"
 
+#include "HotKey.h"
+
 #include "modules/keys/KeysModule.h"
 
+#include "AppController.h"
 #include "catalog/Button.h"
 #include "catalog/SelectRow.h"
 #include "catalog/containers/Separator.h"
@@ -121,7 +124,12 @@ void AddKey::init() {
     fileRow->setTitle(TR("keys-mode-file"));
     fileRow->setProperty(K_ADD_KEY_MODE, static_cast<int>(Mode::ImportFile));
 
-    m_mode_rows = {qrRow, sdRow, xpubRow, fileRow};
+    auto *hotRow = new catalog::SelectRow;
+    hotRow->setIcon(icon::lock(IconColor::Accent));
+    hotRow->setTitle(TR("keys-mode-hot"));
+    hotRow->setProperty(K_ADD_KEY_MODE, static_cast<int>(Mode::HotKey));
+
+    m_mode_rows = {qrRow, sdRow, xpubRow, fileRow, hotRow};
 
     m_alias_input = new Input;
     m_alias_input->setPlaceholderText(TR("keys-alias-placeholder"));
@@ -142,6 +150,10 @@ void AddKey::init() {
     m_browse_btn = new Button(TR("keys-pick-file"));
     m_file_label = new Label(QString(), LabelRole::Caption);
 
+    m_hot_caption = new Label(TR("keys-mode-hot-hint"), LabelRole::Caption);
+    m_hot_caption->setWordWrap(true);
+    m_hot_caption->setVisible(false);
+
     m_error_label = new Label(QString(), LabelRole::Caption);
     m_error_label->setVisible(false);
 
@@ -158,6 +170,7 @@ void AddKey::init() {
                      ->pushSpacer(resolve(Spacing::XS))
                      ->push(m_file_label);
 
+    m_alias_row = new FormRow(TR("keys-alias"), m_alias_input);
     m_origin_row = new FormRow(TR("keys-origin"), m_origin_input);
     m_xpub_row = new FormRow(TR("keys-xpub"), m_xpub_input);
 }
@@ -191,11 +204,12 @@ void AddKey::view() {
     col->pushSpacer(resolve(Spacing::M))
         ->push(new catalog::Separator)
         ->pushSpacer(resolve(Spacing::M))
-        ->push(new FormRow(TR("keys-alias"), m_alias_input))
+        ->push(m_alias_row)
         ->push(m_origin_row)
         ->push(m_xpub_row)
         ->push(m_qr_row)
         ->push(m_file_row)
+        ->push(m_hot_caption)
         ->push(m_error_label)
         ->pushSpacer(resolve(Spacing::M));
 
@@ -212,11 +226,14 @@ void AddKey::view() {
 void AddKey::applyMode() {
     bool isQr = (m_mode == Mode::AirgapQr);
     bool isFile = (m_mode == Mode::ImportFile);
+    bool isHot = (m_mode == Mode::HotKey);
 
     m_qr_row->setVisible(isQr);
     m_file_row->setVisible(isFile);
-    m_origin_row->setVisible(!isFile);
-    m_xpub_row->setVisible(!isFile);
+    m_alias_row->setVisible(!isHot);
+    m_origin_row->setVisible(!isFile && !isHot);
+    m_xpub_row->setVisible(!isFile && !isHot);
+    m_hot_caption->setVisible(isHot);
     m_origin_input->input()->setReadOnly(isQr);
     m_xpub_input->input()->setReadOnly(isQr);
 
@@ -225,6 +242,11 @@ void AddKey::applyMode() {
 
 void AddKey::updateRegisterState() {
     showError(QString());
+
+    if (m_mode == Mode::HotKey) {
+        m_register_btn->setEnabled(true);
+        return;
+    }
 
     if (m_mode == Mode::ImportFile) {
         m_register_btn->setEnabled(!m_file_path.isEmpty());
@@ -354,6 +376,13 @@ void AddKey::onRegisterClicked() {
         return;
     }
 
+    if (m_mode == Mode::HotKey) {
+        auto *hotKey = new HotKey(m_module);
+        connect(hotKey, &HotKey::keyAdded, this, &AddKey::onHotKeyAdded, qontrol::UNIQUE);
+        AppController::execModal(hotKey);
+        return;
+    }
+
     if (m_mode == Mode::ImportFile) {
         registerFromFile();
         return;
@@ -478,6 +507,11 @@ void AddKey::registerFromFile() {
         }
     }
 
+    emit keyAdded(fingerprint);
+    accept();
+}
+
+void AddKey::onHotKeyAdded(const QString &fingerprint) {
     emit keyAdded(fingerprint);
     accept();
 }
