@@ -6,11 +6,13 @@
 
 pub mod error;
 pub mod record;
+pub mod store;
 
 pub use error::Error;
 pub use record::{
     DescriptorEntry, DeviceRecord, KeyRecord, RouteKind, Routes, SecretEnvelope, XpubEntry,
 };
+pub use store::KeyStore;
 
 /// Bump when `KeyRecord`'s on-disk shape changes in a way older Silent versions cannot
 /// read. `KeyRecord::check_version` refuses to load anything greater than this.
