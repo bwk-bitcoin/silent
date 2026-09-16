@@ -996,6 +996,7 @@ struct LiveDevice;
 struct KeyXpub;
 struct KeyDescriptor;
 struct KeyOpResult;
+struct QrReserveResult;
 struct KeyInfoResult;
 struct SigningCandidate;
 struct SigningPlan;
@@ -1524,6 +1525,21 @@ struct KeyOpResult final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_KeyOpResult
+
+#ifndef CXXBRIDGE1_STRUCT_QrReserveResult
+#define CXXBRIDGE1_STRUCT_QrReserveResult
+// Result of `qr_reserve_sign`. `id` is meaningless when `is_ok` is false: unlike
+// the plain `u64` this replaces, failure never overlaps a real reserved id (`0`
+// is reserved for "no outstanding request" and is never issued by `reserve_id`).
+struct QrReserveResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Error message (empty if is_ok is true).
+  ::rust::String error;
+  ::std::uint64_t id CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_QrReserveResult
 
 #ifndef CXXBRIDGE1_STRUCT_KeyInfoResult
 #define CXXBRIDGE1_STRUCT_KeyInfoResult
@@ -2135,7 +2151,17 @@ struct KeysModule final : public ::rust::Opaque {
   ::rust::Box<::QrRequest> qr_request_get_xpubs(::rust::Vec<::rust::String> paths, ::std::uint32_t part_bytes) noexcept;
   ::rust::Box<::QrRequest> qr_request_register_descriptor(::rust::Str descriptor, ::std::uint32_t part_bytes) noexcept;
   ::rust::Box<::QrRequest> qr_request_verify_address(::rust::Str descriptor, ::rust::Str path, ::rust::Str address, ::std::uint32_t part_bytes) noexcept;
-  ::rust::Box<::QrRequest> qr_request_sign(::rust::Vec<::rust::String> descriptors, ::rust::Str psbt_v2_hex, ::std::uint32_t part_bytes) noexcept;
+
+  // Reserves the id a signing QR request will be built under. The build itself
+  // runs on a background thread through `qr_build_sign`, committed back with
+  // `qr_commit_request` once done.
+  ::QrReserveResult qr_reserve_sign() noexcept;
+
+  // Commits a request `qr_build_sign` built back into the session, on the GUI
+  // thread. Errors if a newer id has been reserved since (a superseded density
+  // rebuild) instead of silently dropping it.
+  ::KeyOpResult qr_commit_request(::QrRequest const &request) noexcept;
+
   ::rust::Box<::QrRequest> qr_request_get_sp_descriptor(::std::uint32_t part_bytes) noexcept;
 
   // Validates a pasted payload against the outstanding request id.
@@ -2443,6 +2469,11 @@ void hwi_set_config_network(::Network network) noexcept;
 // keeping its silent-payment input tweaks and ECDH shares. Only signature
 // fields are copied. Cheap; safe to call from the GUI thread.
 ::SignResult usb_merge_signed(::rust::Str original_v2_hex, ::rust::Str signed_v0_base64) noexcept;
+
+// Builds the signing QR request `qr_reserve_sign` reserved. Touches no
+// `KeysModule` state: the one QR builder meant to run off the GUI thread,
+// inside a `QThread::create` lambda.
+::rust::Box<::QrRequest> qr_build_sign(::std::uint64_t req_id, ::rust::Vec<::rust::String> descriptors, ::rust::Str psbt_v2_hex, ::std::uint32_t part_bytes) noexcept;
 
 // Opens camera `index` on a fresh channel, touching no `KeysModule` state.
 // Only blocks briefly to spawn the capture thread: the device itself opens

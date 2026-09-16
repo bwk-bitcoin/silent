@@ -1,6 +1,7 @@
 #include "KeysModule.h"
 
 #include "KeysTab.h"
+#include "QrRoute.h"
 #include "modules/hwi/HwiModule.h"
 #include "modules/keys/modals/PasswordPrompt.h"
 #include "modules/keys/modals/SdPicker.h"
@@ -20,6 +21,7 @@
 #include <QThread>
 
 #include <algorithm>
+#include <cstdint>
 
 #include <common.h>
 
@@ -77,6 +79,7 @@ void KeysBus::deliverError(std::optional<ReqId> req_id, const QString &message) 
 }
 
 KeysModule::KeysModule(QObject *parent) : IModule(parent) {
+    m_qr_route = new QrRoute(this);
     connect(this, &KeysModule::keyEventReceived, this, &KeysModule::onKeyEventReceived,
             qontrol::UNIQUE);
     connect(Host::get()->events(), &HostEvents::instanceRegistered, this,
@@ -743,8 +746,7 @@ void KeysModule::onPasswordPromptRejected() {
 }
 
 void KeysModule::onRouteSignRequested(ReqId req_id, const QString &fingerprint,
-                                      const QString &psbt_v2_hex,
-                                      [[maybe_unused]] const QString &descriptor) {
+                                      const QString &psbt_v2_hex, const QString &descriptor) {
     auto *signer = qobject_cast<RouteSigner *>(sender());
     if (signer == nullptr) {
         return;
@@ -776,9 +778,7 @@ void KeysModule::onRouteSignRequested(ReqId req_id, const QString &fingerprint,
         return;
     }
 
-    // The interactive QR flow is wired in a later task.
-    signer->deliverError(req_id, TR("keys-route-unavailable"));
-    m_pending_requests.remove(req_id);
+    m_qr_route->startSign(req_id, signer, psbt_v2_hex, descriptor);
 }
 
 void KeysModule::onRouteDisplayRequested(ReqId req_id, [[maybe_unused]] const QString &fingerprint,

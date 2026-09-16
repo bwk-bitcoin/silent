@@ -103,6 +103,8 @@ set(SILENT_APP_SOURCES
     src/modules/keys/KeysModule.cpp
     src/modules/keys/KeysTab.h
     src/modules/keys/KeysTab.cpp
+    src/modules/keys/QrRoute.h
+    src/modules/keys/QrRoute.cpp
     src/modules/keys/RouteDisplay.h
     src/modules/keys/RouteDisplay.cpp
     src/modules/keys/signers/RouteSigner.h
@@ -119,6 +121,8 @@ set(SILENT_APP_SOURCES
     src/modules/keys/modals/KeyModal.cpp
     src/modules/keys/modals/PasswordPrompt.h
     src/modules/keys/modals/PasswordPrompt.cpp
+    src/modules/keys/modals/QrDisplay.h
+    src/modules/keys/modals/QrDisplay.cpp
     src/modules/keys/modals/SdPicker.h
     src/modules/keys/modals/SdPicker.cpp
     src/modules/keys/modals/SignerPicker.h

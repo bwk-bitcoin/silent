@@ -131,6 +131,11 @@ pub enum Error {
     FrameOutOfRange { index: usize, count: usize },
     #[error("QR encoder produced no frames")]
     NoFrames,
+    #[error("QR request id {got:?} is stale: {expected:?} was reserved after it")]
+    StaleRequest {
+        expected: bwk_qr_protocol::RequestId,
+        got: bwk_qr_protocol::RequestId,
+    },
     #[error("get_xpubs requires at least one derivation path")]
     EmptyPathList,
     #[error("QR payload is a request, not a response")]

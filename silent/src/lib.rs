@@ -411,6 +411,17 @@ mod ffi {
         pub error: String,
     }
 
+    /// Result of `qr_reserve_sign`. `id` is meaningless when `is_ok` is false: unlike
+    /// the plain `u64` this replaces, failure never overlaps a real reserved id (`0`
+    /// is reserved for "no outstanding request" and is never issued by `reserve_id`).
+    #[derive(Debug, Clone)]
+    pub struct QrReserveResult {
+        pub is_ok: bool,
+        /// Error message (empty if is_ok is true).
+        pub error: String,
+        pub id: u64,
+    }
+
     /// Result of a keys module operation carrying a `KeyInfo`.
     #[derive(Debug, Clone)]
     pub struct KeyInfoResult {
@@ -1098,12 +1109,23 @@ mod ffi {
             address: &str,
             part_bytes: u32,
         ) -> Box<QrRequest>;
-        fn qr_request_sign(
-            self: &mut KeysModule,
+        /// Reserves the id a signing QR request will be built under. The build itself
+        /// runs on a background thread through `qr_build_sign`, committed back with
+        /// `qr_commit_request` once done.
+        fn qr_reserve_sign(self: &mut KeysModule) -> QrReserveResult;
+        /// Builds the signing QR request `qr_reserve_sign` reserved. Touches no
+        /// `KeysModule` state: the one QR builder meant to run off the GUI thread,
+        /// inside a `QThread::create` lambda.
+        fn qr_build_sign(
+            req_id: u64,
             descriptors: Vec<String>,
             psbt_v2_hex: &str,
             part_bytes: u32,
         ) -> Box<QrRequest>;
+        /// Commits a request `qr_build_sign` built back into the session, on the GUI
+        /// thread. Errors if a newer id has been reserved since (a superseded density
+        /// rebuild) instead of silently dropping it.
+        fn qr_commit_request(self: &mut KeysModule, request: &QrRequest) -> KeyOpResult;
         fn qr_request_get_sp_descriptor(self: &mut KeysModule, part_bytes: u32) -> Box<QrRequest>;
 
         fn is_ok(self: &QrRequest) -> bool;
@@ -1734,7 +1756,7 @@ pub use hwi_config::{
     NoiseConfigData, PersistedBitboxNoiseConfig,
 };
 pub use keys::bridge::{
-    camera_open, hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, new_keys_module,
+    camera_open, hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, new_keys_module, qr_build_sign,
     usb_merge_signed, usb_sign_payload, CameraHandle, HotMaterial, KeysModule, KeysPoll,
     KeysReceiver, QrRequest, QrResponse, SealedHotKey,
 };

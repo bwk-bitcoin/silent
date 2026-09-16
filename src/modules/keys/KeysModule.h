@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 
@@ -33,6 +34,7 @@ using RustKeys = ::KeysModule;
 
 class KeysModule;
 class KeysTab;
+class QrRoute;
 class RouteSigner;
 
 // IModule and IKeys are both QObjects, so one class cannot be both. KeysModule owns
@@ -286,6 +288,9 @@ private:
     QString m_usb_sign_psbt_v2_hex;
     // The SD card route request currently in flight, if any.
     SdRequest m_sd_request;
+    // Owns the whole QR route (sign): its display modal, its one flow in progress,
+    // and the density setting.
+    QrRoute *m_qr_route = nullptr;
 };
 
 } // namespace keys

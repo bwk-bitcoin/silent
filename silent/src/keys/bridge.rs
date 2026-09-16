@@ -646,23 +646,46 @@ impl KeysModule {
         Box::new(QrRequest { inner })
     }
 
-    pub fn qr_request_sign(
-        &mut self,
-        descriptors: Vec<String>,
-        psbt_v2_hex: &str,
-        part_bytes: u32,
-    ) -> Box<QrRequest> {
-        let psbt_bytes = match hex::decode(psbt_v2_hex) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                return Box::new(QrRequest {
-                    inner: Err(format!("invalid psbt hex: {e}")),
-                })
-            }
+    /// Reserves the id a signing QR request will be built under, without building it.
+    /// The build itself runs on a background thread through the free `qr_build_sign`,
+    /// which touches no `KeysModule` state; the result is committed back into the
+    /// session with `qr_commit_request` on the GUI thread. `is_ok` is false if the
+    /// module has no session or the session lock is poisoned; `id` is meaningless in
+    /// that case (never the reserved-id sentinel `0` a success could be confused
+    /// with).
+    pub fn qr_reserve_sign(&mut self) -> ffi::QrReserveResult {
+        let Some(session) = self.session.as_ref() else {
+            return failed_reserve(&self.error);
         };
-        let inner = self
-            .with_session(|session| session.sign(&descriptors, &psbt_bytes, part_bytes as usize));
-        Box::new(QrRequest { inner })
+        let Ok(mut session) = session.lock() else {
+            return failed_reserve("QR session lock poisoned");
+        };
+        ffi::QrReserveResult {
+            is_ok: true,
+            error: String::new(),
+            id: request_id_to_u64(session.reserve_id()),
+        }
+    }
+
+    /// Commits a request built by `qr_build_sign` back into the session as the
+    /// outstanding request. Errors (rather than silently dropping) if a newer id has
+    /// been reserved since, so the C++ side can tell a superseded density rebuild
+    /// apart from a genuine session failure.
+    pub fn qr_commit_request(&mut self, request: &QrRequest) -> ffi::KeyOpResult {
+        let built = match request.inner.as_ref() {
+            Ok(built) => built,
+            Err(e) => return failed_op(e),
+        };
+        let Some(session) = self.session.as_ref() else {
+            return failed_op(&self.error);
+        };
+        let Ok(mut session) = session.lock() else {
+            return failed_op("QR session lock poisoned");
+        };
+        match session.commit(built) {
+            Ok(()) => ok_op(),
+            Err(e) => failed_op(&e.to_string()),
+        }
     }
 
     pub fn qr_request_get_sp_descriptor(&mut self, part_bytes: u32) -> Box<QrRequest> {
@@ -1036,6 +1059,34 @@ impl QrRequest {
     }
 }
 
+/// Builds a signing QR request for the id `qr_reserve_sign` reserved. Touches no
+/// `KeysModule` state, so this is the one QR builder meant to run off the GUI thread,
+/// inside a `QThread::create` lambda; the C++ side commits the result back on the GUI
+/// thread with `qr_commit_request`.
+pub fn qr_build_sign(
+    req_id: u64,
+    descriptors: Vec<String>,
+    psbt_v2_hex: &str,
+    part_bytes: u32,
+) -> Box<QrRequest> {
+    let psbt_bytes = match hex::decode(psbt_v2_hex) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return Box::new(QrRequest {
+                inner: Err(format!("invalid psbt hex: {e}")),
+            })
+        }
+    };
+    let inner = qr::build_sign_request(
+        u64_to_request_id(req_id),
+        &descriptors,
+        &psbt_bytes,
+        part_bytes as usize,
+    )
+    .map_err(|e| e.to_string());
+    Box::new(QrRequest { inner })
+}
+
 /// Wraps a decoded and validated QR response, or the error that rejected it. An
 /// accessor for a kind the response is not returns an empty value.
 pub struct QrResponse {
@@ -1079,7 +1130,8 @@ impl QrResponse {
         }
     }
 
-    /// The signed PSBT as v2 hex when kind() is SignedPsbt, else empty.
+    /// The original v2 PSBT with the device's signatures merged in, as hex, when
+    /// kind() is SignedPsbt, else empty.
     pub fn psbt_hex(&self) -> String {
         match self.inner.as_ref() {
             Ok(qr::QrResponse::SignedPsbt(bytes)) => hex::encode(bytes),
@@ -1329,6 +1381,10 @@ fn request_id_to_u64(id: bwk_qr_protocol::RequestId) -> u64 {
     u64::from(u16::from_be_bytes(id.0))
 }
 
+fn u64_to_request_id(id: u64) -> bwk_qr_protocol::RequestId {
+    bwk_qr_protocol::RequestId((id as u16).to_be_bytes())
+}
+
 fn failed_image(error: &str) -> ffi::QrImageResult {
     ffi::QrImageResult {
         is_ok: false,
@@ -1454,6 +1510,14 @@ fn failed_op(error: &str) -> ffi::KeyOpResult {
     ffi::KeyOpResult {
         is_ok: false,
         error: error.to_string(),
+    }
+}
+
+fn failed_reserve(error: &str) -> ffi::QrReserveResult {
+    ffi::QrReserveResult {
+        is_ok: false,
+        error: error.to_string(),
+        id: 0,
     }
 }
 

@@ -11,7 +11,7 @@ use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
 use bwk_qr_protocol::{
     request, response, Message, MessageType, Request, RequestId, Response, SignResponseKind,
 };
-use bwk_sp::{bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor, bwk_tx::bwk_psbt::PsbtV2};
+use bwk_sp::bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor;
 
 use crate::hwi;
 use crate::keys::error::Error;
@@ -25,6 +25,10 @@ struct Outstanding {
     id: RequestId,
     message_type: MessageType,
     requested_paths: Vec<DerivationPath>,
+    /// The original v2 PSBT bytes a `Sign` request carried, so `validate_signed` merges
+    /// the device's answer into it instead of trusting the returned bytes as-is. `None`
+    /// for every other request kind.
+    original_psbt_v2: Option<Vec<u8>>,
 }
 
 /// Allocates request ids, builds the five signing-flow requests, and encodes each
@@ -69,6 +73,34 @@ impl QrSession {
     fn next_id(&mut self) -> RequestId {
         self.counter = self.counter.wrapping_add(1);
         RequestId(self.counter.to_be_bytes())
+    }
+
+    /// Reserves the id a request will be built under, without building it. Lets a
+    /// caller hand the id to a builder running off the session (`build_sign_request`)
+    /// and commit the result back later with `commit`.
+    pub fn reserve_id(&mut self) -> RequestId {
+        self.next_id()
+    }
+
+    /// Commits a request built out-of-band (by `build_sign_request`, on any thread)
+    /// as the session's outstanding request. Refused if a newer id has been reserved
+    /// since, so a superseded density rebuild never clobbers the request the caller
+    /// actually still wants answered.
+    pub fn commit(&mut self, request: &QrRequest) -> Result<(), Error> {
+        let latest = RequestId(self.counter.to_be_bytes());
+        if request.id != latest {
+            return Err(Error::StaleRequest {
+                expected: latest,
+                got: request.id,
+            });
+        }
+        self.outstanding = Some(Outstanding {
+            id: request.id,
+            message_type: request.message_type,
+            requested_paths: request.requested_paths.clone(),
+            original_psbt_v2: request.original_psbt_v2.clone(),
+        });
+        Ok(())
     }
 
     pub fn get_xpubs(
@@ -116,40 +148,19 @@ impl QrSession {
         self.issue(body, Vec::new(), part_bytes)
     }
 
+    /// Reserves an id, builds the request off the session, and commits it back in one
+    /// call: the synchronous convenience path for a caller that does not need the
+    /// build to run off the GUI thread (tests, and the other four QR builders' style).
     pub fn sign(
         &mut self,
         descriptors: &[String],
         psbt_v2_bytes: &[u8],
         part_bytes: usize,
     ) -> Result<QrRequest, Error> {
-        let request_descriptors = descriptors
-            .iter()
-            .map(|descriptor| request::Descriptor {
-                alias: hwi::wallet_name(descriptor),
-                descriptor: Some(request::DescriptorBody::Bip380(descriptor.clone())),
-                proof: None,
-            })
-            .collect();
-
-        let parsed = psbt::parse_v2(psbt_v2_bytes)?;
-        // A silent-payment PSBT needs its input tweaks and ECDH shares, which a v0
-        // conversion drops, so it goes over the wire unchanged. A plain hardware
-        // signer over QR still expects v0.
-        let payload = if psbt::has_sp_artifacts(&parsed)? {
-            psbt_v2_bytes.to_vec()
-        } else {
-            parsed
-                .into_bitcoin_psbt()
-                .map_err(|e| Error::PsbtSerialize(e.to_string()))?
-                .serialize()
-        };
-
-        let body = request::Body::Sign(request::Sign {
-            descriptors: request_descriptors,
-            psbt: payload,
-            want_kind: Some(SignResponseKind::Psbt),
-        });
-        self.issue(body, Vec::new(), part_bytes)
+        let id = self.reserve_id();
+        let request = build_sign_request(id, descriptors, psbt_v2_bytes, part_bytes)?;
+        self.commit(&request)?;
+        Ok(request)
     }
 
     pub fn get_sp_descriptor(&mut self, part_bytes: usize) -> Result<QrRequest, Error> {
@@ -187,10 +198,14 @@ impl QrSession {
         self.outstanding = Some(Outstanding {
             id,
             message_type,
-            requested_paths,
+            requested_paths: requested_paths.clone(),
+            original_psbt_v2: None,
         });
         Ok(QrRequest {
             id,
+            message_type,
+            requested_paths,
+            original_psbt_v2: None,
             message,
             frames,
         })
@@ -220,6 +235,7 @@ impl QrSession {
         }
         let expected_type = outstanding.message_type;
         let requested_paths = outstanding.requested_paths.clone();
+        let original_psbt_v2 = outstanding.original_psbt_v2.clone();
 
         let body = response.body;
         if let response::Body::Error(e) = body {
@@ -239,7 +255,7 @@ impl QrSession {
 
         let parsed = match body {
             response::Body::Xpubs(xpubs) => validate_xpubs(xpubs, &requested_paths)?,
-            response::Body::Signed(signed) => validate_signed(signed)?,
+            response::Body::Signed(signed) => validate_signed(signed, original_psbt_v2.as_deref())?,
             response::Body::SpDescriptor(descriptor) => {
                 validate_sp_descriptor_response(descriptor)?
             }
@@ -266,6 +282,9 @@ pub enum QrResponse {
         registered: bool,
     },
     AddressUri(String),
+    /// The original v2 PSBT the sign request carried, with the device's signatures
+    /// merged in. Always v2, even for a plain (non-SP) sign request that was sent to
+    /// the device as v0.
     SignedPsbt(Vec<u8>),
     SpDescriptor {
         descriptor: String,
@@ -298,13 +317,19 @@ fn validate_xpubs(
     })
 }
 
-fn validate_signed(signed: response::Signed) -> Result<QrResponse, Error> {
+/// Merges the device's answer into `original_psbt_v2` with the same helper USB
+/// signing uses, so both paths always hand back v2 bytes with the original's silent
+/// payment fields intact. `original_psbt_v2` is `None` for a signed response to a
+/// request that carried no PSBT, which is refused rather than trusted as-is.
+fn validate_signed(
+    signed: response::Signed,
+    original_psbt_v2: Option<&[u8]>,
+) -> Result<QrResponse, Error> {
     match signed {
         response::Signed::Psbt(bytes) => {
-            if PsbtV2::deserialize(&bytes).is_err() && bitcoin::Psbt::deserialize(&bytes).is_err() {
-                return Err(Error::InvalidSignedPsbt);
-            }
-            Ok(QrResponse::SignedPsbt(bytes))
+            let original = original_psbt_v2.ok_or(Error::InvalidSignedPsbt)?;
+            let merged = psbt::merge_signatures_bytes(original, &bytes)?;
+            Ok(QrResponse::SignedPsbt(merged))
         }
         response::Signed::Signatures(_) => Err(Error::SignaturesUnsupported),
     }
@@ -343,11 +368,86 @@ fn hex_id(id: RequestId) -> String {
 }
 
 /// One encoded QR request: the protocol message and the full set of animation frames
-/// a caller pulls from on its own timer.
+/// a caller pulls from on its own timer. Carries what `commit` needs to turn it into
+/// the session's `Outstanding` request, so a request built off the session (by
+/// `build_sign_request`) is self-sufficient once handed back to `QrSession::commit`.
 pub struct QrRequest {
     id: RequestId,
+    message_type: MessageType,
+    requested_paths: Vec<DerivationPath>,
+    /// The original v2 PSBT bytes, for a `Sign` request. `None` for every other
+    /// builder. Carried into `Outstanding` by `commit`, so `validate_signed` can
+    /// merge the device's answer into it.
+    original_psbt_v2: Option<Vec<u8>>,
     message: Vec<u8>,
     frames: Vec<bwk_qr::image::Image>,
+}
+
+/// Builds a signing-flow QR request without touching a `QrSession`: no encoder reuse,
+/// no outstanding-request tracking, safe to call from any thread. `id` comes from
+/// `QrSession::reserve_id` beforehand; the result is handed to `QrSession::commit`
+/// afterwards, on whichever thread owns the session. This is the one QR builder meant
+/// to run off the GUI thread, since a large PSBT makes encoding it non-trivial work.
+pub fn build_sign_request(
+    id: RequestId,
+    descriptors: &[String],
+    psbt_v2_bytes: &[u8],
+    part_bytes: usize,
+) -> Result<QrRequest, Error> {
+    let request_descriptors = descriptors
+        .iter()
+        .map(|descriptor| request::Descriptor {
+            alias: hwi::wallet_name(descriptor),
+            descriptor: Some(request::DescriptorBody::Bip380(descriptor.clone())),
+            proof: None,
+        })
+        .collect();
+
+    let parsed = psbt::parse_v2(psbt_v2_bytes)?;
+    // A silent-payment PSBT needs its input tweaks and ECDH shares, which a v0
+    // conversion drops, so it goes over the wire unchanged. A plain hardware signer
+    // over QR still expects v0.
+    let payload = if psbt::has_sp_artifacts(&parsed)? {
+        psbt_v2_bytes.to_vec()
+    } else {
+        parsed
+            .into_bitcoin_psbt()
+            .map_err(|e| Error::PsbtSerialize(e.to_string()))?
+            .serialize()
+    };
+
+    let body = request::Body::Sign(request::Sign {
+        descriptors: request_descriptors,
+        psbt: payload,
+        want_kind: Some(SignResponseKind::Psbt),
+    });
+    let message_type = body.message_type();
+    let request = Request { id, body };
+    let message = bwk_qr_protocol::encode_request(&request)?;
+
+    let target_part_bytes = if part_bytes == 0 {
+        bwk_qr::config::Config::default().bbqr_part_bytes
+    } else {
+        part_bytes
+    };
+    let config = bwk_qr::config::Config {
+        bbqr_part_bytes: target_part_bytes,
+        ..bwk_qr::config::Config::default()
+    };
+    let encoder = bwk_qr::encoder::Encoder::new(config)?;
+    let frames = encoder.encode_request(&request)?;
+    if frames.is_empty() {
+        return Err(Error::NoFrames);
+    }
+
+    Ok(QrRequest {
+        id,
+        message_type,
+        requested_paths: Vec::new(),
+        original_psbt_v2: Some(psbt_v2_bytes.to_vec()),
+        message,
+        frames,
+    })
 }
 
 impl QrRequest {
@@ -369,5 +469,67 @@ impl QrRequest {
             index,
             count: self.frames.len(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::{absolute::LockTime, hashes::Hash, transaction};
+    use bwk_sp::bwk_tx::bwk_psbt::{Input as PsbtInput, Output as PsbtOutput, PsbtV2};
+
+    use crate::keys::error::Error;
+    use crate::keys::qr::{build_sign_request, QrSession};
+
+    fn sign_psbt_bytes() -> Vec<u8> {
+        let psbt = PsbtV2 {
+            tx_version: transaction::Version::TWO,
+            fallback_lock_time: Some(LockTime::ZERO),
+            tx_modifiable: None,
+            xpub: Default::default(),
+            proprietary: Default::default(),
+            unknown: Default::default(),
+            inputs: vec![PsbtInput {
+                previous_output: bitcoin::OutPoint::new(Hash::all_zeros(), 0),
+                sequence: bitcoin::Sequence::MAX,
+                required_time_lock_time: None,
+                required_height_lock_time: None,
+                psbt: bitcoin::psbt::Input::default(),
+            }],
+            outputs: vec![PsbtOutput {
+                amount: bitcoin::Amount::from_sat(1_000),
+                script_pubkey: Some(bitcoin::ScriptBuf::new()),
+                psbt: bitcoin::psbt::Output::default(),
+            }],
+        };
+        psbt.serialize().expect("serialize psbt")
+    }
+
+    #[test]
+    fn commit_rejects_a_stale_request() {
+        let mut session = QrSession::new().expect("create session");
+        let stale_id = session.reserve_id();
+        let request =
+            build_sign_request(stale_id, &["wpkh(desc)".to_string()], &sign_psbt_bytes(), 0)
+                .expect("build sign request");
+        session.reserve_id();
+
+        let error = session
+            .commit(&request)
+            .expect_err("a stale commit must be rejected");
+        assert!(
+            matches!(error, Error::StaleRequest { .. }),
+            "expected StaleRequest, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn commit_sets_the_latest_outstanding_id() {
+        let mut session = QrSession::new().expect("create session");
+        let id = session.reserve_id();
+        let request = build_sign_request(id, &["wpkh(desc)".to_string()], &sign_psbt_bytes(), 0)
+            .expect("build sign request");
+
+        session.commit(&request).expect("commit succeeds");
+        assert_eq!(session.outstanding_id(), Some(id));
     }
 }
