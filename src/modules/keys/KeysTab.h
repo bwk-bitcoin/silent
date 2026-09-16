@@ -29,6 +29,8 @@ public slots:
     void onRegisterDeviceClicked();
     void onDeviceClicked();
     void onKeyClicked();
+    void openAddKey();
+    void onKeyAdded(const QString &fingerprint);
 
 protected:
     void init() override;

@@ -287,3 +287,49 @@ keys-remove-warning
 keys-remove-failed => "Could not remove the key: %1"
 
 keys-key-load-failed => "Could not load key details."
+
+keys-add-key-title => "Add a key"
+
+keys-mode-qr => "Airgap over QR"
+
+keys-mode-sd => "Airgap over SD card"
+
+keys-mode-xpub => "Import an origin and an xpub"
+
+keys-mode-file => "Import a key file"
+
+keys-alias-placeholder => "A name you will recognise"
+
+keys-origin => "Origin:"
+
+keys-xpub => "Xpub:"
+
+keys-qr-paste => "Paste the response from the device"
+
+keys-qr-decode => "Decode"
+
+keys-qr-failed => "Could not decode the response: %1"
+
+keys-qr-wrong-kind => "That response does not carry an xpub."
+
+keys-pick-file => "Pick a key file"
+
+keys-file-filter => "Key file (*.json)"
+
+keys-file-version => "This key file was written by a newer version of Silent."
+
+keys-file-network => "This key file is for another network."
+
+keys-register-key => "Register"
+
+keys-add-failed => "Could not register the key: %1"
+
+keys-already-registered => "A key with this fingerprint is already registered."
+
+keys-file-open-failed => "Could not open the key file."
+
+keys-file-invalid => "This is not a valid key file."
+
+keys-file-missing-fingerprint => "This key file is missing a fingerprint."
+
+keys-file-unknown-route => "This key file has an unknown route type."

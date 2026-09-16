@@ -3,6 +3,7 @@
 #include "KeysModule.h"
 
 #include "RouteDisplay.h"
+#include "modals/AddKey.h"
 #include "modals/DeviceModal.h"
 #include "modals/KeyModal.h"
 #include "modules/hwi/HwiModule.h"
@@ -90,6 +91,7 @@ void KeysTab::doConnect() {
     connect(m_module, &KeysModule::keysChanged, this, &KeysTab::onKeysChanged, qontrol::UNIQUE);
     connect(m_module, &KeysModule::liveDevicesChanged, this, &KeysTab::onDevicesChanged,
             qontrol::UNIQUE);
+    connect(m_add_key_btn, &QPushButton::clicked, this, &KeysTab::openAddKey, qontrol::UNIQUE);
 }
 
 void KeysTab::view() {
@@ -111,8 +113,6 @@ void KeysTab::view() {
                     ->push(m_keys_empty)
                     ->push(m_key_column)
                     ->pushSpacer(resolve(Spacing::S))
-                    // The add key modal that wires m_add_key_btn's clicked signal is added
-                    // by the task that creates it.
                     ->push((new qontrol::Row)->push(m_add_key_btn)->pushSpacer())
                     ->pushSpacer();
 
@@ -301,6 +301,17 @@ void KeysTab::onKeyClicked() {
         return;
     }
     AppController::execModal(new modal::KeyModal(m_module, fingerprint));
+}
+
+void KeysTab::openAddKey() {
+    auto *addKeyModal = new modal::AddKey(m_module);
+    connect(addKeyModal, &modal::AddKey::keyAdded, this, &KeysTab::onKeyAdded, qontrol::UNIQUE);
+    AppController::execModal(addKeyModal);
+}
+
+void KeysTab::onKeyAdded([[maybe_unused]] const QString &fingerprint) {
+    rebuildKeys();
+    rebuildDevices();
 }
 
 void KeysTab::showError(const QString &message) {

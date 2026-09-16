@@ -105,6 +105,8 @@ set(SILENT_APP_SOURCES
     src/modules/keys/KeysTab.cpp
     src/modules/keys/RouteDisplay.h
     src/modules/keys/RouteDisplay.cpp
+    src/modules/keys/modals/AddKey.h
+    src/modules/keys/modals/AddKey.cpp
     src/modules/keys/modals/DeviceModal.h
     src/modules/keys/modals/DeviceModal.cpp
     src/modules/keys/modals/KeyModal.h
