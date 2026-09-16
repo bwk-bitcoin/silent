@@ -205,6 +205,79 @@ bool KeysModule::hasKey(const QString &fingerprint) const {
     return false;
 }
 
+auto KeysModule::setAlias(const QString &fingerprint, const QString &alias) -> KeyOpResult {
+    if (!m_rust.has_value()) {
+        KeyOpResult result;
+        result.is_ok = false;
+        result.error = rust::String("keys: module not ready");
+        return result;
+    }
+    auto result = m_rust.value()->set_alias(rust::String(fingerprint.toStdString()),
+                                            rust::String(alias.toStdString()));
+    if (result.is_ok) {
+        emit keysChanged();
+    }
+    return result;
+}
+
+auto KeysModule::addRoute(const QString &fingerprint, KeyRouteKind kind) -> KeyOpResult {
+    if (!m_rust.has_value()) {
+        KeyOpResult result;
+        result.is_ok = false;
+        result.error = rust::String("keys: module not ready");
+        return result;
+    }
+    auto result = m_rust.value()->add_route(rust::String(fingerprint.toStdString()), kind);
+    if (result.is_ok) {
+        emit keysChanged();
+    }
+    return result;
+}
+
+auto KeysModule::removeRoute(const QString &fingerprint, KeyRouteKind kind) -> KeyOpResult {
+    if (!m_rust.has_value()) {
+        KeyOpResult result;
+        result.is_ok = false;
+        result.error = rust::String("keys: module not ready");
+        return result;
+    }
+    auto result = m_rust.value()->remove_route(rust::String(fingerprint.toStdString()), kind);
+    if (result.is_ok) {
+        emit keysChanged();
+    }
+    return result;
+}
+
+auto KeysModule::setRouteOrder(const QString &fingerprint, rust::Vec<KeyRouteKind> order)
+    -> KeyOpResult {
+    if (!m_rust.has_value()) {
+        KeyOpResult result;
+        result.is_ok = false;
+        result.error = rust::String("keys: module not ready");
+        return result;
+    }
+    auto result =
+        m_rust.value()->set_route_order(rust::String(fingerprint.toStdString()), std::move(order));
+    if (result.is_ok) {
+        emit keysChanged();
+    }
+    return result;
+}
+
+auto KeysModule::removeKey(const QString &fingerprint, bool force) -> KeyOpResult {
+    if (!m_rust.has_value()) {
+        KeyOpResult result;
+        result.is_ok = false;
+        result.error = rust::String("keys: module not ready");
+        return result;
+    }
+    auto result = m_rust.value()->remove_key(rust::String(fingerprint.toStdString()), force);
+    if (result.is_ok) {
+        emit keysChanged();
+    }
+    return result;
+}
+
 RustKeys *KeysModule::rust() const {
     return m_rust.has_value() ? m_rust.value().operator->() : nullptr;
 }

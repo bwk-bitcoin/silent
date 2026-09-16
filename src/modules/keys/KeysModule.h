@@ -75,6 +75,14 @@ public:
 
     [[nodiscard]] QList<KeyInfo> keys() const;
     [[nodiscard]] bool hasKey(const QString &fingerprint) const;
+    // Key record mutators. Each forwards to the Rust handle and, on success, emits
+    // keysChanged() so the tab rebuilds; modals call these instead of rust() directly.
+    [[nodiscard]] auto setAlias(const QString &fingerprint, const QString &alias) -> KeyOpResult;
+    [[nodiscard]] auto addRoute(const QString &fingerprint, KeyRouteKind kind) -> KeyOpResult;
+    [[nodiscard]] auto removeRoute(const QString &fingerprint, KeyRouteKind kind) -> KeyOpResult;
+    [[nodiscard]] auto setRouteOrder(const QString &fingerprint, rust::Vec<KeyRouteKind> order)
+        -> KeyOpResult;
+    [[nodiscard]] auto removeKey(const QString &fingerprint, bool force) -> KeyOpResult;
     // The Rust handle, for the tab and the modals of this module only. Null until the
     // handle is built, so every caller checks.
     [[nodiscard]] RustKeys *rust() const;

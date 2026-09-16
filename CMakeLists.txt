@@ -103,8 +103,12 @@ set(SILENT_APP_SOURCES
     src/modules/keys/KeysModule.cpp
     src/modules/keys/KeysTab.h
     src/modules/keys/KeysTab.cpp
+    src/modules/keys/RouteDisplay.h
+    src/modules/keys/RouteDisplay.cpp
     src/modules/keys/modals/DeviceModal.h
     src/modules/keys/modals/DeviceModal.cpp
+    src/modules/keys/modals/KeyModal.h
+    src/modules/keys/modals/KeyModal.cpp
     src/modules/sp/SpPlugin.h
     src/modules/sp/SpPlugin.cpp
     src/modules/sp/SpModule.h

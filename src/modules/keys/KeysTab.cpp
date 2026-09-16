@@ -2,7 +2,9 @@
 
 #include "KeysModule.h"
 
+#include "RouteDisplay.h"
 #include "modals/DeviceModal.h"
+#include "modals/KeyModal.h"
 #include "modules/hwi/HwiModule.h"
 
 #include "AppController.h"
@@ -51,35 +53,6 @@ auto stateText(plugin::SignerState state) -> QString {
     }
 }
 
-auto routeIcon(KeyRouteKind kind) -> QIcon {
-    switch (kind) {
-    case KeyRouteKind::Hot:
-        return icon::key(IconColor::Accent);
-    case KeyRouteKind::Usb:
-        return icon::usb(IconColor::Accent);
-    case KeyRouteKind::Qr:
-        return icon::qr(IconColor::Accent);
-    case KeyRouteKind::SdCard:
-        return icon::sdCard(IconColor::Accent);
-    default:
-        return icon::key(IconColor::Muted);
-    }
-}
-
-auto routeTooltip(KeyRouteKind kind) -> QString {
-    switch (kind) {
-    case KeyRouteKind::Hot:
-        return TR("keys-route-hot");
-    case KeyRouteKind::Usb:
-        return TR("keys-route-usb");
-    case KeyRouteKind::Qr:
-        return TR("keys-route-qr");
-    case KeyRouteKind::SdCard:
-        return TR("keys-route-sd");
-    default:
-        return QString();
-    }
-}
 } // namespace
 
 KeysTab::KeysTab(KeysModule *module) : m_module(module) {
@@ -249,20 +222,19 @@ void KeysTab::rebuildKeys() {
         QString alias = KeysModule::toQt(keyInfo.alias);
         QString title = alias.isEmpty() ? fingerprint : alias;
 
-        // The key modal that wires this row's clicked signal is added by the task that
-        // creates it.
         auto *row = new catalog::SelectRow;
         row->setIcon(icon::key(IconColor::Accent));
         row->setTitle(title);
         row->setMetadata(fingerprint);
         row->setProperty(K_FINGERPRINT, fingerprint);
+        connect(row, &catalog::SelectRow::clicked, this, &KeysTab::onKeyClicked, qontrol::UNIQUE);
 
         auto *routeStrip = new qontrol::Row;
         for (const auto &routeKind : keyInfo.routes) {
             auto *routeIconLabel = new QLabel;
             routeIconLabel->setPixmap(routeIcon(routeKind).pixmap(metric::SELECT_ROW_ICON_SIZE,
                                                                   metric::SELECT_ROW_ICON_SIZE));
-            routeIconLabel->setToolTip(routeTooltip(routeKind));
+            routeIconLabel->setToolTip(routeLabel(routeKind));
             routeStrip->push(routeIconLabel);
         }
 
@@ -317,6 +289,18 @@ void KeysTab::onDeviceClicked() {
             return;
         }
     }
+}
+
+void KeysTab::onKeyClicked() {
+    auto *row = qobject_cast<QObject *>(sender());
+    if (row == nullptr) {
+        return;
+    }
+    QString fingerprint = row->property(K_FINGERPRINT).toString();
+    if (fingerprint.isEmpty() || m_module->rust() == nullptr) {
+        return;
+    }
+    AppController::execModal(new modal::KeyModal(m_module, fingerprint));
 }
 
 void KeysTab::showError(const QString &message) {

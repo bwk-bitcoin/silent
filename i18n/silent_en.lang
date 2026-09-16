@@ -240,3 +240,50 @@ keys-route-qr => "QR code"
 keys-route-sd => "SD card"
 
 keys-device-title => "Device"
+
+keys-key-title => "Key"
+
+keys-alias => "Alias:"
+
+keys-alias-failed => "Could not rename the key: %1"
+
+keys-routes => "Routes"
+
+keys-add-route => "Add route"
+
+keys-route-failed => "Could not change the routes: %1"
+
+keys-route-primary => "Primary"
+
+keys-route-up => "Move up"
+
+keys-route-down => "Move down"
+
+keys-route-remove => "Remove this route"
+
+keys-devices-recorded => "Devices seen"
+
+keys-no-devices-recorded => "This key has not been seen on a device yet."
+
+keys-xpubs => "Cached xpubs"
+
+keys-no-xpubs => "No xpub cached for this key."
+
+keys-descriptors => "Registered descriptors"
+
+keys-no-descriptors => "No descriptor registered with this key."
+
+keys-descriptor-registered => "Registered"
+
+keys-descriptor-unregistered => "Not registered"
+
+keys-remove-key => "Remove key"
+
+keys-remove-blocked => "%1 descriptor(s) are still registered with this key."
+
+keys-remove-warning
+=> "Removing this key drops its routes, its cached xpubs and its registered descriptors. Accounts using it will not be able to sign.";;
+
+keys-remove-failed => "Could not remove the key: %1"
+
+keys-key-load-failed => "Could not load key details."
