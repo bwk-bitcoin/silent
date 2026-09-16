@@ -413,3 +413,16 @@ keys-picker-no-route => "No usable signing route"
 keys-picker-device-offline => "Device is not connected"
 
 keys-picker-unknown-reason => "Unusable"
+
+keys-sd-save-title => "Save the unsigned transaction"
+
+keys-sd-load-title => "Load the signed transaction"
+
+keys-sd-filter => "Partially signed transaction (*.psbt)"
+
+keys-sd-load-step
+=> "Sign the file on the device, then load the signed transaction back.";;
+
+keys-sd-save-failed => "Could not write the transaction to that path."
+
+keys-sd-load-failed => "Could not read the signed transaction from that path."

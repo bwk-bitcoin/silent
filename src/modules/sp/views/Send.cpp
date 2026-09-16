@@ -9,7 +9,6 @@
 #include "catalog/display/Badge.h"
 #include "catalog/display/Display.h"
 #include "catalog/display/Label.h"
-#include "catalog/feedback/ModalStatus.h"
 #include "catalog/form/LabelledInput.h"
 #include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/Checkbox.h"
@@ -17,12 +16,12 @@
 #include "catalog/inputs/Toggle.h"
 #include "catalog/panels/send/TxFlow.h"
 #include "i18n/Tr.h"
-#include "interfaces/signer.h"
+#include "interfaces/host.h"
+#include "interfaces/keys.h"
 #include "theme/Icon.h"
 #include "theme/Palette.h"
 #include "theme/Theme.h"
 #include "views/modals/ConfirmSend.h"
-#include "views/modals/SelectSigner.h"
 #include "views/utils.h"
 #include <QApplication>
 #include <QBoxLayout>
@@ -1546,75 +1545,45 @@ auto Send::showReuseWarning(PsbtValidation result) -> bool {
 }
 
 void Send::showSignerStep() {
-    auto *picker = new modal::SelectSigner(TR("send-select-signer"));
-    int dialogResult = picker->exec();
-    auto signerName = picker->selectedName();
-    auto signerKind = picker->selectedKind();
-    auto *signer = picker->selectedSigner();
-    delete picker;
-    if (dialogResult != QDialog::Accepted) {
-        m_psbt_result = std::nullopt;
-        m_tx_template = std::nullopt;
+    if (!m_psbt_result.has_value() || Host::get()->keys() == nullptr) {
+        AppController::execModal(
+            new qontrol::Modal(TR("common-error"), TR("send-transaction-state-lost")));
         return;
     }
-    auto *status = new catalog::ModalStatus;
-    status->setState(catalog::ModalStatus::State::Signing);
-    status->setSubtitle(signerKind == "sd" ? TR("confirm-send-sd-step")
-                                           : TR("confirm-send-device-step").arg(signerName));
-    auto *continueBtn = new Button(TR("common-proceed"), ButtonRole::Primary);
-    auto *cancelBtn = new Button(TR("common-cancel"));
-    auto *stepModal = new qontrol::Modal;
-    stepModal->setWindowTitle(signerName);
-    connect(continueBtn, &QPushButton::clicked, stepModal, &QDialog::accept, qontrol::UNIQUE);
-    connect(cancelBtn, &QPushButton::clicked, stepModal, &QDialog::reject, qontrol::UNIQUE);
-    auto *btnRow = (new qontrol::Row)
-                       ->pushSpacer()
-                       ->push(cancelBtn)
-                       ->pushSpacer(resolve(Spacing::XS))
-                       ->push(continueBtn)
-                       ->pushSpacer();
-    stepModal->setMainWidget(margin((new qontrol::Column)
-                                        ->push(status)
-                                        ->pushSpacer(resolve(Spacing::M))
-                                        ->push(btnRow)
-                                        ->pushSpacer()));
-    int stepResult = stepModal->exec();
-    delete stepModal;
-    if (stepResult != QDialog::Accepted) {
-        m_psbt_result = std::nullopt;
-        m_tx_template = std::nullopt;
-        return;
-    }
-    m_selected_signer = signer;
+
+    connect(Host::get()->keys(), &IKeys::signed_, this, &Send::onSignerSigned, qontrol::UNIQUE);
+    connect(Host::get()->keys(), &IKeys::error, this, &Send::onSignerError, qontrol::UNIQUE);
     onSendConfirmed();
 }
 
 void Send::onSendConfirmed() {
     qDebug() << "Send::onSendConfirmed()";
     auto &account = m_controller->getAccount();
-    if (!account.has_value() || !m_psbt_result.has_value() || m_selected_signer == nullptr) {
+    if (!account.has_value() || !m_psbt_result.has_value() || Host::get()->keys() == nullptr) {
         AppController::execModal(
             new qontrol::Modal(TR("common-error"), TR("send-transaction-state-lost")));
         return;
     }
 
+    auto psbtV2Hex =
+        QString::fromStdString(std::string(m_psbt_result.value()->bytes_v2_hex().c_str()));
     auto descriptor = QString::fromStdString(std::string(m_controller->getDescriptor().c_str()));
-    auto psbtHex = QString::fromStdString(std::string(m_psbt_result.value()->bytes_hex().c_str()));
-    auto psbtBase64 = QString::fromLatin1(QByteArray::fromHex(psbtHex.toLatin1()).toBase64());
-
-    connect(m_selected_signer, &ISigner::signed_, this, &Send::onSignerSigned, qontrol::UNIQUE);
-    connect(m_selected_signer, &ISigner::error, this, &Send::onSignerError, qontrol::UNIQUE);
-    m_sign_req_id = m_selected_signer->signWithDescriptor(psbtBase64, descriptor);
+    m_sign_req_id = Host::get()->keys()->newRequest();
+    Host::get()->keys()->sign(m_sign_req_id, psbtV2Hex, QStringList{descriptor});
 }
 
-void Send::onSignerSigned(ReqId req_id, QString psbt_base64) {
+void Send::onSignerSigned(ReqId req_id, QString psbt_v2_hex) {
     if (req_id != m_sign_req_id) {
         return;
     }
 
-    auto signedPsbt = psbt_base64.toStdString();
-    auto *thread = QThread::create([this, signedPsbt]() {
-        auto result = m_controller->getAccount().value()->finalize_psbt(rust::String(signedPsbt));
+    // finalize_psbt() still takes base64: convert the v2 hex the keys module
+    // handed back, exactly as prepare_transaction's own bytes_hex() used to.
+    auto signedPsbtBase64 =
+        QString::fromLatin1(QByteArray::fromHex(psbt_v2_hex.toLatin1()).toBase64()).toStdString();
+    auto *thread = QThread::create([this, signedPsbtBase64]() {
+        auto result =
+            m_controller->getAccount().value()->finalize_psbt(rust::String(signedPsbtBase64));
         emit signReady(result);
     });
     connect(thread, &QThread::finished, thread, &QThread::deleteLater);
@@ -1626,6 +1595,11 @@ void Send::onSignerError(std::optional<ReqId> req_id, QString message) {
         return;
     }
 
+    if (Host::get()->keys() != nullptr) {
+        disconnect(Host::get()->keys(), &IKeys::signed_, this, &Send::onSignerSigned);
+        disconnect(Host::get()->keys(), &IKeys::error, this, &Send::onSignerError);
+    }
+
     TxResult result;
     result.is_ok = false;
     result.error = rust::String(message.toStdString());
@@ -1635,11 +1609,15 @@ void Send::onSignerError(std::optional<ReqId> req_id, QString message) {
 
 void Send::onSignResult(TxResult result) {
     qDebug() << "Send::onSignResult() ok:" << result.is_ok;
+    if (Host::get()->keys() != nullptr) {
+        disconnect(Host::get()->keys(), &IKeys::signed_, this, &Send::onSignerSigned);
+        disconnect(Host::get()->keys(), &IKeys::error, this, &Send::onSignerError);
+    }
+
     if (!result.is_ok) {
         auto error = QString::fromStdString(std::string(result.error.c_str()));
         m_psbt_result = std::nullopt;
         m_tx_template = std::nullopt;
-        m_selected_signer = nullptr;
         m_sign_req_id = 0;
         AppController::execModal(
             new qontrol::Modal(TR("common-error"), TR("send-signing-failed") + "\n\n" +
@@ -1649,7 +1627,6 @@ void Send::onSignResult(TxResult result) {
 
     m_signed_tx_hex = QString::fromStdString(std::string(result.value.c_str()));
     m_psbt_result = std::nullopt;
-    m_selected_signer = nullptr;
     m_sign_req_id = 0;
     m_warning_label->setText(TR("confirm-send-signed"));
     m_warning_label->setVisible(true);

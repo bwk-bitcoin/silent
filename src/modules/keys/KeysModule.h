@@ -16,8 +16,14 @@
 #include <silent.h>
 
 class HwiModule;
+class ISigner;
 class QThread;
 class QWidget;
+
+namespace keys::modal {
+class SdPicker;
+class UsbConfirm;
+} // namespace keys::modal
 
 namespace keys {
 
@@ -112,6 +118,10 @@ public:
     // The Keys tab widget. Built on first call and reused afterwards; a QPointer
     // leaves this null again if the host that owns the widget deletes it.
     [[nodiscard]] auto tab() -> QWidget *;
+    // Signs `psbt_v2_hex` with the key the user picks for `descriptors`, over that
+    // key's best usable route, and answers `req_id` through the bus's signed_ or
+    // error signal.
+    void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors);
 
     // Worker jobs owned by this module, so a thread never outlives the modal or
     // signer that asked for it. Each starts a QThread::create lambda that captures
@@ -133,6 +143,13 @@ signals:
     void keysChanged();
     // The live device set changed and the Rust handle already has it.
     void liveDevicesChanged();
+    // Emitted from the background thread that ran sd_save_psbt/sd_load_psbt.
+    void sdSaveReady(bool is_ok, QString error);
+    void sdLoadReady(bool is_ok, QString psbt_hex, QString error);
+    // Mirrors sdSaveReady for the picker: tells SdPicker::onLoadDone whether to
+    // close (accept) or show the error and stay open, once the real load result
+    // (not the button click) is known.
+    void sdLoadDone(bool is_ok, QString error);
 
     // Worker job results. Each pair below is: emitted from the background thread,
     // re-owned by the matching private slot, which re-emits the second (public)
@@ -156,6 +173,10 @@ public slots:
                                  const QString &descriptor, const QString &path,
                                  const QString &address);
     void onSignerPicked(QString fingerprint);
+    void onSdSaveRequested(QString path);
+    void onSdLoadRequested(QString path);
+    void onUsbConfirmCancelled();
+    void onSdPickerCancelled();
 
 private slots:
     void onKeyEventReceived(const KeyEvent &event);
@@ -164,6 +185,11 @@ private slots:
     void onDevicesChanged();
     void onPasswordPromptEntered(QString password);
     void onPasswordPromptRejected();
+    void onDeviceSignSigned(ReqId req_id, QString psbt_base64);
+    void onDeviceSignError(std::optional<ReqId> req_id, QString message);
+    void onRouteSignSigned(ReqId req_id, QString psbt_v2_hex);
+    void onRouteSignError(std::optional<ReqId> req_id, QString message);
+    void onSdLoadReady(bool is_ok, QString psbt_hex, QString error);
     void onMnemonicGenerationFinished(ReqId req_id, MnemonicResult result);
     void onHotKeySealed(ReqId req_id, SealedHotKey *sealed, QString alias);
     void onMnemonicRevealFinished(ReqId req_id, MnemonicResult result);
@@ -191,6 +217,12 @@ protected:
     // Builds the signer picker plan for `psbt_v2_hex`. Shows an error modal and
     // still returns the (is_ok false) plan on failure, never a fabricated one.
     [[nodiscard]] auto signingPlanFor(const QString &psbt_v2_hex) const -> SigningPlan;
+    // Drives the connected-device (Usb) signing route: connects to the device's own
+    // signals, starts the request, and shows UsbConfirm around it. Maps the
+    // signer's own ReqId to `req_id` before opening the modal, so an answer that
+    // lands during it can still be translated back.
+    void signWithDevice(ISigner *signer, const QString &psbt_v2_hex, const QString &descriptor,
+                        ReqId req_id);
     // Translates a RouteSigner/device signer's own ReqId back to the caller's
     // request id via m_signer_to_request, removing the entry. Falls back to
     // `signer_req_id` unchanged when no mapping was recorded: some requests
@@ -204,6 +236,14 @@ private:
     struct PasswordRequest {
         RouteSigner *requester = nullptr;
         ReqId req_id = 0;
+    };
+
+    // An SD card route's save/load flow in flight. One at a time: the picker is a
+    // single blocking modal, so a second sign() call cannot overlap this one.
+    struct SdRequest {
+        ReqId req_id = 0;
+        QPointer<RouteSigner> signer;
+        QString psbt_hex;
     };
 
     // Box's constness gates the pointee's constness through operator->(), so this is
@@ -236,6 +276,16 @@ private:
     // The fingerprint picked in the signer picker last shown, set by onSignerPicked()
     // while showSignerPicker()'s execModal() call is still on the stack.
     QString m_picked_fingerprint;
+    // The connected-device (Usb) sign request currently in flight, if any.
+    ReqId m_usb_sign_req_id = 0;
+    QPointer<ISigner> m_usb_signer;
+    QPointer<keys::modal::UsbConfirm> m_usb_confirm;
+    // The original v2 psbt hex of the outstanding Usb sign request, kept to merge the
+    // device's v0 answer back into it. Cleared on every answer and cancel path,
+    // alongside m_usb_sign_req_id.
+    QString m_usb_sign_psbt_v2_hex;
+    // The SD card route request currently in flight, if any.
+    SdRequest m_sd_request;
 };
 
 } // namespace keys

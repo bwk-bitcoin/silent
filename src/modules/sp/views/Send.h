@@ -63,7 +63,6 @@ class QCheckBox;
 #include <silent.h>
 
 class AccountController;
-class ISigner;
 
 namespace modal {
 class ConfirmSend;
@@ -156,7 +155,7 @@ public slots:
     void onSendConfirmed();
     void onBroadcastConfirmed();
     void onSignResult(TxResult result);
-    void onSignerSigned(ReqId req_id, QString psbt_base64);
+    void onSignerSigned(ReqId req_id, QString psbt_v2_hex);
     void onSignerError(std::optional<ReqId> req_id, QString message);
     void onBroadcastResult(TxResult result);
     void onCoinsUpdated(CoinState state);
@@ -177,7 +176,7 @@ protected:
     // Warn about address reuse and ask the user to confirm. Returns true to
     // proceed, false if the user cancelled (transaction state is reset).
     auto showReuseWarning(PsbtValidation result) -> bool;
-    // Run the signer picker + signing-step modal sequence, then sign on confirm.
+    // Guards the keys module is reachable, then hands the PSBT over to it.
     void showSignerStep();
     auto output() -> QWidget *;
     void updateCoinCheckboxes();
@@ -243,7 +242,6 @@ private:
     std::optional<rust::Box<PsbtResult>> m_psbt_result = std::nullopt;
     std::optional<TransactionTemplate> m_tx_template = std::nullopt;
     QString m_signed_tx_hex;
-    ISigner *m_selected_signer = nullptr;
     ReqId m_sign_req_id = 0;
     /// SP change of m_signed_tx_hex, kept for broadcast once the psbt is dropped.
     QList<RustCoin> m_selected_coins{};

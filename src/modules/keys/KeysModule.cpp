@@ -3,7 +3,9 @@
 #include "KeysTab.h"
 #include "modules/hwi/HwiModule.h"
 #include "modules/keys/modals/PasswordPrompt.h"
+#include "modules/keys/modals/SdPicker.h"
 #include "modules/keys/modals/SignerPicker.h"
+#include "modules/keys/modals/UsbConfirm.h"
 #include "modules/keys/signers/OfflineSigner.h"
 #include "modules/keys/signers/RouteSigner.h"
 
@@ -12,6 +14,7 @@
 #include "interfaces/host.h"
 #include "interfaces/signer.h"
 
+#include <QByteArray>
 #include <QDebug>
 #include <QDialog>
 #include <QThread>
@@ -42,9 +45,8 @@ auto KeysBus::newRequest() -> ReqId {
     return m_module->nextReqId();
 }
 
-void KeysBus::sign(ReqId req_id, [[maybe_unused]] const QString &psbt_v2_hex,
-                   [[maybe_unused]] const QStringList &descriptors) {
-    deliverError(req_id, QStringLiteral("keys: signing is not wired yet"));
+void KeysBus::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors) {
+    m_module->sign(req_id, psbt_v2_hex, descriptors);
 }
 
 void KeysBus::verifyAddress(ReqId req_id, [[maybe_unused]] const QString &descriptor,
@@ -81,6 +83,7 @@ KeysModule::KeysModule(QObject *parent) : IModule(parent) {
             &KeysModule::onInstanceRegistered, qontrol::UNIQUE);
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
             &KeysModule::onInstanceRemoved, qontrol::UNIQUE);
+    connect(this, &KeysModule::sdLoadReady, this, &KeysModule::onSdLoadReady, qontrol::UNIQUE);
     connect(this, &KeysModule::mnemonicGenerationFinished, this,
             &KeysModule::onMnemonicGenerationFinished, qontrol::UNIQUE);
     connect(this, &KeysModule::hotKeySealed, this, &KeysModule::onHotKeySealed, qontrol::UNIQUE);
@@ -293,6 +296,10 @@ auto KeysModule::routeSignerFor(const QString &fingerprint, const KeyInfo &info,
             deferred);
     connect(created, &RouteSigner::routeDisplayRequested, this,
             &KeysModule::onRouteDisplayRequested, deferred);
+    // Forwarded to the bus for every route this class drives (hot, qr, sd card),
+    // whichever request happens to be in flight; the bus's callers filter by ReqId.
+    connect(created, &ISigner::signed_, this, &KeysModule::onRouteSignSigned, qontrol::UNIQUE);
+    connect(created, &ISigner::error, this, &KeysModule::onRouteSignError, qontrol::UNIQUE);
     if (cached != nullptr) {
         cached->deleteLater();
     }
@@ -346,6 +353,47 @@ auto KeysModule::signingPlanFor(const QString &psbt_v2_hex) const -> SigningPlan
         AppController::execModal(new qontrol::Modal(TR("common-error"), toQt(plan.error)));
     }
     return plan;
+}
+
+void KeysModule::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors) {
+    auto plan = signingPlanFor(psbt_v2_hex);
+    if (!plan.is_ok) {
+        m_bus->deliverError(req_id, toQt(plan.error));
+        return;
+    }
+
+    QString fingerprint = showSignerPicker(TR("send-select-signer"), plan);
+    if (fingerprint.isEmpty()) {
+        m_bus->deliverError(req_id, TR("keys-signing-cancelled"));
+        return;
+    }
+
+    QString descriptor = descriptors.isEmpty() ? QString() : descriptors.first();
+    for (const auto &info : keys()) {
+        if (QString::compare(toQt(info.fingerprint), fingerprint, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        auto entry = buildKeyEntry(info);
+        if (!entry.can_sign || entry.signer == nullptr) {
+            break;
+        }
+        auto *route = qobject_cast<RouteSigner *>(entry.signer);
+        if (route != nullptr) {
+            // Hot/Qr/SdCard all expect v2 hex, not base64: signWithDescriptor()'s
+            // parameter name mirrors the generic ISigner interface, but RouteSigner
+            // forwards it straight to Rust or into the SD card/QR modal flow. It
+            // returns its own ReqId, mapped back to req_id for the answer.
+            ReqId signerReqId = route->signWithDescriptor(psbt_v2_hex, descriptor);
+            m_signer_to_request.insert(signerReqId, req_id);
+            return;
+        }
+        // Not a RouteSigner and can_sign is true: the module's own OfflineSigner
+        // never reports can_sign, so this is a live device on the Usb route.
+        signWithDevice(entry.signer, psbt_v2_hex, descriptor, req_id);
+        return;
+    }
+
+    m_bus->deliverError(req_id, TR("keys-route-unavailable"));
 }
 
 void KeysModule::generateMnemonic(ReqId req_id, std::uint32_t word_count) {
@@ -454,6 +502,30 @@ void KeysModule::signHot(ReqId req_id, QString fingerprint, QString password, QS
 
 void KeysModule::onHotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error) {
     emit hotSigned(req_id, is_ok, psbt_v2_hex, error);
+}
+
+void KeysModule::signWithDevice(ISigner *signer, const QString &psbt_v2_hex,
+                                const QString &descriptor, ReqId req_id) {
+    auto payload = ::usb_sign_payload(rust::String(psbt_v2_hex.toStdString()));
+    if (!payload.is_ok) {
+        m_bus->deliverError(req_id, toQt(payload.error));
+        return;
+    }
+
+    connect(signer, &ISigner::signed_, this, &KeysModule::onDeviceSignSigned, qontrol::UNIQUE);
+    connect(signer, &ISigner::error, this, &KeysModule::onDeviceSignError, qontrol::UNIQUE);
+
+    ReqId signerReqId = signer->signWithDescriptor(toQt(payload.psbt_base64), descriptor);
+    m_usb_sign_req_id = signerReqId;
+    m_usb_signer = signer;
+    m_usb_sign_psbt_v2_hex = psbt_v2_hex;
+    m_signer_to_request.insert(signerReqId, req_id);
+
+    auto *confirm = new modal::UsbConfirm(signer->id());
+    m_usb_confirm = confirm;
+    connect(confirm, &modal::UsbConfirm::cancelled, this, &KeysModule::onUsbConfirmCancelled,
+            qontrol::UNIQUE);
+    AppController::execModal(confirm);
 }
 
 void KeysModule::trackPendingRequest(ReqId req_id, ISigner *signer) {
@@ -670,15 +742,41 @@ void KeysModule::onPasswordPromptRejected() {
     }
 }
 
-void KeysModule::onRouteSignRequested(ReqId req_id, [[maybe_unused]] const QString &fingerprint,
-                                      [[maybe_unused]] const QString &psbt_v2_hex,
+void KeysModule::onRouteSignRequested(ReqId req_id, const QString &fingerprint,
+                                      const QString &psbt_v2_hex,
                                       [[maybe_unused]] const QString &descriptor) {
     auto *signer = qobject_cast<RouteSigner *>(sender());
     if (signer == nullptr) {
         return;
     }
     m_pending_requests.insert(req_id, signer);
-    // The interactive QR and SD card flows are wired in a later task.
+
+    if (signer->route() == KeyRouteKind::SdCard) {
+        QString alias = fingerprint;
+        for (const auto &info : keys()) {
+            if (QString::compare(toQt(info.fingerprint), fingerprint, Qt::CaseInsensitive) == 0 &&
+                !toQt(info.alias).isEmpty()) {
+                alias = toQt(info.alias);
+                break;
+            }
+        }
+        m_sd_request = SdRequest{.req_id = req_id, .signer = signer, .psbt_hex = psbt_v2_hex};
+        auto *picker = new modal::SdPicker(alias);
+        connect(picker, &modal::SdPicker::saveRequested, this, &KeysModule::onSdSaveRequested,
+                qontrol::UNIQUE);
+        connect(picker, &modal::SdPicker::loadRequested, this, &KeysModule::onSdLoadRequested,
+                qontrol::UNIQUE);
+        connect(picker, &modal::SdPicker::cancelled, this, &KeysModule::onSdPickerCancelled,
+                qontrol::UNIQUE);
+        connect(this, &KeysModule::sdSaveReady, picker, &modal::SdPicker::onSaveDone,
+                qontrol::UNIQUE);
+        connect(this, &KeysModule::sdLoadDone, picker, &modal::SdPicker::onLoadDone,
+                qontrol::UNIQUE);
+        AppController::execModal(picker);
+        return;
+    }
+
+    // The interactive QR flow is wired in a later task.
     signer->deliverError(req_id, TR("keys-route-unavailable"));
     m_pending_requests.remove(req_id);
 }
@@ -699,6 +797,128 @@ void KeysModule::onRouteDisplayRequested(ReqId req_id, [[maybe_unused]] const QS
 
 void KeysModule::onSignerPicked(QString fingerprint) {
     m_picked_fingerprint = std::move(fingerprint);
+}
+
+void KeysModule::onSdSaveRequested(QString path) {
+    auto psbt = m_sd_request.psbt_hex.toStdString();
+    auto *thread = QThread::create([this, path = path.toStdString(), psbt]() {
+        auto result = ::sd_save_psbt(rust::String(path), rust::String(psbt));
+        emit sdSaveReady(result.is_ok, toQt(result.error));
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
+void KeysModule::onSdLoadRequested(QString path) {
+    auto *thread = QThread::create([this, path = path.toStdString()]() {
+        auto result = ::sd_load_psbt(rust::String(path));
+        emit sdLoadReady(result.is_ok, toQt(result.psbt_hex), toQt(result.error));
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
+void KeysModule::onSdLoadReady(bool is_ok, QString psbt_hex, QString error) {
+    QPointer<RouteSigner> signer = m_sd_request.signer;
+    ReqId reqId = m_sd_request.req_id;
+    m_sd_request = SdRequest{};
+    if (signer.isNull()) {
+        return;
+    }
+    m_pending_requests.remove(reqId);
+    if (!is_ok) {
+        signer->deliverError(reqId, error);
+        emit sdLoadDone(false, error);
+        return;
+    }
+    signer->deliverSigned(reqId, psbt_hex);
+    emit sdLoadDone(true, QString());
+}
+
+void KeysModule::onSdPickerCancelled() {
+    QPointer<RouteSigner> signer = m_sd_request.signer;
+    if (signer.isNull()) {
+        return;
+    }
+    ReqId reqId = m_sd_request.req_id;
+    m_sd_request = SdRequest{};
+    m_pending_requests.remove(reqId);
+    signer->deliverError(reqId, TR("keys-signing-cancelled"));
+}
+
+void KeysModule::onUsbConfirmCancelled() {
+    if (m_usb_sign_req_id == 0) {
+        return;
+    }
+    if (!m_usb_signer.isNull()) {
+        disconnect(m_usb_signer, &ISigner::signed_, this, &KeysModule::onDeviceSignSigned);
+        disconnect(m_usb_signer, &ISigner::error, this, &KeysModule::onDeviceSignError);
+    }
+    ReqId signerReqId = m_usb_sign_req_id;
+    m_usb_signer = nullptr;
+    m_usb_sign_req_id = 0;
+    m_usb_sign_psbt_v2_hex.clear();
+    m_bus->deliverError(requestIdFor(signerReqId), TR("keys-signing-cancelled"));
+}
+
+void KeysModule::onDeviceSignSigned(ReqId req_id, QString psbt_base64) {
+    if (req_id != m_usb_sign_req_id) {
+        return;
+    }
+    if (!m_usb_signer.isNull()) {
+        disconnect(m_usb_signer, &ISigner::signed_, this, &KeysModule::onDeviceSignSigned);
+        disconnect(m_usb_signer, &ISigner::error, this, &KeysModule::onDeviceSignError);
+    }
+    m_usb_signer = nullptr;
+    m_usb_sign_req_id = 0;
+    QString originalPsbtV2Hex = m_usb_sign_psbt_v2_hex;
+    m_usb_sign_psbt_v2_hex.clear();
+    ReqId requestId = requestIdFor(req_id);
+
+    auto merged = ::usb_merge_signed(rust::String(originalPsbtV2Hex.toStdString()),
+                                     rust::String(psbt_base64.toStdString()));
+    if (!merged.is_ok) {
+        if (!m_usb_confirm.isNull()) {
+            m_usb_confirm->onFailed(toQt(merged.error));
+        }
+        m_bus->deliverError(requestId, toQt(merged.error));
+        return;
+    }
+
+    if (!m_usb_confirm.isNull()) {
+        m_usb_confirm->onSigned();
+    }
+    m_bus->deliverSigned(requestId, toQt(merged.psbt_v2_hex));
+}
+
+void KeysModule::onDeviceSignError(std::optional<ReqId> req_id, QString message) {
+    if (!req_id.has_value() || req_id.value() != m_usb_sign_req_id) {
+        return;
+    }
+    if (!m_usb_signer.isNull()) {
+        disconnect(m_usb_signer, &ISigner::signed_, this, &KeysModule::onDeviceSignSigned);
+        disconnect(m_usb_signer, &ISigner::error, this, &KeysModule::onDeviceSignError);
+    }
+    m_usb_signer = nullptr;
+    m_usb_sign_req_id = 0;
+    m_usb_sign_psbt_v2_hex.clear();
+    ReqId requestId = requestIdFor(req_id.value());
+    if (!m_usb_confirm.isNull()) {
+        m_usb_confirm->onFailed(message);
+    }
+    m_bus->deliverError(requestId, message);
+}
+
+void KeysModule::onRouteSignSigned(ReqId req_id, QString psbt_v2_hex) {
+    m_bus->deliverSigned(requestIdFor(req_id), psbt_v2_hex);
+}
+
+void KeysModule::onRouteSignError(std::optional<ReqId> req_id, QString message) {
+    if (!req_id.has_value()) {
+        m_bus->deliverError(std::nullopt, message);
+        return;
+    }
+    m_bus->deliverError(requestIdFor(*req_id), message);
 }
 
 } // namespace keys

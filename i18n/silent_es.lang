@@ -212,6 +212,16 @@ keys-route-unsupported
 keys-route-up => "Move up" => "NONE"
 keys-route-usb => "USB" => "NONE"
 keys-routes => "Routes" => "NONE"
+keys-sd-filter => "Partially signed transaction (*.psbt)" => "NONE"
+keys-sd-load-failed
+=> "Could not read the signed transaction from that path."
+=> "NONE";;
+keys-sd-load-step
+=> "Sign the file on the device, then load the signed transaction back."
+=> "NONE";;
+keys-sd-load-title => "Load the signed transaction" => "NONE"
+keys-sd-save-failed => "Could not write the transaction to that path." => "NONE"
+keys-sd-save-title => "Save the unsigned transaction" => "NONE"
 keys-signing-cancelled => "Signing was cancelled." => "NONE"
 keys-words-12 => "12 words" => "NONE"
 keys-words-24 => "24 words" => "NONE"
