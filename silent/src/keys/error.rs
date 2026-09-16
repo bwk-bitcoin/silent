@@ -126,8 +126,41 @@ pub enum Error {
     NoFrames,
     #[error("get_xpubs requires at least one derivation path")]
     EmptyPathList,
+    #[error("QR payload is a request, not a response")]
+    PayloadIsRequest,
+    #[error("no QR request is outstanding")]
+    NoOutstandingRequest,
+    #[error("response id {got} does not match outstanding request id {expected}")]
+    RequestIdMismatch { expected: String, got: String },
+    #[error("expected a response to {expected:?}, got {got:?}")]
+    ResponseKindMismatch {
+        expected: bwk_qr_protocol::MessageType,
+        got: bwk_qr_protocol::MessageType,
+    },
+    #[error("signer refused {message_type:?} with {code:?}: {message}")]
+    SignerRefused {
+        message_type: bwk_qr_protocol::MessageType,
+        code: bwk_qr_protocol::response::Error,
+        message: String,
+    },
+    #[error("get_xpubs requested {requested} path(s) but the response carries {returned}")]
+    XpubCountMismatch { requested: usize, returned: usize },
+    #[error("signed PSBT failed to parse as PSBT v2 or v0")]
+    InvalidSignedPsbt,
+    #[error("signer returned bare signatures, only a full signed PSBT is accepted")]
+    SignaturesUnsupported,
+    #[error("sp() descriptor has no key origin")]
+    SpDescriptorNoOrigin,
+    #[error("registration response did not report whether registration succeeded")]
+    IncompleteRegistration,
+    #[error("address verification response carries no address uri")]
+    NoAddressUri,
     #[error(transparent)]
     Qr(#[from] bwk_qr::error::Error),
     #[error(transparent)]
     Encode(#[from] bwk_qr_protocol::encode::Error),
+    #[error(transparent)]
+    Decode(#[from] bwk_qr_protocol::decode::Error),
+    #[error(transparent)]
+    XpubConvert(#[from] bwk_qr_protocol::types::Error),
 }

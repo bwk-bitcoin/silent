@@ -1,11 +1,17 @@
-//! Builds signing-flow QR requests and encodes them into animated frame sets.
+//! Builds signing-flow QR requests, encodes them into animated frame sets, and
+//! decodes and validates the matching responses.
 //!
 //! `QrSession` owns the request id counter and remembers the one outstanding request,
-//! so the response side (a later task) can check a decoded response against what was
-//! actually asked. Response decoding is not implemented here.
+//! so a decoded response is checked against what was actually asked before it is
+//! accepted.
 
-use bitcoin::bip32::DerivationPath;
-use bwk_qr_protocol::{request, MessageType, Request, RequestId, SignResponseKind};
+use std::str::FromStr;
+
+use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
+use bwk_qr_protocol::{
+    request, response, Message, MessageType, Request, RequestId, Response, SignResponseKind,
+};
+use bwk_sp::{bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor, bwk_tx::bwk_psbt::PsbtV2};
 
 use crate::hwi;
 use crate::keys::error::Error;
@@ -13,12 +19,11 @@ use crate::keys::psbt;
 
 /// What the next response has to match. `requested_paths` is empty for every
 /// request but `GetXpubs`, whose response carries xpubs in request order and
-/// nothing else to pair them with. Read back by the response side in a later task.
+/// nothing else to pair them with. Read back by `validate_response` to check a
+/// decoded response against what was actually asked.
 struct Outstanding {
     id: RequestId,
-    #[allow(dead_code)]
     message_type: MessageType,
-    #[allow(dead_code)]
     requested_paths: Vec<DerivationPath>,
 }
 
@@ -180,6 +185,151 @@ impl QrSession {
             frames,
         })
     }
+
+    /// Decodes a pasted or scanned payload and validates it against the outstanding
+    /// request.
+    pub fn decode_response(&mut self, bytes: &[u8]) -> Result<QrResponse, Error> {
+        match bwk_qr_protocol::decode(bytes)? {
+            Message::Request(_) => Err(Error::PayloadIsRequest),
+            Message::Response(response) => self.validate_response(response),
+        }
+    }
+
+    /// Validates a response the camera already protocol-decoded. `decode_response` is
+    /// this function plus `bwk_qr_protocol::decode`, so a scanned payload and a pasted
+    /// one go through exactly the same checks.
+    pub fn validate_response(&mut self, response: Response) -> Result<QrResponse, Error> {
+        let Some(outstanding) = self.outstanding.as_ref() else {
+            return Err(Error::NoOutstandingRequest);
+        };
+        if response.id != outstanding.id {
+            return Err(Error::RequestIdMismatch {
+                expected: hex_id(outstanding.id),
+                got: hex_id(response.id),
+            });
+        }
+        let expected_type = outstanding.message_type;
+        let requested_paths = outstanding.requested_paths.clone();
+
+        let body = response.body;
+        if let response::Body::Error(e) = body {
+            return Err(Error::SignerRefused {
+                message_type: e.message_type,
+                code: e.error,
+                message: e.message,
+            });
+        }
+        let got_type = body.message_type();
+        if got_type != expected_type {
+            return Err(Error::ResponseKindMismatch {
+                expected: expected_type,
+                got: got_type,
+            });
+        }
+
+        let parsed = match body {
+            response::Body::Xpubs(xpubs) => validate_xpubs(xpubs, &requested_paths)?,
+            response::Body::Signed(signed) => validate_signed(signed)?,
+            response::Body::SpDescriptor(descriptor) => {
+                validate_sp_descriptor_response(descriptor)?
+            }
+            response::Body::Registration(registration) => validate_registration(registration)?,
+            response::Body::AddressUri(address_uri) => validate_address_uri(address_uri)?,
+            response::Body::Error(_) => unreachable!("error responses are handled above"),
+        };
+
+        self.outstanding = None;
+        Ok(parsed)
+    }
+}
+
+/// A decoded and validated signing-flow QR response.
+pub enum QrResponse {
+    Xpubs {
+        fingerprint: Fingerprint,
+        xpubs: Vec<(DerivationPath, Xpub)>,
+        model: String,
+        version: String,
+    },
+    Registration {
+        alias: String,
+        registered: bool,
+    },
+    AddressUri(String),
+    SignedPsbt(Vec<u8>),
+    SpDescriptor {
+        descriptor: String,
+        fingerprint: Fingerprint,
+    },
+}
+
+fn validate_xpubs(
+    xpubs: response::Xpubs,
+    requested_paths: &[DerivationPath],
+) -> Result<QrResponse, Error> {
+    if xpubs.xpubs.len() != requested_paths.len() {
+        return Err(Error::XpubCountMismatch {
+            requested: requested_paths.len(),
+            returned: xpubs.xpubs.len(),
+        });
+    }
+    let mut converted = Vec::with_capacity(xpubs.xpubs.len());
+    for (path, xpub) in requested_paths.iter().zip(xpubs.xpubs.iter()) {
+        converted.push((path.clone(), Xpub::try_from(xpub)?));
+    }
+    Ok(QrResponse::Xpubs {
+        fingerprint: Fingerprint::from(&xpubs.fingerprint),
+        xpubs: converted,
+        model: xpubs.model,
+        version: format!(
+            "{}.{}.{}",
+            xpubs.version.major, xpubs.version.minor, xpubs.version.patch
+        ),
+    })
+}
+
+fn validate_signed(signed: response::Signed) -> Result<QrResponse, Error> {
+    match signed {
+        response::Signed::Psbt(bytes) => {
+            if PsbtV2::deserialize(&bytes).is_err() && bitcoin::Psbt::deserialize(&bytes).is_err() {
+                return Err(Error::InvalidSignedPsbt);
+            }
+            Ok(QrResponse::SignedPsbt(bytes))
+        }
+        response::Signed::Signatures(_) => Err(Error::SignaturesUnsupported),
+    }
+}
+
+fn validate_sp_descriptor_response(
+    descriptor: response::SpDescriptor,
+) -> Result<QrResponse, Error> {
+    let parsed = SpDescriptor::from_str(&descriptor.descriptor)
+        .map_err(|e| Error::DescriptorParse(e.to_string()))?;
+    let fingerprint = parsed.fingerprint().ok_or(Error::SpDescriptorNoOrigin)?;
+    Ok(QrResponse::SpDescriptor {
+        descriptor: descriptor.descriptor,
+        fingerprint,
+    })
+}
+
+fn validate_registration(registration: response::Registration) -> Result<QrResponse, Error> {
+    let registered = registration
+        .registered
+        .ok_or(Error::IncompleteRegistration)?;
+    Ok(QrResponse::Registration {
+        alias: registration.descriptor_alias,
+        registered,
+    })
+}
+
+fn validate_address_uri(address_uri: response::AddressUri) -> Result<QrResponse, Error> {
+    let uri = address_uri.uri.ok_or(Error::NoAddressUri)?;
+    Ok(QrResponse::AddressUri(uri))
+}
+
+/// Hex-encodes a request id for error messages.
+fn hex_id(id: RequestId) -> String {
+    id.0.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// One encoded QR request: the protocol message and the full set of animation frames
