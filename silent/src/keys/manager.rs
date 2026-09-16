@@ -675,6 +675,7 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
+    use crate::keys::record::SecretEnvelope;
 
     fn fingerprint(value: u32) -> Fingerprint {
         Fingerprint::from(value.to_be_bytes())
@@ -683,6 +684,20 @@ mod tests {
     fn manager_over(root: &std::path::Path, network: Network) -> KeyManager {
         let store = KeyStore::new(root.to_path_buf(), network);
         KeyManager::new(store, network).expect("build manager")
+    }
+
+    fn test_secret() -> SecretEnvelope {
+        SecretEnvelope {
+            version: 1,
+            kdf: "argon2id".to_string(),
+            m_cost_kib: 65_536,
+            t_cost: 3,
+            p_cost: 1,
+            salt: "salt".to_string(),
+            cipher: "xchacha20poly1305".to_string(),
+            nonce: "nonce".to_string(),
+            ciphertext: "ciphertext".to_string(),
+        }
     }
 
     fn test_xpub() -> Xpub {
@@ -759,6 +774,83 @@ mod tests {
         assert!(
             listed.is_empty(),
             "expected nothing written for a foreign network record, got {listed:?}"
+        );
+    }
+
+    #[test]
+    fn add_key_catches_up_memory_from_a_stale_duplicate_on_disk() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager_a = manager_over(tmp.path(), Network::Regtest);
+        let mut manager_b = manager_over(tmp.path(), Network::Regtest);
+
+        let fp = fingerprint(1);
+        let mut with_secret = KeyRecord::new(fp, Network::Regtest, "hot alias".to_string());
+        with_secret.secret = Some(test_secret());
+        with_secret
+            .routes
+            .push(RouteKind::Hot)
+            .expect("push hot route");
+        manager_a
+            .add_key(with_secret.clone())
+            .expect("A adds the hot key");
+
+        let without_secret = KeyRecord::new(fp, Network::Regtest, "stale alias".to_string());
+        let result = manager_b.add_key(without_secret);
+        assert!(
+            matches!(result, Err(Error::DuplicateKey(found)) if found == fp),
+            "expected DuplicateKey, got {result:?}"
+        );
+
+        let store = KeyStore::new(tmp.path().to_path_buf(), Network::Regtest);
+        let on_disk = store.load(fp).expect("load record");
+        assert_eq!(
+            on_disk, with_secret,
+            "the on-disk record must keep A's secret, got {on_disk:?}"
+        );
+
+        let refreshed = manager_b.key(fp).expect("B's memory refreshed from disk");
+        assert_eq!(
+            refreshed, &with_secret,
+            "expected B's in-memory record to catch up to the on-disk one, got {refreshed:?}"
+        );
+    }
+
+    #[test]
+    fn add_key_refuses_a_record_written_directly_through_a_second_store_instance() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let fp = fingerprint(1);
+
+        let second_store = KeyStore::new(tmp.path().to_path_buf(), Network::Regtest);
+        let mut written = KeyRecord::new(fp, Network::Regtest, "written directly".to_string());
+        written.secret = Some(test_secret());
+        written.routes.push(RouteKind::Hot).expect("push hot route");
+        second_store
+            .save(&written)
+            .expect("second writer saves directly");
+
+        let result = manager.add_key(KeyRecord::new(
+            fp,
+            Network::Regtest,
+            "manager alias".to_string(),
+        ));
+        assert!(
+            matches!(result, Err(Error::DuplicateKey(found)) if found == fp),
+            "expected DuplicateKey, got {result:?}"
+        );
+
+        let on_disk = second_store.load(fp).expect("load record");
+        assert_eq!(
+            on_disk, written,
+            "expected the directly written record to remain unchanged, got {on_disk:?}"
+        );
+
+        let refreshed = manager
+            .key(fp)
+            .expect("manager's memory refreshed from disk");
+        assert_eq!(
+            refreshed, &written,
+            "expected the manager's memory to catch up to the on-disk record, got {refreshed:?}"
         );
     }
 
@@ -848,7 +940,8 @@ mod tests {
     fn routes_persist_and_keep_hot_first() {
         let tmp = temp_dir::TempDir::new().expect("create temp dir");
         let mut manager = manager_over(tmp.path(), Network::Regtest);
-        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        let mut record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        record.secret = Some(test_secret());
         manager.add_key(record).expect("add key");
 
         manager
@@ -1206,9 +1299,16 @@ mod tests {
 
         let hot_only = KeyRecord::new(fingerprint(2), Network::Regtest, "hot only".to_string());
         manager.add_key(hot_only).expect("add hot only key");
+        // The store refuses to persist a hot route without a secret, so this
+        // unusable state is simulated in memory only to exercise best_route's
+        // handling of it.
         manager
-            .add_route(fingerprint(2), RouteKind::Hot)
-            .expect("add hot route");
+            .records
+            .get_mut(&fingerprint(2))
+            .expect("record present")
+            .routes
+            .push(RouteKind::Hot)
+            .expect("push hot route");
         let no_secret = manager.best_route(fingerprint(2));
         assert_eq!(
             no_secret, None,
@@ -1813,9 +1913,17 @@ mod tests {
                 "alias".to_string(),
             ))
             .expect("add hot key");
+        // The store now refuses to persist a hot route without a secret, so this
+        // fallback state (data written before that guard existed, or corrupted on
+        // disk) is simulated in memory only, to exercise unusable_reason's handling
+        // of it rather than the store's write path.
         manager
-            .add_route(no_hot_secret, RouteKind::Hot)
-            .expect("add hot route");
+            .records
+            .get_mut(&no_hot_secret)
+            .expect("record present")
+            .routes
+            .push(RouteKind::Hot)
+            .expect("push hot route");
         manager
             .add_key(KeyRecord::new(
                 device_not_connected,

@@ -14,7 +14,11 @@ use std::path::{Path, PathBuf};
 use bitcoin::{bip32::Fingerprint, Network};
 use fs2::FileExt;
 
-use crate::keys::{error::Error, network_name, record::KeyRecord};
+use crate::keys::{
+    error::Error,
+    network_name,
+    record::{KeyRecord, RouteKind},
+};
 
 const LOCK_FILE_NAME: &str = ".lock";
 const RECORD_EXTENSION: &str = "json";
@@ -223,7 +227,14 @@ impl KeyStore {
         })
     }
 
+    /// `save_locked` is the single write path shared by `save` and `update`, so
+    /// this is where a hot route with no secret to sign with is refused once and
+    /// for all, regardless of whether the caller wrote a full record or applied
+    /// an incremental mutation.
     fn save_locked(&self, dir: &Path, record: &KeyRecord) -> Result<(), Error> {
+        if record.routes.contains(RouteKind::Hot) && record.secret.is_none() {
+            return Err(Error::NoSecret(record.fingerprint));
+        }
         let expected_network = network_name(self.network)?;
         let found_network = network_name(record.network)?;
         if found_network != expected_network {
