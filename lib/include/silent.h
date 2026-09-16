@@ -970,6 +970,8 @@ enum class LogLevel : ::std::uint8_t;
 enum class NotificationFlag : ::std::uint8_t;
 enum class HwiDeviceState : ::std::uint8_t;
 enum class HwiEventFlag : ::std::uint8_t;
+enum class KeyRouteKind : ::std::uint8_t;
+enum class KeyUnusableReason : ::std::uint8_t;
 struct Notification;
 struct RustCoin;
 struct CoinState;
@@ -986,6 +988,13 @@ struct PsbtValidation;
 struct BackendInfo;
 struct HwiDevice;
 struct HwiEvent;
+struct KeyInfo;
+struct KeyDevice;
+struct LiveDevice;
+struct KeyXpub;
+struct KeyDescriptor;
+struct KeyOpResult;
+struct KeyInfoResult;
 struct Config;
 struct Account;
 struct Poll;
@@ -995,6 +1004,7 @@ struct SyncEstimator;
 struct HwiService;
 struct HwiReceiver;
 struct HwiPoll;
+struct KeysModule;
 
 #ifndef CXXBRIDGE1_ENUM_Network
 #define CXXBRIDGE1_ENUM_Network
@@ -1070,6 +1080,30 @@ enum class HwiEventFlag : ::std::uint8_t {
   Error = 6,
 };
 #endif // CXXBRIDGE1_ENUM_HwiEventFlag
+
+#ifndef CXXBRIDGE1_ENUM_KeyRouteKind
+#define CXXBRIDGE1_ENUM_KeyRouteKind
+// How a key can be reached, in priority order. Hot always outranks the others.
+enum class KeyRouteKind : ::std::uint8_t {
+  Hot = 0,
+  Usb = 1,
+  Qr = 2,
+  SdCard = 3,
+};
+#endif // CXXBRIDGE1_ENUM_KeyRouteKind
+
+#ifndef CXXBRIDGE1_ENUM_KeyUnusableReason
+#define CXXBRIDGE1_ENUM_KeyUnusableReason
+// Why a key cannot sign the PSBT in hand. `None` means it can.
+enum class KeyUnusableReason : ::std::uint8_t {
+  None = 0,
+  NotRegistered = 1,
+  NoRoute = 2,
+  DeviceNotConnected = 3,
+  NoHotSecret = 4,
+  SpOutputsPending = 5,
+};
+#endif // CXXBRIDGE1_ENUM_KeyUnusableReason
 
 #ifndef CXXBRIDGE1_STRUCT_Notification
 #define CXXBRIDGE1_STRUCT_Notification
@@ -1345,6 +1379,114 @@ struct HwiEvent final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_HwiEvent
+
+#ifndef CXXBRIDGE1_STRUCT_KeyInfo
+#define CXXBRIDGE1_STRUCT_KeyInfo
+// A registered key as the Keys tab shows it.
+struct KeyInfo final {
+  ::rust::String fingerprint;
+  ::rust::String alias;
+  bool has_hot_secret CXX_DEFAULT_VALUE(false);
+  // In priority order, first entry is the preferred route.
+  ::rust::Vec<::KeyRouteKind> routes;
+  bool is_connected CXX_DEFAULT_VALUE(false);
+  ::std::uint32_t device_count CXX_DEFAULT_VALUE(0);
+  ::std::uint32_t descriptor_count CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_KeyInfo
+
+#ifndef CXXBRIDGE1_STRUCT_KeyDevice
+#define CXXBRIDGE1_STRUCT_KeyDevice
+// A device remembered for a key. `model` and `serial` are empty until bwk-hwi
+// reports them; they exist only to deduplicate devices sharing a fingerprint.
+// `device_id` and `brand` are always empty: `DeviceRecord` carries neither a
+// stable id nor a brand today.
+struct KeyDevice final {
+  ::rust::String fingerprint;
+  ::rust::String device_id;
+  ::rust::String kind;
+  ::rust::String brand;
+  ::rust::String model;
+  ::rust::String serial;
+  ::rust::String module;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_KeyDevice
+
+#ifndef CXXBRIDGE1_STRUCT_LiveDevice
+#define CXXBRIDGE1_STRUCT_LiveDevice
+// A device the signer bus can see right now, fed in from the hwi module.
+// `brand` is always empty: `manager::LiveDevice` carries no brand field
+// because bwk-hwi has not reported one yet.
+struct LiveDevice final {
+  ::rust::String device_id;
+  ::rust::String fingerprint;
+  ::rust::String kind;
+  ::rust::String brand;
+  ::rust::String model;
+  ::rust::String serial;
+  ::rust::String module;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_LiveDevice
+
+#ifndef CXXBRIDGE1_STRUCT_KeyXpub
+#define CXXBRIDGE1_STRUCT_KeyXpub
+// A cached extended public key at a derivation path for a registered key.
+struct KeyXpub final {
+  ::rust::String fingerprint;
+  ::rust::String path;
+  ::rust::String xpub;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_KeyXpub
+
+#ifndef CXXBRIDGE1_STRUCT_KeyDescriptor
+#define CXXBRIDGE1_STRUCT_KeyDescriptor
+// A descriptor a key participates in.
+struct KeyDescriptor final {
+  ::rust::String fingerprint;
+  ::rust::String descriptor;
+  // The sha256-prefix alias the device knows this descriptor by.
+  ::rust::String alias;
+  bool registered CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_KeyDescriptor
+
+#ifndef CXXBRIDGE1_STRUCT_KeyOpResult
+#define CXXBRIDGE1_STRUCT_KeyOpResult
+// Result of a keys module operation carrying no response data.
+struct KeyOpResult final {
+  // Whether the operation succeeded.
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Error message (empty if is_ok is true).
+  ::rust::String error;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_KeyOpResult
+
+#ifndef CXXBRIDGE1_STRUCT_KeyInfoResult
+#define CXXBRIDGE1_STRUCT_KeyInfoResult
+// Result of a keys module operation carrying a `KeyInfo`.
+struct KeyInfoResult final {
+  // Whether the operation succeeded.
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Error message (empty if is_ok is true).
+  ::rust::String error;
+  // The key info (empty/zeroed fields on error).
+  ::KeyInfo key;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_KeyInfoResult
 
 #ifndef CXXBRIDGE1_STRUCT_Config
 #define CXXBRIDGE1_STRUCT_Config
@@ -1689,6 +1831,68 @@ private:
 };
 #endif // CXXBRIDGE1_STRUCT_HwiPoll
 
+#ifndef CXXBRIDGE1_STRUCT_KeysModule
+#define CXXBRIDGE1_STRUCT_KeysModule
+// Owns the key manager for one network: records, routes, devices, the xpub
+// cache and registered descriptors.
+struct KeysModule final : public ::rust::Opaque {
+  bool is_ok() const noexcept;
+  ::rust::String get_error() const noexcept;
+
+  // Reloads the records for `network`. The Keys tab combobox drives this.
+  // On failure the previously-loaded manager is left untouched; only the
+  // error returned by `get_error()` changes.
+  ::KeyOpResult set_network(::Network network) noexcept;
+
+  // Returns `Regtest` as a sentinel if the module has no inner manager.
+  // Callers MUST check `is_ok()` before trusting this value.
+  ::Network network() const noexcept;
+
+  ::rust::Vec<::KeyInfo> keys() const noexcept;
+  ::KeyInfoResult key(::rust::Str fingerprint) const noexcept;
+  ::KeyInfoResult add_key(::rust::Str fingerprint, ::rust::Str alias) noexcept;
+
+  // Refuses while descriptors are registered unless `force` is set; the UI sets
+  // it only after warning.
+  ::KeyOpResult remove_key(::rust::Str fingerprint, bool force) noexcept;
+
+  ::KeyOpResult set_alias(::rust::Str fingerprint, ::rust::Str alias) noexcept;
+  ::KeyOpResult add_route(::rust::Str fingerprint, ::KeyRouteKind kind) noexcept;
+  ::KeyOpResult remove_route(::rust::Str fingerprint, ::KeyRouteKind kind) noexcept;
+
+  // `order` is the full route list, highest priority first.
+  ::KeyOpResult set_route_order(::rust::Str fingerprint, ::rust::Vec<::KeyRouteKind> order) noexcept;
+
+  // Replaces the live list wholesale; the C++ side calls this on every
+  // devicesChanged from the hwi module.
+  void set_live_devices(::rust::Vec<::LiveDevice> devices) noexcept;
+
+  ::rust::Vec<::LiveDevice> live_devices() const noexcept;
+
+  // Remembers a device for the key with that fingerprint.
+  ::KeyOpResult record_device(::LiveDevice device) noexcept;
+
+  ::rust::Vec<::KeyDevice> key_devices(::rust::Str fingerprint) const noexcept;
+  ::KeyOpResult cache_xpub(::rust::Str fingerprint, ::rust::Str path, ::rust::Str xpub) noexcept;
+  ::rust::Vec<::KeyXpub> key_xpubs(::rust::Str fingerprint) const noexcept;
+  ::KeyOpResult register_descriptor(::rust::Str fingerprint, ::rust::Str descriptor) noexcept;
+  ::KeyOpResult unregister_descriptor(::rust::Str fingerprint, ::rust::Str descriptor) noexcept;
+  ::rust::Vec<::KeyDescriptor> key_descriptors(::rust::Str fingerprint) const noexcept;
+
+  // Every registered key whose descriptor list contains this descriptor.
+  ::rust::Vec<::KeyInfo> keys_for_descriptor(::rust::Str descriptor) const noexcept;
+
+  ~KeysModule() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_KeysModule
+
 // Initialize logging with the specified level.
 // Call this once at application startup.
 void init_logging(::LogLevel level) noexcept;
@@ -1758,6 +1962,8 @@ bool delete_config(::rust::String account_name) noexcept;
 ::Network hwi_config_network() noexcept;
 
 void hwi_set_config_network(::Network network) noexcept;
+
+::rust::Box<::KeysModule> new_keys_module(::Network network) noexcept;
 
 // Create a new SyncEstimator with default EMA alpha.
 ::rust::Box<::SyncEstimator> new_sync_estimator() noexcept;

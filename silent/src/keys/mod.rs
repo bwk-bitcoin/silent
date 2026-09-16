@@ -4,6 +4,7 @@
 //! records are scoped per network: the same seed on testnet and on mainnet are two
 //! separate records.
 
+pub mod bridge;
 pub mod camera;
 pub mod crypto;
 pub mod error;
@@ -15,6 +16,7 @@ pub mod record;
 pub mod sdcard;
 pub mod store;
 
+pub use bridge::{new_keys_module, KeysModule};
 pub use crypto::Password;
 pub use error::Error;
 pub use hot::{generate_mnemonic, MNEMONIC_WORDS_LONG, MNEMONIC_WORDS_SHORT};

@@ -81,6 +81,26 @@ mod ffi {
         Error,
     }
 
+    /// How a key can be reached, in priority order. Hot always outranks the others.
+    #[derive(Debug, Clone, Copy)]
+    pub enum KeyRouteKind {
+        Hot,
+        Usb,
+        Qr,
+        SdCard,
+    }
+
+    /// Why a key cannot sign the PSBT in hand. `None` means it can.
+    #[derive(Debug, Clone, Copy)]
+    pub enum KeyUnusableReason {
+        None,
+        NotRegistered,
+        NoRoute,
+        DeviceNotConnected,
+        NoHotSecret,
+        SpOutputsPending,
+    }
+
     // ===== Shared Structs =====
 
     /// Notification from the account scanner.
@@ -294,6 +314,86 @@ mod ffi {
         pub ok: bool,
     }
 
+    /// A registered key as the Keys tab shows it.
+    #[derive(Debug, Clone)]
+    pub struct KeyInfo {
+        pub fingerprint: String,
+        pub alias: String,
+        pub has_hot_secret: bool,
+        /// In priority order, first entry is the preferred route.
+        pub routes: Vec<KeyRouteKind>,
+        pub is_connected: bool,
+        pub device_count: u32,
+        pub descriptor_count: u32,
+    }
+
+    /// A device remembered for a key. `model` and `serial` are empty until bwk-hwi
+    /// reports them; they exist only to deduplicate devices sharing a fingerprint.
+    /// `device_id` and `brand` are always empty: `DeviceRecord` carries neither a
+    /// stable id nor a brand today.
+    #[derive(Debug, Clone)]
+    pub struct KeyDevice {
+        pub fingerprint: String,
+        pub device_id: String,
+        pub kind: String,
+        pub brand: String,
+        pub model: String,
+        pub serial: String,
+        pub module: String,
+    }
+
+    /// A device the signer bus can see right now, fed in from the hwi module.
+    /// `brand` is always empty: `manager::LiveDevice` carries no brand field
+    /// because bwk-hwi has not reported one yet.
+    #[derive(Debug, Clone)]
+    pub struct LiveDevice {
+        pub device_id: String,
+        pub fingerprint: String,
+        pub kind: String,
+        pub brand: String,
+        pub model: String,
+        pub serial: String,
+        pub module: String,
+    }
+
+    /// A cached extended public key at a derivation path for a registered key.
+    #[derive(Debug, Clone)]
+    pub struct KeyXpub {
+        pub fingerprint: String,
+        pub path: String,
+        pub xpub: String,
+    }
+
+    /// A descriptor a key participates in.
+    #[derive(Debug, Clone)]
+    pub struct KeyDescriptor {
+        pub fingerprint: String,
+        pub descriptor: String,
+        /// The sha256-prefix alias the device knows this descriptor by.
+        pub alias: String,
+        pub registered: bool,
+    }
+
+    /// Result of a keys module operation carrying no response data.
+    #[derive(Debug, Clone)]
+    pub struct KeyOpResult {
+        /// Whether the operation succeeded.
+        pub is_ok: bool,
+        /// Error message (empty if is_ok is true).
+        pub error: String,
+    }
+
+    /// Result of a keys module operation carrying a `KeyInfo`.
+    #[derive(Debug, Clone)]
+    pub struct KeyInfoResult {
+        /// Whether the operation succeeded.
+        pub is_ok: bool,
+        /// Error message (empty if is_ok is true).
+        pub error: String,
+        /// The key info (empty/zeroed fields on error).
+        pub key: KeyInfo,
+    }
+
     // ===== Opaque Rust Types =====
 
     extern "Rust" {
@@ -323,6 +423,10 @@ mod ffi {
 
         /// Poll result for HWI notifications.
         type HwiPoll;
+
+        /// Owns the key manager for one network: records, routes, devices, the xpub
+        /// cache and registered descriptors.
+        type KeysModule;
     }
 
     // ===== Utility Functions =====
@@ -635,6 +739,75 @@ mod ffi {
         /// Network the device service runs on, persisted in the module's config file.
         fn hwi_config_network() -> Network;
         fn hwi_set_config_network(network: Network);
+    }
+
+    // Thread contract for every "Keys" section below: only a free function (no
+    // `self` receiver) may run off the GUI thread. Every `self: &KeysModule` or
+    // `self: &mut KeysModule` method touches shared state and is GUI-thread only.
+
+    // ===== Keys Module Methods =====
+
+    extern "Rust" {
+        fn new_keys_module(network: Network) -> Box<KeysModule>;
+        fn is_ok(self: &KeysModule) -> bool;
+        fn get_error(self: &KeysModule) -> String;
+        /// Reloads the records for `network`. The Keys tab combobox drives this.
+        /// On failure the previously-loaded manager is left untouched; only the
+        /// error returned by `get_error()` changes.
+        fn set_network(self: &mut KeysModule, network: Network) -> KeyOpResult;
+        /// Returns `Regtest` as a sentinel if the module has no inner manager.
+        /// Callers MUST check `is_ok()` before trusting this value.
+        fn network(self: &KeysModule) -> Network;
+
+        fn keys(self: &KeysModule) -> Vec<KeyInfo>;
+        fn key(self: &KeysModule, fingerprint: &str) -> KeyInfoResult;
+        fn add_key(self: &mut KeysModule, fingerprint: &str, alias: &str) -> KeyInfoResult;
+        /// Refuses while descriptors are registered unless `force` is set; the UI sets
+        /// it only after warning.
+        fn remove_key(self: &mut KeysModule, fingerprint: &str, force: bool) -> KeyOpResult;
+        fn set_alias(self: &mut KeysModule, fingerprint: &str, alias: &str) -> KeyOpResult;
+
+        fn add_route(self: &mut KeysModule, fingerprint: &str, kind: KeyRouteKind) -> KeyOpResult;
+        fn remove_route(
+            self: &mut KeysModule,
+            fingerprint: &str,
+            kind: KeyRouteKind,
+        ) -> KeyOpResult;
+        /// `order` is the full route list, highest priority first.
+        fn set_route_order(
+            self: &mut KeysModule,
+            fingerprint: &str,
+            order: Vec<KeyRouteKind>,
+        ) -> KeyOpResult;
+
+        /// Replaces the live list wholesale; the C++ side calls this on every
+        /// devicesChanged from the hwi module.
+        fn set_live_devices(self: &mut KeysModule, devices: Vec<LiveDevice>);
+        fn live_devices(self: &KeysModule) -> Vec<LiveDevice>;
+        /// Remembers a device for the key with that fingerprint.
+        fn record_device(self: &mut KeysModule, device: LiveDevice) -> KeyOpResult;
+        fn key_devices(self: &KeysModule, fingerprint: &str) -> Vec<KeyDevice>;
+
+        fn cache_xpub(
+            self: &mut KeysModule,
+            fingerprint: &str,
+            path: &str,
+            xpub: &str,
+        ) -> KeyOpResult;
+        fn key_xpubs(self: &KeysModule, fingerprint: &str) -> Vec<KeyXpub>;
+        fn register_descriptor(
+            self: &mut KeysModule,
+            fingerprint: &str,
+            descriptor: &str,
+        ) -> KeyOpResult;
+        fn unregister_descriptor(
+            self: &mut KeysModule,
+            fingerprint: &str,
+            descriptor: &str,
+        ) -> KeyOpResult;
+        fn key_descriptors(self: &KeysModule, fingerprint: &str) -> Vec<KeyDescriptor>;
+        /// Every registered key whose descriptor list contains this descriptor.
+        fn keys_for_descriptor(self: &KeysModule, descriptor: &str) -> Vec<KeyInfo>;
     }
 
     // ===== PsbtResult Methods =====
@@ -1038,14 +1211,16 @@ pub use app_state::{
 };
 pub use config::{config_from_file, delete_config, list_configs, new_config, set_datadir, Config};
 pub use ffi::{
-    BackendInfo, LogLevel, Network, Notification, NotificationFlag, Output, PsbtValidation,
-    RegtestDefaults, TransactionSimulation, TransactionTemplate,
+    BackendInfo, KeyDescriptor, KeyDevice, KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind,
+    KeyUnusableReason, KeyXpub, LiveDevice, LogLevel, Network, Notification, NotificationFlag,
+    Output, PsbtValidation, RegtestDefaults, TransactionSimulation, TransactionTemplate,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{
     hwi_config_network, hwi_set_config_network, BitboxSettings, HwiConfig, NoiseConfig,
     NoiseConfigData, PersistedBitboxNoiseConfig,
 };
+pub use keys::bridge::{new_keys_module, KeysModule};
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};
 
 #[cfg(test)]
