@@ -161,6 +161,18 @@ pub enum Error {
     PsbtFileTooLarge { path: PathBuf, len: u64 },
     #[error("could not read a psbt from {path}: tried {tried}")]
     UnreadablePsbtFile { path: PathBuf, tried: &'static str },
+    #[error("camera capture is only available on Linux; paste the QR response instead")]
+    CameraUnsupported,
+    #[error("failed to open camera {index}: {message}")]
+    CameraOpen { index: u32, message: String },
+    #[error("camera capture error: {0}")]
+    CameraCapture(String),
+    #[error("no camera was found")]
+    NoCamera,
+    #[error("no camera format meets the minimum resolution and frame rate; offered: {0}")]
+    CameraNoSuitableFormat(String),
+    #[error("camera {0} is already in use")]
+    CameraBusy(u32),
     #[error(transparent)]
     Qr(#[from] bwk_qr::error::Error),
     #[error(transparent)]

@@ -36,6 +36,12 @@ chacha20poly1305 = "0.10"
 zeroize = "1.8"
 ureq = { version = "3.3", default-features = false, features = ["gzip", "native-tls"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# V4L + MJPEG decode: mingw has no MSMF backend, and MJPEG decoding needs a C
+# toolchain (mozjpeg), so capture is Linux only and every other target gets an
+# explicit error.
+nokhwa = { version = "0.10", default-features = false, features = ["input-v4l", "decoding"] }
+
 [dev-dependencies]
 blindbitd = { git = "https://github.com/pythcoiner/blindbitd.git", features = ["electrum"] }
 bwk-utils = { git = "https://github.com/pythcoiner/bwk.git", rev = "912eb7cd3e1d8a8b52bfc3ff0052cb51a3c647fe", features = ["test"] }

@@ -4,6 +4,7 @@
 //! records are scoped per network: the same seed on testnet and on mainnet are two
 //! separate records.
 
+pub mod camera;
 pub mod crypto;
 pub mod error;
 pub mod hot;

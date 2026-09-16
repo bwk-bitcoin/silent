@@ -164,6 +164,10 @@ CARGO_EOF
             rustToolchain
             pkgs.pkg-config
             pkgs.perl
+            # mozjpeg-sys (behind nokhwa's Linux-only "decoding" feature) builds
+            # with its nasm_simd feature active; see the mozjpeg-sys/nasm_simd
+            # cargo tree entry checked when that feature was enabled.
+            pkgs.nasm
           ] ++ extraNativeBuildInputs;
 
           buildInputs = (with pkgs; [
@@ -231,6 +235,10 @@ CARGO_EOF
             rustToolchain
             pkgs.pkg-config
             pkgs.perl
+            # mozjpeg-sys (behind nokhwa's Linux-only "decoding" feature) builds
+            # with its nasm_simd feature active; see the mozjpeg-sys/nasm_simd
+            # cargo tree entry checked when that feature was enabled.
+            pkgs.nasm
           ] ++ extraNativeBuildInputs;
 
           buildInputs = (with pkgs; [
