@@ -4,10 +4,12 @@
 //! records are scoped per network: the same seed on testnet and on mainnet are two
 //! separate records.
 
+pub mod crypto;
 pub mod error;
 pub mod record;
 pub mod store;
 
+pub use crypto::Password;
 pub use error::Error;
 pub use record::{
     DescriptorEntry, DeviceRecord, KeyRecord, RouteKind, Routes, SecretEnvelope, XpubEntry,

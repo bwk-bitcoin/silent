@@ -44,4 +44,26 @@ pub enum Error {
     NetworkMismatch { expected: String, found: String },
     #[error("file {path} has an invalid fingerprint file name '{stem}'")]
     InvalidFingerprintFileName { path: PathBuf, stem: String },
+    #[error("wrong password")]
+    WrongPassword,
+    #[error("crypto error: {0}")]
+    Crypto(String),
+    #[error("invalid base64 in secret envelope: {0}")]
+    Base64(String),
+    #[error("failed to generate random bytes: {0}")]
+    Random(String),
+    #[error("kdf parameter '{field}' is {found}, below the minimum of {minimum}")]
+    WeakKdfParams {
+        field: &'static str,
+        found: u32,
+        minimum: u32,
+    },
+    #[error("unsupported kdf '{0}'")]
+    UnsupportedKdf(String),
+    #[error("unsupported cipher '{0}'")]
+    UnsupportedCipher(String),
+    #[error(
+        "secret envelope version {found} is not supported, this build supports up to {supported}"
+    )]
+    UnsupportedEnvelopeVersion { found: u32, supported: u32 },
 }
