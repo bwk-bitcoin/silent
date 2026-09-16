@@ -4,20 +4,23 @@
 
 #![allow(dead_code)]
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use bitcoin::bip32::ChildNumber;
+use bitcoin::bip32::{ChildNumber, DerivationPath};
 use bitcoin::{Amount, OutPoint, ScriptBuf, TxOut, XOnlyPublicKey};
 use blindbitd::BlindbitD;
 use bwk_sp::{
     bwk_sign::{
-        bwk_descriptor::descriptor::{tr_path, DescriptorDerivator},
+        bwk_descriptor::{
+            descriptor::{tr_path, DescriptorDerivator},
+            sp_descriptor::SpDescriptor,
+            sp_key::{SpKey, SpScanKey},
+        },
         hot_signer::HotSigner,
     },
-    receiver::{bip39, SpReceiver},
+    receiver::{bip352_base_derivation, bip39, scan_path, spend_path, SpReceiver},
 };
 use bwk_utils::test as bwk_test;
 use bwk_utils::test::corepc_node;
@@ -33,6 +36,10 @@ pub const TEST_MNEMONIC: &str =
 /// Dust threshold for SP outputs.
 const DUST: u64 = 330;
 
+/// A watch-only sp() descriptor built the same way `hot::sp_descriptor` does: the
+/// private scan key and the public spend key, no spend secret. `Account::new`
+/// refuses any descriptor carrying a spend secret, so every test account is built
+/// from this watch-only shape.
 pub fn descriptor_from_mnemonic(mnemonic: &str, network: Network) -> String {
     let network = match network {
         Network::Regtest => bitcoin::Network::Regtest,
@@ -41,15 +48,20 @@ pub fn descriptor_from_mnemonic(mnemonic: &str, network: Network) -> String {
         Network::Bitcoin => bitcoin::Network::Bitcoin,
         _ => unreachable!("CXX enum type safety guarantees no other variants exist"),
     };
-    bwk_sp::account::config::Config::new(
-        "test".to_string(),
-        network,
-        mnemonic.to_string(),
-        String::new(),
-        PathBuf::new(),
-    )
-    .unwrap()
-    .descriptor
+    let signer = HotSigner::new_from_mnemonics(network, mnemonic).expect("valid signer");
+    let account = ChildNumber::from_hardened_idx(0).expect("valid account index");
+    let origin = (
+        signer.fingerprint(),
+        DerivationPath::from(bip352_base_derivation(network, account)),
+    );
+    SpDescriptor::Packed {
+        origin: Some(origin),
+        key: SpKey::Scan(SpScanKey {
+            scan_key: signer.private_key_at(&scan_path(network, account)),
+            spend_key: signer.public_key_at(&spend_path(network, account)),
+            network: bitcoin::NetworkKind::from(network),
+        }),
+    }
     .to_string()
 }
 

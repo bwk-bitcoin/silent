@@ -6,17 +6,19 @@
 //! never cached.
 
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
 use bitcoin::{
-    bip32::Fingerprint,
+    bip32::{DerivationPath, Fingerprint, Xpub},
     secp256k1::{All, Secp256k1},
     Network,
 };
+use bwk_sp::bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor;
 
 use crate::keys::{
     error::Error,
     network_name,
-    record::{DeviceRecord, KeyRecord, RouteKind},
+    record::{DescriptorEntry, DeviceRecord, KeyRecord, RouteKind, XpubEntry},
     store::KeyStore,
 };
 
@@ -70,6 +72,28 @@ pub trait KeyManagerImpl {
     ) -> Result<(), Error>;
     fn set_live_devices(&mut self, live: Vec<LiveDevice>);
     fn live_devices(&self) -> &[LiveDevice];
+
+    fn cache_xpub(
+        &mut self,
+        fingerprint: Fingerprint,
+        path: DerivationPath,
+        xpub: Xpub,
+    ) -> Result<(), Error>;
+    fn xpub(&self, fingerprint: Fingerprint, path: &DerivationPath) -> Option<Xpub>;
+
+    fn set_descriptor_registered(
+        &mut self,
+        fingerprint: Fingerprint,
+        alias: String,
+        descriptor: String,
+    ) -> Result<(), Error>;
+    fn clear_descriptor_registration(
+        &mut self,
+        fingerprint: Fingerprint,
+        descriptor: &str,
+    ) -> Result<(), Error>;
+    fn registered_descriptors(&self, fingerprint: Fingerprint) -> &[DescriptorEntry];
+    fn keys_for_descriptor(&self, descriptor: &str) -> Vec<Fingerprint>;
 }
 
 /// Owns the in-memory view of every registered key on one network.
@@ -106,13 +130,6 @@ impl KeyManager {
             .map(|record| (record.fingerprint, record))
             .collect();
         Ok(())
-    }
-
-    /// Reused by later tasks (signing, xpub derivation) instead of building a fresh
-    /// context per call.
-    #[allow(dead_code)]
-    pub fn secp(&self) -> &Secp256k1<All> {
-        &self.secp
     }
 
     /// Writes through to the store before committing the change to memory, so memory
@@ -268,12 +285,133 @@ impl KeyManagerImpl for KeyManager {
     fn live_devices(&self) -> &[LiveDevice] {
         &self.live
     }
+
+    fn cache_xpub(
+        &mut self,
+        fingerprint: Fingerprint,
+        path: DerivationPath,
+        xpub: Xpub,
+    ) -> Result<(), Error> {
+        self.mutate(fingerprint, |record| {
+            if let Some(entry) = record.xpubs.iter().find(|entry| entry.path == path) {
+                if entry.xpub == xpub {
+                    return Ok(());
+                }
+                return Err(Error::XpubMismatch {
+                    fingerprint,
+                    path,
+                    cached: Box::new(entry.xpub),
+                    found: Box::new(xpub),
+                });
+            }
+            let index = record
+                .xpubs
+                .iter()
+                .position(|entry| entry.path > path)
+                .unwrap_or(record.xpubs.len());
+            record.xpubs.insert(index, XpubEntry { path, xpub });
+            Ok(())
+        })
+    }
+
+    fn xpub(&self, fingerprint: Fingerprint, path: &DerivationPath) -> Option<Xpub> {
+        self.records
+            .get(&fingerprint)?
+            .xpubs
+            .iter()
+            .find(|entry| entry.path == *path)
+            .map(|entry| entry.xpub)
+    }
+
+    fn set_descriptor_registered(
+        &mut self,
+        fingerprint: Fingerprint,
+        alias: String,
+        descriptor: String,
+    ) -> Result<(), Error> {
+        if let Ok(parsed) = SpDescriptor::from_str(&descriptor) {
+            match parsed.spend_secret_key(&self.secp) {
+                Ok(Some(_)) => return Err(Error::SpSpendDescriptor),
+                Ok(None) => {}
+                Err(e) => return Err(Error::DescriptorParse(e.to_string())),
+            }
+        }
+        self.mutate(fingerprint, |record| {
+            if let Some(entry) = record
+                .descriptors
+                .iter_mut()
+                .find(|entry| entry.descriptor == descriptor)
+            {
+                if entry.alias != alias {
+                    entry.alias = alias;
+                }
+                return Ok(());
+            }
+            let index = record
+                .descriptors
+                .iter()
+                .position(|entry| entry.descriptor > descriptor)
+                .unwrap_or(record.descriptors.len());
+            record
+                .descriptors
+                .insert(index, DescriptorEntry { alias, descriptor });
+            Ok(())
+        })
+    }
+
+    fn clear_descriptor_registration(
+        &mut self,
+        fingerprint: Fingerprint,
+        descriptor: &str,
+    ) -> Result<(), Error> {
+        let record = self
+            .records
+            .get(&fingerprint)
+            .ok_or(Error::UnknownKey(fingerprint))?;
+        if !record
+            .descriptors
+            .iter()
+            .any(|entry| entry.descriptor == descriptor)
+        {
+            return Err(Error::DescriptorNotRegistered {
+                fingerprint,
+                descriptor: descriptor.to_string(),
+            });
+        }
+        self.mutate(fingerprint, |record| {
+            record
+                .descriptors
+                .retain(|entry| entry.descriptor != descriptor);
+            Ok(())
+        })
+    }
+
+    fn registered_descriptors(&self, fingerprint: Fingerprint) -> &[DescriptorEntry] {
+        self.records
+            .get(&fingerprint)
+            .map(|record| record.descriptors.as_slice())
+            .unwrap_or(&[])
+    }
+
+    fn keys_for_descriptor(&self, descriptor: &str) -> Vec<Fingerprint> {
+        self.records
+            .iter()
+            .filter(|(_, record)| {
+                record
+                    .descriptors
+                    .iter()
+                    .any(|entry| entry.descriptor == descriptor)
+            })
+            .map(|(fingerprint, _)| *fingerprint)
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
-    use crate::keys::record::DescriptorEntry;
 
     fn fingerprint(value: u32) -> Fingerprint {
         Fingerprint::from(value.to_be_bytes())
@@ -282,6 +420,22 @@ mod tests {
     fn manager_over(root: &std::path::Path, network: Network) -> KeyManager {
         let store = KeyStore::new(root.to_path_buf(), network);
         KeyManager::new(store, network).expect("build manager")
+    }
+
+    fn test_xpub() -> Xpub {
+        let seed = [11u8; 32];
+        let xpriv = bitcoin::bip32::Xpriv::new_master(bitcoin::NetworkKind::Test, &seed)
+            .expect("valid seed");
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        Xpub::from_priv(&secp, &xpriv)
+    }
+
+    fn other_test_xpub() -> Xpub {
+        let seed = [13u8; 32];
+        let xpriv = bitcoin::bip32::Xpriv::new_master(bitcoin::NetworkKind::Test, &seed)
+            .expect("valid seed");
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        Xpub::from_priv(&secp, &xpriv)
     }
 
     #[test]
@@ -596,6 +750,326 @@ mod tests {
         assert!(
             listed.is_empty(),
             "expected no file for an unregistered live device, got {listed:?}"
+        );
+    }
+
+    #[test]
+    fn cache_xpub_persists_and_reads_back() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+
+        let path = DerivationPath::from_str("m/86'/1'/0'").expect("valid path");
+        let xpub = test_xpub();
+        manager
+            .cache_xpub(fingerprint(1), path.clone(), xpub)
+            .expect("cache xpub");
+
+        let reloaded = manager_over(tmp.path(), Network::Regtest);
+        let found = reloaded.xpub(fingerprint(1), &path);
+        assert_eq!(
+            found,
+            Some(xpub),
+            "expected the cached xpub to persist, got {found:?}"
+        );
+    }
+
+    #[test]
+    fn caching_the_same_xpub_twice_does_not_rewrite_the_file() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+
+        let path = DerivationPath::from_str("m/86'/1'/0'").expect("valid path");
+        let xpub = test_xpub();
+        manager
+            .cache_xpub(fingerprint(1), path.clone(), xpub)
+            .expect("first cache");
+
+        let store = KeyStore::new(tmp.path().to_path_buf(), Network::Regtest);
+        let file_path = store.record_path(fingerprint(1)).expect("record path");
+        let before = std::fs::read(&file_path).expect("read file before");
+
+        manager
+            .cache_xpub(fingerprint(1), path, xpub)
+            .expect("second cache is a no-op");
+
+        let after = std::fs::read(&file_path).expect("read file after");
+        assert_eq!(
+            before, after,
+            "expected caching the same xpub twice to leave the file untouched"
+        );
+    }
+
+    #[test]
+    fn a_different_xpub_at_the_same_path_is_refused() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+
+        let path = DerivationPath::from_str("m/86'/1'/0'").expect("valid path");
+        let first = test_xpub();
+        manager
+            .cache_xpub(fingerprint(1), path.clone(), first)
+            .expect("first cache");
+
+        let second = other_test_xpub();
+        let result = manager.cache_xpub(fingerprint(1), path.clone(), second);
+        assert!(
+            matches!(
+                result,
+                Err(Error::XpubMismatch { ref cached, ref found, .. })
+                    if **cached == first && **found == second
+            ),
+            "expected XpubMismatch carrying both values, got {result:?}"
+        );
+
+        let still_cached = manager.xpub(fingerprint(1), &path);
+        assert_eq!(
+            still_cached,
+            Some(first),
+            "expected the original xpub to remain cached, got {still_cached:?}"
+        );
+    }
+
+    #[test]
+    fn cache_xpub_detects_a_stale_conflict_against_disk() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager_a = manager_over(tmp.path(), Network::Regtest);
+        let fp = fingerprint(1);
+        manager_a
+            .add_key(KeyRecord::new(fp, Network::Regtest, "alias".to_string()))
+            .expect("add key");
+
+        let mut manager_b = manager_over(tmp.path(), Network::Regtest);
+
+        let path = DerivationPath::from_str("m/86'/1'/0'").expect("valid path");
+        let first = test_xpub();
+        manager_a
+            .cache_xpub(fp, path.clone(), first)
+            .expect("A caches the first xpub");
+
+        let second = other_test_xpub();
+        let result = manager_b.cache_xpub(fp, path.clone(), second);
+        assert!(
+            matches!(
+                result,
+                Err(Error::XpubMismatch { ref cached, ref found, .. })
+                    if **cached == first && **found == second
+            ),
+            "expected XpubMismatch against the on-disk xpub, got {result:?}"
+        );
+
+        let store = KeyStore::new(tmp.path().to_path_buf(), Network::Regtest);
+        let on_disk = store.load(fp).expect("load record");
+        assert_eq!(
+            on_disk.xpubs,
+            vec![XpubEntry { path, xpub: first }],
+            "expected only A's xpub on disk, got {:?}",
+            on_disk.xpubs
+        );
+    }
+
+    #[test]
+    fn xpub_on_an_unknown_path_is_none() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+
+        let path = DerivationPath::from_str("m/86'/1'/0'").expect("valid path");
+        let found = manager.xpub(fingerprint(1), &path);
+        assert_eq!(
+            found, None,
+            "expected no cached xpub for an unqueried path, got {found:?}"
+        );
+    }
+
+    #[test]
+    fn cache_xpub_on_an_unknown_fingerprint_errors() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let unknown = fingerprint(99);
+        let path = DerivationPath::from_str("m/86'/1'/0'").expect("valid path");
+
+        let result = manager.cache_xpub(unknown, path, test_xpub());
+        assert!(
+            matches!(result, Err(Error::UnknownKey(fp)) if fp == unknown),
+            "expected UnknownKey, got {result:?}"
+        );
+
+        let store = KeyStore::new(tmp.path().to_path_buf(), Network::Regtest);
+        let listed = store.list().expect("list");
+        assert!(
+            listed.is_empty(),
+            "expected no file for a cache on an unknown fingerprint, got {listed:?}"
+        );
+    }
+
+    #[test]
+    fn set_descriptor_registered_persists_and_dedupes() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+
+        manager
+            .set_descriptor_registered(
+                fingerprint(1),
+                "first alias".to_string(),
+                "descriptor".to_string(),
+            )
+            .expect("first register");
+        manager
+            .set_descriptor_registered(
+                fingerprint(1),
+                "first alias".to_string(),
+                "descriptor".to_string(),
+            )
+            .expect("duplicate register is a no-op");
+
+        let reloaded = manager_over(tmp.path(), Network::Regtest);
+        let descriptors = reloaded.registered_descriptors(fingerprint(1));
+        assert_eq!(
+            descriptors,
+            &[DescriptorEntry {
+                alias: "first alias".to_string(),
+                descriptor: "descriptor".to_string(),
+            }],
+            "expected a single entry after registering twice with the same alias, got {descriptors:?}"
+        );
+
+        manager
+            .set_descriptor_registered(
+                fingerprint(1),
+                "new alias".to_string(),
+                "descriptor".to_string(),
+            )
+            .expect("re-register with a new alias");
+        let descriptors = manager.registered_descriptors(fingerprint(1));
+        assert_eq!(
+            descriptors,
+            &[DescriptorEntry {
+                alias: "new alias".to_string(),
+                descriptor: "descriptor".to_string(),
+            }],
+            "expected the alias to update in place, got {descriptors:?}"
+        );
+    }
+
+    #[test]
+    fn set_descriptor_registered_dedupes_against_disk_not_stale_memory() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager_a = manager_over(tmp.path(), Network::Regtest);
+        let fp = fingerprint(1);
+        manager_a
+            .add_key(KeyRecord::new(fp, Network::Regtest, "alias".to_string()))
+            .expect("add key");
+
+        let mut manager_b = manager_over(tmp.path(), Network::Regtest);
+
+        manager_a
+            .set_descriptor_registered(fp, "alias one".to_string(), "descriptor".to_string())
+            .expect("A registers the descriptor");
+        manager_b
+            .set_descriptor_registered(fp, "alias one".to_string(), "descriptor".to_string())
+            .expect("B's stale register is a no-op against disk");
+
+        let store = KeyStore::new(tmp.path().to_path_buf(), Network::Regtest);
+        let on_disk = store.load(fp).expect("load record");
+        assert_eq!(
+            on_disk.descriptors.len(),
+            1,
+            "expected no duplicate descriptor on disk, got {:?}",
+            on_disk.descriptors
+        );
+    }
+
+    #[test]
+    fn clear_descriptor_registration_removes_the_entry() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+        manager
+            .set_descriptor_registered(
+                fingerprint(1),
+                "alias".to_string(),
+                "descriptor".to_string(),
+            )
+            .expect("register");
+
+        manager
+            .clear_descriptor_registration(fingerprint(1), "descriptor")
+            .expect("clear registration");
+        let descriptors = manager.registered_descriptors(fingerprint(1));
+        assert!(
+            descriptors.is_empty(),
+            "expected no descriptors after clearing, got {descriptors:?}"
+        );
+
+        let second = manager.clear_descriptor_registration(fingerprint(1), "descriptor");
+        assert!(
+            matches!(
+                second,
+                Err(Error::DescriptorNotRegistered { fingerprint: fp, ref descriptor })
+                    if fp == fingerprint(1) && descriptor == "descriptor"
+            ),
+            "expected DescriptorNotRegistered on the second clear, got {second:?}"
+        );
+    }
+
+    #[test]
+    fn keys_for_descriptor_finds_every_key() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        manager
+            .add_key(KeyRecord::new(
+                fingerprint(1),
+                Network::Regtest,
+                "first".to_string(),
+            ))
+            .expect("add first key");
+        manager
+            .add_key(KeyRecord::new(
+                fingerprint(2),
+                Network::Regtest,
+                "second".to_string(),
+            ))
+            .expect("add second key");
+
+        manager
+            .set_descriptor_registered(fingerprint(2), "alias 2".to_string(), "shared".to_string())
+            .expect("register on second");
+        manager
+            .set_descriptor_registered(fingerprint(1), "alias 1".to_string(), "shared".to_string())
+            .expect("register on first");
+
+        let found = manager.keys_for_descriptor("shared");
+        assert_eq!(
+            found,
+            vec![fingerprint(1), fingerprint(2)],
+            "expected both fingerprints in fingerprint order, got {found:?}"
+        );
+
+        let empty = manager.keys_for_descriptor("unregistered");
+        assert!(
+            empty.is_empty(),
+            "expected no keys for an unregistered descriptor, got {empty:?}"
+        );
+    }
+
+    #[test]
+    fn registered_descriptors_on_an_unknown_fingerprint_is_empty() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let manager = manager_over(tmp.path(), Network::Regtest);
+        let descriptors = manager.registered_descriptors(fingerprint(99));
+        assert!(
+            descriptors.is_empty(),
+            "expected an empty slice for an unknown fingerprint, got {descriptors:?}"
         );
     }
 }

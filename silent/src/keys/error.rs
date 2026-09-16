@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use bitcoin::bip32::Fingerprint;
+use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
 
 use crate::keys::record::RouteKind;
 
@@ -75,4 +75,20 @@ pub enum Error {
         fingerprint: Fingerprint,
         count: usize,
     },
+    #[error("path '{path}' on key '{fingerprint}' is already cached with a different xpub")]
+    XpubMismatch {
+        fingerprint: Fingerprint,
+        path: DerivationPath,
+        cached: Box<Xpub>,
+        found: Box<Xpub>,
+    },
+    #[error("key '{fingerprint}' has no descriptor '{descriptor}' registered")]
+    DescriptorNotRegistered {
+        fingerprint: Fingerprint,
+        descriptor: String,
+    },
+    #[error("failed to parse descriptor: {0}")]
+    DescriptorParse(String),
+    #[error("sp() descriptor holds a spend secret; only watch-only descriptors are accepted")]
+    SpSpendDescriptor,
 }

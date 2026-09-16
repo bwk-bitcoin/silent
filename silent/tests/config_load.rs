@@ -141,3 +141,67 @@ fn config_from_file_defaults_plugin_id_to_sp() {
         "plugin_id should default to \"sp\" when absent from a valid file"
     );
 }
+
+/// A full sp() descriptor carrying the spend secret, used only to exercise the
+/// refusal path in `to_sp_config`. Test accounts elsewhere use the watch-only
+/// `common::descriptor_from_mnemonic` instead.
+fn spend_descriptor_from_mnemonic(mnemonic: &str, network: Network) -> String {
+    let btc_network = match network {
+        Network::Regtest => bitcoin::Network::Regtest,
+        Network::Signet => bitcoin::Network::Signet,
+        Network::Testnet => bitcoin::Network::Testnet,
+        Network::Bitcoin => bitcoin::Network::Bitcoin,
+        _ => unreachable!("CXX enum type safety guarantees no other variants exist"),
+    };
+    bwk_sp::account::config::Config::new(
+        "test".to_string(),
+        btc_network,
+        mnemonic.to_string(),
+        String::new(),
+        PathBuf::new(),
+    )
+    .unwrap()
+    .descriptor
+    .to_string()
+}
+
+#[test]
+fn to_sp_config_refuses_a_spend_descriptor() {
+    shared_datadir();
+
+    let config = Config::new(
+        "spend_descriptor_account".to_string(),
+        Network::Regtest,
+        spend_descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest),
+        "http://localhost:50001".to_string(),
+        String::new(),
+        Some(546),
+    );
+
+    let result = config.to_sp_config();
+    assert!(
+        matches!(result, Err(ref message) if message.contains("watch-only")),
+        "expected a watch-only refusal, got {result:?}"
+    );
+}
+
+#[test]
+fn to_sp_config_accepts_a_watch_only_descriptor() {
+    shared_datadir();
+
+    let descriptor = descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest);
+    let config = Config::new(
+        "watch_only_account".to_string(),
+        Network::Regtest,
+        descriptor,
+        "http://localhost:50001".to_string(),
+        String::new(),
+        Some(546),
+    );
+
+    let result = config.to_sp_config();
+    assert!(
+        result.is_ok(),
+        "expected a watch-only descriptor to be accepted, got {result:?}"
+    );
+}

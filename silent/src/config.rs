@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::OnceLock;
 
-use bitcoin::Network as BtcNetwork;
+use bitcoin::{secp256k1::Secp256k1, Network as BtcNetwork};
 use bwk_sp::account::config::Config as SpConfig;
 use bwk_sp::bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor;
 use serde::{Deserialize, Serialize};
@@ -192,6 +192,13 @@ impl Config {
     pub fn to_sp_config(&self) -> Result<SpConfig, String> {
         let descriptor = SpDescriptor::from_str(&self.descriptor)
             .map_err(|e| format!("invalid SP descriptor: {e}"))?;
+        let has_spend_secret = descriptor
+            .spend_secret_key(&Secp256k1::new())
+            .map_err(|e| format!("invalid SP descriptor: {e}"))?
+            .is_some();
+        if has_spend_secret {
+            return Err(crate::keys::error::Error::SpSpendDescriptor.to_string());
+        }
         let mut config = SpConfig::from_descriptor(
             self.account_name.clone(),
             self.network.into(),
