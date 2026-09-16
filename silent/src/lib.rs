@@ -78,6 +78,7 @@ mod ffi {
         WalletRegistered,
         WalletIsRegistered,
         TransactionSigned,
+        AddressDisplayed,
         Error,
     }
 
@@ -910,6 +911,17 @@ mod ffi {
             descriptor: &str,
         ) -> bool;
         fn sign_psbt(self: &HwiService, req_id: u64, device_id: &str, psbt_base64: &str) -> bool;
+
+        /// Asks the device to show the address at `path`. `descriptor` picks the script
+        /// kind: a taproot single key path is shown directly, anything else needs the
+        /// wallet to be registered first.
+        fn display_address(
+            self: &HwiService,
+            req_id: u64,
+            device_id: &str,
+            descriptor: &str,
+            path: &str,
+        ) -> bool;
     }
 
     // ===== HwiReceiver / HwiPoll Methods =====

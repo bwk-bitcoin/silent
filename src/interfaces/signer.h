@@ -24,6 +24,11 @@ public:
     [[nodiscard]] virtual QString id() const = 0;
     [[nodiscard]] virtual QString fingerprint() const = 0;
     [[nodiscard]] virtual QString walletName() const = 0;
+    // Device provenance, immutable like the accessors above. Nothing here identifies a
+    // signer: it exists only to tell apart several device records sharing a fingerprint.
+    [[nodiscard]] virtual QString brand() const = 0;
+    [[nodiscard]] virtual QString model() const = 0;
+    [[nodiscard]] virtual QString serial() const = 0;
     // Immutable too: a signer whose state changes is dropped and registered
     // again, so a reader never sees it change underneath. Requests on anything
     // but Ready answer with error(). stateDetail() says why, in one line the UI
@@ -37,6 +42,10 @@ public:
     virtual ReqId isDescriptorRegistered(const QString &descriptor) = 0;
     virtual ReqId registerDescriptor(const QString &descriptor) = 0;
     virtual ReqId signWithDescriptor(const QString &psbt_base64, const QString &descriptor) = 0;
+    // Asks the device to show `address` on its own screen so the user can compare it.
+    // `descriptor` is the wallet the address belongs to and `path` its derivation.
+    virtual ReqId displayAddress(const QString &descriptor, const QString &path,
+                                 const QString &address) = 0;
     virtual ReqId raw(const QByteArray &request) = 0;
 
 signals:
@@ -47,6 +56,9 @@ signals:
     void descriptorIsRegistered(ReqId req_id, bool registered);
     // NOLINTNEXTLINE(readability-identifier-naming)
     void signed_(ReqId req_id, QString psbt_base64);
+    // Echoes the address the caller asked for, so a screen can confirm which one was
+    // shown without keeping its own map.
+    void addressDisplayed(ReqId req_id, QString address);
     void raw(ReqId req_id, QByteArray response);
     void error(std::optional<ReqId> req_id, QString message);
 };

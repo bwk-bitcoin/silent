@@ -52,6 +52,8 @@ public:
     [[nodiscard]] bool sendRegister(ReqId req_id, const QString &device_id,
                                     const QString &descriptor);
     [[nodiscard]] bool sendSign(ReqId req_id, const QString &device_id, const QString &psbt_base64);
+    [[nodiscard]] bool sendDisplayAddress(ReqId req_id, const QString &device_id,
+                                          const QString &descriptor, const QString &path);
     ReqId nextReqId();
     void trackRequest(ReqId req_id, HwiSigner *signer);
 

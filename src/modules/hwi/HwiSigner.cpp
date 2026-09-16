@@ -58,6 +58,21 @@ QString HwiSigner::walletName() const {
     return QString();
 }
 
+QString HwiSigner::brand() const {
+    // The device kind the service reports (ledger, coldcard, bitbox02, jade).
+    return m_kind;
+}
+
+// bwk-hwi reports neither a model nor a serial today (only BitBox carries one, inside
+// its id), so these stay empty until the upstream ask lands.
+QString HwiSigner::model() const {
+    return QString();
+}
+
+QString HwiSigner::serial() const {
+    return QString();
+}
+
 plugin::SignerState HwiSigner::state() const {
     return m_state;
 }
@@ -114,6 +129,13 @@ ReqId HwiSigner::signWithDescriptor(const QString &psbt_base64, const QString &d
     return dispatch(Request::Sign, psbt_base64, descriptor);
 }
 
+ReqId HwiSigner::displayAddress(const QString &descriptor, const QString &path,
+                                const QString &address) {
+    ReqId reqId = dispatch(Request::DisplayAddress, descriptor, path);
+    m_display_addresses.insert(reqId, address);
+    return reqId;
+}
+
 ReqId HwiSigner::raw(const QByteArray &request) {
     Q_UNUSED(request);
     ReqId reqId = m_module->nextReqId();
@@ -122,7 +144,6 @@ ReqId HwiSigner::raw(const QByteArray &request) {
 }
 
 ReqId HwiSigner::dispatch(Request request, const QString &first, const QString &second) {
-    Q_UNUSED(second);
     ReqId reqId = m_module->nextReqId();
     if (!ready()) {
         emit deferredError(reqId, m_detail);
@@ -141,7 +162,11 @@ ReqId HwiSigner::dispatch(Request request, const QString &first, const QString &
         sent = m_module->sendRegister(reqId, m_id, first);
         break;
     case Request::Sign:
+        // second carries the descriptor, unused: bwk's sign_tx takes only the PSBT.
         sent = m_module->sendSign(reqId, m_id, first);
+        break;
+    case Request::DisplayAddress:
+        sent = m_module->sendDisplayAddress(reqId, m_id, first, second);
         break;
     }
 
@@ -168,7 +193,11 @@ void HwiSigner::deliver(const HwiEvent &event) {
     case HwiEventFlag::TransactionSigned:
         emit signed_(reqId, toQt(event.payload));
         break;
+    case HwiEventFlag::AddressDisplayed:
+        emit addressDisplayed(reqId, m_display_addresses.take(reqId));
+        break;
     case HwiEventFlag::Error:
+        m_display_addresses.remove(reqId);
         emit error(reqId, toQt(event.error));
         break;
     default:
@@ -195,5 +224,8 @@ void HwiSigner::onDeferredInitialized(ReqId req_id) {
 }
 
 void HwiSigner::onDeferredError(ReqId req_id, QString message) {
+    // Covers a displayAddress() refused before dispatch, so the map cannot grow there
+    // either; a no-op for every other request kind.
+    m_display_addresses.remove(req_id);
     emit error(req_id, std::move(message));
 }

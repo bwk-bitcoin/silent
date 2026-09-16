@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QObject>
 #include <QString>
 
@@ -25,6 +26,9 @@ public:
     [[nodiscard]] QString id() const override;
     [[nodiscard]] QString fingerprint() const override;
     [[nodiscard]] QString walletName() const override;
+    [[nodiscard]] QString brand() const override;
+    [[nodiscard]] QString model() const override;
+    [[nodiscard]] QString serial() const override;
     [[nodiscard]] plugin::SignerState state() const override;
     [[nodiscard]] QString stateDetail() const override;
 
@@ -34,6 +38,8 @@ public:
     ReqId isDescriptorRegistered(const QString &descriptor) override;
     ReqId registerDescriptor(const QString &descriptor) override;
     ReqId signWithDescriptor(const QString &psbt_base64, const QString &descriptor) override;
+    ReqId displayAddress(const QString &descriptor, const QString &path,
+                         const QString &address) override;
     ReqId raw(const QByteArray &request) override;
 
     // Called by the module when a notification carries one of this signer's request ids.
@@ -57,7 +63,7 @@ private slots:
     void onDeferredError(ReqId req_id, QString message);
 
 protected:
-    enum class Request { Xpub, IsRegistered, Register, Sign };
+    enum class Request { Xpub, IsRegistered, Register, Sign, DisplayAddress };
 
     // Allocates a request id and dispatches, or defers an error when the device cannot
     // take it. Either way the caller gets an id and an answer on a signal.
@@ -72,4 +78,5 @@ private:
     QString m_version;
     QString m_detail;
     plugin::SignerState m_state = plugin::SignerState::Unsupported;
+    QHash<ReqId, QString> m_display_addresses;
 };

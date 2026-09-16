@@ -1097,7 +1097,8 @@ enum class HwiEventFlag : ::std::uint8_t {
   WalletRegistered = 3,
   WalletIsRegistered = 4,
   TransactionSigned = 5,
-  Error = 6,
+  AddressDisplayed = 6,
+  Error = 7,
 };
 #endif // CXXBRIDGE1_ENUM_HwiEventFlag
 
@@ -2007,6 +2008,12 @@ struct HwiService final : public ::rust::Opaque {
   bool is_descriptor_registered(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str descriptor) const noexcept;
   bool register_descriptor(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str descriptor) const noexcept;
   bool sign_psbt(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str psbt_base64) const noexcept;
+
+  // Asks the device to show the address at `path`. `descriptor` picks the script
+  // kind: a taproot single key path is shown directly, anything else needs the
+  // wallet to be registered first.
+  bool display_address(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str descriptor, ::rust::Str path) const noexcept;
+
   ~HwiService() = delete;
 
 private:

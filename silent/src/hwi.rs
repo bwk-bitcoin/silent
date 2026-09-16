@@ -12,8 +12,12 @@ use std::sync::Arc;
 use bitcoin::bip32::DerivationPath;
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::{Network as BtcNetwork, Psbt};
-use bwk_hwi::service::{
-    HwiService as BwkService, SigningDevice, SigningDeviceMsg, SupportedDevice, UnsupportedReason,
+use bwk_hwi::{
+    service::{
+        HwiService as BwkService, SigningDevice, SigningDeviceMsg, SupportedDevice,
+        UnsupportedReason,
+    },
+    AddressScript,
 };
 use crossbeam::channel;
 
@@ -174,6 +178,44 @@ impl HwiService {
         true
     }
 
+    pub fn display_address(
+        &self,
+        req_id: u64,
+        device_id: &str,
+        descriptor: &str,
+        path: &str,
+    ) -> bool {
+        let script = if descriptor.is_empty() || descriptor.starts_with("tr(") {
+            let Ok(deriv) = DerivationPath::from_str(path) else {
+                log::error!("HwiService::display_address() invalid derivation path: {path}");
+                return false;
+            };
+            AddressScript::P2TR(deriv)
+        } else {
+            let segments: Vec<&str> = path.split('/').collect();
+            if segments.len() < 2 {
+                log::error!("HwiService::display_address() path too short for miniscript: {path}");
+                return false;
+            }
+            let change_str = segments[segments.len() - 2];
+            let index_str = segments[segments.len() - 1];
+            let (Ok(change), Ok(index)) = (change_str.parse::<u32>(), index_str.parse::<u32>())
+            else {
+                log::error!("HwiService::display_address() invalid change/index in path: {path}");
+                return false;
+            };
+            AddressScript::Miniscript {
+                index,
+                change: change != 0,
+            }
+        };
+        let Some(device) = self.supported(device_id) else {
+            return false;
+        };
+        device.display_address(req_id, &script);
+        true
+    }
+
     fn supported(&self, device_id: &str) -> Option<SupportedDevice<HwiMessage, u64>> {
         match self.inner.list().remove(device_id) {
             Some(SigningDevice::Supported(device)) => Some(device),
@@ -234,6 +276,14 @@ fn to_device(id: String, device: &SigningDevice<HwiMessage, u64>) -> HwiDevice {
         version,
         state,
         detail,
+    }
+}
+
+/// Short, log-only rendering of what was shown on the device screen.
+fn render_address_script(script: &AddressScript) -> String {
+    match script {
+        AddressScript::P2TR(path) => path.to_string(),
+        AddressScript::Miniscript { index, change } => format!("{change}/{index}"),
     }
 }
 
@@ -304,8 +354,14 @@ fn to_event(msg: SigningDeviceMsg<u64>) -> Option<HwiEvent> {
             ok: true,
             ..HwiEvent::default()
         },
-        // Never requested: nothing calls display_address.
-        SigningDeviceMsg::AddressDisplayed(..) => return None,
+        SigningDeviceMsg::AddressDisplayed(req_id, fingerprint, script) => HwiEvent {
+            flag: HwiEventFlag::AddressDisplayed,
+            req_id,
+            fingerprint: fingerprint.to_string(),
+            payload: render_address_script(&script),
+            ok: true,
+            ..HwiEvent::default()
+        },
     };
     Some(event)
 }

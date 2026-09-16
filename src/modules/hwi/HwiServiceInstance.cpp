@@ -48,6 +48,9 @@ public:
     [[nodiscard]] QString id() const override { return QString(); }
     [[nodiscard]] QString fingerprint() const override { return QString(); }
     [[nodiscard]] QString walletName() const override { return QString(); }
+    [[nodiscard]] QString brand() const override { return QString(); }
+    [[nodiscard]] QString model() const override { return QString(); }
+    [[nodiscard]] QString serial() const override { return QString(); }
     [[nodiscard]] plugin::SignerState state() const override {
         return plugin::SignerState::Unsupported;
     }
@@ -69,6 +72,13 @@ public:
     ReqId signWithDescriptor(const QString &psbt_base64, const QString &descriptor) override {
         Q_UNUSED(psbt_base64);
         Q_UNUSED(descriptor);
+        return 0;
+    }
+    ReqId displayAddress(const QString &descriptor, const QString &path,
+                         const QString &address) override {
+        Q_UNUSED(descriptor);
+        Q_UNUSED(path);
+        Q_UNUSED(address);
         return 0;
     }
     ReqId raw(const QByteArray &request) override {

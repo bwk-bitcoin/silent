@@ -205,6 +205,15 @@ bool HwiModule::sendSign(ReqId req_id, const QString &device_id, const QString &
                                         psbt_base64.toStdString());
 }
 
+bool HwiModule::sendDisplayAddress(ReqId req_id, const QString &device_id,
+                                   const QString &descriptor, const QString &path) {
+    if (!m_service.has_value()) {
+        return false;
+    }
+    return m_service.value()->display_address(req_id, device_id.toStdString(),
+                                              descriptor.toStdString(), path.toStdString());
+}
+
 QString HwiModule::instanceIdFor(const QString &device_id) {
     return K_INSTANCE_PREFIX + device_id;
 }
