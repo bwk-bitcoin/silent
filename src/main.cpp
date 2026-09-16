@@ -3,6 +3,7 @@
 #include "i18n/I18nManager.h"
 #include "metatypes.h"
 #include "modules/hwi/HwiPlugin.h"
+#include "modules/keys/KeysModule.h"
 #include "modules/sp/SpPlugin.h"
 #include "interfaces/types.h"
 #include "interfaces/host.h"
@@ -40,6 +41,7 @@ auto main(int argc, char *argv[]) -> int {
     qRegisterMetaType<Notification>();
     qRegisterMetaType<HwiEvent>();
     qRegisterMetaType<HwiDevice>();
+    qRegisterMetaType<KeyEvent>();
     qRegisterMetaType<std::optional<ReqId>>();
 
     // Initialize Rust logging (Debug level for verbose output)
@@ -60,6 +62,7 @@ auto main(int argc, char *argv[]) -> int {
     Host::get();
     controller->registerBuiltinPlugin(std::make_unique<SpPlugin>());
     controller->registerBuiltinPlugin(std::make_unique<HwiPlugin>());
+    controller->registerBuiltinPlugin(std::make_unique<keys::KeysModule>());
 
     // Create and show main window
     auto *window = new MainWindow();

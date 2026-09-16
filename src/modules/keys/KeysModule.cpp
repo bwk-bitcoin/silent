@@ -1,0 +1,301 @@
+#include "KeysModule.h"
+
+#include "modules/hwi/HwiModule.h"
+
+#include "interfaces/host.h"
+#include "interfaces/signer.h"
+
+#include <QDebug>
+#include <QThread>
+
+#include <common.h>
+
+namespace keys {
+
+KeysBus::KeysBus(KeysModule *module, QObject *parent) : IKeys(parent), m_module(module) {
+}
+
+QList<KeyEntry> KeysBus::keys(Network network) const {
+    QList<KeyEntry> entries;
+    // The module holds one network at a time, so a request for any other network
+    // gets nothing rather than a stale cross-network list.
+    if (network != KeysModule::network()) {
+        return entries;
+    }
+    for (const auto &info : m_module->keys()) {
+        KeyEntry entry;
+        entry.fingerprint = KeysModule::toQt(info.fingerprint);
+        entry.alias = KeysModule::toQt(info.alias);
+        // Route signers are supplied by a later task; until then a null signer with
+        // can_sign false is the honest answer.
+        entry.can_sign = false;
+        entry.signer = nullptr;
+        entries.append(entry);
+    }
+    return entries;
+}
+
+auto KeysBus::newRequest() -> ReqId {
+    return m_module->nextReqId();
+}
+
+void KeysBus::sign(ReqId req_id, [[maybe_unused]] const QString &psbt_v2_hex,
+                   [[maybe_unused]] const QStringList &descriptors) {
+    deliverError(req_id, QStringLiteral("keys: signing is not wired yet"));
+}
+
+void KeysBus::verifyAddress(ReqId req_id, [[maybe_unused]] const QString &descriptor,
+                            [[maybe_unused]] const QString &path,
+                            [[maybe_unused]] const QString &address) {
+    deliverError(req_id, QStringLiteral("keys: signing is not wired yet"));
+}
+
+void KeysBus::spDescriptor(ReqId req_id, [[maybe_unused]] const QString &fingerprint) {
+    deliverError(req_id, QStringLiteral("keys: sp descriptor fetch is not wired yet"));
+}
+
+void KeysBus::registerDescriptor(ReqId req_id, [[maybe_unused]] const QString &fingerprint,
+                                 [[maybe_unused]] const QString &descriptor) {
+    deliverError(req_id, QStringLiteral("keys: descriptor registration is not wired yet"));
+}
+
+void KeysBus::deliverSigned(ReqId req_id, const QString &psbt_v2_hex) {
+    emit signed_(req_id, psbt_v2_hex);
+}
+
+void KeysBus::deliverVerified(ReqId req_id, const QString &address) {
+    emit verified(req_id, address);
+}
+
+void KeysBus::deliverError(std::optional<ReqId> req_id, const QString &message) {
+    emit error(req_id, message);
+}
+
+KeysModule::KeysModule(QObject *parent) : IModule(parent) {
+    connect(this, &KeysModule::keyEventReceived, this, &KeysModule::onKeyEventReceived,
+            qontrol::UNIQUE);
+    connect(Host::get()->events(), &HostEvents::instanceRegistered, this,
+            &KeysModule::onInstanceRegistered, qontrol::UNIQUE);
+    connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
+            &KeysModule::onInstanceRemoved, qontrol::UNIQUE);
+    createModule();
+    m_bus = std::make_unique<KeysBus>(this);
+    Host::get()->setKeys(m_bus.get(), this);
+    bindHwiModule();
+    refreshLiveDevices();
+}
+
+KeysModule::~KeysModule() {
+    teardownModule();
+}
+
+auto KeysModule::toQt(const rust::String &value) -> QString {
+    return QString::fromStdString(std::string(value));
+}
+
+QMap<QString, QString> KeysModule::meta() const {
+    return {{QStringLiteral("id"), QStringLiteral("keys")},
+            {QStringLiteral("name"), QStringLiteral("Keys")},
+            {QStringLiteral("version"), QStringLiteral("1.0.0")}};
+}
+
+QList<IModule *> KeysModule::modules() const {
+    // IPlugin::modules() is const, but the host activates the module it gets back.
+    return {const_cast<KeysModule *>(this)};
+}
+
+ReqId KeysModule::list() {
+    // Nothing to launch from the launcher: this module's widget is hosted directly by
+    // the main window, not through an instance.
+    ReqId reqId = nextReqId();
+    emit IModule::instances(reqId, QList<QPair<QString, QString>>{});
+    return reqId;
+}
+
+ReqId KeysModule::autoStart() {
+    // This module pushes no instance: its widget is hosted directly by the main
+    // window in a later task.
+    ReqId reqId = nextReqId();
+    emit IModule::autoStart(reqId, QStringList{});
+    return reqId;
+}
+
+void KeysModule::startInstance(const QString &id) {
+    emit error(std::nullopt, QStringLiteral("keys: unknown instance %1").arg(id));
+}
+
+void KeysModule::createModule() {
+    m_rust = std::make_optional(::new_keys_module(KeysModule::network()));
+    if (!m_rust.value()->is_ok()) {
+        qWarning() << "keys:" << toQt(m_rust.value()->get_error());
+    }
+
+    auto receiver = m_rust.value()->take_receiver();
+    // QThread::create plus a lambda is the endorsed way to sit on a blocking FFI call:
+    // the loop only emits, and the queued connection lands the work on the GUI thread.
+    m_notif_thread = QThread::create([this, recv = std::move(receiver)]() {
+        while (true) {
+            auto poll = recv->recv();
+            if (!poll->is_some()) {
+                break;
+            }
+            emit keyEventReceived(poll->get_event());
+        }
+    });
+    connect(m_notif_thread, &QThread::finished, m_notif_thread, &QThread::deleteLater,
+            qontrol::UNIQUE);
+    m_notif_thread->start();
+}
+
+void KeysModule::teardownModule() {
+    if (m_rust.has_value()) {
+        // Wakes the blocking recv with a sentinel; waiting for the sender to drop
+        // would hang here for as long as an in-flight operation takes.
+        m_rust.value()->shutdown();
+    }
+    if (m_notif_thread != nullptr) {
+        m_notif_thread->wait();
+        m_notif_thread = nullptr;
+    }
+    m_rust.reset();
+}
+
+Network KeysModule::network() {
+    // The device service network is the application network today, and the Keys tab
+    // drives both selectors from one combobox.
+    return ::hwi_config_network();
+}
+
+void KeysModule::setNetwork(Network network) {
+    if (m_synced_network == network) {
+        return;
+    }
+    if (!m_rust.has_value()) {
+        return;
+    }
+    // Does not touch hwi_set_config_network: the tab calls HwiModule::setNetwork for
+    // that, which owns the persistence.
+    auto result = m_rust.value()->set_network(network);
+    if (!result.is_ok) {
+        qWarning() << "keys:" << toQt(result.error);
+        return;
+    }
+    m_synced_network = network;
+    emit keysChanged();
+}
+
+QList<KeyInfo> KeysModule::keys() const {
+    QList<KeyInfo> keys;
+    if (!m_rust.has_value()) {
+        return keys;
+    }
+    for (const auto &key : m_rust.value()->keys()) {
+        keys.append(key);
+    }
+    return keys;
+}
+
+bool KeysModule::hasKey(const QString &fingerprint) const {
+    for (const auto &key : keys()) {
+        if (QString::compare(toQt(key.fingerprint), fingerprint, Qt::CaseInsensitive) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+RustKeys *KeysModule::rust() const {
+    return m_rust.has_value() ? m_rust.value().operator->() : nullptr;
+}
+
+HwiModule *KeysModule::hwi() const {
+    return m_hwi;
+}
+
+KeysBus *KeysModule::bus() const {
+    return m_bus.get();
+}
+
+ReqId KeysModule::nextReqId() {
+    ++m_next_req_id;
+    if (m_next_req_id == 0) {
+        ++m_next_req_id;
+    }
+    return m_next_req_id;
+}
+
+void KeysModule::bindHwiModule() {
+    if (m_hwi != nullptr) {
+        return;
+    }
+    for (const auto &entry : Host::get()->signers()) {
+        auto *hwi = qobject_cast<HwiModule *>(entry.module);
+        if (hwi == nullptr) {
+            continue;
+        }
+        m_hwi = hwi;
+        connect(m_hwi, &HwiModule::devicesChanged, this, &KeysModule::onDevicesChanged,
+                qontrol::UNIQUE);
+        return;
+    }
+}
+
+void KeysModule::refreshLiveDevices() {
+    if (!m_rust.has_value()) {
+        emit liveDevicesChanged();
+        return;
+    }
+    rust::Vec<LiveDevice> devices;
+    for (const auto &entry : Host::get()->signers()) {
+        if (entry.signer == nullptr) {
+            continue;
+        }
+        LiveDevice device;
+        device.device_id = rust::String(entry.instanceId.toStdString());
+        device.fingerprint = rust::String(entry.signer->fingerprint().toStdString());
+        device.brand = rust::String(entry.signer->brand().toStdString());
+        device.model = rust::String(entry.signer->model().toStdString());
+        device.serial = rust::String(entry.signer->serial().toStdString());
+        if (entry.module != nullptr) {
+            device.module =
+                rust::String(entry.module->meta().value(QStringLiteral("id")).toStdString());
+        }
+        devices.push_back(std::move(device));
+    }
+    m_rust.value()->set_live_devices(std::move(devices));
+    emit liveDevicesChanged();
+}
+
+void KeysModule::onKeyEventReceived(const KeyEvent &event) {
+    switch (event.flag) {
+    case KeyEventFlag::Error:
+        if (event.req_id == 0) {
+            qWarning() << "keys:" << toQt(event.error);
+            return;
+        }
+        m_bus->deliverError(event.req_id, toQt(event.error));
+        return;
+    default:
+        // QrDecoded, ScanProgress and CameraStopped drive the QR/camera modals of a
+        // later task; nothing in this skeleton reacts to them yet.
+        break;
+    }
+}
+
+void KeysModule::onInstanceRegistered(const QString &id) {
+    Q_UNUSED(id);
+    bindHwiModule();
+    refreshLiveDevices();
+}
+
+void KeysModule::onInstanceRemoved(const QString &id) {
+    Q_UNUSED(id);
+    bindHwiModule();
+    refreshLiveDevices();
+}
+
+void KeysModule::onDevicesChanged() {
+    refreshLiveDevices();
+}
+
+} // namespace keys
