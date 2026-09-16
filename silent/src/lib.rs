@@ -7,6 +7,7 @@ pub mod app_state;
 pub mod config;
 pub mod hwi;
 pub mod hwi_config;
+pub mod keys;
 pub mod sync_estimator;
 
 use bwk_sp::bwk::bwk_electrum::url::ElectrumScheme;
