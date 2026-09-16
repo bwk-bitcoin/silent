@@ -44,5 +44,8 @@ auto refresh(IconColor color = IconColor::Default) -> QIcon;
 auto qr(IconColor color = IconColor::Default) -> QIcon;
 auto layout(IconColor color = IconColor::Default) -> QIcon;
 auto silentMark(IconColor color = IconColor::Default) -> QIcon;
+auto key(IconColor color = IconColor::Default) -> QIcon;
+auto lock(IconColor color = IconColor::Default) -> QIcon;
+auto sdCard(IconColor color = IconColor::Default) -> QIcon;
 
 } // namespace icon

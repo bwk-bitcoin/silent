@@ -36,6 +36,7 @@ protected:
     void hideEvent(QHideEvent *event) override;
 
     void rebuildDevices();
+    void rebuildKeys();
     void showError(const QString &message);
 
 private:
@@ -44,6 +45,9 @@ private:
     catalog::Label *m_devices_empty = nullptr;
     catalog::Label *m_error_label = nullptr;
     qontrol::Column *m_device_column = nullptr;
+    catalog::Label *m_keys_empty = nullptr;
+    qontrol::Column *m_key_column = nullptr;
+    catalog::Button *m_add_key_btn = nullptr;
     QWidget *m_main_widget = nullptr;
 };
 

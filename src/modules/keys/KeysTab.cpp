@@ -7,6 +7,7 @@
 #include "catalog/Button.h"
 #include "catalog/SelectRow.h"
 #include "catalog/containers/Separator.h"
+#include "catalog/display/Badge.h"
 #include "catalog/display/Label.h"
 #include "catalog/form/FormRow.h"
 #include "catalog/inputs/ComboBox.h"
@@ -16,11 +17,13 @@
 #include "theme/Icon.h"
 #include "views/utils.h"
 
+#include <QLabel>
 #include <QStringList>
 #include <QVariant>
 
 #include <common.h>
 
+using catalog::Badge;
 using catalog::Button;
 using catalog::ButtonRole;
 using catalog::ComboBox;
@@ -42,6 +45,36 @@ auto stateText(plugin::SignerState state) -> QString {
         return TR("hwi-state-locked");
     default:
         return TR("hwi-state-unsupported");
+    }
+}
+
+auto routeIcon(KeyRouteKind kind) -> QIcon {
+    switch (kind) {
+    case KeyRouteKind::Hot:
+        return icon::key(IconColor::Accent);
+    case KeyRouteKind::Usb:
+        return icon::usb(IconColor::Accent);
+    case KeyRouteKind::Qr:
+        return icon::qr(IconColor::Accent);
+    case KeyRouteKind::SdCard:
+        return icon::sdCard(IconColor::Accent);
+    default:
+        return icon::key(IconColor::Muted);
+    }
+}
+
+auto routeTooltip(KeyRouteKind kind) -> QString {
+    switch (kind) {
+    case KeyRouteKind::Hot:
+        return TR("keys-route-hot");
+    case KeyRouteKind::Usb:
+        return TR("keys-route-usb");
+    case KeyRouteKind::Qr:
+        return TR("keys-route-qr");
+    case KeyRouteKind::SdCard:
+        return TR("keys-route-sd");
+    default:
+        return QString();
     }
 }
 } // namespace
@@ -68,6 +101,11 @@ void KeysTab::init() {
     m_error_label = new Label(QString(), LabelRole::Caption);
     m_error_label->setVisible(false);
     m_device_column = new qontrol::Column;
+
+    m_keys_empty = new Label(TR("keys-no-keys"), LabelRole::Caption);
+    m_key_column = new qontrol::Column;
+    m_add_key_btn = new Button(TR("keys-add-key"), ButtonRole::Primary);
+    m_add_key_btn->setIcon(icon::plus(IconColor::Accent));
 }
 
 void KeysTab::doConnect() {
@@ -89,10 +127,22 @@ void KeysTab::view() {
                     ->push(m_error_label)
                     ->push(m_devices_empty)
                     ->push(m_device_column)
+                    ->pushSpacer(resolve(Spacing::M))
+                    ->push(new catalog::Separator)
+                    ->pushSpacer(resolve(Spacing::M))
+                    ->push(new Label(TR("keys-keys"), LabelRole::Heading))
+                    ->pushSpacer(resolve(Spacing::S))
+                    ->push(m_keys_empty)
+                    ->push(m_key_column)
+                    ->pushSpacer(resolve(Spacing::S))
+                    // The add key modal that wires m_add_key_btn's clicked signal is added
+                    // by the task that creates it.
+                    ->push((new qontrol::Row)->push(m_add_key_btn)->pushSpacer())
                     ->pushSpacer();
 
     setScreenContent(this, m_main_widget, col);
     rebuildDevices();
+    rebuildKeys();
 }
 
 void KeysTab::showEvent(QShowEvent *event) {
@@ -119,10 +169,12 @@ void KeysTab::onNetworkChanged() {
 
 void KeysTab::onDevicesChanged() {
     rebuildDevices();
+    rebuildKeys();
 }
 
 void KeysTab::onKeysChanged() {
     rebuildDevices();
+    rebuildKeys();
 }
 
 void KeysTab::rebuildDevices() {
@@ -173,6 +225,52 @@ void KeysTab::rebuildDevices() {
     }
 
     m_devices_empty->setVisible(!hasDevice);
+}
+
+void KeysTab::rebuildKeys() {
+    m_key_column->clear();
+
+    if (m_module->rust() == nullptr) {
+        m_keys_empty->setVisible(true);
+        return;
+    }
+
+    QList<KeyInfo> keyList = m_module->keys();
+    m_keys_empty->setVisible(keyList.isEmpty());
+
+    for (const auto &keyInfo : keyList) {
+        QString fingerprint = KeysModule::toQt(keyInfo.fingerprint);
+        QString alias = KeysModule::toQt(keyInfo.alias);
+        QString title = alias.isEmpty() ? fingerprint : alias;
+
+        // The key modal that wires this row's clicked signal is added by the task that
+        // creates it.
+        auto *row = new catalog::SelectRow;
+        row->setIcon(icon::key(IconColor::Accent));
+        row->setTitle(title);
+        row->setMetadata(fingerprint);
+        row->setProperty(K_FINGERPRINT, fingerprint);
+
+        auto *routeStrip = new qontrol::Row;
+        for (const auto &routeKind : keyInfo.routes) {
+            auto *routeIconLabel = new QLabel;
+            routeIconLabel->setPixmap(routeIcon(routeKind).pixmap(metric::SELECT_ROW_ICON_SIZE,
+                                                                  metric::SELECT_ROW_ICON_SIZE));
+            routeIconLabel->setToolTip(routeTooltip(routeKind));
+            routeStrip->push(routeIconLabel);
+        }
+
+        Badge *statusBadge = nullptr;
+        if (keyInfo.is_connected) {
+            statusBadge = new Badge(TR("keys-connected"), Badge::Role::Success);
+        } else {
+            statusBadge = new Badge(TR("keys-offline"), Badge::Role::Neutral);
+        }
+
+        auto *keyRow =
+            (new qontrol::Row)->push(row)->pushSpacer()->push(routeStrip)->push(statusBadge);
+        m_key_column->push(keyRow)->pushSpacer(resolve(Spacing::S));
+    }
 }
 
 void KeysTab::onRegisterDeviceClicked() {

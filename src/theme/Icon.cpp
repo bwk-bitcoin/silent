@@ -10,8 +10,11 @@
 #include "resources/icon/download.h"
 #include "resources/icon/eye_off.h"
 #include "resources/icon/folder.h"
+#include "resources/icon/hard_drive.h"
 #include "resources/icon/history.h"
+#include "resources/icon/key.h"
 #include "resources/icon/layout_dashboard.h"
+#include "resources/icon/lock.h"
 #include "resources/icon/lock_open.h"
 #include "resources/icon/minus.h"
 #include "resources/icon/network.h"
@@ -143,5 +146,13 @@ auto refresh(IconColor color) -> QIcon { return renderIcon(embedded_icon::REFRES
 auto qr(IconColor color) -> QIcon { return renderIcon(embedded_icon::QR_CODE, defaultStroke(), color); }
 auto layout(IconColor color) -> QIcon { return renderIcon(embedded_icon::LAYOUT_DASHBOARD, defaultStroke(), color); }
 auto silentMark(IconColor color) -> QIcon { return renderIcon(embedded_icon::SILENT_MARK, defaultStroke(), color); }
+
+auto key(IconColor color) -> QIcon { return renderIcon(embedded_icon::KEY, defaultStroke(), color); }
+auto lock(IconColor color) -> QIcon { return renderIcon(embedded_icon::LOCK, defaultStroke(), color); }
+
+// Lucide ships no sd card glyph, a hard drive is the closest storage stand-in.
+auto sdCard(IconColor color) -> QIcon {
+    return renderIcon(embedded_icon::HARD_DRIVE, defaultStroke(), color);
+}
 
 } // namespace icon

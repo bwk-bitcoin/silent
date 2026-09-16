@@ -220,3 +220,21 @@ keys-no-devices => "No device connected."
 keys-register => "Register a key for this device"
 
 keys-register-failed => "Could not register the key: %1"
+
+keys-keys => "Keys"
+
+keys-no-keys => "No key registered yet."
+
+keys-add-key => "Add a key"
+
+keys-connected => "Connected"
+
+keys-offline => "Offline"
+
+keys-route-hot => "Hot key"
+
+keys-route-usb => "USB"
+
+keys-route-qr => "QR code"
+
+keys-route-sd => "SD card"
