@@ -377,3 +377,21 @@ keys-reveal-failed => "Could not open the key: %1"
 keys-password => "Password"
 
 keys-password-confirm => "Confirm password"
+
+keys-xpub-not-cached => "No cached xpub for this derivation path."
+
+keys-no-usable-route => "This key has no usable signing route."
+
+keys-route-unsupported => "This signing route is not supported for this request."
+
+keys-hot-no-display => "A hot key has no screen to verify an address on."
+
+keys-no-raw-requests => "This signer takes no raw requests."
+
+keys-signing-cancelled => "Signing was cancelled."
+
+keys-route-unavailable => "This signing route is not available yet."
+
+keys-module-not-ready => "The keys module is not ready."
+
+keys-address-display-failed => "The address could not be displayed on the device."

@@ -105,6 +105,10 @@ set(SILENT_APP_SOURCES
     src/modules/keys/KeysTab.cpp
     src/modules/keys/RouteDisplay.h
     src/modules/keys/RouteDisplay.cpp
+    src/modules/keys/signers/RouteSigner.h
+    src/modules/keys/signers/RouteSigner.cpp
+    src/modules/keys/signers/OfflineSigner.h
+    src/modules/keys/signers/OfflineSigner.cpp
     src/modules/keys/modals/AddKey.h
     src/modules/keys/modals/AddKey.cpp
     src/modules/keys/modals/DeviceModal.h

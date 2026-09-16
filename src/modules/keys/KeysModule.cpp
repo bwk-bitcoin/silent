@@ -2,12 +2,20 @@
 
 #include "KeysTab.h"
 #include "modules/hwi/HwiModule.h"
+#include "modules/keys/modals/PasswordPrompt.h"
+#include "modules/keys/signers/OfflineSigner.h"
+#include "modules/keys/signers/RouteSigner.h"
 
+#include "AppController.h"
+#include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/signer.h"
 
 #include <QDebug>
+#include <QDialog>
 #include <QThread>
+
+#include <algorithm>
 
 #include <common.h>
 
@@ -24,14 +32,7 @@ QList<KeyEntry> KeysBus::keys(Network network) const {
         return entries;
     }
     for (const auto &info : m_module->keys()) {
-        KeyEntry entry;
-        entry.fingerprint = KeysModule::toQt(info.fingerprint);
-        entry.alias = KeysModule::toQt(info.alias);
-        // Route signers are supplied by a later task; until then a null signer with
-        // can_sign false is the honest answer.
-        entry.can_sign = false;
-        entry.signer = nullptr;
-        entries.append(entry);
+        entries.append(m_module->buildKeyEntry(info));
     }
     return entries;
 }
@@ -83,6 +84,8 @@ KeysModule::KeysModule(QObject *parent) : IModule(parent) {
             &KeysModule::onMnemonicGenerationFinished, qontrol::UNIQUE);
     connect(this, &KeysModule::hotKeySealed, this, &KeysModule::onHotKeySealed, qontrol::UNIQUE);
     connect(this, &KeysModule::mnemonicRevealFinished, this, &KeysModule::onMnemonicRevealFinished,
+            qontrol::UNIQUE);
+    connect(this, &KeysModule::hotSignFinished, this, &KeysModule::onHotSignFinished,
             qontrol::UNIQUE);
     createModule();
     m_bus = std::make_unique<KeysBus>(this);
@@ -202,12 +205,120 @@ QList<KeyInfo> KeysModule::keys() const {
 }
 
 bool KeysModule::hasKey(const QString &fingerprint) const {
-    for (const auto &key : keys()) {
-        if (QString::compare(toQt(key.fingerprint), fingerprint, Qt::CaseInsensitive) == 0) {
-            return true;
+    auto matches = keys();
+    return std::ranges::any_of(matches, [&fingerprint](const KeyInfo &key) {
+        return QString::compare(toQt(key.fingerprint), fingerprint, Qt::CaseInsensitive) == 0;
+    });
+}
+
+auto KeysModule::countRegisteredDescriptors(const QString &fingerprint) const -> int {
+    if (rust() == nullptr) {
+        return 0;
+    }
+    int count = 0;
+    for (const auto &entry : rust()->key_descriptors(rust::String(fingerprint.toStdString()))) {
+        if (entry.registered) {
+            ++count;
         }
     }
-    return false;
+    return count;
+}
+
+auto KeysModule::buildKeyEntry(const KeyInfo &info) -> KeyEntry {
+    QString fingerprint = toQt(info.fingerprint);
+    KeyEntry entry;
+    entry.fingerprint = fingerprint;
+    entry.alias = toQt(info.alias);
+
+    for (const auto &route : info.routes) {
+        switch (route) {
+        case KeyRouteKind::Usb: {
+            auto *deviceSigner = findLiveDeviceSigner(fingerprint);
+            if (deviceSigner != nullptr) {
+                entry.can_sign = true;
+                entry.signer = deviceSigner;
+                return entry;
+            }
+            break;
+        }
+        case KeyRouteKind::Hot:
+            if (info.has_hot_secret) {
+                entry.can_sign = true;
+                entry.signer = routeSignerFor(fingerprint, info, KeyRouteKind::Hot);
+                return entry;
+            }
+            break;
+        case KeyRouteKind::Qr:
+        case KeyRouteKind::SdCard:
+            entry.can_sign = true;
+            entry.signer = routeSignerFor(fingerprint, info, route);
+            return entry;
+        case KeyRouteKind::Unknown:
+        default:
+            break;
+        }
+    }
+
+    entry.can_sign = false;
+    entry.signer = offlineSignerFor(fingerprint, info);
+    return entry;
+}
+
+auto KeysModule::findLiveDeviceSigner(const QString &fingerprint) -> ISigner * {
+    for (const auto &live : Host::get()->signers()) {
+        if (live.signer != nullptr && live.signer->fingerprint() == fingerprint) {
+            return live.signer;
+        }
+    }
+    return nullptr;
+}
+
+auto KeysModule::routeSignerFor(const QString &fingerprint, const KeyInfo &info, KeyRouteKind route)
+    -> ISigner * {
+    auto *cached = m_signers.value(fingerprint, nullptr);
+    auto *cachedRoute = qobject_cast<RouteSigner *>(cached);
+    if (cachedRoute != nullptr && cachedRoute->route() == route) {
+        return cachedRoute;
+    }
+    if (cached != nullptr && hasPendingRequests(cached)) {
+        // The route changed but a request on the stale instance is still in
+        // flight: keep serving it until the caller holding it gets an answer.
+        return cached;
+    }
+
+    auto *created = new RouteSigner(this, info, route, this);
+    auto deferred = static_cast<Qt::ConnectionType>(Qt::QueuedConnection | Qt::UniqueConnection);
+    connect(created, &RouteSigner::routeSignRequested, this, &KeysModule::onRouteSignRequested,
+            deferred);
+    connect(created, &RouteSigner::routeDisplayRequested, this,
+            &KeysModule::onRouteDisplayRequested, deferred);
+    if (cached != nullptr) {
+        cached->deleteLater();
+    }
+    m_signers.insert(fingerprint, created);
+    return created;
+}
+
+auto KeysModule::offlineSignerFor(const QString &fingerprint, const KeyInfo &info) -> ISigner * {
+    auto *cached = m_signers.value(fingerprint, nullptr);
+    if (qobject_cast<OfflineSigner *>(cached) != nullptr) {
+        return cached;
+    }
+    if (cached != nullptr && hasPendingRequests(cached)) {
+        return cached;
+    }
+
+    auto *created = new OfflineSigner(this, info, this);
+    if (cached != nullptr) {
+        cached->deleteLater();
+    }
+    m_signers.insert(fingerprint, created);
+    return created;
+}
+
+auto KeysModule::hasPendingRequests(const ISigner *signer) const -> bool {
+    return std::ranges::any_of(m_pending_requests,
+                               [signer](const ISigner *pending) { return pending == signer; });
 }
 
 void KeysModule::generateMnemonic(ReqId req_id, std::uint32_t word_count) {
@@ -289,6 +400,52 @@ void KeysModule::revealMnemonic(ReqId req_id, QString fingerprint, QString passw
 
 void KeysModule::onMnemonicRevealFinished(ReqId req_id, MnemonicResult result) {
     emit mnemonicRevealed(req_id, result);
+}
+
+void KeysModule::signHot(ReqId req_id, QString fingerprint, QString password, QString psbt_v2_hex) {
+    if (rust() == nullptr) {
+        emit hotSignFinished(req_id, false, QString(), TR("keys-module-not-ready"));
+        return;
+    }
+    auto material = rust()->hot_material(rust::String(fingerprint.toStdString()));
+    if (!material->is_ok()) {
+        emit hotSignFinished(req_id, false, QString(), toQt(material->get_error()));
+        return;
+    }
+    auto *thread = QThread::create([this, req_id, material = material.into_raw(),
+                                    password = password.toStdString(),
+                                    psbt = psbt_v2_hex.toStdString()]() mutable {
+        auto box = rust::Box<HotMaterial>::from_raw(material);
+        auto result = ::hot_sign(*box, password, psbt);
+        password.assign(password.size(), '\0');
+        password.clear();
+        emit hotSignFinished(req_id, result.is_ok, toQt(result.psbt_v2_hex), toQt(result.error));
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
+void KeysModule::onHotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error) {
+    emit hotSigned(req_id, is_ok, psbt_v2_hex, error);
+}
+
+void KeysModule::trackPendingRequest(ReqId req_id, ISigner *signer) {
+    m_pending_requests.insert(req_id, signer);
+}
+
+void KeysModule::untrackPendingRequest(ReqId req_id) {
+    m_pending_requests.remove(req_id);
+}
+
+void KeysModule::promptPassword(RouteSigner *requester, ReqId req_id) {
+    auto *prompt =
+        new modal::PasswordPrompt(modal::PasswordPrompt::Mode::Use, TR("keys-password-use"));
+    m_password_requests.insert(prompt, PasswordRequest{.requester = requester, .req_id = req_id});
+    connect(prompt, &modal::PasswordPrompt::passwordEntered, this,
+            &KeysModule::onPasswordPromptEntered, qontrol::UNIQUE);
+    connect(prompt, &QDialog::rejected, this, &KeysModule::onPasswordPromptRejected,
+            qontrol::UNIQUE);
+    AppController::execModal(prompt);
 }
 
 auto KeysModule::setAlias(const QString &fingerprint, const QString &alias) -> KeyOpResult {
@@ -391,6 +548,11 @@ ReqId KeysModule::nextReqId() {
     return m_next_req_id;
 }
 
+auto KeysModule::requestIdFor(ReqId signer_req_id) -> ReqId {
+    ReqId requestId = m_signer_to_request.take(signer_req_id);
+    return requestId == 0 ? signer_req_id : requestId;
+}
+
 void KeysModule::bindHwiModule() {
     if (m_hwi != nullptr) {
         return;
@@ -463,6 +625,49 @@ void KeysModule::onInstanceRemoved(const QString &id) {
 
 void KeysModule::onDevicesChanged() {
     refreshLiveDevices();
+}
+
+void KeysModule::onPasswordPromptEntered(QString password) {
+    PasswordRequest request = m_password_requests.take(sender());
+    if (request.requester != nullptr) {
+        request.requester->onPasswordResolved(request.req_id, password);
+    }
+    password.fill(QChar());
+    password.clear();
+}
+
+void KeysModule::onPasswordPromptRejected() {
+    PasswordRequest request = m_password_requests.take(sender());
+    if (request.requester != nullptr) {
+        request.requester->onPasswordResolved(request.req_id, QString());
+    }
+}
+
+void KeysModule::onRouteSignRequested(ReqId req_id, [[maybe_unused]] const QString &fingerprint,
+                                      [[maybe_unused]] const QString &psbt_v2_hex,
+                                      [[maybe_unused]] const QString &descriptor) {
+    auto *signer = qobject_cast<RouteSigner *>(sender());
+    if (signer == nullptr) {
+        return;
+    }
+    m_pending_requests.insert(req_id, signer);
+    // The interactive QR and SD card flows are wired in a later task.
+    signer->deliverError(req_id, TR("keys-route-unavailable"));
+    m_pending_requests.remove(req_id);
+}
+
+void KeysModule::onRouteDisplayRequested(ReqId req_id, [[maybe_unused]] const QString &fingerprint,
+                                         [[maybe_unused]] const QString &descriptor,
+                                         [[maybe_unused]] const QString &path,
+                                         [[maybe_unused]] const QString &address) {
+    auto *signer = qobject_cast<RouteSigner *>(sender());
+    if (signer == nullptr) {
+        return;
+    }
+    m_pending_requests.insert(req_id, signer);
+    // The interactive QR and SD card flows are wired in a later task.
+    signer->deliverError(req_id, TR("keys-route-unavailable"));
+    m_pending_requests.remove(req_id);
 }
 
 } // namespace keys
