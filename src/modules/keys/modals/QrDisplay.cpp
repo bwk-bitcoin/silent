@@ -225,7 +225,6 @@ void QrDisplay::onSpeedChanged(int value) {
 void QrDisplay::onNextClicked() {
     m_frame_timer->stop();
     emit nextRequested();
-    accept();
 }
 
 void QrDisplay::onCancelClicked() {

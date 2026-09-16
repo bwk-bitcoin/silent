@@ -127,6 +127,16 @@ mod ffi {
         Error,
     }
 
+    /// Discriminant for a `KeyEvent::Error`, distinguishing the two QR response
+    /// validation failures the GUI must not swallow untranslated from every other
+    /// camera-sourced error, which only ever surfaces `error` as free text.
+    #[derive(Debug, Clone, Copy)]
+    pub enum QrErrorKind {
+        Other,
+        RequestIdMismatch,
+        SignaturesUnsupported,
+    }
+
     // ===== Shared Structs =====
 
     /// Notification from the account scanner.
@@ -519,6 +529,8 @@ mod ffi {
         pub fingerprint: String,
         pub payload: String,
         pub error: String,
+        /// Only meaningful when `flag` is `Error`; `Other` otherwise.
+        pub error_kind: QrErrorKind,
         pub ok: bool,
     }
 

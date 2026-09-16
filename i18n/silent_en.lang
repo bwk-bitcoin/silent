@@ -443,6 +443,23 @@ keys-qr-rebuilding => "Rebuilding the frames..."
 
 keys-qr-frame-failed => "Could not render this frame: %1"
 
-keys-scan-unavailable => "The camera scan step is not available yet."
+keys-camera-title => "Scan the signed transaction"
+
+keys-camera-source => "Camera source"
+
+keys-camera-progress => "%1 of %2 parts scanned"
+
+keys-camera-waiting => "Point the camera at the animated code."
+
+keys-camera-unsupported => "Camera capture is only available on Linux in this build."
+
+keys-camera-none => "No camera was found."
+
+keys-camera-previous => "Previous"
+
+keys-qr-response-mismatch => "That code answers a different request."
+
+keys-qr-response-partial
+=> "That device returned signatures only; a full transaction is required.";;
 
 keys-qr-busy => "Another QR exchange is already in progress."

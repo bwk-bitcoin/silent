@@ -1263,6 +1263,7 @@ impl Default for ffi::KeyEvent {
             fingerprint: String::new(),
             payload: String::new(),
             error: String::new(),
+            error_kind: ffi::QrErrorKind::Other,
             ok: false,
         }
     }
@@ -1323,6 +1324,7 @@ fn decoded_to_event(
         Ok(parsed) => qr_response_to_event(parsed),
         Err(e) => ffi::KeyEvent {
             flag: ffi::KeyEventFlag::Error,
+            error_kind: ffi::QrErrorKind::from(&e),
             error: e.to_string(),
             ..ffi::KeyEvent::default()
         },
@@ -1662,6 +1664,19 @@ impl From<Option<crate::keys::manager::UnusableReason>> for ffi::KeyUnusableReas
             Some(UnusableReason::DeviceNotConnected) => ffi::KeyUnusableReason::DeviceNotConnected,
             Some(UnusableReason::NoHotSecret) => ffi::KeyUnusableReason::NoHotSecret,
             Some(UnusableReason::SpOutputsPending) => ffi::KeyUnusableReason::SpOutputsPending,
+        }
+    }
+}
+
+/// The two QR response validation failures the GUI must show translated; every
+/// other `Error` variant (camera, session, protocol, ...) stays `Other` and
+/// surfaces only as the free-text `error` field.
+impl From<&Error> for ffi::QrErrorKind {
+    fn from(error: &Error) -> Self {
+        match error {
+            Error::RequestIdMismatch { .. } => ffi::QrErrorKind::RequestIdMismatch,
+            Error::SignaturesUnsupported => ffi::QrErrorKind::SignaturesUnsupported,
+            _ => ffi::QrErrorKind::Other,
         }
     }
 }

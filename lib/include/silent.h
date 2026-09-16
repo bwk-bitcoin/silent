@@ -974,6 +974,7 @@ enum class KeyRouteKind : ::std::uint8_t;
 enum class KeyUnusableReason : ::std::uint8_t;
 enum class QrResponseKind : ::std::uint8_t;
 enum class KeyEventFlag : ::std::uint8_t;
+enum class QrErrorKind : ::std::uint8_t;
 struct Notification;
 struct RustCoin;
 struct CoinState;
@@ -1155,6 +1156,18 @@ enum class KeyEventFlag : ::std::uint8_t {
   Error = 3,
 };
 #endif // CXXBRIDGE1_ENUM_KeyEventFlag
+
+#ifndef CXXBRIDGE1_ENUM_QrErrorKind
+#define CXXBRIDGE1_ENUM_QrErrorKind
+// Discriminant for a `KeyEvent::Error`, distinguishing the two QR response
+// validation failures the GUI must not swallow untranslated from every other
+// camera-sourced error, which only ever surfaces `error` as free text.
+enum class QrErrorKind : ::std::uint8_t {
+  Other = 0,
+  RequestIdMismatch = 1,
+  SignaturesUnsupported = 2,
+};
+#endif // CXXBRIDGE1_ENUM_QrErrorKind
 
 #ifndef CXXBRIDGE1_STRUCT_Notification
 #define CXXBRIDGE1_STRUCT_Notification
@@ -1667,6 +1680,8 @@ struct KeyEvent final {
   ::rust::String fingerprint;
   ::rust::String payload;
   ::rust::String error;
+  // Only meaningful when `flag` is `Error`; `Other` otherwise.
+  ::QrErrorKind error_kind;
   bool ok CXX_DEFAULT_VALUE(false);
 
   using IsRelocatable = ::std::true_type;

@@ -1,6 +1,7 @@
 #include "QrRoute.h"
 
 #include "modules/keys/KeysModule.h"
+#include "modules/keys/modals/CameraScan.h"
 #include "modules/keys/modals/QrDisplay.h"
 #include "modules/keys/signers/RouteSigner.h"
 
@@ -27,6 +28,22 @@ constexpr std::uint32_t PART_BYTES_STEP = 50;
 auto densityToPartBytes(int density) -> std::uint32_t {
     return MIN_PART_BYTES +
            static_cast<std::uint32_t>(density - modal::QrDisplay::MIN_LEVEL) * PART_BYTES_STEP;
+}
+
+// Translates the two QR response validation failures that get their own message
+// (qr::Error::RequestIdMismatch, qr::Error::SignaturesUnsupported); Rust tags them
+// via KeyEvent::error_kind so this switches on a stable discriminant rather than
+// matching the Display text. Any other camera-sourced error passes through as-is.
+auto cameraQrErrorMessage(const KeyEvent &event) -> QString {
+    switch (event.error_kind) {
+    case QrErrorKind::RequestIdMismatch:
+        return TR("keys-qr-response-mismatch");
+    case QrErrorKind::SignaturesUnsupported:
+        return TR("keys-qr-response-partial");
+    case QrErrorKind::Other:
+    default:
+        return KeysModule::toQt(event.error);
+    }
 }
 
 } // namespace
@@ -133,11 +150,83 @@ void QrRoute::onDensityChanged(int density) {
 }
 
 void QrRoute::onDisplayNext() {
-    finishFlow(Outcome::Error, TR("keys-scan-unavailable"));
+    if (!m_flow.has_value()) {
+        return;
+    }
+    if (m_module->rust() == nullptr) {
+        finishFlow(Outcome::Error, TR("keys-route-unavailable"));
+        return;
+    }
+
+    auto *scan = new modal::CameraScan(TR("keys-camera-title"), m_module);
+    m_camera_scan = scan;
+    connect(scan, &modal::CameraScan::previousRequested, this, &QrRoute::onCameraScanPrevious,
+            qontrol::UNIQUE);
+    connect(scan, &modal::CameraScan::cancelled, this, &QrRoute::onCameraScanCancelled,
+            qontrol::UNIQUE);
+    AppController::execModal(scan);
+}
+
+void QrRoute::onCameraScanPrevious() {
+    if (!m_display.isNull()) {
+        m_display->restartAnimation();
+    }
+}
+
+void QrRoute::onCameraScanCancelled() {
+    finishFlow(Outcome::Error, TR("keys-signing-cancelled"));
 }
 
 void QrRoute::onDisplayRejected() {
     finishFlow(Outcome::Error, TR("keys-signing-cancelled"));
+}
+
+void QrRoute::onKeyEvent(const KeyEvent &event) {
+    switch (event.flag) {
+    case KeyEventFlag::Error:
+        // Camera-sourced errors (a mismatched or unsupported response, a device
+        // that disappeared mid-scan) carry no req_id: the outstanding camera scan,
+        // if one is open, is the only thing they can be answering. event.req_id == 0
+        // is what actually marks an Error as camera-unsolicited; without that check,
+        // an unrelated Error with a genuine req_id arriving while the scan is open
+        // would be misrouted here instead of to the bus.
+        if (!m_camera_scan.isNull() && m_flow.has_value() && event.req_id == 0) {
+            finishFlow(Outcome::Error, cameraQrErrorMessage(event));
+            return;
+        }
+        if (event.req_id == 0) {
+            qWarning() << "keys:" << KeysModule::toQt(event.error);
+            return;
+        }
+        m_module->bus()->deliverError(event.req_id, KeysModule::toQt(event.error));
+        return;
+    case KeyEventFlag::QrDecoded:
+        // `event.payload` already went through the session's response validation
+        // (request id match, expected message type, no bare-signatures response) on
+        // the Rust side before this event was emitted; a failed check surfaces as
+        // KeyEventFlag::Error above instead. Here it is always the matching
+        // outstanding flow's answer: a signed PSBT v2 hex, ready to deliver as-is.
+        if (m_camera_scan.isNull() || !m_flow.has_value()) {
+            return;
+        }
+        finishFlow(Outcome::Signed, KeysModule::toQt(event.payload));
+        return;
+    case KeyEventFlag::ScanProgress:
+        if (!m_camera_scan.isNull() && m_module->rust() != nullptr) {
+            auto progress = m_module->rust()->camera_progress();
+            if (progress.is_ok) {
+                m_camera_scan->setProgress(progress.seen, progress.total);
+            }
+        }
+        return;
+    case KeyEventFlag::CameraStopped:
+        // Every capture-thread exit, including the one this route triggers itself
+        // via camera_stop(), reports this. A failure already arrived as its own
+        // Error event just before it, so there is nothing left to do here.
+        return;
+    default:
+        return;
+    }
 }
 
 void QrRoute::finishFlow(Outcome outcome, const QString &text) {
@@ -163,6 +252,9 @@ void QrRoute::finishFlow(Outcome outcome, const QString &text) {
 
 void QrRoute::closeOutstanding(ReqId req_id) {
     m_module->untrackPendingRequest(req_id);
+    if (!m_camera_scan.isNull() && m_camera_scan->isVisible()) {
+        m_camera_scan->reject();
+    }
     if (!m_display.isNull() && m_display->isVisible()) {
         m_display->reject();
     }

@@ -117,6 +117,15 @@ keys-backup-confirm => "I have written these words down" => "NONE"
 keys-backup-warning
 => "These words are shown once. Anyone holding them holds the coins."
 => "NONE";;
+keys-camera-none => "No camera was found." => "NONE"
+keys-camera-previous => "Previous" => "NONE"
+keys-camera-progress => "%1 of %2 parts scanned" => "NONE"
+keys-camera-source => "Camera source" => "NONE"
+keys-camera-title => "Scan the signed transaction" => "NONE"
+keys-camera-unsupported
+=> "Camera capture is only available on Linux in this build."
+=> "NONE";;
+keys-camera-waiting => "Point the camera at the animated code." => "NONE"
 keys-connected => "Connected" => "NONE"
 keys-descriptor-registered => "Registered" => "NONE"
 keys-descriptor-unregistered => "Not registered" => "NONE"
@@ -189,6 +198,10 @@ keys-qr-next => "Next" => "NONE"
 keys-qr-part => "Part %1 / %2" => "NONE"
 keys-qr-paste => "Paste the response from the device" => "NONE"
 keys-qr-rebuilding => "Rebuilding the frames..." => "NONE"
+keys-qr-response-mismatch => "That code answers a different request." => "NONE"
+keys-qr-response-partial
+=> "That device returned signatures only; a full transaction is required."
+=> "NONE";;
 keys-qr-speed => "Animation speed" => "NONE"
 keys-qr-title => "Show the transaction" => "NONE"
 keys-qr-wrong-kind => "That response does not carry an xpub." => "NONE"
@@ -219,7 +232,6 @@ keys-route-unsupported
 keys-route-up => "Move up" => "NONE"
 keys-route-usb => "USB" => "NONE"
 keys-routes => "Routes" => "NONE"
-keys-scan-unavailable => "The camera scan step is not available yet." => "NONE"
 keys-sd-filter => "Partially signed transaction (*.psbt)" => "NONE"
 keys-sd-load-failed
 => "Could not read the signed transaction from that path."

@@ -94,6 +94,8 @@ KeysModule::KeysModule(QObject *parent) : IModule(parent) {
             qontrol::UNIQUE);
     connect(this, &KeysModule::hotSignFinished, this, &KeysModule::onHotSignFinished,
             qontrol::UNIQUE);
+    connect(this, &KeysModule::cameraOpenFinished, this, &KeysModule::onCameraOpenFinished,
+            qontrol::UNIQUE);
     createModule();
     m_bus = std::make_unique<KeysBus>(this);
     Host::get()->setKeys(m_bus.get(), this);
@@ -507,6 +509,49 @@ void KeysModule::onHotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex
     emit hotSigned(req_id, is_ok, psbt_v2_hex, error);
 }
 
+void KeysModule::openCamera(ReqId req_id, std::uint32_t index) {
+    m_camera_req_id = req_id;
+    auto *thread = QThread::create([this, req_id, index]() {
+        auto handle = ::camera_open(index);
+        emit cameraOpenFinished(req_id, handle.into_raw());
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
+void KeysModule::cancelCamera() {
+    m_camera_req_id = 0;
+    if (m_camera_installed && rust() != nullptr) {
+        rust()->camera_stop();
+        m_camera_installed = false;
+    }
+}
+
+void KeysModule::onCameraOpenFinished(ReqId req_id, CameraHandle *handle) {
+    auto box = rust::Box<CameraHandle>::from_raw(handle);
+    if (req_id != m_camera_req_id) {
+        // A newer openCamera() or a cancelCamera() call superseded this one;
+        // dropping `box` here releases the device instead of installing a stale
+        // handle.
+        return;
+    }
+    if (!box->is_ok()) {
+        emit cameraOpened(req_id, false, toQt(box->get_error()));
+        return;
+    }
+    if (rust() == nullptr) {
+        emit cameraOpened(req_id, false, TR("keys-module-not-ready"));
+        return;
+    }
+    auto result = rust()->camera_install(std::move(box));
+    if (!result.is_ok) {
+        emit cameraOpened(req_id, false, toQt(result.error));
+        return;
+    }
+    m_camera_installed = true;
+    emit cameraOpened(req_id, true, QString());
+}
+
 void KeysModule::signWithDevice(ISigner *signer, const QString &psbt_v2_hex,
                                 const QString &descriptor, ReqId req_id) {
     auto payload = ::usb_sign_payload(rust::String(psbt_v2_hex.toStdString()));
@@ -698,19 +743,7 @@ void KeysModule::refreshLiveDevices() {
 }
 
 void KeysModule::onKeyEventReceived(const KeyEvent &event) {
-    switch (event.flag) {
-    case KeyEventFlag::Error:
-        if (event.req_id == 0) {
-            qWarning() << "keys:" << toQt(event.error);
-            return;
-        }
-        m_bus->deliverError(event.req_id, toQt(event.error));
-        return;
-    default:
-        // QrDecoded, ScanProgress and CameraStopped drive the QR/camera modals of a
-        // later task; nothing in this skeleton reacts to them yet.
-        break;
-    }
+    m_qr_route->onKeyEvent(event);
 }
 
 void KeysModule::onInstanceRegistered(const QString &id) {

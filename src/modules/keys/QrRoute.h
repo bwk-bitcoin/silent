@@ -16,6 +16,7 @@ class RouteSigner;
 } // namespace keys
 
 namespace keys::modal {
+class CameraScan;
 class QrDisplay;
 } // namespace keys::modal
 
@@ -34,6 +35,9 @@ public:
     // Starts a sign flow. Answers at once with keys-qr-busy through `signer` if a
     // flow is already in progress.
     void startSign(ReqId req_id, RouteSigner *signer, QString psbt_v2_hex, QString descriptor);
+    // Camera-sourced events for the flow currently in progress: a decoded/validated
+    // response, a scan error, or a scan progress update.
+    void onKeyEvent(const KeyEvent &event);
 
 signals:
     // Emitted from the background thread buildSignRequest() spawns, with the
@@ -45,6 +49,8 @@ public slots:
     void onDensityChanged(int density);
     void onDisplayNext();
     void onDisplayRejected();
+    void onCameraScanPrevious();
+    void onCameraScanCancelled();
 
 protected:
     // The two possible endings that hand an answer back to the caller.
@@ -59,8 +65,8 @@ protected:
     void showRequest(rust::Box<QrRequest> request);
     // The only place that ends a flow: answers m_flow's caller exactly once (a
     // second call is a no-op, since m_flow is already reset by the first), then
-    // removes the pending request registration, closes the display if still open,
-    // and resets m_flow.
+    // removes the pending request registration, closes the camera scan and the
+    // display if still open, and resets m_flow.
     void finishFlow(Outcome outcome, const QString &text);
     // Shared tail of finishFlow().
     void closeOutstanding(ReqId req_id);
@@ -80,6 +86,7 @@ private:
     KeysModule *m_module = nullptr;
     std::optional<QrFlow> m_flow;
     QPointer<modal::QrDisplay> m_display;
+    QPointer<modal::CameraScan> m_camera_scan;
     int m_density;
 };
 

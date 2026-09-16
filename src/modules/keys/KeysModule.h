@@ -135,6 +135,12 @@ public:
     void importHotKey(ReqId req_id, QString mnemonic, QString alias, QString password);
     void revealMnemonic(ReqId req_id, QString fingerprint, QString password);
     void signHot(ReqId req_id, QString fingerprint, QString password, QString psbt_v2_hex);
+    // Stores `req_id` as the current camera request; onCameraOpenFinished() installs
+    // the opened handle only if it is still current by the time the worker answers,
+    // dropping (and thereby releasing) any other handle.
+    void openCamera(ReqId req_id, std::uint32_t index);
+    // Clears the current camera request and stops the installed camera, if any.
+    void cancelCamera();
 
     [[nodiscard]] static auto toQt(const rust::String &value) -> QString;
 
@@ -167,6 +173,10 @@ signals:
     void mnemonicRevealed(ReqId req_id, MnemonicResult result);
     void hotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error);
     void hotSigned(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error);
+    // The opened camera's raw pointer, re-owned by onCameraOpenFinished(), which
+    // drops it instead of installing it if `req_id` is no longer current.
+    void cameraOpenFinished(ReqId req_id, CameraHandle *handle);
+    void cameraOpened(ReqId req_id, bool is_ok, QString error);
 
 public slots:
     void onRouteSignRequested(ReqId req_id, const QString &fingerprint, const QString &psbt_v2_hex,
@@ -196,6 +206,7 @@ private slots:
     void onHotKeySealed(ReqId req_id, SealedHotKey *sealed, QString alias);
     void onMnemonicRevealFinished(ReqId req_id, MnemonicResult result);
     void onHotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error);
+    void onCameraOpenFinished(ReqId req_id, CameraHandle *handle);
 
 protected:
     void createModule();
@@ -288,9 +299,16 @@ private:
     QString m_usb_sign_psbt_v2_hex;
     // The SD card route request currently in flight, if any.
     SdRequest m_sd_request;
-    // Owns the whole QR route (sign): its display modal, its one flow in progress,
-    // and the density setting.
+    // Owns the whole QR route (sign): its display and camera scan modals, its one
+    // flow in progress, and the density setting.
     QrRoute *m_qr_route = nullptr;
+    // The req_id openCamera() started most recently; cancelCamera() clears it back
+    // to 0. onCameraOpenFinished() installs its handle only while this still
+    // matches, so a late answer after cancel/switch is dropped, not installed.
+    ReqId m_camera_req_id = 0;
+    // Whether camera_install() last succeeded, so cancelCamera() knows whether to
+    // call camera_stop().
+    bool m_camera_installed = false;
 };
 
 } // namespace keys
