@@ -14,12 +14,14 @@ use bitcoin::{
     Network,
 };
 use bwk_sp::bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor;
+use zeroize::Zeroizing;
 
 use crate::keys::{
+    crypto::{self, Password},
     error::Error,
-    network_name,
+    hot, network_name,
     psbt::{inspect_bytes, PsbtArtifacts},
-    record::{DescriptorEntry, DeviceRecord, KeyRecord, RouteKind, XpubEntry},
+    record::{DescriptorEntry, DeviceRecord, KeyRecord, RouteKind, SecretEnvelope, XpubEntry},
     store::KeyStore,
 };
 
@@ -114,6 +116,27 @@ pub trait KeyManagerImpl {
     fn add_key(&mut self, record: KeyRecord) -> Result<(), Error>;
     fn remove_key(&mut self, fingerprint: Fingerprint, force: bool) -> Result<(), Error>;
     fn set_alias(&mut self, fingerprint: Fingerprint, alias: String) -> Result<(), Error>;
+
+    fn import_hot_key(
+        &mut self,
+        mnemonic: Zeroizing<String>,
+        alias: String,
+        password: Password,
+    ) -> Result<Fingerprint, Error>;
+    /// Stores a key `hot::seal_mnemonic` already sealed: a new record with the
+    /// secret and the Hot route, or the existing record updated with both in the
+    /// same store write.
+    fn commit_hot_key(
+        &mut self,
+        fingerprint: Fingerprint,
+        envelope: SecretEnvelope,
+        alias: String,
+    ) -> Result<(), Error>;
+    fn reveal_mnemonic(
+        &self,
+        fingerprint: Fingerprint,
+        password: Password,
+    ) -> Result<Zeroizing<String>, Error>;
 
     fn add_route(&mut self, fingerprint: Fingerprint, kind: RouteKind) -> Result<(), Error>;
     fn remove_route(&mut self, fingerprint: Fingerprint, kind: RouteKind) -> Result<(), Error>;
@@ -380,6 +403,59 @@ impl KeyManagerImpl for KeyManager {
             }
             Err(e) => Err(e),
         }
+    }
+
+    fn import_hot_key(
+        &mut self,
+        mnemonic: Zeroizing<String>,
+        alias: String,
+        password: Password,
+    ) -> Result<Fingerprint, Error> {
+        let (fingerprint, envelope) = hot::seal_mnemonic(&mnemonic, self.network, password)?;
+        self.commit_hot_key(fingerprint, envelope, alias)?;
+        Ok(fingerprint)
+    }
+
+    fn commit_hot_key(
+        &mut self,
+        fingerprint: Fingerprint,
+        envelope: SecretEnvelope,
+        alias: String,
+    ) -> Result<(), Error> {
+        if !self.records.contains_key(&fingerprint) {
+            let mut record = KeyRecord::new(fingerprint, self.network, alias);
+            record.secret = Some(envelope.clone());
+            record.routes.push(RouteKind::Hot)?;
+            match self.add_key(record) {
+                Ok(()) => return Ok(()),
+                Err(Error::DuplicateKey(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+
+        self.mutate(fingerprint, |record| {
+            if record.secret.is_some() {
+                return Err(Error::SecretAlreadyPresent(fingerprint));
+            }
+            record.secret = Some(envelope);
+            record.routes.push(RouteKind::Hot)
+        })
+    }
+
+    fn reveal_mnemonic(
+        &self,
+        fingerprint: Fingerprint,
+        password: Password,
+    ) -> Result<Zeroizing<String>, Error> {
+        let record = self
+            .records
+            .get(&fingerprint)
+            .ok_or(Error::UnknownKey(fingerprint))?;
+        let envelope = record.secret.as_ref().ok_or(Error::NoSecret(fingerprint))?;
+        let plaintext = crypto::open(envelope, fingerprint, self.network, password)?;
+        let mnemonic =
+            std::str::from_utf8(&plaintext).map_err(|e| Error::Mnemonic(e.to_string()))?;
+        Ok(Zeroizing::new(mnemonic.to_string()))
     }
 
     fn remove_key(&mut self, fingerprint: Fingerprint, force: bool) -> Result<(), Error> {
@@ -795,6 +871,228 @@ mod tests {
             &[RouteKind::Hot, RouteKind::Usb, RouteKind::Qr],
             "expected hot first, got {:?}",
             key.routes.as_slice()
+        );
+    }
+
+    const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon \
+        abandon abandon abandon abandon abandon about";
+    const TEST_HOT_FINGERPRINT_BYTES: [u8; 4] = [0x73, 0xc5, 0xda, 0x0a];
+
+    fn test_hot_fingerprint() -> Fingerprint {
+        Fingerprint::from(TEST_HOT_FINGERPRINT_BYTES)
+    }
+
+    fn import_test_mnemonic(
+        manager: &mut KeyManager,
+        alias: &str,
+        password: &str,
+    ) -> Result<Fingerprint, Error> {
+        manager.import_hot_key(
+            Zeroizing::new(TEST_MNEMONIC.to_string()),
+            alias.to_string(),
+            Password::new(password.to_string()),
+        )
+    }
+
+    #[test]
+    fn import_hot_key_creates_the_record_with_hot_first() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+
+        let fingerprint =
+            import_test_mnemonic(&mut manager, "alias", "password").expect("import succeeds");
+        assert_eq!(
+            fingerprint,
+            test_hot_fingerprint(),
+            "expected the standard test vector's fingerprint, got {fingerprint}"
+        );
+
+        let key = manager.key(fingerprint).expect("key present");
+        assert_eq!(
+            key.routes.as_slice(),
+            &[RouteKind::Hot],
+            "expected only the hot route, got {:?}",
+            key.routes.as_slice()
+        );
+        assert!(
+            key.secret.is_some(),
+            "expected the imported key to carry a secret"
+        );
+    }
+
+    #[test]
+    fn import_hot_key_attaches_to_an_existing_record() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let fp = test_hot_fingerprint();
+        manager
+            .add_key(KeyRecord::new(
+                fp,
+                Network::Regtest,
+                "usb alias".to_string(),
+            ))
+            .expect("add usb key");
+        manager
+            .add_route(fp, RouteKind::Usb)
+            .expect("add usb route");
+
+        import_test_mnemonic(&mut manager, "ignored alias", "password")
+            .expect("import attaches to the existing record");
+
+        let key = manager.key(fp).expect("key present");
+        assert_eq!(
+            key.routes.as_slice(),
+            &[RouteKind::Hot, RouteKind::Usb],
+            "expected hot first alongside the existing usb route, got {:?}",
+            key.routes.as_slice()
+        );
+        assert_eq!(
+            key.alias, "usb alias",
+            "expected the original alias to be kept, got {}",
+            key.alias
+        );
+        assert!(
+            key.secret.is_some(),
+            "expected the attached key to carry a secret"
+        );
+    }
+
+    #[test]
+    fn import_hot_key_refuses_to_overwrite_a_secret() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let fp = import_test_mnemonic(&mut manager, "alias", "password").expect("first import");
+        let before = manager
+            .key(fp)
+            .expect("key present")
+            .secret
+            .clone()
+            .expect("secret present");
+
+        let result = import_test_mnemonic(&mut manager, "alias", "other password");
+        assert!(
+            matches!(result, Err(Error::SecretAlreadyPresent(found)) if found == fp),
+            "expected SecretAlreadyPresent, got {result:?}"
+        );
+
+        let after = manager
+            .key(fp)
+            .expect("key present")
+            .secret
+            .clone()
+            .expect("secret present");
+        assert_eq!(
+            before, after,
+            "expected the stored envelope to be unchanged after the refused import"
+        );
+    }
+
+    #[test]
+    fn import_hot_key_refuses_a_stale_secret_already_present_on_disk() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager_a = manager_over(tmp.path(), Network::Regtest);
+        let fp = test_hot_fingerprint();
+        manager_a
+            .add_key(KeyRecord::new(
+                fp,
+                Network::Regtest,
+                "usb alias".to_string(),
+            ))
+            .expect("add usb key");
+        manager_a
+            .add_route(fp, RouteKind::Usb)
+            .expect("add usb route");
+
+        let mut manager_b = manager_over(tmp.path(), Network::Regtest);
+
+        import_test_mnemonic(&mut manager_a, "ignored alias", "password")
+            .expect("A imports the secret");
+
+        let result = import_test_mnemonic(&mut manager_b, "ignored alias", "other password");
+        assert!(
+            matches!(result, Err(Error::SecretAlreadyPresent(found)) if found == fp),
+            "expected SecretAlreadyPresent, got {result:?}"
+        );
+
+        let store = KeyStore::new(tmp.path().to_path_buf(), Network::Regtest);
+        let on_disk = store.load(fp).expect("load record");
+        let a_secret = manager_a
+            .key(fp)
+            .expect("key present")
+            .secret
+            .clone()
+            .expect("secret present");
+        assert_eq!(
+            on_disk.secret,
+            Some(a_secret),
+            "expected the on-disk secret to be unchanged after B's refused import"
+        );
+    }
+
+    #[test]
+    fn import_hot_key_refuses_a_bad_mnemonic() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+
+        let result = manager.import_hot_key(
+            Zeroizing::new("not a mnemonic".to_string()),
+            "alias".to_string(),
+            Password::new("password".to_string()),
+        );
+        assert!(
+            matches!(result, Err(Error::Mnemonic(_))),
+            "expected a mnemonic error for an unparsable mnemonic, got {result:?}"
+        );
+        assert!(
+            manager.keys().is_empty(),
+            "expected no record to be created for a bad mnemonic, got {:?}",
+            manager.keys()
+        );
+    }
+
+    #[test]
+    fn reveal_mnemonic_round_trips() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let fp = import_test_mnemonic(&mut manager, "alias", "password").expect("import");
+
+        let revealed = manager
+            .reveal_mnemonic(fp, Password::new("password".to_string()))
+            .expect("reveal succeeds");
+        assert_eq!(
+            revealed.as_str(),
+            TEST_MNEMONIC,
+            "expected the revealed mnemonic to match the imported one, got {}",
+            revealed.as_str()
+        );
+    }
+
+    #[test]
+    fn reveal_with_a_wrong_password_errors() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let fp = import_test_mnemonic(&mut manager, "alias", "password").expect("import");
+
+        let result = manager.reveal_mnemonic(fp, Password::new("wrong".to_string()));
+        assert!(
+            matches!(result, Err(Error::WrongPassword)),
+            "expected WrongPassword, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn reveal_without_a_secret_errors() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let fp = fingerprint(1);
+        manager
+            .add_key(KeyRecord::new(fp, Network::Regtest, "alias".to_string()))
+            .expect("add key");
+
+        let result = manager.reveal_mnemonic(fp, Password::new("password".to_string()));
+        assert!(
+            matches!(result, Err(Error::NoSecret(found)) if found == fp),
+            "expected NoSecret, got {result:?}"
         );
     }
 

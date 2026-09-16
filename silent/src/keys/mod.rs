@@ -6,6 +6,7 @@
 
 pub mod crypto;
 pub mod error;
+pub mod hot;
 pub mod manager;
 pub mod psbt;
 pub mod record;
@@ -13,6 +14,7 @@ pub mod store;
 
 pub use crypto::Password;
 pub use error::Error;
+pub use hot::{generate_mnemonic, MNEMONIC_WORDS_LONG, MNEMONIC_WORDS_SHORT};
 pub use manager::{KeyManager, KeyManagerImpl, LiveDevice};
 pub use psbt::{inspect, PsbtArtifacts};
 pub use record::{

@@ -95,6 +95,16 @@ pub enum Error {
     MissingSpDescriptor,
     #[error("sp() descriptor '{0}' has no key origin")]
     MissingSpOrigin(String),
+    #[error("unsupported mnemonic word count {0}")]
+    InvalidWordCount(usize),
+    #[error("invalid mnemonic: {0}")]
+    Mnemonic(String),
+    #[error("key '{0}' has no secret to reveal")]
+    NoSecret(Fingerprint),
+    #[error("key '{0}' already has a secret")]
+    SecretAlreadyPresent(Fingerprint),
+    #[error("hot signer error: {0}")]
+    Signer(String),
     #[error("failed to parse descriptor: {0}")]
     DescriptorParse(String),
     #[error("sp() descriptor holds a spend secret; only watch-only descriptors are accepted")]
