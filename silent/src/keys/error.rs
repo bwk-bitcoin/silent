@@ -120,4 +120,14 @@ pub enum Error {
     SpOutputsPending,
     #[error("no input was signed with this key")]
     NothingSigned,
+    #[error("QR frame index {index} is out of range: only {count} frame(s) available")]
+    FrameOutOfRange { index: usize, count: usize },
+    #[error("QR encoder produced no frames")]
+    NoFrames,
+    #[error("get_xpubs requires at least one derivation path")]
+    EmptyPathList,
+    #[error(transparent)]
+    Qr(#[from] bwk_qr::error::Error),
+    #[error(transparent)]
+    Encode(#[from] bwk_qr_protocol::encode::Error),
 }

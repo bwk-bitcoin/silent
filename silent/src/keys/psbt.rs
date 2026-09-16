@@ -33,10 +33,16 @@ pub fn parse_v2(bytes: &[u8]) -> Result<PsbtV2, Error> {
     PsbtV2::deserialize(bytes).map_err(|e| Error::PsbtParse(e.to_string()))
 }
 
-pub fn inspect(
-    psbt: &PsbtV2,
-    sp_descriptor: Option<&SpDescriptor>,
-) -> Result<PsbtArtifacts, Error> {
+/// Result of scanning a PSBT's inputs and outputs for required signers and SP
+/// artifacts, without requiring an SP descriptor.
+struct Scan {
+    required: BTreeSet<Fingerprint>,
+    sp_inputs: bool,
+    sp_outputs: bool,
+    sp_outputs_pending: bool,
+}
+
+fn scan(psbt: &PsbtV2) -> Result<Scan, Error> {
     let mut required = BTreeSet::new();
     let mut sp_inputs = false;
 
@@ -89,6 +95,34 @@ pub fn inspect(
             sp_outputs_pending = true;
         }
     }
+
+    Ok(Scan {
+        required,
+        sp_inputs,
+        sp_outputs,
+        sp_outputs_pending,
+    })
+}
+
+/// Whether `psbt` carries silent payment artifacts (SP output info, input tweaks,
+/// or ECDH shares), read directly off the PSBT's own fields. No descriptor is
+/// needed since this only detects artifacts, it does not resolve the signer
+/// fingerprint behind them.
+pub fn has_sp_artifacts(psbt: &PsbtV2) -> Result<bool, Error> {
+    let scan = scan(psbt)?;
+    Ok(scan.sp_inputs || scan.sp_outputs)
+}
+
+pub fn inspect(
+    psbt: &PsbtV2,
+    sp_descriptor: Option<&SpDescriptor>,
+) -> Result<PsbtArtifacts, Error> {
+    let Scan {
+        mut required,
+        sp_inputs,
+        sp_outputs,
+        sp_outputs_pending,
+    } = scan(psbt)?;
 
     let mut sp_fingerprint = None;
     if sp_inputs || sp_outputs {

@@ -188,7 +188,7 @@ impl HwiService {
 /// Same derivation bwk-sign's `HwSigner` uses, so a descriptor registered through one
 /// path is found by the other. FIXME: bwk should expose it instead of both sides
 /// deriving it.
-fn wallet_name(descriptor: &str) -> String {
+pub(crate) fn wallet_name(descriptor: &str) -> String {
     let hash = sha256::Hash::hash(descriptor.as_bytes());
     let bytes = hash.as_byte_array();
     format!(
