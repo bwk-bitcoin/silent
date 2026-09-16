@@ -50,6 +50,16 @@ impl QrSession {
         })
     }
 
+    /// Reinitializes the session in place for a network switch: clears any
+    /// outstanding request and rebuilds the id counter and encoder. Keeps the
+    /// session's identity intact, so a `KeysReceiver` taken before the switch
+    /// (holding its own `Arc` clone) keeps observing this same session instead
+    /// of a stale, disconnected one.
+    pub fn reset(&mut self) -> Result<(), Error> {
+        *self = Self::new()?;
+        Ok(())
+    }
+
     pub fn outstanding_id(&self) -> Option<RequestId> {
         self.outstanding.as_ref().map(|outstanding| outstanding.id)
     }

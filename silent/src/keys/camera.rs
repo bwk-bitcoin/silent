@@ -57,6 +57,9 @@ pub struct ScanProgress {
 /// bridge type.
 pub enum CameraMessage {
     Decoded(bwk_qr::decoder::Decoded),
+    /// The BBQR reassembly progress changed. Carries no data itself: the
+    /// receiver reads the new values from `Camera::progress()`.
+    Progress,
     Failed(String),
     Stopped,
 }
@@ -393,6 +396,9 @@ fn capture_loop(
             return;
         }
     };
+    // Matches `Shared::default().progress`, so the first frame does not push a
+    // spurious progress event when nothing has been scanned yet.
+    let mut last_progress = (0usize, 0usize);
 
     while !stop_flag.load(Ordering::Relaxed) {
         if reset_flag.swap(false, Ordering::Relaxed) {
@@ -443,31 +449,33 @@ fn capture_loop(
 
         let preview = rgb_box_downscale(&rgb_data, width, height, preview_factor(width, height));
         let progress = decoder.progress();
+        let (seen, total) = match progress {
+            Some(p) => (p.seen, p.total),
+            None => (0, 0),
+        };
 
-        let Ok(mut state) = shared.lock() else {
-            log::error!("camera: shared state poisoned");
-            return;
-        };
-        state.seq += 1;
-        let seq = state.seq;
-        state.preview = Some(Preview {
-            data: preview.data,
-            width: preview.width,
-            height: preview.height,
-            seq,
-        });
-        state.progress = match progress {
-            Some(p) => ScanProgress {
-                seen: p.seen,
-                total: p.total,
+        {
+            let Ok(mut state) = shared.lock() else {
+                log::error!("camera: shared state poisoned");
+                return;
+            };
+            state.seq += 1;
+            let seq = state.seq;
+            state.preview = Some(Preview {
+                data: preview.data,
+                width: preview.width,
+                height: preview.height,
                 seq,
-            },
-            None => ScanProgress {
-                seen: 0,
-                total: 0,
-                seq,
-            },
-        };
+            });
+            state.progress = ScanProgress { seen, total, seq };
+        }
+
+        if (seen, total) != last_progress {
+            last_progress = (seen, total);
+            if sender.send(CameraMessage::Progress).is_err() {
+                return;
+            }
+        }
     }
 
     let _ = sender.send(CameraMessage::Stopped);

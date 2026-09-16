@@ -105,6 +105,27 @@ mod ffi {
         SpOutputsPending,
     }
 
+    /// Kind of a decoded and validated QR response.
+    #[derive(Debug, Clone, Copy)]
+    pub enum QrResponseKind {
+        Xpubs,
+        Registration,
+        AddressUri,
+        SignedPsbt,
+        SpDescriptor,
+    }
+
+    /// Kind of notification coming from the keys module. `ScanProgress` is a
+    /// push-only signal to go read the current values from the polled
+    /// `camera_progress()` accessor; it carries no progress data itself.
+    #[derive(Debug, Clone, Copy)]
+    pub enum KeyEventFlag {
+        QrDecoded,
+        ScanProgress,
+        CameraStopped,
+        Error,
+    }
+
     // ===== Shared Structs =====
 
     /// Notification from the account scanner.
@@ -477,6 +498,56 @@ mod ffi {
         pub psbt_base64: String,
     }
 
+    /// A notification from the keys module. `req_id` is the QR request id the event
+    /// answers, and 0 for an unsolicited push.
+    #[derive(Debug, Clone)]
+    pub struct KeyEvent {
+        pub flag: KeyEventFlag,
+        pub req_id: u64,
+        pub fingerprint: String,
+        pub payload: String,
+        pub error: String,
+        pub ok: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct CameraListResult {
+        pub is_ok: bool,
+        pub error: String,
+        pub names: Vec<String>,
+        /// Parallel to `names`: the index to pass to camera_start.
+        pub indexes: Vec<u32>,
+    }
+
+    /// Three bytes per pixel, interleaved RGB888.
+    #[derive(Debug, Clone)]
+    pub struct CameraFrameResult {
+        pub is_ok: bool,
+        pub error: String,
+        pub data: Vec<u8>,
+        pub width: u32,
+        pub height: u32,
+        /// Monotonic. C++ repaints only when it changes.
+        pub seq: u64,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ScanProgress {
+        pub is_ok: bool,
+        pub error: String,
+        pub seen: u32,
+        pub total: u32,
+        pub seq: u64,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct PsbtFileResult {
+        pub is_ok: bool,
+        pub error: String,
+        /// The PSBT read from disk, hex encoded. Empty on save and on error.
+        pub psbt_hex: String,
+    }
+
     // ===== Opaque Rust Types =====
 
     extern "Rust" {
@@ -511,12 +582,27 @@ mod ffi {
         /// cache and registered descriptors.
         type KeysModule;
 
+        /// One encoded QR request the C++ modal pulls animation frames from.
+        type QrRequest;
+
+        /// A decoded and validated QR response.
+        type QrResponse;
+
+        /// Notification receiver for the keys module's camera/QR event channel.
+        type KeysReceiver;
+
+        /// Poll result for keys module notifications.
+        type KeysPoll;
+
         /// GUI-thread copy of one key's record and the manager's network, for the
         /// free hot-key worker functions to sign/reveal/derive from off-thread.
         type HotMaterial;
 
         /// A mnemonic sealed by `hot_seal`, committed by `KeysModule::commit_hot_key`.
         type SealedHotKey;
+
+        /// A camera opened by `camera_open`, installed by `KeysModule::camera_install`.
+        type CameraHandle;
     }
 
     // ===== Utility Functions =====
@@ -576,6 +662,10 @@ mod ffi {
 
         /// Set the active app theme name.
         fn app_set_active_theme(name: String);
+
+        /// Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
+        fn sd_save_psbt(path: &str, psbt_hex: &str) -> PsbtFileResult;
+        fn sd_load_psbt(path: &str) -> PsbtFileResult;
     }
 
     // ===== Config Methods =====
@@ -858,6 +948,12 @@ mod ffi {
         /// Callers MUST check `is_ok()` before trusting this value.
         fn network(self: &KeysModule) -> Network;
 
+        /// Stop the camera for good and end the notification stream.
+        fn shutdown(self: &mut KeysModule);
+
+        /// Take the receiver for a dedicated notification thread. Call once.
+        fn take_receiver(self: &mut KeysModule) -> Box<KeysReceiver>;
+
         fn keys(self: &KeysModule) -> Vec<KeyInfo>;
         fn key(self: &KeysModule, fingerprint: &str) -> KeyInfoResult;
         fn add_key(self: &mut KeysModule, fingerprint: &str, alias: &str) -> KeyInfoResult;
@@ -968,6 +1064,98 @@ mod ffi {
         /// keeping its silent-payment input tweaks and ECDH shares. Only signature
         /// fields are copied. Cheap; safe to call from the GUI thread.
         fn usb_merge_signed(original_v2_hex: &str, signed_v0_base64: &str) -> SignResult;
+    }
+
+    // ===== Keys QR Methods =====
+
+    extern "Rust" {
+        fn qr_request_get_xpubs(
+            self: &mut KeysModule,
+            paths: Vec<String>,
+            part_bytes: u32,
+        ) -> Box<QrRequest>;
+        fn qr_request_register_descriptor(
+            self: &mut KeysModule,
+            descriptor: &str,
+            part_bytes: u32,
+        ) -> Box<QrRequest>;
+        fn qr_request_verify_address(
+            self: &mut KeysModule,
+            descriptor: &str,
+            path: &str,
+            address: &str,
+            part_bytes: u32,
+        ) -> Box<QrRequest>;
+        fn qr_request_sign(
+            self: &mut KeysModule,
+            descriptors: Vec<String>,
+            psbt_v2_hex: &str,
+            part_bytes: u32,
+        ) -> Box<QrRequest>;
+        fn qr_request_get_sp_descriptor(self: &mut KeysModule, part_bytes: u32) -> Box<QrRequest>;
+
+        fn is_ok(self: &QrRequest) -> bool;
+        fn get_error(self: &QrRequest) -> String;
+        fn req_id(self: &QrRequest) -> u64;
+        fn frame_count(self: &QrRequest) -> u32;
+        /// Frame `index` of the animated request. An index past the end answers with
+        /// is_ok false, never with frame 0.
+        fn frame(self: &QrRequest, index: u32) -> QrImageResult;
+        /// The whole encoded request, base64, for the paste box.
+        fn base64(self: &QrRequest) -> String;
+
+        /// Validates a pasted payload against the outstanding request id.
+        fn qr_decode_response(self: &mut KeysModule, payload: &str) -> Box<QrResponse>;
+
+        fn is_ok(self: &QrResponse) -> bool;
+        fn get_error(self: &QrResponse) -> String;
+        /// Only meaningful when is_ok().
+        fn kind(self: &QrResponse) -> QrResponseKind;
+        /// The signer's fingerprint when kind() is Xpubs or SpDescriptor, else empty.
+        fn fingerprint(self: &QrResponse) -> String;
+        /// The SP descriptor when kind() is SpDescriptor, else empty.
+        fn descriptor(self: &QrResponse) -> String;
+        /// The signed PSBT as v2 hex when kind() is SignedPsbt, else empty.
+        fn psbt_hex(self: &QrResponse) -> String;
+        /// The derived xpubs when kind() is Xpubs, else empty.
+        fn xpubs(self: &QrResponse) -> Vec<KeyXpub>;
+        /// The address URI when kind() is AddressUri, else empty.
+        fn uri(self: &QrResponse) -> String;
+        fn registered(self: &QrResponse) -> bool;
+    }
+
+    // ===== Keys Camera Methods =====
+
+    extern "Rust" {
+        fn camera_list(self: &KeysModule) -> CameraListResult;
+        /// Opens camera `index` on a fresh channel, touching no `KeysModule` state.
+        /// Only blocks briefly to spawn the capture thread: the device itself opens
+        /// asynchronously inside `capture_loop`, with success or failure reported
+        /// later over the channel as a `CameraMessage`. Still call from a QThread,
+        /// never from the GUI thread, for consistency with the other worker
+        /// functions.
+        fn camera_open(index: u32) -> Box<CameraHandle>;
+        fn is_ok(self: &CameraHandle) -> bool;
+        fn get_error(self: &CameraHandle) -> String;
+        /// Stops the current camera, if any, and stores the one `camera_open`
+        /// built.
+        fn camera_install(self: &mut KeysModule, handle: Box<CameraHandle>) -> KeyOpResult;
+        /// Idempotent.
+        fn camera_stop(self: &mut KeysModule);
+        fn camera_frame(self: &KeysModule) -> CameraFrameResult;
+        fn camera_progress(self: &KeysModule) -> ScanProgress;
+        /// Drops the partial BBQR reassembly, for a rescan.
+        fn camera_reset(self: &mut KeysModule);
+    }
+
+    // ===== KeysReceiver / KeysPoll Methods =====
+
+    extern "Rust" {
+        /// Blocking receive. Returns a poll with is_some()=false once shut down.
+        fn recv(self: &KeysReceiver) -> Box<KeysPoll>;
+
+        fn is_some(self: &KeysPoll) -> bool;
+        fn get_event(self: &KeysPoll) -> KeyEvent;
     }
 
     // ===== PsbtResult Methods =====
@@ -1479,6 +1667,41 @@ pub fn get_regtest_defaults() -> RegtestDefaults {
     }
 }
 
+/// Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
+pub fn sd_save_psbt(path: &str, psbt_hex: &str) -> ffi::PsbtFileResult {
+    let bytes = match hex::decode(psbt_hex) {
+        Ok(bytes) => bytes,
+        Err(e) => return failed_psbt_file(format!("invalid psbt hex: {e}")),
+    };
+    match keys::sdcard::save_psbt(std::path::Path::new(path), &bytes) {
+        Ok(()) => ffi::PsbtFileResult {
+            is_ok: true,
+            error: String::new(),
+            psbt_hex: String::new(),
+        },
+        Err(e) => failed_psbt_file(e.to_string()),
+    }
+}
+
+pub fn sd_load_psbt(path: &str) -> ffi::PsbtFileResult {
+    match keys::sdcard::load_psbt(std::path::Path::new(path)) {
+        Ok(bytes) => ffi::PsbtFileResult {
+            is_ok: true,
+            error: String::new(),
+            psbt_hex: hex::encode(bytes),
+        },
+        Err(e) => failed_psbt_file(e.to_string()),
+    }
+}
+
+fn failed_psbt_file(error: String) -> ffi::PsbtFileResult {
+    ffi::PsbtFileResult {
+        is_ok: false,
+        error,
+        psbt_hex: String::new(),
+    }
+}
+
 // Re-export main types
 pub use account::{new_account, Account, NotificationReceiver, Poll, PsbtResult};
 pub use app_state::{
@@ -1486,10 +1709,12 @@ pub use app_state::{
 };
 pub use config::{config_from_file, delete_config, list_configs, new_config, set_datadir, Config};
 pub use ffi::{
-    BackendInfo, FingerprintsResult, KeyDescriptor, KeyDevice, KeyInfo, KeyInfoResult, KeyOpResult,
-    KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice, LogLevel, MnemonicResult, Network,
-    Notification, NotificationFlag, Output, PsbtValidation, RegtestDefaults, SignResult,
-    SigningCandidate, SigningPlan, TransactionSimulation, TransactionTemplate,
+    BackendInfo, CameraFrameResult, CameraListResult, FingerprintsResult, KeyDescriptor, KeyDevice,
+    KeyEvent, KeyEventFlag, KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind, KeyUnusableReason,
+    KeyXpub, LiveDevice, LogLevel, MnemonicResult, Network, Notification, NotificationFlag, Output,
+    PsbtFileResult, PsbtPayloadResult, PsbtValidation, QrResponseKind, RegtestDefaults,
+    ScanProgress, SignResult, SigningCandidate, SigningPlan, TransactionSimulation,
+    TransactionTemplate,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{
@@ -1497,8 +1722,9 @@ pub use hwi_config::{
     NoiseConfigData, PersistedBitboxNoiseConfig,
 };
 pub use keys::bridge::{
-    hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, new_keys_module, usb_merge_signed,
-    usb_sign_payload, HotMaterial, KeysModule, SealedHotKey,
+    camera_open, hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, new_keys_module,
+    usb_merge_signed, usb_sign_payload, CameraHandle, HotMaterial, KeysModule, KeysPoll,
+    KeysReceiver, QrRequest, QrResponse, SealedHotKey,
 };
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};
 
