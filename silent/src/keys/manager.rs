@@ -451,11 +451,7 @@ impl KeyManagerImpl for KeyManager {
             .records
             .get(&fingerprint)
             .ok_or(Error::UnknownKey(fingerprint))?;
-        let envelope = record.secret.as_ref().ok_or(Error::NoSecret(fingerprint))?;
-        let plaintext = crypto::open(envelope, fingerprint, self.network, password)?;
-        let mnemonic =
-            std::str::from_utf8(&plaintext).map_err(|e| Error::Mnemonic(e.to_string()))?;
-        Ok(Zeroizing::new(mnemonic.to_string()))
+        crypto::open_mnemonic(record, self.network, password)
     }
 
     fn remove_key(&mut self, fingerprint: Fingerprint, force: bool) -> Result<(), Error> {

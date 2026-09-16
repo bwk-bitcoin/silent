@@ -89,6 +89,8 @@ pub enum Error {
     },
     #[error("failed to parse PSBT: {0}")]
     PsbtParse(String),
+    #[error("failed to serialize PSBT: {0}")]
+    PsbtSerialize(String),
     #[error("malformed silent payment PSBT field: {0}")]
     SpField(String),
     #[error("PSBT carries silent payment artifacts but no sp() descriptor was supplied")]
@@ -105,8 +107,17 @@ pub enum Error {
     SecretAlreadyPresent(Fingerprint),
     #[error("hot signer error: {0}")]
     Signer(String),
+    #[error("silent payment signer error: {0}")]
+    SpSign(String),
     #[error("failed to parse descriptor: {0}")]
     DescriptorParse(String),
     #[error("sp() descriptor holds a spend secret; only watch-only descriptors are accepted")]
     SpSpendDescriptor,
+    #[error(
+        "the psbt still has an output with no script: the sp() key must sign first to \
+         derive it"
+    )]
+    SpOutputsPending,
+    #[error("no input was signed with this key")]
+    NothingSigned,
 }

@@ -2,20 +2,36 @@
 //! mnemonic derives to on a given network. `HotSigner::new` is never used here: it
 //! asserts on mainnet, which is exactly where a hot key has to work.
 
-use bitcoin::{bip32::Fingerprint, Network};
-use bwk_sp::bwk_sign::{bip39, hot_signer::HotSigner};
+use std::str::FromStr;
+
+use bitcoin::{
+    bip32::{ChildNumber, Fingerprint},
+    Network,
+};
+use bwk_sp::{
+    bwk_sign::{
+        bip39, bwk_descriptor::descriptor::Descriptor, error::Error as HotSignerError,
+        hot_signer::HotSigner,
+    },
+    bwk_tx::bwk_psbt::{PsbtV2, TxModifiable},
+    signer::SpSigner,
+};
 use zeroize::Zeroizing;
 
 use crate::keys::{
     crypto::{self, Password},
     error::Error,
-    record::SecretEnvelope,
+    psbt::parse_v2,
+    record::{KeyRecord, SecretEnvelope},
 };
 
 pub const MNEMONIC_WORDS_SHORT: usize = 12;
 pub const MNEMONIC_WORDS_LONG: usize = 24;
 const ENTROPY_BYTES_SHORT: usize = 16;
 const ENTROPY_BYTES_LONG: usize = 32;
+
+/// Account index the silent-payment spend key is derived at.
+const SP_ACCOUNT_INDEX: u32 = 0;
 
 /// Draws entropy from `getrandom` and builds a mnemonic from it, so behavior is
 /// identical on every network, mainnet included.
@@ -52,6 +68,104 @@ pub fn seal_mnemonic(
     let fingerprint = fingerprint_of(mnemonic, network)?;
     let envelope = crypto::seal(mnemonic.as_bytes(), fingerprint, network, password)?;
     Ok((fingerprint, envelope))
+}
+
+fn tap_key_sig_count(psbt: &PsbtV2) -> usize {
+    psbt.inputs
+        .iter()
+        .filter(|input| input.psbt.tap_key_sig.is_some())
+        .count()
+}
+
+/// The hardened account index the silent-payment spend key is derived at.
+fn sp_account() -> Result<ChildNumber, Error> {
+    ChildNumber::from_hardened_idx(SP_ACCOUNT_INDEX).map_err(|e| Error::SpSign(e.to_string()))
+}
+
+/// Signs `psbt_v2_bytes` with this key's hot secret and returns the re-serialized
+/// PSBTv2. Blocks on Argon2id while opening the envelope, so it must not run on a
+/// GUI thread.
+pub fn sign_hot(
+    record: &KeyRecord,
+    network: Network,
+    password: Password,
+    psbt_v2_bytes: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let mnemonic = crypto::open_mnemonic(record, network, password)?;
+
+    let mut psbt = parse_v2(psbt_v2_bytes)?;
+
+    let descriptors = record
+        .descriptors
+        .iter()
+        .map(|entry| {
+            Descriptor::from_str(&entry.descriptor)
+                .map_err(|e| Error::DescriptorParse(e.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Only a record holding the sp() descriptor may run `SpSigner::sign`: for any
+    // other key it errors out from inside `complete_output_scripts` on a PSBT the
+    // sp() key hasn't derived outputs on yet, hiding the intended SpOutputsPending.
+    let has_sp_descriptor = descriptors.iter().any(Descriptor::is_sp);
+    let sp_signed_any = if has_sp_descriptor {
+        let signed_before = tap_key_sig_count(&psbt);
+        let sp_signer = SpSigner::from_mnemonic(mnemonic.as_str(), network, sp_account()?)
+            .map_err(|e| Error::SpSign(e.to_string()))?;
+        sp_signer
+            .sign(&mut psbt)
+            .map_err(|e| Error::SpSign(e.to_string()))?;
+        tap_key_sig_count(&psbt) > signed_before
+    } else {
+        false
+    };
+
+    // `into_bitcoin_psbt` fails on a missing output script: reaching that here means
+    // the sp() key has not derived the outputs yet, so this key must not sign now.
+    let mut v0 = psbt
+        .clone()
+        .into_bitcoin_psbt()
+        .map_err(|_| Error::SpOutputsPending)?;
+
+    let signer = HotSigner::new_from_mnemonics(network, mnemonic.as_str())
+        .map_err(|e| Error::Signer(e.to_string()))?;
+    let mut miniscript_signed_any = false;
+    for descriptor in &descriptors {
+        if descriptor.is_sp() {
+            continue;
+        }
+        let Some(miniscript) = descriptor.as_miniscript() else {
+            continue;
+        };
+        match signer.inner_sign(&mut v0, miniscript) {
+            Ok(()) => miniscript_signed_any = true,
+            // A descriptor that matches no input in this PSBT is normal in
+            // multi-account signing, not a failure.
+            Err(HotSignerError::SigningInfo) => {
+                log::debug!("hot sign: descriptor matched no input");
+            }
+            Err(e) => return Err(Error::Signer(e.to_string())),
+        }
+    }
+
+    // FIXME: bwk keeps `set_v0_maps` and an SP-aware `validated_v0` private, and the
+    // public `validated_v0` refuses any PSBT carrying SP output info, so both have to
+    // be redone here. Upstream ask: make them public.
+    for (input, v0_input) in psbt.inputs.iter_mut().zip(v0.inputs) {
+        input.psbt = v0_input;
+    }
+    for (output, v0_output) in psbt.outputs.iter_mut().zip(v0.outputs) {
+        output.psbt = v0_output;
+    }
+
+    if !sp_signed_any && !miniscript_signed_any {
+        return Err(Error::NothingSigned);
+    }
+
+    psbt.tx_modifiable = Some(TxModifiable::none());
+
+    psbt.serialize()
+        .map_err(|e| Error::PsbtSerialize(e.to_string()))
 }
 
 #[cfg(test)]

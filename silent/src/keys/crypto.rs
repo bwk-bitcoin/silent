@@ -11,7 +11,11 @@ use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, XNonce};
 use zeroize::Zeroizing;
 
-use crate::keys::{error::Error, network_name, record::SecretEnvelope};
+use crate::keys::{
+    error::Error,
+    network_name,
+    record::{KeyRecord, SecretEnvelope},
+};
 
 /// Bump when the sealed envelope's format changes in a way older Silent versions
 /// cannot open.
@@ -204,6 +208,23 @@ pub fn open(
         .map_err(|_| Error::WrongPassword)?;
 
     Ok(Zeroizing::new(plaintext))
+}
+
+/// Opens `record`'s envelope and decodes it to the mnemonic string, the one way to
+/// go from a stored secret to a usable mnemonic. Both revealing and signing must
+/// call this instead of re-implementing the open-then-decode sequence.
+pub(crate) fn open_mnemonic(
+    record: &KeyRecord,
+    network: Network,
+    password: Password,
+) -> Result<Zeroizing<String>, Error> {
+    let envelope = record
+        .secret
+        .as_ref()
+        .ok_or(Error::NoSecret(record.fingerprint))?;
+    let plaintext = open(envelope, record.fingerprint, network, password)?;
+    let mnemonic = std::str::from_utf8(&plaintext).map_err(|e| Error::Mnemonic(e.to_string()))?;
+    Ok(Zeroizing::new(mnemonic.to_string()))
 }
 
 #[cfg(test)]
