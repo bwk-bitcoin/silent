@@ -7,12 +7,14 @@
 pub mod crypto;
 pub mod error;
 pub mod manager;
+pub mod psbt;
 pub mod record;
 pub mod store;
 
 pub use crypto::Password;
 pub use error::Error;
 pub use manager::{KeyManager, KeyManagerImpl, LiveDevice};
+pub use psbt::{inspect, PsbtArtifacts};
 pub use record::{
     DescriptorEntry, DeviceRecord, KeyRecord, RouteKind, Routes, SecretEnvelope, XpubEntry,
 };

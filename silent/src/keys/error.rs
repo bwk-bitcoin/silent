@@ -87,6 +87,14 @@ pub enum Error {
         fingerprint: Fingerprint,
         descriptor: String,
     },
+    #[error("failed to parse PSBT: {0}")]
+    PsbtParse(String),
+    #[error("malformed silent payment PSBT field: {0}")]
+    SpField(String),
+    #[error("PSBT carries silent payment artifacts but no sp() descriptor was supplied")]
+    MissingSpDescriptor,
+    #[error("sp() descriptor '{0}' has no key origin")]
+    MissingSpOrigin(String),
     #[error("failed to parse descriptor: {0}")]
     DescriptorParse(String),
     #[error("sp() descriptor holds a spend secret; only watch-only descriptors are accepted")]
