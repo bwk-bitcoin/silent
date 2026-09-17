@@ -164,10 +164,6 @@ set(SILENT_APP_SOURCES
     src/views/modals/ConfirmDelete.h
     src/views/modals/ConfirmDelete.cpp
     src/views/modals/CustomLaunchers.cpp
-    src/views/modals/SelectSigner.h
-    src/views/modals/SelectSigner.cpp
-    src/views/modals/ConfirmSend.h
-    src/views/modals/ConfirmSend.cpp
     src/theme/Icon.h
     src/theme/Icon.cpp
     src/catalog/containers/Tab.h

@@ -21,7 +21,6 @@
 #include "theme/Icon.h"
 #include "theme/Palette.h"
 #include "theme/Theme.h"
-#include "views/modals/ConfirmSend.h"
 #include "views/utils.h"
 #include <QApplication>
 #include <QBoxLayout>
@@ -1489,7 +1488,7 @@ void Send::onValidationResult(PsbtValidation result) {
         auto error = QString::fromStdString(std::string(result.error.c_str()));
         auto text = mapBackendErrorSummary(error) + "\n\n" + formatBackendErrorDetails(error);
         AppController::execModal(new qontrol::Modal(TR("send-validation-error"), text));
-        // Fall through to show ConfirmSend anyway
+        // Fall through and let the user confirm the transaction anyway
     } else if (result.spent_input_count > 0) {
         // Spent inputs: block the transaction
         auto issues = QString::fromStdString(std::string(result.issues.c_str()));

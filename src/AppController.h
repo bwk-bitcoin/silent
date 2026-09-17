@@ -38,6 +38,7 @@ public:
     [[nodiscard]] auto regtestDefaults() const -> std::optional<RegtestDefaultsInfo>;
     [[nodiscard]] auto pluginRegistry() const -> PluginRegistry *;
     auto registerBuiltinPlugin(std::unique_ptr<IPlugin> plugin) -> void;
+    [[nodiscard]] auto keysTab() const -> QWidget *;
 
 signals:
     void accountList(QList<QString>);

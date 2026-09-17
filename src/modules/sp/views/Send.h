@@ -64,10 +64,6 @@ class QCheckBox;
 
 class AccountController;
 
-namespace modal {
-class ConfirmSend;
-}
-
 namespace view {
 class Send;
 
@@ -247,7 +243,6 @@ private:
     QList<RustCoin> m_selected_coins{};
     QStringList m_auto_selected_outpoints;
     CoinState m_last_coin_state{};
-    modal::ConfirmSend *m_confirm_modal = nullptr;
 };
 
 } // namespace view

@@ -32,6 +32,7 @@ auto MainWindow::initWindow() -> void {
 
     m_tab = new catalog::Tabs(this);
     m_menu_tab = new MenuTab(this);
+    m_keys_tab = AppController::get()->keysTab();
 
     m_tab->setTabsClosable(true);
     m_tab->setMovable(true);
@@ -79,6 +80,11 @@ auto MainWindow::resizeEvent(QResizeEvent *event) -> void {
 auto MainWindow::updateTabs() -> void {
     while (m_tab->count() > 0) {
         m_tab->removeTab(0);
+    }
+
+    if (m_keys_tab != nullptr) {
+        int keysIndex = m_tab->addTab(m_keys_tab, TR("main-keys-tab"));
+        m_tab->tabBar()->setTabButton(keysIndex, QTabBar::RightSide, nullptr);
     }
 
     for (const auto &tab : m_tabs) {
@@ -179,7 +185,7 @@ auto MainWindow::closeEvent(QCloseEvent *event) -> void {
 
 auto MainWindow::onTabCloseRequested(int index) -> void {
     auto *hosted = m_tab->widget(index);
-    if (hosted != nullptr && hosted != m_menu_tab) {
+    if (hosted != nullptr && hosted != m_menu_tab && hosted != m_keys_tab) {
         emit hostedTabCloseRequested(hosted);
     }
 }

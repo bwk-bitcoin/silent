@@ -17,13 +17,11 @@ common-broadcast => "Broadcast" => "Senden"
 common-cancel => "Cancel" => "Abbrechen"
 common-clear => "Clear" => "Leeren"
 common-close => "Close" => "Schliessen"
-common-confirm => "Confirm" => "Bestaetigen"
 common-copy => "Copy" => "Kopieren"
 common-delete => "Delete" => "Loeschen"
 common-error => "Error" => "Fehler"
 common-generate => "Generate" => "Generieren"
 common-no => "No" => "Nein"
-common-ok => "OK" => "OK"
 common-proceed => "Proceed" => "Fortfahren"
 common-test => "Test" => "Testen"
 common-testing => "Testing…" => "Teste..."
@@ -33,18 +31,15 @@ confirm-send-device-step
 => "Confirm the transaction on %1."
 => "Bestaetigen Sie die Transaktion auf %1.";;
 confirm-send-failed => "Broadcast Failed\n\n%1" => "Senden fehlgeschlagen\n\n%1"
-confirm-send-fee => "Fee: %1" => "Gebuehr: %1"
 confirm-send-sd-step
 => "Select a file destination for the signed transaction."
 => "Waehlen Sie ein Ziel fuer die signierte Transaktion.";;
 confirm-send-signed
 => "Signed. Ready to broadcast."
 => "Signiert. Bereit zum Senden.";;
-confirm-send-signing => "Signing..." => "Signiere..."
 confirm-send-success
 => "Transaction Sent\n\nTxid: %1"
 => "Transaction Sent\n\nTxid: %1";;
-confirm-send-txid => "Txid: %1" => "Txid: %1"
 confirm-transaction-title => "Confirm Transaction" => "Transaktion bestaetigen"
 create-account-action-create => "Create" => "Erstellen"
 create-account-blindbit-empty
@@ -255,6 +250,7 @@ language-german => "German" => "Deutsch"
 language-italian => "Italian" => "Italiano"
 language-portuguese => "Portuguese" => "Portugues"
 language-spanish => "Spanish" => "Espanol"
+main-keys-tab => "Keys" => "NONE"
 main-menu-tab => "+" => "+"
 main-window-title
 => "Silent - Silent Payments Wallet"

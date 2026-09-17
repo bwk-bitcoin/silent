@@ -4,9 +4,10 @@
 #include "interfaces/instance.h"
 #include "interfaces/module.h"
 #include "interfaces/theme.h"
+#include "modules/keys/KeysModule.h"
+#include "theme/Theme.h"
 #include "views/modals/AppSettings.h"
 #include "views/modals/ConfirmDelete.h"
-#include "theme/Theme.h"
 #include <algorithm>
 #include <common.h>
 #include <qlogging.h>
@@ -30,6 +31,15 @@ auto AppController::get() -> AppController * {
 
 auto AppController::pluginRegistry() const -> PluginRegistry * {
     return m_plugin_registry.get();
+}
+
+auto AppController::keysTab() const -> QWidget * {
+    auto *module = moduleForPluginId(QStringLiteral("keys"));
+    auto *keysModule = dynamic_cast<keys::KeysModule *>(module);
+    if (keysModule == nullptr) {
+        return nullptr;
+    }
+    return keysModule->tab();
 }
 
 auto AppController::registerBuiltinPlugin(std::unique_ptr<IPlugin> plugin) -> void {

@@ -47,4 +47,5 @@ private:
     catalog::Button *m_settings_btn = nullptr;
     QList<QPair<QString, QWidget *>> m_tabs;
     QWidget *m_menu_tab = nullptr;
+    QWidget *m_keys_tab = nullptr;
 };
