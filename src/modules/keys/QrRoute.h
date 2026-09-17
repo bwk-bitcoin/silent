@@ -22,7 +22,7 @@ class QrDisplay;
 
 namespace keys {
 
-// Owns the whole QR route: sign and SP descriptor requests all funnel
+// Owns the whole QR route: sign, verify and SP descriptor requests all funnel
 // through the single m_flow this class holds, so exactly one of them can be in
 // flight at a time and every ending, whatever triggers it, passes through
 // finishFlow().
@@ -36,6 +36,9 @@ public:
     // Starts a sign flow. Answers at once with keys-qr-busy through `signer` if a
     // flow is already in progress.
     void startSign(ReqId req_id, RouteSigner *signer, QString psbt_v2_hex, QString descriptor);
+    // Starts a verify_address flow. Same busy behaviour as startSign().
+    void startVerify(ReqId req_id, RouteSigner *signer, QString descriptor, QString path,
+                     QString address);
     // Starts an sp() descriptor fetch. Answers through the module's bus (there is
     // no RouteSigner for this flow), same busy behaviour as startSign().
     void startSpDescriptor(ReqId req_id);
@@ -45,8 +48,8 @@ public:
 
 signals:
     // Emitted with the freshly built (or rebuilt) QR request: synchronously for a
-    // spDescriptor request, and from the background thread buildSignRequest() spawns
-    // for a sign request.
+    // verify/spDescriptor request, and from the background thread buildSignRequest()
+    // spawns for a sign request.
     void qrRequestReady(QrRequest *request);
 
 public slots:
@@ -58,13 +61,16 @@ public slots:
     void onCameraScanCancelled();
 
 protected:
-    // The three possible endings that hand an answer back to the caller.
+    // The three possible endings that hand an answer back to the caller, besides
+    // the bool overload below for a verify match/mismatch.
     enum class Outcome : std::uint8_t { Signed, Descriptor, Error };
 
     // Reserves a QR request id on the GUI thread, then builds (or rebuilds, at a
     // new density) the sign request's frames on a background thread, emitting
     // qrRequestReady() with the raw pointer once built.
     void buildSignRequest();
+    // Same as buildSignRequest(), synchronous, for the current verify flow.
+    void buildVerifyRequest();
     // Same as buildSignRequest(), synchronous, for the current spDescriptor flow.
     void buildSpDescriptorRequest();
     // Shows `request` in m_display, opening it on the first call and swapping the
@@ -75,7 +81,9 @@ protected:
     // removes the pending request registration, closes the camera scan and the
     // display if still open, and resets m_flow.
     void finishFlow(Outcome outcome, const QString &text);
-    // Shared tail of finishFlow().
+    // Overload for a verify flow's match/mismatch answer.
+    void finishFlow(bool matched);
+    // Shared tail of both finishFlow() overloads.
     void closeOutstanding(ReqId req_id);
 
 private:
@@ -85,7 +93,7 @@ private:
     // id (0 once committed or for a non-sign flow), and the request's own data,
     // kept to rebuild at a new density.
     struct QrFlow {
-        enum class Kind : std::uint8_t { Sign, SpDescriptor };
+        enum class Kind : std::uint8_t { Sign, Verify, SpDescriptor };
 
         Kind kind{};
         ReqId req_id = 0;
@@ -93,6 +101,8 @@ private:
         std::uint64_t pending_id = 0;
         QString psbt_hex;
         QString descriptor;
+        QString verify_path;
+        QString verify_address;
     };
 
     KeysModule *m_module = nullptr;

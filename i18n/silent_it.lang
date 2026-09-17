@@ -102,9 +102,6 @@ keys-add-failed => "Could not register the key: %1" => "NONE"
 keys-add-key => "Add a key" => "NONE"
 keys-add-key-title => "Add a key" => "NONE"
 keys-add-route => "Add route" => "NONE"
-keys-address-display-failed
-=> "The address could not be displayed on the device."
-=> "NONE";;
 keys-alias => "Alias:" => "NONE"
 keys-alias-failed => "Could not rename the key: %1" => "NONE"
 keys-alias-placeholder => "A name you will recognise" => "NONE"
@@ -289,9 +286,13 @@ receive-silent-payment-address
 => "Indirizzo Silent Payment:";;
 receive-taproot-address => "Taproot Address:" => "Indirizzo Taproot:"
 receive-title => "Receive" => "Ricevi"
+receive-verify-matched => "The device confirmed this address." => "NONE"
 receive-verify-message
 => "Confirm the address on %1."
 => "Conferma l'indirizzo su %1.";;
+receive-verify-mismatch
+=> "The device did not confirm this address. Do not use it."
+=> "NONE";;
 receive-verify-title => "Verify" => "Verifica"
 receive-verify-unavailable
 => "No signing device is available for address verification in this build."

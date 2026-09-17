@@ -17,14 +17,15 @@ class UsbConfirm final : public qontrol::Modal {
     Q_OBJECT
 
 public:
-    explicit UsbConfirm(const QString &device_name, QWidget *parent = nullptr);
+    explicit UsbConfirm(const QString &device_name, const QString &subtitle,
+                        QWidget *parent = nullptr);
 
 signals:
     void cancelled();
 
 public slots:
     void onCancelClicked();
-    void onSigned();
+    void onSucceeded();
     void onFailed(const QString &message);
 
 protected:
@@ -34,6 +35,7 @@ protected:
 
 private:
     QString m_device_name;
+    QString m_subtitle;
     catalog::ModalStatus *m_status = nullptr;
     catalog::Button *m_cancel_btn = nullptr;
 };

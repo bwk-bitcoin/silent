@@ -338,6 +338,13 @@ auto AccountController::getDescriptor() -> rust::String {
     return rust::String("");
 }
 
+auto AccountController::addressVerifyInfo(const QString &address) -> AddressVerifyInfo {
+    if (m_account.has_value()) {
+        return m_account.value()->address_verify_info(rust::String(address.toStdString()));
+    }
+    return AddressVerifyInfo{.descriptor = rust::String(""), .path = rust::String("")};
+}
+
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 auto AccountController::coins() -> qontrol::Screen * {
     auto scr = screen("coins");

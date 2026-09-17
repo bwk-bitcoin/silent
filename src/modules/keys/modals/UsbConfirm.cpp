@@ -12,7 +12,9 @@ using catalog::ModalStatus;
 
 namespace keys::modal {
 
-UsbConfirm::UsbConfirm(const QString &device_name, QWidget *parent) : m_device_name(device_name) {
+UsbConfirm::UsbConfirm(const QString &device_name, const QString &subtitle, QWidget *parent)
+    : m_device_name(device_name),
+      m_subtitle(subtitle) {
     Q_UNUSED(parent);
     setWindowTitle(m_device_name);
     init();
@@ -23,7 +25,7 @@ UsbConfirm::UsbConfirm(const QString &device_name, QWidget *parent) : m_device_n
 void UsbConfirm::init() {
     m_status = new ModalStatus;
     m_status->setState(ModalStatus::State::Signing);
-    m_status->setSubtitle(TR("confirm-send-device-step").arg(m_device_name));
+    m_status->setSubtitle(m_subtitle);
 
     m_cancel_btn = new Button(TR("common-cancel"));
 }
@@ -48,7 +50,7 @@ void UsbConfirm::onCancelClicked() {
     reject();
 }
 
-void UsbConfirm::onSigned() {
+void UsbConfirm::onSucceeded() {
     accept();
 }
 

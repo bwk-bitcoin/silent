@@ -995,6 +995,7 @@ struct KeyInfo;
 struct KeyDevice;
 struct LiveDevice;
 struct KeyXpub;
+struct AddressVerifyInfo;
 struct KeyDescriptor;
 struct KeyOpResult;
 struct QrReserveResult;
@@ -1138,7 +1139,7 @@ enum class KeyUnusableReason : ::std::uint8_t {
 enum class QrResponseKind : ::std::uint8_t {
   Xpubs = 0,
   Registration = 1,
-  AddressUri = 2,
+  AddressVerified = 2,
   SignedPsbt = 3,
   SpDescriptor = 4,
 };
@@ -1512,6 +1513,19 @@ struct KeyXpub final {
 };
 #endif // CXXBRIDGE1_STRUCT_KeyXpub
 
+#ifndef CXXBRIDGE1_STRUCT_AddressVerifyInfo
+#define CXXBRIDGE1_STRUCT_AddressVerifyInfo
+// Descriptor and derivation path needed to verify a generated address on a
+// signing device. Empty when `address` cannot be resolved (e.g. the silent
+// payment address itself, which is not derived at a BIP32 path).
+struct AddressVerifyInfo final {
+  ::rust::String descriptor;
+  ::rust::String path;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_AddressVerifyInfo
+
 #ifndef CXXBRIDGE1_STRUCT_KeyDescriptor
 #define CXXBRIDGE1_STRUCT_KeyDescriptor
 // A descriptor a key participates in.
@@ -1865,6 +1879,9 @@ struct Account final : public ::rust::Opaque {
 
   // Get the account SP descriptor.
   ::rust::String descriptor() const noexcept;
+
+  // Descriptor and derivation path to verify `address` on a signing device.
+  ::AddressVerifyInfo address_verify_info(::rust::Str address) const noexcept;
 
   // Simulate a transaction to check feasibility and estimate fees.
   // Returns simulation result with fee, weight, and validity info.
@@ -2257,8 +2274,8 @@ struct QrResponse final : public ::rust::Opaque {
   // The derived xpubs when kind() is Xpubs, else empty.
   ::rust::Vec<::KeyXpub> xpubs() const noexcept;
 
-  // The address URI when kind() is AddressUri, else empty.
-  ::rust::String uri() const noexcept;
+  // The device's verify_address answer when kind() is AddressVerified, else false.
+  bool verified() const noexcept;
 
   bool registered() const noexcept;
   ~QrResponse() = delete;

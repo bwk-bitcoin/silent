@@ -55,6 +55,9 @@ public:
 
     // Called by the module once its modal flow for an interactive route ends.
     void deliverSigned(ReqId req_id, const QString &psbt_hex);
+    // `displayed` is the device's own verify_address answer, not a transport
+    // outcome: false means the device explicitly refused the match, and is
+    // delivered through addressVerified(), never through ISigner::error.
     void deliverDisplayed(ReqId req_id, bool displayed);
     void deliverError(ReqId req_id, const QString &message);
 
@@ -78,6 +81,8 @@ signals:
                             QString descriptor);
     void routeDisplayRequested(ReqId req_id, QString fingerprint, QString descriptor, QString path,
                                QString address);
+    // The Qr route's verify_address answer, delivered by deliverDisplayed().
+    void addressVerified(ReqId req_id, bool matched);
     // The module's connection point for a completed (or failed) fetch, once
     // KeysModule::hotSpDescriptorFetched has landed and matched a pending id.
     void spDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error);
@@ -111,7 +116,6 @@ private:
     // through hotSigned(): membership doubles as "is this req_id mine" when that
     // broadcast signal lands.
     QHash<ReqId, QString> m_pending_signs;
-    QHash<ReqId, QString> m_display_addresses;
     // Hot-route spDescriptor() fetches in flight, from fetchSpDescriptor() until the
     // module answers through hotSpDescriptorFetched(); membership doubles as "is
     // this req_id mine" the same way m_pending_signs does.

@@ -25,6 +25,9 @@ struct Outstanding {
     id: RequestId,
     message_type: MessageType,
     requested_paths: Vec<DerivationPath>,
+    /// The address a `VerifyAddress` request asked the device to confirm, so the
+    /// response can be compared against it. `None` for every other request.
+    expected_address: Option<String>,
     /// The original v2 PSBT bytes a `Sign` request carried, so `validate_signed` merges
     /// the device's answer into it instead of trusting the returned bytes as-is. `None`
     /// for every other request kind.
@@ -98,6 +101,7 @@ impl QrSession {
             id: request.id,
             message_type: request.message_type,
             requested_paths: request.requested_paths.clone(),
+            expected_address: request.expected_address.clone(),
             original_psbt_v2: request.original_psbt_v2.clone(),
         });
         Ok(())
@@ -116,7 +120,7 @@ impl QrSession {
             .map(bwk_qr_protocol::types::DerivationPath::from)
             .collect();
         let body = request::Body::GetXpubs(request::GetXpubs { derivation_paths });
-        self.issue(body, paths, part_bytes)
+        self.issue(body, paths, None, part_bytes)
     }
 
     pub fn register_descriptor(
@@ -128,7 +132,7 @@ impl QrSession {
             descriptor_alias: hwi::wallet_name(descriptor),
             descriptor: Some(request::DescriptorBody::Bip380(descriptor.to_string())),
         });
-        self.issue(body, Vec::new(), part_bytes)
+        self.issue(body, Vec::new(), None, part_bytes)
     }
 
     pub fn verify_address(
@@ -141,11 +145,11 @@ impl QrSession {
         let body = request::Body::VerifyAddress(request::VerifyAddress {
             descriptor_alias: hwi::wallet_name(descriptor),
             derivation_path: bwk_qr_protocol::types::DerivationPath::from(&path),
-            address: Some(address),
+            address: Some(address.clone()),
             descriptor: Some(request::DescriptorBody::Bip380(descriptor.to_string())),
             proof: None,
         });
-        self.issue(body, Vec::new(), part_bytes)
+        self.issue(body, Vec::new(), Some(address), part_bytes)
     }
 
     /// Reserves an id, builds the request off the session, and commits it back in one
@@ -165,13 +169,14 @@ impl QrSession {
 
     pub fn get_sp_descriptor(&mut self, part_bytes: usize) -> Result<QrRequest, Error> {
         let body = request::Body::GetSpDescriptor(request::GetSpDescriptor {});
-        self.issue(body, Vec::new(), part_bytes)
+        self.issue(body, Vec::new(), None, part_bytes)
     }
 
     fn issue(
         &mut self,
         body: request::Body,
         requested_paths: Vec<DerivationPath>,
+        expected_address: Option<String>,
         part_bytes: usize,
     ) -> Result<QrRequest, Error> {
         let id = self.next_id();
@@ -199,12 +204,14 @@ impl QrSession {
             id,
             message_type,
             requested_paths: requested_paths.clone(),
+            expected_address: expected_address.clone(),
             original_psbt_v2: None,
         });
         Ok(QrRequest {
             id,
             message_type,
             requested_paths,
+            expected_address,
             original_psbt_v2: None,
             message,
             frames,
@@ -235,6 +242,7 @@ impl QrSession {
         }
         let expected_type = outstanding.message_type;
         let requested_paths = outstanding.requested_paths.clone();
+        let expected_address = outstanding.expected_address.clone();
         let original_psbt_v2 = outstanding.original_psbt_v2.clone();
 
         let body = response.body;
@@ -260,7 +268,9 @@ impl QrSession {
                 validate_sp_descriptor_response(descriptor)?
             }
             response::Body::Registration(registration) => validate_registration(registration)?,
-            response::Body::AddressUri(address_uri) => validate_address_uri(address_uri)?,
+            response::Body::AddressUri(address_uri) => {
+                validate_address_uri(address_uri, expected_address)?
+            }
             response::Body::Error(_) => unreachable!("error responses are handled above"),
         };
 
@@ -281,7 +291,9 @@ pub enum QrResponse {
         alias: String,
         registered: bool,
     },
-    AddressUri(String),
+    /// Whether the device's independently derived address matched the one the
+    /// caller asked it to confirm.
+    AddressVerified(bool),
     /// The original v2 PSBT the sign request carried, with the device's signatures
     /// merged in. Always v2, even for a plain (non-SP) sign request that was sent to
     /// the device as v0.
@@ -357,9 +369,17 @@ fn validate_registration(registration: response::Registration) -> Result<QrRespo
     })
 }
 
-fn validate_address_uri(address_uri: response::AddressUri) -> Result<QrResponse, Error> {
+/// The device echoes back the address it independently derived as `bitcoin:<address>`,
+/// never the bare address; comparing it against `expected_address` is the whole
+/// point of the request.
+fn validate_address_uri(
+    address_uri: response::AddressUri,
+    expected_address: Option<String>,
+) -> Result<QrResponse, Error> {
     let uri = address_uri.uri.ok_or(Error::NoAddressUri)?;
-    Ok(QrResponse::AddressUri(uri))
+    let expected = expected_address.ok_or(Error::MissingExpectedAddress)?;
+    let address = uri.strip_prefix("bitcoin:").unwrap_or(&uri);
+    Ok(QrResponse::AddressVerified(address == expected))
 }
 
 /// Hex-encodes a request id for error messages.
@@ -375,6 +395,7 @@ pub struct QrRequest {
     id: RequestId,
     message_type: MessageType,
     requested_paths: Vec<DerivationPath>,
+    expected_address: Option<String>,
     /// The original v2 PSBT bytes, for a `Sign` request. `None` for every other
     /// builder. Carried into `Outstanding` by `commit`, so `validate_signed` can
     /// merge the device's answer into it.
@@ -444,6 +465,7 @@ pub fn build_sign_request(
         id,
         message_type,
         requested_paths: Vec::new(),
+        expected_address: None,
         original_psbt_v2: Some(psbt_v2_bytes.to_vec()),
         message,
         frames,

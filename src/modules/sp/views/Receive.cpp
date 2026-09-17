@@ -10,10 +10,12 @@
 #include "catalog/inputs/Input.h"
 #include "catalog/panels/receive/AddressRow.h"
 #include "catalog/panels/receive/LabelRow.h"
-#include "views/modals/AddressHistoryModal.h"
 #include "i18n/Tr.h"
+#include "interfaces/host.h"
+#include "interfaces/keys.h"
+#include "modules/keys/KeysModule.h"
 #include "theme/Palette.h"
-#include "views/modals/SelectSigner.h"
+#include "views/modals/AddressHistoryModal.h"
 #include "views/utils.h"
 #include <Qontrol>
 #include <common.h>
@@ -83,6 +85,11 @@ void Receive::doConnect() {
         connect(m_taproot_section, &catalog::FoldSection::toggled, this,
                 &Receive::onTaprootSectionToggled, qontrol::UNIQUE);
     }
+    auto *keys = Host::get()->keys();
+    if (keys != nullptr) {
+        connect(keys, &IKeys::verified, this, &Receive::onAddressVerified, qontrol::UNIQUE);
+        connect(keys, &IKeys::error, this, &Receive::onKeysError, qontrol::UNIQUE);
+    }
 }
 
 void Receive::onNewSegwitAddr() {
@@ -134,20 +141,39 @@ void Receive::onVerifyAddress() {
     showVerifyModal(row != nullptr ? row->address() : QString());
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void Receive::showVerifyModal(const QString &address) {
-    auto *picker = new modal::SelectSigner(TR("receive-verify-title"), false);
-    int result = picker->exec();
-    auto signer = picker->selectedName();
-    auto kind = picker->selectedKind();
-    delete picker;
-    if (result != QDialog::Accepted || kind == "sd") {
+    auto *keys = Host::get()->keys();
+    if (keys == nullptr) {
+        AppController::execModal(
+            new qontrol::Modal(TR("receive-verify-title"), TR("receive-verify-unavailable")));
         return;
     }
+
+    auto info = m_controller->addressVerifyInfo(address);
+    auto descriptor = keys::KeysModule::toQt(info.descriptor);
+    auto path = keys::KeysModule::toQt(info.path);
+    if (descriptor.isEmpty()) {
+        AppController::execModal(
+            new qontrol::Modal(TR("receive-verify-title"), TR("receive-verify-unavailable")));
+        return;
+    }
+
+    m_verify_address = address;
+    m_verify_req_id = keys->newRequest();
+    keys->verifyAddress(m_verify_req_id, descriptor, path, address);
+}
+
+void Receive::onAddressVerified(ReqId req_id, bool verified) {
+    if (req_id != m_verify_req_id) {
+        return;
+    }
+    m_verify_req_id = 0;
+
     auto *status = new catalog::ModalStatus;
-    status->setState(catalog::ModalStatus::State::Signing);
-    status->setSubtitle(TR("receive-verify-message").arg(signer));
-    auto *addressLabel = new catalog::Label(address, catalog::LabelRole::Mono);
+    status->setState(verified ? catalog::ModalStatus::State::Success
+                              : catalog::ModalStatus::State::Error);
+    status->setSubtitle(verified ? TR("receive-verify-matched") : TR("receive-verify-mismatch"));
+    auto *addressLabel = new catalog::Label(m_verify_address, catalog::LabelRole::Mono);
     addressLabel->setWordWrap(true);
     addressLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     auto *container = new qontrol::Modal;
@@ -158,6 +184,14 @@ void Receive::showVerifyModal(const QString &address) {
                                         ->push(addressLabel)
                                         ->pushSpacer(resolve(Spacing::M))));
     AppController::execModal(container);
+}
+
+void Receive::onKeysError(std::optional<ReqId> req_id, QString message) {
+    if (!req_id.has_value() || req_id.value() != m_verify_req_id) {
+        return;
+    }
+    m_verify_req_id = 0;
+    AppController::execModal(new qontrol::Modal(TR("receive-verify-title"), message));
 }
 
 void Receive::onSpSectionToggled(bool expanded) {

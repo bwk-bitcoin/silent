@@ -51,10 +51,9 @@ void KeysBus::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &
     m_module->sign(req_id, psbt_v2_hex, descriptors);
 }
 
-void KeysBus::verifyAddress(ReqId req_id, [[maybe_unused]] const QString &descriptor,
-                            [[maybe_unused]] const QString &path,
-                            [[maybe_unused]] const QString &address) {
-    deliverError(req_id, QStringLiteral("keys: signing is not wired yet"));
+void KeysBus::verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
+                            const QString &address) {
+    m_module->verifyAddress(req_id, descriptor, path, address);
 }
 
 void KeysBus::spDescriptor(ReqId req_id, const QString &fingerprint) {
@@ -70,8 +69,8 @@ void KeysBus::deliverSigned(ReqId req_id, const QString &psbt_v2_hex) {
     emit signed_(req_id, psbt_v2_hex);
 }
 
-void KeysBus::deliverVerified(ReqId req_id, const QString &address) {
-    emit verified(req_id, address);
+void KeysBus::deliverVerified(ReqId req_id, bool matched) {
+    emit verified(req_id, matched);
 }
 
 void KeysBus::deliverError(std::optional<ReqId> req_id, const QString &message) {
@@ -323,6 +322,8 @@ auto KeysModule::routeSignerFor(const QString &fingerprint, const KeyInfo &info,
     connect(created, &ISigner::error, this, &KeysModule::onRouteSignError, qontrol::UNIQUE);
     connect(created, &RouteSigner::spDescriptorFetched, this,
             &KeysModule::onRouteSpDescriptorFetched, qontrol::UNIQUE);
+    connect(created, &RouteSigner::addressVerified, this, &KeysModule::onRouteVerifyDisplayed,
+            qontrol::UNIQUE);
     if (cached != nullptr) {
         cached->deleteLater();
     }
@@ -413,6 +414,97 @@ void KeysModule::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringLis
         // Not a RouteSigner and can_sign is true: the module's own OfflineSigner
         // never reports can_sign, so this is a live device on the Usb route.
         signWithDevice(entry.signer, psbt_v2_hex, descriptor, req_id);
+        return;
+    }
+
+    m_bus->deliverError(req_id, TR("keys-route-unavailable"));
+}
+
+auto KeysModule::verifyUnusableReason(const KeyInfo &info) -> KeyUnusableReason {
+    if (info.routes.empty()) {
+        return KeyUnusableReason::NoRoute;
+    }
+    if (info.routes.size() == 1 && info.routes[0] == KeyRouteKind::Hot && !info.has_hot_secret) {
+        return KeyUnusableReason::NoHotSecret;
+    }
+    return KeyUnusableReason::DeviceNotConnected;
+}
+
+auto KeysModule::buildVerifyCandidate(const KeyInfo &info) -> SigningCandidate {
+    SigningCandidate candidate;
+    candidate.fingerprint = info.fingerprint;
+    candidate.alias = info.alias;
+    candidate.registered = true;
+    candidate.must_sign_first = false;
+
+    auto entry = buildKeyEntry(info);
+    candidate.can_sign = entry.can_sign;
+    if (!entry.can_sign) {
+        // Meaningless when can_sign is false; Hot is the sentinel value (see
+        // SigningCandidate::route).
+        candidate.route = KeyRouteKind::Hot;
+        candidate.unusable = verifyUnusableReason(info);
+        return candidate;
+    }
+
+    candidate.unusable = KeyUnusableReason::None;
+    auto *route = qobject_cast<RouteSigner *>(entry.signer);
+    if (route != nullptr) {
+        candidate.route = route->route();
+        return candidate;
+    }
+    // Not a RouteSigner and can_sign is true: the module's own OfflineSigner never
+    // reports can_sign, so this is a live device on the Usb route.
+    candidate.route = KeyRouteKind::Usb;
+    if (entry.signer != nullptr) {
+        candidate.device_id = rust::String(entry.signer->id().toStdString());
+    }
+    return candidate;
+}
+
+void KeysModule::verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
+                               const QString &address) {
+    if (rust() == nullptr) {
+        m_bus->deliverError(req_id, TR("keys-module-not-ready"));
+        return;
+    }
+
+    auto candidateKeys = rust()->keys_for_descriptor(rust::String(descriptor.toStdString()));
+    if (candidateKeys.empty()) {
+        m_bus->deliverError(req_id, TR("keys-route-unavailable"));
+        return;
+    }
+
+    SigningPlan plan;
+    plan.is_ok = true;
+    plan.sp_outputs_pending = false;
+    for (const auto &info : candidateKeys) {
+        plan.candidates.push_back(buildVerifyCandidate(info));
+    }
+
+    QString fingerprint = showSignerPicker(TR("receive-verify-title"), plan);
+    if (fingerprint.isEmpty()) {
+        m_bus->deliverError(req_id, TR("keys-signing-cancelled"));
+        return;
+    }
+
+    for (const auto &info : candidateKeys) {
+        if (QString::compare(toQt(info.fingerprint), fingerprint, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        auto entry = buildKeyEntry(info);
+        if (!entry.can_sign || entry.signer == nullptr) {
+            break;
+        }
+        auto *route = qobject_cast<RouteSigner *>(entry.signer);
+        if (route != nullptr) {
+            ReqId signerReqId = route->displayAddress(descriptor, path, address);
+            m_signer_to_request.insert(signerReqId, req_id);
+            return;
+        }
+        // Not a RouteSigner and can_sign is true: the module's own OfflineSigner
+        // never reports can_sign, so this is a live device on the Usb route.
+        verifyWithDevice(entry.signer, descriptor, path, address, req_id);
         return;
     }
 
@@ -692,9 +784,29 @@ void KeysModule::signWithDevice(ISigner *signer, const QString &psbt_v2_hex,
     m_usb_sign_psbt_v2_hex = psbt_v2_hex;
     m_signer_to_request.insert(signerReqId, req_id);
 
-    auto *confirm = new modal::UsbConfirm(signer->id());
+    auto *confirm =
+        new modal::UsbConfirm(signer->id(), TR("confirm-send-device-step").arg(signer->id()));
     m_usb_confirm = confirm;
     connect(confirm, &modal::UsbConfirm::cancelled, this, &KeysModule::onUsbConfirmCancelled,
+            qontrol::UNIQUE);
+    AppController::execModal(confirm);
+}
+
+void KeysModule::verifyWithDevice(ISigner *signer, const QString &descriptor, const QString &path,
+                                  const QString &address, ReqId req_id) {
+    connect(signer, &ISigner::addressDisplayed, this, &KeysModule::onDeviceVerifyDisplayed,
+            qontrol::UNIQUE);
+    connect(signer, &ISigner::error, this, &KeysModule::onDeviceVerifyError, qontrol::UNIQUE);
+
+    ReqId signerReqId = signer->displayAddress(descriptor, path, address);
+    m_usb_verify_req_id = signerReqId;
+    m_usb_verify_signer = signer;
+    m_signer_to_request.insert(signerReqId, req_id);
+
+    auto *confirm =
+        new modal::UsbConfirm(signer->id(), TR("receive-verify-message").arg(signer->id()));
+    m_usb_verify_confirm = confirm;
+    connect(confirm, &modal::UsbConfirm::cancelled, this, &KeysModule::onUsbVerifyCancelled,
             qontrol::UNIQUE);
     AppController::execModal(confirm);
 }
@@ -938,17 +1050,15 @@ void KeysModule::onRouteSignRequested(ReqId req_id, const QString &fingerprint,
 }
 
 void KeysModule::onRouteDisplayRequested(ReqId req_id, [[maybe_unused]] const QString &fingerprint,
-                                         [[maybe_unused]] const QString &descriptor,
-                                         [[maybe_unused]] const QString &path,
-                                         [[maybe_unused]] const QString &address) {
+                                         const QString &descriptor, const QString &path,
+                                         const QString &address) {
     auto *signer = qobject_cast<RouteSigner *>(sender());
     if (signer == nullptr) {
         return;
     }
     m_pending_requests.insert(req_id, signer);
-    // The interactive QR and SD card flows are wired in a later task.
-    signer->deliverError(req_id, TR("keys-route-unavailable"));
-    m_pending_requests.remove(req_id);
+
+    m_qr_route->startVerify(req_id, signer, descriptor, path, address);
 }
 
 void KeysModule::onSignerPicked(QString fingerprint) {
@@ -1046,7 +1156,7 @@ void KeysModule::onDeviceSignSigned(ReqId req_id, QString psbt_base64) {
     }
 
     if (!m_usb_confirm.isNull()) {
-        m_usb_confirm->onSigned();
+        m_usb_confirm->onSucceeded();
     }
     m_bus->deliverSigned(requestId, toQt(merged.psbt_v2_hex));
 }
@@ -1069,6 +1179,70 @@ void KeysModule::onDeviceSignError(std::optional<ReqId> req_id, QString message)
     m_bus->deliverError(requestId, message);
 }
 
+void KeysModule::onUsbVerifyCancelled() {
+    if (m_usb_verify_req_id == 0) {
+        return;
+    }
+    if (!m_usb_verify_signer.isNull()) {
+        disconnect(m_usb_verify_signer, &ISigner::addressDisplayed, this,
+                   &KeysModule::onDeviceVerifyDisplayed);
+        disconnect(m_usb_verify_signer, &ISigner::error, this, &KeysModule::onDeviceVerifyError);
+    }
+    ReqId signerReqId = m_usb_verify_req_id;
+    m_usb_verify_signer = nullptr;
+    m_usb_verify_req_id = 0;
+    m_bus->deliverError(requestIdFor(signerReqId), TR("keys-signing-cancelled"));
+}
+
+void KeysModule::onDeviceVerifyDisplayed(ReqId req_id, [[maybe_unused]] QString address) {
+    if (req_id != m_usb_verify_req_id) {
+        return;
+    }
+    if (!m_usb_verify_signer.isNull()) {
+        disconnect(m_usb_verify_signer, &ISigner::addressDisplayed, this,
+                   &KeysModule::onDeviceVerifyDisplayed);
+        disconnect(m_usb_verify_signer, &ISigner::error, this, &KeysModule::onDeviceVerifyError);
+    }
+    m_usb_verify_signer = nullptr;
+    m_usb_verify_req_id = 0;
+    ReqId requestId = requestIdFor(req_id);
+    if (!m_usb_verify_confirm.isNull()) {
+        m_usb_verify_confirm->onSucceeded();
+    }
+    // bwk-hwi's HWI trait only ever returns Ok(()) or an Err from display_address;
+    // there is no "the device showed it, but the user rejected the match" answer
+    // for USB devices, unlike the Qr route's explicit verify_address result. A
+    // device-side rejection surfaces as an Err instead, handled by
+    // onDeviceVerifyError below, indistinguishable there from a transport failure.
+    m_bus->deliverVerified(requestId, true);
+}
+
+void KeysModule::onDeviceVerifyError(std::optional<ReqId> req_id, QString message) {
+    if (!req_id.has_value() || req_id.value() != m_usb_verify_req_id) {
+        return;
+    }
+    if (!m_usb_verify_signer.isNull()) {
+        disconnect(m_usb_verify_signer, &ISigner::addressDisplayed, this,
+                   &KeysModule::onDeviceVerifyDisplayed);
+        disconnect(m_usb_verify_signer, &ISigner::error, this, &KeysModule::onDeviceVerifyError);
+    }
+    m_usb_verify_signer = nullptr;
+    m_usb_verify_req_id = 0;
+    ReqId requestId = requestIdFor(req_id.value());
+    if (!m_usb_verify_confirm.isNull()) {
+        m_usb_verify_confirm->onFailed(message);
+    }
+    // bwk-hwi's Error::UserRefused (a device-side rejection) is collapsed into a
+    // plain string alongside every other failure at the service's error boundary
+    // (bwk hwi/src/service.rs, SigningDeviceMsg::Error), so this can be a device
+    // refusal or an unrelated transport failure and there is no way to tell them
+    // apart on this route. Route it through error() like onDeviceSignError does
+    // for USB sign failures, instead of fabricating a verified(false) mismatch
+    // that IKeys::verified's contract reserves for a genuine comparison result.
+    qWarning() << "keys: usb verify failed:" << message;
+    m_bus->deliverError(requestId, message);
+}
+
 void KeysModule::onRouteSignSigned(ReqId req_id, QString psbt_v2_hex) {
     m_bus->deliverSigned(requestIdFor(req_id), psbt_v2_hex);
 }
@@ -1080,6 +1254,10 @@ void KeysModule::onRouteSignError(std::optional<ReqId> req_id, QString message) 
     }
     m_sp_descriptor_fingerprints.remove(*req_id);
     m_bus->deliverError(requestIdFor(*req_id), message);
+}
+
+void KeysModule::onRouteVerifyDisplayed(ReqId req_id, bool matched) {
+    m_bus->deliverVerified(requestIdFor(req_id), matched);
 }
 
 void KeysModule::onRouteSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor,

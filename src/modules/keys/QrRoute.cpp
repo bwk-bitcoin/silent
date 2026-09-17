@@ -69,8 +69,30 @@ void QrRoute::startSign(ReqId req_id, RouteSigner *signer, QString psbt_v2_hex,
                     .signer = signer,
                     .pending_id = 0,
                     .psbt_hex = std::move(psbt_v2_hex),
-                    .descriptor = std::move(descriptor)};
+                    .descriptor = std::move(descriptor),
+                    .verify_path = QString(),
+                    .verify_address = QString()};
     buildSignRequest();
+}
+
+void QrRoute::startVerify(ReqId req_id, RouteSigner *signer, QString descriptor, QString path,
+                          QString address) {
+    if (m_flow.has_value()) {
+        m_module->untrackPendingRequest(req_id);
+        if (signer != nullptr) {
+            signer->deliverError(req_id, TR("keys-qr-busy"));
+        }
+        return;
+    }
+    m_flow = QrFlow{.kind = QrFlow::Kind::Verify,
+                    .req_id = req_id,
+                    .signer = signer,
+                    .pending_id = 0,
+                    .psbt_hex = QString(),
+                    .descriptor = std::move(descriptor),
+                    .verify_path = std::move(path),
+                    .verify_address = std::move(address)};
+    buildVerifyRequest();
 }
 
 void QrRoute::startSpDescriptor(ReqId req_id) {
@@ -84,7 +106,9 @@ void QrRoute::startSpDescriptor(ReqId req_id) {
                     .signer = nullptr,
                     .pending_id = 0,
                     .psbt_hex = QString(),
-                    .descriptor = QString()};
+                    .descriptor = QString(),
+                    .verify_path = QString(),
+                    .verify_address = QString()};
     buildSpDescriptorRequest();
 }
 
@@ -114,6 +138,19 @@ void QrRoute::buildSignRequest() {
         });
     connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
     thread->start();
+}
+
+void QrRoute::buildVerifyRequest() {
+    auto *r = m_module->rust();
+    if (r == nullptr) {
+        finishFlow(Outcome::Error, TR("keys-route-unavailable"));
+        return;
+    }
+    auto request = r->qr_request_verify_address(rust::String(m_flow->descriptor.toStdString()),
+                                                rust::String(m_flow->verify_path.toStdString()),
+                                                rust::String(m_flow->verify_address.toStdString()),
+                                                densityToPartBytes(m_density));
+    emit qrRequestReady(request.into_raw());
 }
 
 void QrRoute::buildSpDescriptorRequest() {
@@ -178,6 +215,9 @@ void QrRoute::onDensityChanged(int density) {
     case QrFlow::Kind::Sign:
         buildSignRequest();
         return;
+    case QrFlow::Kind::Verify:
+        buildVerifyRequest();
+        return;
     case QrFlow::Kind::SpDescriptor:
         buildSpDescriptorRequest();
         return;
@@ -240,14 +280,18 @@ void QrRoute::onKeyEvent(const KeyEvent &event) {
         // (request id match, expected message type, no bare-signatures response) on
         // the Rust side before this event was emitted; a failed check surfaces as
         // KeyEventFlag::Error above instead. Here it is always the matching
-        // outstanding flow's answer: a signed PSBT v2 hex for a sign flow, or an
-        // sp() descriptor for a spDescriptor flow, ready to deliver as-is.
+        // outstanding flow's answer: a signed PSBT v2 hex for a sign flow, a
+        // match/mismatch bool (event.ok) for a verify flow, or an sp() descriptor
+        // for a spDescriptor flow, ready to deliver as-is.
         if (m_camera_scan.isNull() || !m_flow.has_value()) {
             return;
         }
         switch (m_flow->kind) {
         case QrFlow::Kind::Sign:
             finishFlow(Outcome::Signed, KeysModule::toQt(event.payload));
+            return;
+        case QrFlow::Kind::Verify:
+            finishFlow(event.ok);
             return;
         case QrFlow::Kind::SpDescriptor:
             finishFlow(Outcome::Descriptor, KeysModule::toQt(event.payload));
@@ -270,6 +314,18 @@ void QrRoute::onKeyEvent(const KeyEvent &event) {
     default:
         return;
     }
+}
+
+void QrRoute::finishFlow(bool matched) {
+    if (!m_flow.has_value()) {
+        return;
+    }
+    QrFlow flow = std::move(*m_flow);
+    m_flow.reset();
+    if (!flow.signer.isNull()) {
+        flow.signer->deliverDisplayed(flow.req_id, matched);
+    }
+    closeOutstanding(flow.req_id);
 }
 
 void QrRoute::finishFlow(Outcome outcome, const QString &text) {

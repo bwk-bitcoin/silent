@@ -54,7 +54,9 @@ public:
 signals:
     // NOLINTNEXTLINE(readability-identifier-naming)
     void signed_(ReqId req_id, QString psbt_v2_hex);
-    void verified(ReqId req_id, QString address);
+    // A refusal (verified=false) is the device answering that the address does
+    // not match, not a transport failure: it never comes through error().
+    void verified(ReqId req_id, bool verified);
     void spDescriptorReady(ReqId req_id, QString descriptor, QString fingerprint);
     void descriptorRegistered(ReqId req_id, QString fingerprint);
     void error(std::optional<ReqId> req_id, QString message);

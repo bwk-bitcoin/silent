@@ -111,7 +111,7 @@ mod ffi {
     pub enum QrResponseKind {
         Xpubs,
         Registration,
-        AddressUri,
+        AddressVerified,
         SignedPsbt,
         SpDescriptor,
     }
@@ -400,6 +400,15 @@ mod ffi {
         pub fingerprint: String,
         pub path: String,
         pub xpub: String,
+    }
+
+    /// Descriptor and derivation path needed to verify a generated address on a
+    /// signing device. Empty when `address` cannot be resolved (e.g. the silent
+    /// payment address itself, which is not derived at a BIP32 path).
+    #[derive(Debug, Clone)]
+    pub struct AddressVerifyInfo {
+        pub descriptor: String,
+        pub path: String,
     }
 
     /// A descriptor a key participates in.
@@ -828,6 +837,9 @@ mod ffi {
         /// Get the account SP descriptor.
         fn descriptor(self: &Account) -> String;
 
+        /// Descriptor and derivation path to verify `address` on a signing device.
+        fn address_verify_info(self: &Account, address: &str) -> AddressVerifyInfo;
+
         /// Simulate a transaction to check feasibility and estimate fees.
         /// Returns simulation result with fee, weight, and validity info.
         fn simulate_transaction(
@@ -1165,8 +1177,8 @@ mod ffi {
         fn psbt_hex(self: &QrResponse) -> String;
         /// The derived xpubs when kind() is Xpubs, else empty.
         fn xpubs(self: &QrResponse) -> Vec<KeyXpub>;
-        /// The address URI when kind() is AddressUri, else empty.
-        fn uri(self: &QrResponse) -> String;
+        /// The device's verify_address answer when kind() is AddressVerified, else false.
+        fn verified(self: &QrResponse) -> bool;
         fn registered(self: &QrResponse) -> bool;
     }
 

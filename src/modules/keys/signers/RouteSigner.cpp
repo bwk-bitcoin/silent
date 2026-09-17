@@ -176,7 +176,6 @@ ReqId RouteSigner::displayAddress(const QString &descriptor, const QString &path
         emit deferredError(reqId, TR("keys-hot-no-display"));
         break;
     case KeyRouteKind::Qr:
-        m_display_addresses.insert(reqId, address);
         emit routeDisplayRequested(reqId, m_fingerprint, descriptor, path, address);
         break;
     case KeyRouteKind::Usb:
@@ -296,16 +295,10 @@ void RouteSigner::deliverSigned(ReqId req_id, const QString &psbt_hex) {
 }
 
 void RouteSigner::deliverDisplayed(ReqId req_id, bool displayed) {
-    QString address = m_display_addresses.take(req_id);
-    if (displayed) {
-        emit addressDisplayed(req_id, address);
-        return;
-    }
-    emit ISigner::error(req_id, TR("keys-address-display-failed"));
+    emit addressVerified(req_id, displayed);
 }
 
 void RouteSigner::deliverError(ReqId req_id, const QString &message) {
-    m_display_addresses.remove(req_id);
     emit ISigner::error(req_id, message);
 }
 

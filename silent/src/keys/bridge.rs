@@ -1107,7 +1107,7 @@ impl QrResponse {
         match self.inner.as_ref() {
             Ok(qr::QrResponse::Xpubs { .. }) | Err(_) => ffi::QrResponseKind::Xpubs,
             Ok(qr::QrResponse::Registration { .. }) => ffi::QrResponseKind::Registration,
-            Ok(qr::QrResponse::AddressUri(_)) => ffi::QrResponseKind::AddressUri,
+            Ok(qr::QrResponse::AddressVerified(_)) => ffi::QrResponseKind::AddressVerified,
             Ok(qr::QrResponse::SignedPsbt(_)) => ffi::QrResponseKind::SignedPsbt,
             Ok(qr::QrResponse::SpDescriptor { .. }) => ffi::QrResponseKind::SpDescriptor,
         }
@@ -1156,11 +1156,11 @@ impl QrResponse {
         }
     }
 
-    /// The address URI when kind() is AddressUri, else empty.
-    pub fn uri(&self) -> String {
+    /// The device's verify_address answer when kind() is AddressVerified, else false.
+    pub fn verified(&self) -> bool {
         match self.inner.as_ref() {
-            Ok(qr::QrResponse::AddressUri(uri)) => uri.clone(),
-            _ => String::new(),
+            Ok(qr::QrResponse::AddressVerified(matches)) => *matches,
+            _ => false,
         }
     }
 
@@ -1351,10 +1351,9 @@ fn qr_response_to_event(response: qr::QrResponse) -> ffi::KeyEvent {
             ok: registered,
             ..ffi::KeyEvent::default()
         },
-        qr::QrResponse::AddressUri(uri) => ffi::KeyEvent {
+        qr::QrResponse::AddressVerified(matches) => ffi::KeyEvent {
             flag: ffi::KeyEventFlag::QrDecoded,
-            payload: uri,
-            ok: true,
+            ok: matches,
             ..ffi::KeyEvent::default()
         },
         qr::QrResponse::SignedPsbt(bytes) => ffi::KeyEvent {

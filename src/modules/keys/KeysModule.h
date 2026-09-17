@@ -57,7 +57,9 @@ public:
 
     // Called by the module, which owns every outstanding request.
     void deliverSigned(ReqId req_id, const QString &psbt_v2_hex);
-    void deliverVerified(ReqId req_id, const QString &address);
+    // `matched` is the device's own verify_address answer; false is a refusal, not
+    // a transport failure, and is delivered here rather than through deliverError().
+    void deliverVerified(ReqId req_id, bool matched);
     void deliverError(std::optional<ReqId> req_id, const QString &message);
     void deliverSpDescriptor(ReqId req_id, const QString &descriptor, const QString &fingerprint);
     void deliverDescriptorRegistered(ReqId req_id, const QString &fingerprint);
@@ -126,6 +128,11 @@ public:
     // key's best usable route, and answers `req_id` through the bus's signed_ or
     // error signal.
     void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors);
+    // Shows `address` on the device of the key the user picks among those
+    // `descriptor` is registered against, mirroring sign()'s picker-then-route
+    // sequence. Answers `req_id` through the bus's verified or error signal.
+    void verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
+                       const QString &address);
     // Fetches the sp() descriptor of `fingerprint`'s key over its best usable route
     // (hot or QR only; any other route answers on error) and answers `req_id`
     // through the bus's spDescriptorReady or error signal.
@@ -215,6 +222,7 @@ public slots:
     void onSdSaveRequested(QString path);
     void onSdLoadRequested(QString path);
     void onUsbConfirmCancelled();
+    void onUsbVerifyCancelled();
     void onSdPickerCancelled();
 
 private slots:
@@ -226,8 +234,11 @@ private slots:
     void onPasswordPromptRejected();
     void onDeviceSignSigned(ReqId req_id, QString psbt_base64);
     void onDeviceSignError(std::optional<ReqId> req_id, QString message);
+    void onDeviceVerifyDisplayed(ReqId req_id, QString address);
+    void onDeviceVerifyError(std::optional<ReqId> req_id, QString message);
     void onRouteSignSigned(ReqId req_id, QString psbt_v2_hex);
     void onRouteSignError(std::optional<ReqId> req_id, QString message);
+    void onRouteVerifyDisplayed(ReqId req_id, bool matched);
     void onRouteSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error);
     void onSdLoadReady(bool is_ok, QString psbt_hex, QString error);
     void onQrSpDescriptorRequested(ReqId req_id);
@@ -260,12 +271,24 @@ protected:
     // Builds the signer picker plan for `psbt_v2_hex`. Shows an error modal and
     // still returns the (is_ok false) plan on failure, never a fabricated one.
     [[nodiscard]] auto signingPlanFor(const QString &psbt_v2_hex) const -> SigningPlan;
+    // Builds one signer-picker candidate for a display (verifyAddress) request out of
+    // `info`: the route buildKeyEntry() resolves for it, or the reason it cannot be
+    // used when buildKeyEntry() reports it can't sign.
+    [[nodiscard]] auto buildVerifyCandidate(const KeyInfo &info) -> SigningCandidate;
+    // Mirrors the Rust side's unusable_reason() (silent/src/keys/manager.rs): why
+    // `info` cannot be used, once buildKeyEntry() already reports it can't sign.
+    [[nodiscard]] static auto verifyUnusableReason(const KeyInfo &info) -> KeyUnusableReason;
     // Drives the connected-device (Usb) signing route: connects to the device's own
     // signals, starts the request, and shows UsbConfirm around it. Maps the
     // signer's own ReqId to `req_id` before opening the modal, so an answer that
     // lands during it can still be translated back.
     void signWithDevice(ISigner *signer, const QString &psbt_v2_hex, const QString &descriptor,
                         ReqId req_id);
+    // Drives the connected-device (Usb) verify route, mirroring signWithDevice():
+    // connects to the device's own signals, starts the request, and shows
+    // UsbConfirm around it.
+    void verifyWithDevice(ISigner *signer, const QString &descriptor, const QString &path,
+                          const QString &address, ReqId req_id);
     // Translates a RouteSigner/device signer's own ReqId back to the caller's
     // request id via m_signer_to_request, removing the entry. Falls back to
     // `signer_req_id` unchanged when no mapping was recorded: some requests
@@ -327,10 +350,14 @@ private:
     // device's v0 answer back into it. Cleared on every answer and cancel path,
     // alongside m_usb_sign_req_id.
     QString m_usb_sign_psbt_v2_hex;
+    // The connected-device (Usb) verify request currently in flight, if any.
+    ReqId m_usb_verify_req_id = 0;
+    QPointer<ISigner> m_usb_verify_signer;
+    QPointer<keys::modal::UsbConfirm> m_usb_verify_confirm;
     // The SD card route request currently in flight, if any.
     SdRequest m_sd_request;
-    // Owns the whole QR route (sign, spDescriptor): its display and camera scan
-    // modals, its one flow in progress, and the density setting.
+    // Owns the whole QR route (sign, verify, spDescriptor): its display and camera
+    // scan modals, its one flow in progress, and the density setting.
     QrRoute *m_qr_route = nullptr;
     // The fingerprint each in-flight spDescriptor() request was made for, keyed by
     // req_id, so cancel/error paths can drop the pending entry once the request

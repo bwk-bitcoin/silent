@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use bwk_sp::account::recipient::SpRecipientAddress;
 use bwk_sp::account::{Account as SpAccount, ScanMode};
+use bwk_sp::bwk::bwk_coin::KeyChain;
 use bwk_sp::bwk::bwk_electrum::{
     coin_store::PaymentType,
     notification::{Notification as BwkNotification, SpNotification, TxListenerNotif},
@@ -15,8 +16,8 @@ use bwk_sp::receiver::RecipientAddress;
 
 use crate::config::Config;
 use crate::ffi::{
-    CoinState, Notification, NotificationFlag, RustCoin, RustTx, TransactionSimulation,
-    TransactionTemplate, TxResult,
+    AddressVerifyInfo, CoinState, Notification, NotificationFlag, RustCoin, RustTx,
+    TransactionSimulation, TransactionTemplate, TxResult,
 };
 
 /// Valid account state (created successfully).
@@ -351,6 +352,37 @@ impl Account {
                 String::new()
             }
         }
+    }
+
+    /// Descriptor and derivation path to verify `address` on a signing device.
+    /// Empty when `address` cannot be resolved to one of the account's segwit or
+    /// taproot sub-accounts: the silent payment address itself is not derived at
+    /// a BIP32 path, so it has none.
+    pub fn address_verify_info(&self, address: &str) -> AddressVerifyInfo {
+        let empty = AddressVerifyInfo {
+            descriptor: String::new(),
+            path: String::new(),
+        };
+        let Some(inner) = &self.inner else {
+            return empty;
+        };
+        for scanner in inner.account.scanners() {
+            for entry in scanner.address_entries() {
+                if entry.address.clone().assume_checked().to_string() != address {
+                    continue;
+                }
+                let branch: u32 = match entry.account {
+                    KeyChain::Receive => 0,
+                    KeyChain::Change => 1,
+                    KeyChain::Custom(c) => c,
+                };
+                return AddressVerifyInfo {
+                    descriptor: scanner.descriptor_str(),
+                    path: format!("{branch}/{}", entry.index),
+                };
+            }
+        }
+        empty
     }
 
     /// Build a configured TxBuilder from a TransactionTemplate.

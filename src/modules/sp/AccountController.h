@@ -26,6 +26,7 @@ public:
     virtual auto newTaprootAddr() -> rust::String;
     virtual auto hasSubAccounts() -> bool;
     virtual auto getDescriptor() -> rust::String;
+    virtual auto addressVerifyInfo(const QString &address) -> AddressVerifyInfo;
     auto coins() -> qontrol::Screen *;
     auto getAccount() -> std::optional<rust::Box<Account>> &;
 

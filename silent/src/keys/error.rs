@@ -167,6 +167,8 @@ pub enum Error {
     IncompleteRegistration,
     #[error("address verification response carries no address uri")]
     NoAddressUri,
+    #[error("verify_address response arrived with no expected address recorded")]
+    MissingExpectedAddress,
     #[error("file {path} already exists")]
     FileExists { path: PathBuf },
     #[error("psbt file {path} is {len} bytes, over the accepted size limit")]
