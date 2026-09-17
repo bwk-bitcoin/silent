@@ -6,13 +6,12 @@
 #include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
-#include "catalog/inputs/TextEdit.h"
-#include "catalog/panels/receive/QrCode.h"
 #include "common.h"
 #include "i18n/Tr.h"
+#include "interfaces/host.h"
+#include "interfaces/keys.h"
 #include "views/utils.h"
 
-#include <QImage>
 #include <qthread.h>
 
 namespace modal {
@@ -24,8 +23,6 @@ using catalog::Input;
 using catalog::InputRole;
 using catalog::Label;
 using catalog::LabelRole;
-using catalog::QrCode;
-using catalog::TextEdit;
 using catalog::ValidationMark;
 
 /// Default endpoints for a new mainnet account. Both are prefilled without a
@@ -38,6 +35,7 @@ CreateAccount::CreateAccount([[maybe_unused]] QWidget *parent) {
     init();
     doConnect();
     view();
+    populateKeys();
     applyNetworkDefaults();
 }
 
@@ -45,33 +43,17 @@ void CreateAccount::init() {
     m_name_input = new Input;
     m_name_input->setPlaceholderText(TR("create-account-placeholder-name"));
 
-    m_qr_code = new QrCode;
-    auto qrImage = ::qr_get_sp_descriptor_request_image();
-    if (qrImage.is_ok) {
-        auto image = QImage(qrImage.data.data(), static_cast<int>(qrImage.width),
-                            static_cast<int>(qrImage.height), static_cast<int>(qrImage.width),
-                            QImage::Format_Grayscale8);
-        m_qr_code->setImage(image.copy());
-    }
+    m_key_combo = new ComboBox;
+    m_key_combo->setEnabled(false);
 
-    m_qr_request = new TextEdit;
-    m_qr_request->setText(
-        QString::fromStdString(std::string(::qr_get_sp_descriptor_request().c_str())));
-    m_qr_request->textEdit()->setReadOnly(true);
-    m_qr_request->setMaximumHeight(60);
-    m_qr_request->setMinimumWidth(260);
+    m_fetch_btn = new Button(TR("create-account-fetch-descriptor"));
+    m_fetch_btn->setEnabled(false);
 
-    m_qr_response = new TextEdit;
-    m_qr_response->setPlaceholderText(TR("create-account-placeholder-qr-response"));
-    m_qr_response->setMaximumHeight(60);
-    m_qr_response->setMinimumWidth(260);
+    m_descriptor_label = new Label(TR("create-account-descriptor-pending"), LabelRole::Mono);
+    m_descriptor_label->setWordWrap(true);
+    m_descriptor_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
 
-    m_qr_import_btn = new Button(TR("create-account-import-qr-response"));
-
-    m_descriptor_input = new TextEdit;
-    m_descriptor_input->setPlaceholderText(TR("create-account-placeholder-descriptor"));
-    m_descriptor_input->setMaximumHeight(70);
-    m_descriptor_input->setMinimumWidth(260);
+    m_descriptor_status = new ValidationMark;
 
     m_network_combo = new ComboBox;
     m_network_combo->addItem(TR("network-regtest"), static_cast<int>(Network::Regtest));
@@ -102,9 +84,9 @@ void CreateAccount::init() {
 void CreateAccount::doConnect() {
     connect(m_name_input, &QLineEdit::textChanged, this, &CreateAccount::onUpdateCreateButton,
             qontrol::UNIQUE);
-    connect(m_descriptor_input, &TextEdit::textChanged, this, &CreateAccount::onUpdateCreateButton,
+    connect(m_key_combo, &QComboBox::currentIndexChanged, this, &CreateAccount::onKeyChanged,
             qontrol::UNIQUE);
-    connect(m_qr_import_btn, &QPushButton::clicked, this, &CreateAccount::onImportQrResponse,
+    connect(m_fetch_btn, &QPushButton::clicked, this, &CreateAccount::onFetchDescriptor,
             qontrol::UNIQUE);
     connect(m_network_combo, &QComboBox::currentIndexChanged, this,
             &CreateAccount::onNetworkChanged, qontrol::UNIQUE);
@@ -122,6 +104,15 @@ void CreateAccount::doConnect() {
             qontrol::UNIQUE);
     connect(this, &CreateAccount::electrumTestReady, this, &CreateAccount::onElectrumTestReady,
             qontrol::UNIQUE);
+
+    if (Host::get()->keys() != nullptr) {
+        connect(Host::get()->keys(), &IKeys::spDescriptorReady, this,
+                &CreateAccount::onSpDescriptorReady, qontrol::UNIQUE);
+        connect(Host::get()->keys(), &IKeys::descriptorRegistered, this,
+                &CreateAccount::onDescriptorRegistered, qontrol::UNIQUE);
+        connect(Host::get()->keys(), &IKeys::error, this, &CreateAccount::onKeysError,
+                qontrol::UNIQUE);
+    }
 }
 
 void CreateAccount::view() {
@@ -130,27 +121,16 @@ void CreateAccount::view() {
                         ->pushSpacer(resolve(Spacing::XS))
                         ->push(m_name_input);
 
-    auto *descriptorRow =
-        (new qontrol::Row)
-            ->push(new Label(TR("create-account-descriptor"), LabelRole::InputLabel))
-            ->pushSpacer(resolve(Spacing::XS))
-            ->push(m_descriptor_input);
+    auto *keyRow = (new qontrol::Row)
+                       ->push(new Label(TR("create-account-key"), LabelRole::InputLabel))
+                       ->pushSpacer(resolve(Spacing::XS))
+                       ->push(m_key_combo)
+                       ->pushSpacer(resolve(Spacing::XS))
+                       ->push(m_fetch_btn)
+                       ->pushSpacer(resolve(Spacing::XS))
+                       ->push(m_descriptor_status);
 
-    auto *qrRequestRow =
-        (new qontrol::Row)
-            ->push(new Label(TR("create-account-qr-request"), LabelRole::InputLabel))
-            ->pushSpacer(resolve(Spacing::XS))
-            ->push(m_qr_code)
-            ->pushSpacer(resolve(Spacing::XS))
-            ->push(m_qr_request);
-
-    auto *qrResponseRow =
-        (new qontrol::Row)
-            ->push(new Label(TR("create-account-qr-response"), LabelRole::InputLabel))
-            ->pushSpacer(resolve(Spacing::XS))
-            ->push(m_qr_response)
-            ->pushSpacer(resolve(Spacing::XS))
-            ->push(m_qr_import_btn);
+    auto *descriptorRow = (new qontrol::Row)->push(m_descriptor_label);
 
     auto *networkRow = (new qontrol::Row)
                            ->push(new Label(TR("settings-network"), LabelRole::InputLabel))
@@ -185,9 +165,7 @@ void CreateAccount::view() {
     auto *col = (new qontrol::Column)
                     ->push(nameRow)
                     ->pushSpacer(resolve(Spacing::XS))
-                    ->push(qrRequestRow)
-                    ->pushSpacer(resolve(Spacing::XS))
-                    ->push(qrResponseRow)
+                    ->push(keyRow)
                     ->pushSpacer(resolve(Spacing::XS))
                     ->push(descriptorRow)
                     ->pushSpacer(resolve(Spacing::XS))
@@ -202,17 +180,61 @@ void CreateAccount::view() {
     setMainWidget(margin(col));
 }
 
+void CreateAccount::populateKeys() {
+    m_key_combo->clear();
+    m_descriptor.clear();
+    m_descriptor_fingerprint.clear();
+    m_descriptor_req_id = 0;
+    m_descriptor_status->setState(ValidationMark::State::None);
+
+    auto network = static_cast<Network>(m_network_combo->currentData().toInt());
+    auto *keys = Host::get()->keys();
+    auto entries = keys != nullptr ? keys->keys(network) : QList<KeyEntry>{};
+
+    if (entries.isEmpty()) {
+        m_key_combo->setEnabled(false);
+        m_fetch_btn->setEnabled(false);
+        m_descriptor_label->setText(TR("create-account-no-keys"));
+        onUpdateCreateButton();
+        return;
+    }
+
+    for (const auto &entry : entries) {
+        auto label = entry.alias.isEmpty() ? entry.fingerprint : entry.alias;
+        m_key_combo->addItem(label, entry.fingerprint);
+    }
+    m_key_combo->setEnabled(true);
+    m_fetch_btn->setEnabled(true);
+    m_descriptor_label->setText(TR("create-account-descriptor-pending"));
+    onUpdateCreateButton();
+}
+
 void CreateAccount::onCreate() {
+    if (m_descriptor.isEmpty() || m_descriptor_fingerprint.isEmpty() ||
+        Host::get()->keys() == nullptr) {
+        return;
+    }
+
+    m_create_btn->setEnabled(false);
+    m_register_req_id = Host::get()->keys()->newRequest();
+    Host::get()->keys()->registerDescriptor(m_register_req_id, m_descriptor_fingerprint,
+                                            m_descriptor);
+}
+
+void CreateAccount::onDescriptorRegistered(ReqId req_id) {
+    if (req_id != m_register_req_id) {
+        return;
+    }
+
     auto name = m_name_input->text().trimmed();
-    auto descriptor = m_descriptor_input->toPlainText().trimmed();
     auto blindbitUrl = m_blindbit_input->text().trimmed();
     auto electrumUrl = m_electrum_input->text().trimmed();
     auto network = static_cast<Network>(m_network_combo->currentData().toInt());
 
-    auto config =
-        new_config(rust::String(name.toStdString()), network, rust::String(descriptor.toStdString()),
-                   rust::String(blindbitUrl.toStdString()), rust::String(electrumUrl.toStdString()),
-                   546, rust::String("sp"));
+    auto config = new_config(rust::String(name.toStdString()), network,
+                             rust::String(m_descriptor.toStdString()),
+                             rust::String(blindbitUrl.toStdString()),
+                             rust::String(electrumUrl.toStdString()), 546, rust::String("sp"));
     config->to_file();
 
     AppController::get()->onAccountCreated(name);
@@ -220,26 +242,69 @@ void CreateAccount::onCreate() {
 }
 
 void CreateAccount::onNetworkChanged() {
-    bool isMainnet = false;
-    isMainnet =
-        static_cast<Network>(m_network_combo->currentData().toInt()) == Network::Bitcoin;
-
     invalidateBackendTest();
     invalidateElectrumTest();
+    populateKeys();
     applyNetworkDefaults();
 }
 
-void CreateAccount::onImportQrResponse() {
-    auto payload = m_qr_response->toPlainText().trimmed();
-    auto result = ::qr_decode_sp_descriptor_response(rust::String(payload.toStdString()));
-    if (!result.is_ok) {
-        auto error = QString::fromStdString(std::string(result.error.c_str()));
-        AppController::execModal(new qontrol::Modal(TR("create-account-invalid-input"), error));
+void CreateAccount::onKeyChanged() {
+    m_descriptor.clear();
+    m_descriptor_fingerprint.clear();
+    m_descriptor_status->setState(ValidationMark::State::None);
+    m_descriptor_label->setText(TR("create-account-descriptor-pending"));
+    m_descriptor_req_id = 0;
+    onUpdateCreateButton();
+}
+
+void CreateAccount::onFetchDescriptor() {
+    if (Host::get()->keys() == nullptr) {
+        return;
+    }
+    auto fingerprint = m_key_combo->currentData().toString();
+    if (fingerprint.isEmpty()) {
         return;
     }
 
-    m_descriptor_input->setText(QString::fromStdString(std::string(result.descriptor.c_str())));
+    m_fetch_btn->setEnabled(false);
+    m_descriptor_status->setState(ValidationMark::State::None);
+    m_descriptor_req_id = Host::get()->keys()->newRequest();
+    Host::get()->keys()->spDescriptor(m_descriptor_req_id, fingerprint);
+}
+
+void CreateAccount::onSpDescriptorReady(ReqId req_id, QString descriptor, QString fingerprint) {
+    if (req_id != m_descriptor_req_id) {
+        return;
+    }
+
+    m_descriptor = descriptor;
+    m_descriptor_fingerprint = fingerprint;
+    m_descriptor_label->setText(descriptor);
+    m_descriptor_status->setState(ValidationMark::State::Valid);
+    m_fetch_btn->setEnabled(true);
     onUpdateCreateButton();
+}
+
+void CreateAccount::onKeysError(std::optional<ReqId> req_id, QString message) {
+    if (!req_id.has_value()) {
+        return;
+    }
+
+    if (req_id.value() == m_descriptor_req_id) {
+        m_fetch_btn->setEnabled(true);
+        m_descriptor_status->setState(ValidationMark::State::Invalid);
+        m_descriptor.clear();
+        m_descriptor_fingerprint.clear();
+        m_descriptor_label->setText(TR("create-account-descriptor-pending"));
+        onUpdateCreateButton();
+        AppController::execModal(new qontrol::Modal(TR("create-account-invalid-input"), message));
+        return;
+    }
+
+    if (req_id.value() == m_register_req_id) {
+        onUpdateCreateButton();
+        AppController::execModal(new qontrol::Modal(TR("create-account-invalid-input"), message));
+    }
 }
 
 void CreateAccount::onTestBackend() {
@@ -378,7 +443,6 @@ void CreateAccount::invalidateElectrumTest() {
 
 void CreateAccount::onUpdateCreateButton() {
     auto name = m_name_input->text().trimmed();
-    auto descriptor = m_descriptor_input->toPlainText().trimmed();
 
     if (name.isEmpty() || name.contains(" ")) {
         m_create_btn->setEnabled(false);
@@ -394,7 +458,7 @@ void CreateAccount::onUpdateCreateButton() {
         }
     }
 
-    if (descriptor.isEmpty() || !::validate_sp_descriptor(rust::String(descriptor.toStdString()))) {
+    if (m_descriptor.isEmpty()) {
         m_create_btn->setEnabled(false);
         return;
     }

@@ -59,6 +59,8 @@ public:
     void deliverSigned(ReqId req_id, const QString &psbt_v2_hex);
     void deliverVerified(ReqId req_id, const QString &address);
     void deliverError(std::optional<ReqId> req_id, const QString &message);
+    void deliverSpDescriptor(ReqId req_id, const QString &descriptor, const QString &fingerprint);
+    void deliverDescriptorRegistered(ReqId req_id, const QString &fingerprint);
 
 private:
     KeysModule *m_module = nullptr;
@@ -124,6 +126,25 @@ public:
     // key's best usable route, and answers `req_id` through the bus's signed_ or
     // error signal.
     void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors);
+    // Fetches the sp() descriptor of `fingerprint`'s key over its best usable route
+    // (hot or QR only; any other route answers on error) and answers `req_id`
+    // through the bus's spDescriptorReady or error signal.
+    void spDescriptor(ReqId req_id, const QString &fingerprint);
+    // Requires an origin (see validate_sp_descriptor_origin in lib/include/silent.h)
+    // before answering the bus with spDescriptorReady; rejects, never repairs, a
+    // descriptor that comes back without one. Also cross-checks the validated origin
+    // fingerprint against `req_id`'s originally requested key (m_sp_descriptor_fingerprints)
+    // and rejects a mismatch instead of delivering an answer for the wrong key. Called
+    // by RouteSigner's hot spDescriptor path and by QrRoute::finishFlow.
+    void validateAndDeliverSpDescriptor(ReqId req_id, const QString &descriptor);
+    // Drops the fingerprint tracking for a spDescriptor() request and answers the
+    // bus with `message`, without validating a descriptor: the error counterpart
+    // to validateAndDeliverSpDescriptor(), called by QrRoute::finishFlow when a QR
+    // spDescriptor flow ends on error instead of a decoded answer.
+    void deliverSpDescriptorError(ReqId req_id, const QString &message);
+    // Records `descriptor` as registered with `fingerprint`'s key and answers
+    // `req_id` through the bus's descriptorRegistered or error signal.
+    void registerDescriptor(ReqId req_id, const QString &fingerprint, const QString &descriptor);
 
     // Worker jobs owned by this module, so a thread never outlives the modal or
     // signer that asked for it. Each starts a QThread::create lambda that captures
@@ -135,6 +156,7 @@ public:
     void importHotKey(ReqId req_id, QString mnemonic, QString alias, QString password);
     void revealMnemonic(ReqId req_id, QString fingerprint, QString password);
     void signHot(ReqId req_id, QString fingerprint, QString password, QString psbt_v2_hex);
+    void fetchHotSpDescriptor(ReqId req_id, QString fingerprint, QString password);
     // Stores `req_id` as the current camera request; onCameraOpenFinished() installs
     // the opened handle only if it is still current by the time the worker answers,
     // dropping (and thereby releasing) any other handle.
@@ -158,6 +180,9 @@ signals:
     // close (accept) or show the error and stay open, once the real load result
     // (not the button click) is known.
     void sdLoadDone(bool is_ok, QString error);
+    // Queued to itself, mirroring RouteSigner::routeSignRequested: spDescriptor()'s
+    // Qr branch must return reqId to its caller before any QrDisplay modal is built.
+    void qrSpDescriptorRequested(ReqId req_id);
 
     // Worker job results. Each pair below is: emitted from the background thread,
     // re-owned by the matching private slot, which re-emits the second (public)
@@ -173,6 +198,8 @@ signals:
     void mnemonicRevealed(ReqId req_id, MnemonicResult result);
     void hotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error);
     void hotSigned(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error);
+    void hotSpDescriptorFinished(ReqId req_id, bool is_ok, QString descriptor, QString error);
+    void hotSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error);
     // The opened camera's raw pointer, re-owned by onCameraOpenFinished(), which
     // drops it instead of installing it if `req_id` is no longer current.
     void cameraOpenFinished(ReqId req_id, CameraHandle *handle);
@@ -201,11 +228,14 @@ private slots:
     void onDeviceSignError(std::optional<ReqId> req_id, QString message);
     void onRouteSignSigned(ReqId req_id, QString psbt_v2_hex);
     void onRouteSignError(std::optional<ReqId> req_id, QString message);
+    void onRouteSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error);
     void onSdLoadReady(bool is_ok, QString psbt_hex, QString error);
+    void onQrSpDescriptorRequested(ReqId req_id);
     void onMnemonicGenerationFinished(ReqId req_id, MnemonicResult result);
     void onHotKeySealed(ReqId req_id, SealedHotKey *sealed, QString alias);
     void onMnemonicRevealFinished(ReqId req_id, MnemonicResult result);
     void onHotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error);
+    void onHotSpDescriptorFinished(ReqId req_id, bool is_ok, QString descriptor, QString error);
     void onCameraOpenFinished(ReqId req_id, CameraHandle *handle);
 
 protected:
@@ -299,9 +329,13 @@ private:
     QString m_usb_sign_psbt_v2_hex;
     // The SD card route request currently in flight, if any.
     SdRequest m_sd_request;
-    // Owns the whole QR route (sign): its display and camera scan modals, its one
-    // flow in progress, and the density setting.
+    // Owns the whole QR route (sign, spDescriptor): its display and camera scan
+    // modals, its one flow in progress, and the density setting.
     QrRoute *m_qr_route = nullptr;
+    // The fingerprint each in-flight spDescriptor() request was made for, keyed by
+    // req_id, so cancel/error paths can drop the pending entry once the request
+    // resolves.
+    QHash<ReqId, QString> m_sp_descriptor_fingerprints;
     // The req_id openCamera() started most recently; cancelCamera() clears it back
     // to 0. onCameraOpenFinished() installs its handle only while this still
     // matches, so a late answer after cancel/switch is dropped, not installed.

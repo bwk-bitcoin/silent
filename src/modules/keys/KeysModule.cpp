@@ -57,13 +57,13 @@ void KeysBus::verifyAddress(ReqId req_id, [[maybe_unused]] const QString &descri
     deliverError(req_id, QStringLiteral("keys: signing is not wired yet"));
 }
 
-void KeysBus::spDescriptor(ReqId req_id, [[maybe_unused]] const QString &fingerprint) {
-    deliverError(req_id, QStringLiteral("keys: sp descriptor fetch is not wired yet"));
+void KeysBus::spDescriptor(ReqId req_id, const QString &fingerprint) {
+    m_module->spDescriptor(req_id, fingerprint);
 }
 
-void KeysBus::registerDescriptor(ReqId req_id, [[maybe_unused]] const QString &fingerprint,
-                                 [[maybe_unused]] const QString &descriptor) {
-    deliverError(req_id, QStringLiteral("keys: descriptor registration is not wired yet"));
+void KeysBus::registerDescriptor(ReqId req_id, const QString &fingerprint,
+                                 const QString &descriptor) {
+    m_module->registerDescriptor(req_id, fingerprint, descriptor);
 }
 
 void KeysBus::deliverSigned(ReqId req_id, const QString &psbt_v2_hex) {
@@ -78,6 +78,15 @@ void KeysBus::deliverError(std::optional<ReqId> req_id, const QString &message) 
     emit error(req_id, message);
 }
 
+void KeysBus::deliverSpDescriptor(ReqId req_id, const QString &descriptor,
+                                  const QString &fingerprint) {
+    emit spDescriptorReady(req_id, descriptor, fingerprint);
+}
+
+void KeysBus::deliverDescriptorRegistered(ReqId req_id, const QString &fingerprint) {
+    emit descriptorRegistered(req_id, fingerprint);
+}
+
 KeysModule::KeysModule(QObject *parent) : IModule(parent) {
     m_qr_route = new QrRoute(this);
     connect(this, &KeysModule::keyEventReceived, this, &KeysModule::onKeyEventReceived,
@@ -87,6 +96,11 @@ KeysModule::KeysModule(QObject *parent) : IModule(parent) {
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
             &KeysModule::onInstanceRemoved, qontrol::UNIQUE);
     connect(this, &KeysModule::sdLoadReady, this, &KeysModule::onSdLoadReady, qontrol::UNIQUE);
+    // Queued on purpose, mirroring RouteSigner::routeSignRequested: a result must
+    // not land before spDescriptor() has returned the ReqId to its caller.
+    connect(this, &KeysModule::qrSpDescriptorRequested, this,
+            &KeysModule::onQrSpDescriptorRequested,
+            static_cast<Qt::ConnectionType>(Qt::QueuedConnection | Qt::UniqueConnection));
     connect(this, &KeysModule::mnemonicGenerationFinished, this,
             &KeysModule::onMnemonicGenerationFinished, qontrol::UNIQUE);
     connect(this, &KeysModule::hotKeySealed, this, &KeysModule::onHotKeySealed, qontrol::UNIQUE);
@@ -94,6 +108,8 @@ KeysModule::KeysModule(QObject *parent) : IModule(parent) {
             qontrol::UNIQUE);
     connect(this, &KeysModule::hotSignFinished, this, &KeysModule::onHotSignFinished,
             qontrol::UNIQUE);
+    connect(this, &KeysModule::hotSpDescriptorFinished, this,
+            &KeysModule::onHotSpDescriptorFinished, qontrol::UNIQUE);
     connect(this, &KeysModule::cameraOpenFinished, this, &KeysModule::onCameraOpenFinished,
             qontrol::UNIQUE);
     createModule();
@@ -305,6 +321,8 @@ auto KeysModule::routeSignerFor(const QString &fingerprint, const KeyInfo &info,
     // whichever request happens to be in flight; the bus's callers filter by ReqId.
     connect(created, &ISigner::signed_, this, &KeysModule::onRouteSignSigned, qontrol::UNIQUE);
     connect(created, &ISigner::error, this, &KeysModule::onRouteSignError, qontrol::UNIQUE);
+    connect(created, &RouteSigner::spDescriptorFetched, this,
+            &KeysModule::onRouteSpDescriptorFetched, qontrol::UNIQUE);
     if (cached != nullptr) {
         cached->deleteLater();
     }
@@ -399,6 +417,64 @@ void KeysModule::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringLis
     }
 
     m_bus->deliverError(req_id, TR("keys-route-unavailable"));
+}
+
+void KeysModule::spDescriptor(ReqId req_id, const QString &fingerprint) {
+    if (rust() == nullptr) {
+        m_bus->deliverError(req_id, TR("keys-sp-descriptor-unavailable"));
+        return;
+    }
+
+    auto infos = keys();
+    auto found = std::ranges::find_if(infos, [&fingerprint](const KeyInfo &info) {
+        return QString::compare(toQt(info.fingerprint), fingerprint, Qt::CaseInsensitive) == 0;
+    });
+    if (found == infos.end()) {
+        m_bus->deliverError(req_id, TR("keys-sp-descriptor-unavailable"));
+        return;
+    }
+
+    auto *route = qobject_cast<RouteSigner *>(buildKeyEntry(*found).signer);
+    if (route == nullptr) {
+        m_bus->deliverError(req_id, TR("keys-sp-descriptor-unavailable"));
+        return;
+    }
+
+    switch (route->route()) {
+    case KeyRouteKind::Hot:
+        m_sp_descriptor_fingerprints.insert(req_id, fingerprint);
+        route->fetchSpDescriptor(req_id);
+        return;
+    case KeyRouteKind::Qr:
+        // Queued (like sign()'s Qr/SdCard path via routeSignRequested): building
+        // the QR request opens QrDisplay/CameraScan modals synchronously, so this
+        // must not run until control has returned to the top of the event loop.
+        m_sp_descriptor_fingerprints.insert(req_id, fingerprint);
+        emit qrSpDescriptorRequested(req_id);
+        return;
+    case KeyRouteKind::Usb:
+    case KeyRouteKind::SdCard:
+    case KeyRouteKind::Unknown:
+    default:
+        m_bus->deliverError(req_id, TR("keys-sp-descriptor-unavailable"));
+        return;
+    }
+}
+
+void KeysModule::registerDescriptor(ReqId req_id, const QString &fingerprint,
+                                    const QString &descriptor) {
+    if (rust() == nullptr) {
+        m_bus->deliverError(req_id, TR("keys-module-not-ready"));
+        return;
+    }
+    auto result = rust()->register_descriptor(rust::String(fingerprint.toStdString()),
+                                              rust::String(descriptor.toStdString()));
+    if (!result.is_ok) {
+        m_bus->deliverError(req_id, toQt(result.error));
+        return;
+    }
+    emit keysChanged();
+    m_bus->deliverDescriptorRegistered(req_id, fingerprint);
 }
 
 void KeysModule::generateMnemonic(ReqId req_id, std::uint32_t word_count) {
@@ -509,6 +585,34 @@ void KeysModule::onHotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex
     emit hotSigned(req_id, is_ok, psbt_v2_hex, error);
 }
 
+void KeysModule::fetchHotSpDescriptor(ReqId req_id, QString fingerprint, QString password) {
+    if (rust() == nullptr) {
+        emit hotSpDescriptorFinished(req_id, false, QString(), TR("keys-module-not-ready"));
+        return;
+    }
+    auto material = rust()->hot_material(rust::String(fingerprint.toStdString()));
+    if (!material->is_ok()) {
+        emit hotSpDescriptorFinished(req_id, false, QString(), toQt(material->get_error()));
+        return;
+    }
+    auto *thread = QThread::create([this, req_id, material = material.into_raw(),
+                                    password = password.toStdString()]() mutable {
+        auto box = rust::Box<HotMaterial>::from_raw(material);
+        auto result = ::hot_sp_descriptor(*box, password);
+        password.assign(password.size(), '\0');
+        password.clear();
+        emit hotSpDescriptorFinished(req_id, result.is_ok, toQt(result.descriptor),
+                                     toQt(result.error));
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
+void KeysModule::onHotSpDescriptorFinished(ReqId req_id, bool is_ok, QString descriptor,
+                                           QString error) {
+    emit hotSpDescriptorFetched(req_id, is_ok, descriptor, error);
+}
+
 void KeysModule::openCamera(ReqId req_id, std::uint32_t index) {
     m_camera_req_id = req_id;
     auto *thread = QThread::create([this, req_id, index]() {
@@ -550,6 +654,25 @@ void KeysModule::onCameraOpenFinished(ReqId req_id, CameraHandle *handle) {
     }
     m_camera_installed = true;
     emit cameraOpened(req_id, true, QString());
+}
+
+void KeysModule::validateAndDeliverSpDescriptor(ReqId req_id, const QString &descriptor) {
+    auto expected = m_sp_descriptor_fingerprints.take(req_id);
+    auto validated = ::validate_sp_descriptor_origin(rust::String(descriptor.toStdString()));
+    if (!validated.is_ok) {
+        m_bus->deliverError(req_id, TR("keys-sp-descriptor-no-origin"));
+        return;
+    }
+    if (QString::compare(expected, toQt(validated.fingerprint), Qt::CaseInsensitive) != 0) {
+        m_bus->deliverError(req_id, TR("keys-sp-descriptor-no-origin"));
+        return;
+    }
+    m_bus->deliverSpDescriptor(req_id, toQt(validated.descriptor), toQt(validated.fingerprint));
+}
+
+void KeysModule::deliverSpDescriptorError(ReqId req_id, const QString &message) {
+    m_sp_descriptor_fingerprints.remove(req_id);
+    m_bus->deliverError(req_id, message);
 }
 
 void KeysModule::signWithDevice(ISigner *signer, const QString &psbt_v2_hex,
@@ -879,6 +1002,10 @@ void KeysModule::onSdPickerCancelled() {
     signer->deliverError(reqId, TR("keys-signing-cancelled"));
 }
 
+void KeysModule::onQrSpDescriptorRequested(ReqId req_id) {
+    m_qr_route->startSpDescriptor(req_id);
+}
+
 void KeysModule::onUsbConfirmCancelled() {
     if (m_usb_sign_req_id == 0) {
         return;
@@ -951,7 +1078,18 @@ void KeysModule::onRouteSignError(std::optional<ReqId> req_id, QString message) 
         m_bus->deliverError(std::nullopt, message);
         return;
     }
+    m_sp_descriptor_fingerprints.remove(*req_id);
     m_bus->deliverError(requestIdFor(*req_id), message);
+}
+
+void KeysModule::onRouteSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor,
+                                            QString error) {
+    if (!is_ok) {
+        m_sp_descriptor_fingerprints.remove(req_id);
+        m_bus->deliverError(req_id, error);
+        return;
+    }
+    validateAndDeliverSpDescriptor(req_id, descriptor);
 }
 
 } // namespace keys

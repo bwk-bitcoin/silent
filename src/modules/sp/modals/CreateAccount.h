@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 namespace catalog {
 class Button;
 }
@@ -9,15 +11,11 @@ class Input;
 }
 
 namespace catalog {
-class TextEdit;
-}
-
-namespace catalog {
-class QrCode;
-}
-
-namespace catalog {
 class ComboBox;
+}
+
+namespace catalog {
+class Label;
 }
 
 namespace catalog {
@@ -25,6 +23,7 @@ class ValidationMark;
 }
 
 #include <Qontrol>
+#include <interfaces/types.h>
 #include <silent.h>
 
 namespace modal {
@@ -47,7 +46,11 @@ public slots:
     void onTestBackend();
     void onTestElectrum();
     void onUpdateCreateButton();
-    void onImportQrResponse();
+    void onKeyChanged();
+    void onFetchDescriptor();
+    void onSpDescriptorReady(ReqId req_id, QString descriptor, QString fingerprint);
+    void onDescriptorRegistered(ReqId req_id);
+    void onKeysError(std::optional<ReqId> req_id, QString message);
     void onBackendInfoReady(BackendInfo info);
     void onElectrumTestReady(ConnectionResult result);
 
@@ -55,6 +58,7 @@ protected:
     void init();
     void doConnect();
     void view();
+    void populateKeys();
     void applyNetworkDefaults();
     auto applyRegtestDefaults() -> bool;
     void invalidateBackendTest();
@@ -62,11 +66,10 @@ protected:
 
 private:
     catalog::Input *m_name_input = nullptr;
-    catalog::QrCode *m_qr_code = nullptr;
-    catalog::TextEdit *m_qr_request = nullptr;
-    catalog::TextEdit *m_qr_response = nullptr;
-    catalog::Button *m_qr_import_btn = nullptr;
-    catalog::TextEdit *m_descriptor_input = nullptr;
+    catalog::ComboBox *m_key_combo = nullptr;
+    catalog::Button *m_fetch_btn = nullptr;
+    catalog::Label *m_descriptor_label = nullptr;
+    catalog::ValidationMark *m_descriptor_status = nullptr;
     catalog::ComboBox *m_network_combo = nullptr;
     catalog::Input *m_blindbit_input = nullptr;
     catalog::Button *m_test_btn = nullptr;
@@ -78,6 +81,14 @@ private:
     catalog::Button *m_cancel_btn = nullptr;
     bool m_backend_verified = false;
     bool m_electrum_verified = false;
+    QString m_descriptor;
+    // The descriptor's own validated origin fingerprint, as returned by
+    // spDescriptorReady, kept so onCreate() registers the descriptor under the key
+    // it was actually proven to belong to rather than whatever the key combo
+    // currently shows.
+    QString m_descriptor_fingerprint;
+    ReqId m_descriptor_req_id = 0;
+    ReqId m_register_req_id = 0;
 };
 
 } // namespace modal

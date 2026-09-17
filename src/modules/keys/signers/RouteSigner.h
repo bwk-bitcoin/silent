@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QString>
 
 #include <interfaces/signer.h>
@@ -57,6 +58,11 @@ public:
     void deliverDisplayed(ReqId req_id, bool displayed);
     void deliverError(ReqId req_id, const QString &message);
 
+    // Fetches this key's silent payment descriptor over the hot route: prompts for
+    // the module's password, then runs hot_sp_descriptor() on a background thread.
+    // Not part of ISigner: the module calls this only when route() == Hot.
+    void fetchSpDescriptor(ReqId req_id);
+
 signals:
     // Queued to itself so a result never lands before the caller holds the ReqId.
     void deferredInfo(ReqId req_id);
@@ -72,6 +78,9 @@ signals:
                             QString descriptor);
     void routeDisplayRequested(ReqId req_id, QString fingerprint, QString descriptor, QString path,
                                QString address);
+    // The module's connection point for a completed (or failed) fetch, once
+    // KeysModule::hotSpDescriptorFetched has landed and matched a pending id.
+    void spDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error);
 
 public slots:
     void onDeferredInfo(ReqId req_id);
@@ -80,16 +89,18 @@ public slots:
     void onDeferredRegistered(ReqId req_id, bool registered);
     void onDeferredIsRegistered(ReqId req_id, bool registered);
     void onDeferredError(ReqId req_id, QString message);
-    // Matched against the module's broadcast KeysModule::hotSigned signal by req_id:
-    // every RouteSigner instance receives it, so only the id this instance is
-    // waiting on is acted on.
+    // Matched against the module's broadcast KeysModule::hotSigned/
+    // hotSpDescriptorFetched signals by req_id: every RouteSigner instance
+    // receives them, so only the id this instance is waiting on is acted on.
     void onHotSigned(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error);
+    void onHotSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error);
     // Called by the module once its password prompt for `req_id` resolves. An empty
     // password means the user cancelled the modal.
     void onPasswordResolved(ReqId req_id, QString password);
 
 protected:
     void signHot(ReqId req_id, const QString &psbt_v2_hex, const QString &descriptor);
+    void resolveSpDescriptorPassword(ReqId req_id, QString password);
 
 private:
     KeysModule *m_module = nullptr;
@@ -101,6 +112,10 @@ private:
     // broadcast signal lands.
     QHash<ReqId, QString> m_pending_signs;
     QHash<ReqId, QString> m_display_addresses;
+    // Hot-route spDescriptor() fetches in flight, from fetchSpDescriptor() until the
+    // module answers through hotSpDescriptorFetched(); membership doubles as "is
+    // this req_id mine" the same way m_pending_signs does.
+    QSet<ReqId> m_pending_sp_descriptors;
 };
 
 } // namespace keys

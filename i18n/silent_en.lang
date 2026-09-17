@@ -44,15 +44,9 @@ create-account-default-blindbit => "http://localhost:8080"
 create-account-electrum => "Electrum:"
 create-account-electrum-empty => "Electrum address cannot be empty."
 create-account-invalid-input => "Invalid Input"
-create-account-descriptor => "SP Descriptor:"
-create-account-import-qr-response => "Import"
 create-account-name => "Account Name:"
 create-account-placeholder-blindbit => "http://localhost:8080"
-create-account-placeholder-descriptor => "sp(scan,spend)"
 create-account-placeholder-name => "Enter account name"
-create-account-placeholder-qr-response => "Paste signer response"
-create-account-qr-request => "QR Request:"
-create-account-qr-response => "QR Response:"
 create-account-title => "Create Account"
 delete-wallet-confirmation => "Delete wallet '%1'? This cannot be undone."
 delete-wallet-title => "Delete Wallet"
@@ -461,5 +455,19 @@ keys-qr-response-mismatch => "That code answers a different request."
 
 keys-qr-response-partial
 => "That device returned signatures only; a full transaction is required.";;
+
+create-account-key => "Key:"
+
+create-account-fetch-descriptor => "Get descriptor"
+
+create-account-descriptor-pending => "No descriptor fetched yet."
+
+create-account-no-keys => "Register a key first: an account is created from a key."
+
+keys-sp-descriptor-unavailable
+=> "This key cannot return a silent payment descriptor.";;
+
+keys-sp-descriptor-no-origin
+=> "That descriptor carries no key origin and cannot be used.";;
 
 keys-qr-busy => "Another QR exchange is already in progress."

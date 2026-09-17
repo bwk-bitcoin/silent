@@ -51,24 +51,22 @@ create-account-blindbit-empty
 => "BlindBit URL cannot be empty."
 => "BlindBit URL cannot be empty.";;
 create-account-default-blindbit => "http://localhost:8080" => "http://localhost:8080"
-create-account-descriptor => "SP Descriptor:" => "Descritor SP:"
+create-account-descriptor-pending => "No descriptor fetched yet." => "NONE"
 create-account-electrum => "Electrum:" => "Electrum:"
 create-account-electrum-empty
 => "Electrum address cannot be empty."
 => "Electrum address cannot be empty.";;
-create-account-import-qr-response => "Import" => "Importar"
+create-account-fetch-descriptor => "Get descriptor" => "NONE"
 create-account-invalid-input => "Invalid Input" => "Entrada invalida"
+create-account-key => "Key:" => "NONE"
 create-account-name => "Account Name:" => "Nome da conta:"
+create-account-no-keys
+=> "Register a key first: an account is created from a key."
+=> "NONE";;
 create-account-placeholder-blindbit
 => "http://localhost:8080"
 => "http://localhost:8080";;
-create-account-placeholder-descriptor => "sp(scan,spend)" => "sp(scan,spend)"
 create-account-placeholder-name => "Enter account name" => "Digite o nome da conta"
-create-account-placeholder-qr-response
-=> "Paste signer response"
-=> "Colar resposta do assinador";;
-create-account-qr-request => "QR Request:" => "Pedido QR:"
-create-account-qr-response => "QR Response:" => "Resposta QR:"
 create-account-title => "Create Account" => "Criar conta"
 delete-wallet-confirmation
 => "Delete wallet '%1'? This cannot be undone."
@@ -243,6 +241,12 @@ keys-sd-load-title => "Load the signed transaction" => "NONE"
 keys-sd-save-failed => "Could not write the transaction to that path." => "NONE"
 keys-sd-save-title => "Save the unsigned transaction" => "NONE"
 keys-signing-cancelled => "Signing was cancelled." => "NONE"
+keys-sp-descriptor-no-origin
+=> "That descriptor carries no key origin and cannot be used."
+=> "NONE";;
+keys-sp-descriptor-unavailable
+=> "This key cannot return a silent payment descriptor."
+=> "NONE";;
 keys-words-12 => "12 words" => "NONE"
 keys-words-24 => "24 words" => "NONE"
 keys-xpub => "Xpub:" => "NONE"

@@ -64,12 +64,28 @@ void QrRoute::startSign(ReqId req_id, RouteSigner *signer, QString psbt_v2_hex,
         }
         return;
     }
-    m_flow = QrFlow{.req_id = req_id,
+    m_flow = QrFlow{.kind = QrFlow::Kind::Sign,
+                    .req_id = req_id,
                     .signer = signer,
                     .pending_id = 0,
                     .psbt_hex = std::move(psbt_v2_hex),
                     .descriptor = std::move(descriptor)};
     buildSignRequest();
+}
+
+void QrRoute::startSpDescriptor(ReqId req_id) {
+    if (m_flow.has_value()) {
+        m_module->untrackPendingRequest(req_id);
+        m_module->deliverSpDescriptorError(req_id, TR("keys-qr-busy"));
+        return;
+    }
+    m_flow = QrFlow{.kind = QrFlow::Kind::SpDescriptor,
+                    .req_id = req_id,
+                    .signer = nullptr,
+                    .pending_id = 0,
+                    .psbt_hex = QString(),
+                    .descriptor = QString()};
+    buildSpDescriptorRequest();
 }
 
 void QrRoute::buildSignRequest() {
@@ -100,6 +116,16 @@ void QrRoute::buildSignRequest() {
     thread->start();
 }
 
+void QrRoute::buildSpDescriptorRequest() {
+    auto *r = m_module->rust();
+    if (r == nullptr) {
+        finishFlow(Outcome::Error, TR("keys-route-unavailable"));
+        return;
+    }
+    auto request = r->qr_request_get_sp_descriptor(densityToPartBytes(m_density));
+    emit qrRequestReady(request.into_raw());
+}
+
 void QrRoute::onQrRequestReady(QrRequest *request) {
     auto box = rust::Box<QrRequest>::from_raw(request);
     if (!m_flow.has_value()) {
@@ -108,20 +134,22 @@ void QrRoute::onQrRequestReady(QrRequest *request) {
         // for a flow that has ended.
         return;
     }
-    if (box->req_id() != m_flow->pending_id) {
-        // A newer density rebuild reserved a later id; this build is stale.
-        return;
-    }
-    m_flow->pending_id = 0;
-    auto *r = m_module->rust();
-    if (r == nullptr) {
-        finishFlow(Outcome::Error, TR("keys-route-unavailable"));
-        return;
-    }
-    auto result = r->qr_commit_request(*box);
-    if (!result.is_ok) {
-        finishFlow(Outcome::Error, KeysModule::toQt(result.error));
-        return;
+    if (m_flow->kind == QrFlow::Kind::Sign) {
+        if (box->req_id() != m_flow->pending_id) {
+            // A newer density rebuild reserved a later id; this build is stale.
+            return;
+        }
+        m_flow->pending_id = 0;
+        auto *r = m_module->rust();
+        if (r == nullptr) {
+            finishFlow(Outcome::Error, TR("keys-route-unavailable"));
+            return;
+        }
+        auto result = r->qr_commit_request(*box);
+        if (!result.is_ok) {
+            finishFlow(Outcome::Error, KeysModule::toQt(result.error));
+            return;
+        }
     }
     showRequest(std::move(box));
 }
@@ -146,7 +174,14 @@ void QrRoute::onDensityChanged(int density) {
     if (!m_flow.has_value()) {
         return;
     }
-    buildSignRequest();
+    switch (m_flow->kind) {
+    case QrFlow::Kind::Sign:
+        buildSignRequest();
+        return;
+    case QrFlow::Kind::SpDescriptor:
+        buildSpDescriptorRequest();
+        return;
+    }
 }
 
 void QrRoute::onDisplayNext() {
@@ -205,11 +240,19 @@ void QrRoute::onKeyEvent(const KeyEvent &event) {
         // (request id match, expected message type, no bare-signatures response) on
         // the Rust side before this event was emitted; a failed check surfaces as
         // KeyEventFlag::Error above instead. Here it is always the matching
-        // outstanding flow's answer: a signed PSBT v2 hex, ready to deliver as-is.
+        // outstanding flow's answer: a signed PSBT v2 hex for a sign flow, or an
+        // sp() descriptor for a spDescriptor flow, ready to deliver as-is.
         if (m_camera_scan.isNull() || !m_flow.has_value()) {
             return;
         }
-        finishFlow(Outcome::Signed, KeysModule::toQt(event.payload));
+        switch (m_flow->kind) {
+        case QrFlow::Kind::Sign:
+            finishFlow(Outcome::Signed, KeysModule::toQt(event.payload));
+            return;
+        case QrFlow::Kind::SpDescriptor:
+            finishFlow(Outcome::Descriptor, KeysModule::toQt(event.payload));
+            return;
+        }
         return;
     case KeyEventFlag::ScanProgress:
         if (!m_camera_scan.isNull() && m_module->rust() != nullptr) {
@@ -241,8 +284,13 @@ void QrRoute::finishFlow(Outcome outcome, const QString &text) {
             flow.signer->deliverSigned(flow.req_id, text);
         }
         break;
+    case Outcome::Descriptor:
+        m_module->validateAndDeliverSpDescriptor(flow.req_id, text);
+        break;
     case Outcome::Error:
-        if (!flow.signer.isNull()) {
+        if (flow.kind == QrFlow::Kind::SpDescriptor) {
+            m_module->deliverSpDescriptorError(flow.req_id, text);
+        } else if (!flow.signer.isNull()) {
             flow.signer->deliverError(flow.req_id, text);
         }
         break;

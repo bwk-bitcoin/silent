@@ -33,6 +33,8 @@ RouteSigner::RouteSigner(KeysModule *module, const KeyInfo &key, KeyRouteKind ro
             deferred);
     connect(this, &RouteSigner::deferredError, this, &RouteSigner::onDeferredError, deferred);
     connect(m_module, &KeysModule::hotSigned, this, &RouteSigner::onHotSigned, qontrol::UNIQUE);
+    connect(m_module, &KeysModule::hotSpDescriptorFetched, this,
+            &RouteSigner::onHotSpDescriptorFetched, qontrol::UNIQUE);
 }
 
 bool RouteSigner::implemented() const {
@@ -193,6 +195,19 @@ ReqId RouteSigner::raw([[maybe_unused]] const QByteArray &request) {
     return reqId;
 }
 
+void RouteSigner::fetchSpDescriptor(ReqId req_id) {
+    if (m_module->rust() == nullptr) {
+        emit deferredError(req_id, TR("keys-module-not-ready"));
+        return;
+    }
+    // Tracked the same way signHot() tracks a pending sign: a route-change rebuild
+    // must not delete this instance while the module's password prompt is open or
+    // the background thread still holds `this`.
+    m_module->trackPendingRequest(req_id, this);
+    m_pending_sp_descriptors.insert(req_id);
+    m_module->promptPassword(this, req_id);
+}
+
 void RouteSigner::signHot(ReqId req_id, const QString &psbt_v2_hex,
                           [[maybe_unused]] const QString &descriptor) {
     if (m_module->rust() == nullptr) {
@@ -209,6 +224,10 @@ void RouteSigner::signHot(ReqId req_id, const QString &psbt_v2_hex,
 }
 
 void RouteSigner::onPasswordResolved(ReqId req_id, QString password) {
+    if (m_pending_sp_descriptors.contains(req_id)) {
+        resolveSpDescriptorPassword(req_id, std::move(password));
+        return;
+    }
     if (!m_pending_signs.contains(req_id)) {
         // Not a request this instance is waiting on.
         return;
@@ -242,6 +261,34 @@ void RouteSigner::onHotSigned(ReqId req_id, bool is_ok, QString psbt_v2_hex, QSt
         return;
     }
     emit ISigner::error(req_id, std::move(error));
+}
+
+void RouteSigner::resolveSpDescriptorPassword(ReqId req_id, QString password) {
+    if (password.isEmpty()) {
+        // The prompt refuses to confirm an empty password, so this also covers the
+        // user cancelling the modal.
+        emit deferredError(req_id, TR("keys-signing-cancelled"));
+        m_pending_sp_descriptors.remove(req_id);
+        m_module->untrackPendingRequest(req_id);
+        return;
+    }
+
+    // The module owns the worker thread; it answers through
+    // hotSpDescriptorFetched(), matched by req_id in onHotSpDescriptorFetched().
+    m_module->fetchHotSpDescriptor(req_id, m_fingerprint, password);
+
+    password.fill(QChar());
+    password.clear();
+}
+
+void RouteSigner::onHotSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor,
+                                           QString error) {
+    if (!m_pending_sp_descriptors.remove(req_id)) {
+        // Not a request this instance is waiting on.
+        return;
+    }
+    m_module->untrackPendingRequest(req_id);
+    emit spDescriptorFetched(req_id, is_ok, std::move(descriptor), std::move(error));
 }
 
 void RouteSigner::deliverSigned(ReqId req_id, const QString &psbt_hex) {
