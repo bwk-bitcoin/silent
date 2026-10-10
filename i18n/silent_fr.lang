@@ -125,6 +125,44 @@ delete-wallet-confirmation
 => "Delete wallet '%1'? This cannot be undone."
 => "Supprimer le wallet '%1' ? Action irreversible.";;
 delete-wallet-title => "Delete Wallet" => "Supprimer le wallet"
+flow-password => "Password:" => "NONE"
+flow-password-reason => "Enter the password." => "NONE"
+flow-sd-load-body
+=> "Insert the card in the device, sign, then load %1 back."
+=> "NONE";;
+flow-sd-load-title => "2. Sign on the device, then load the signed file" => "NONE"
+flow-sd-read-error-body
+=> "The file is not a signed transaction for this wallet. Pick the file the device wrote."
+=> "NONE";;
+flow-sd-read-error-title => "Could not read the signed file" => "NONE"
+flow-sd-save-body => "Silent saves %1. Copy it to the SD card." => "NONE"
+flow-sd-save-title => "1. Save the unsigned transaction" => "NONE"
+flow-sd-write-error-body
+=> "The SD card is full or read-only. Check the card, then try again."
+=> "NONE";;
+flow-sd-write-error-title => "Could not save the file" => "NONE"
+flow-usb-disconnected-body
+=> "%1 was disconnected. Reconnect and unlock it, then try again."
+=> "NONE";;
+flow-usb-disconnected-title => "Device Disconnected" => "NONE"
+flow-usb-failed-body
+=> "%1 stopped responding. Unplug it, plug it back in, then try again."
+=> "NONE";;
+flow-usb-failed-title => "The Device Did Not Answer" => "NONE"
+flow-usb-rejected-body => "%1 declined the request. Nothing was signed." => "NONE"
+flow-usb-rejected-title => "Rejected on the Device" => "NONE"
+flow-verify-error-body
+=> "%1 did not return an answer. The address was not checked."
+=> "NONE";;
+flow-verify-error-title => "Could Not Verify" => "NONE"
+flow-verify-matched-body
+=> "%1 derived the same address. It belongs to this wallet."
+=> "NONE";;
+flow-verify-matched-title => "Address Confirmed" => "NONE"
+flow-verify-mismatch-body
+=> "%1 did not confirm this address. Do not use it to receive coins."
+=> "NONE";;
+flow-verify-mismatch-title => "Address Does Not Match" => "NONE"
 history-amount => "Amount" => "Montant"
 history-confirmed => "Confirmed:" => "Confirme:"
 history-direction => "Direction" => "Direction"

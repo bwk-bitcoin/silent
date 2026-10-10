@@ -107,6 +107,14 @@ set(SILENT_APP_SOURCES
     src/modules/keys/KeysTab.cpp
     src/modules/keys/QrRoute.h
     src/modules/keys/QrRoute.cpp
+    src/modules/keys/flow/UsbStep.h
+    src/modules/keys/flow/UsbStep.cpp
+    src/modules/keys/flow/SdStep.h
+    src/modules/keys/flow/SdStep.cpp
+    src/modules/keys/flow/PasswordStep.h
+    src/modules/keys/flow/PasswordStep.cpp
+    src/modules/keys/flow/VerifyResultStep.h
+    src/modules/keys/flow/VerifyResultStep.cpp
     src/modules/keys/signers/RouteSigner.h
     src/modules/keys/signers/RouteSigner.cpp
     src/modules/keys/signers/OfflineSigner.h

@@ -636,3 +636,52 @@ scan-progress-waiting => "Waiting for the first part…"
 scan-progress-done => "All %1 parts received"
 
 scan-progress-parts => "%1 of %2 parts"
+
+flow-password => "Password:"
+
+flow-password-reason => "Enter the password."
+
+flow-usb-rejected-title => "Rejected on the Device"
+
+flow-usb-rejected-body => "%1 declined the request. Nothing was signed."
+
+flow-usb-disconnected-title => "Device Disconnected"
+
+flow-usb-disconnected-body
+=> "%1 was disconnected. Reconnect and unlock it, then try again.";;
+
+flow-usb-failed-title => "The Device Did Not Answer"
+
+flow-usb-failed-body
+=> "%1 stopped responding. Unplug it, plug it back in, then try again.";;
+
+flow-sd-save-title => "1. Save the unsigned transaction"
+
+flow-sd-save-body => "Silent saves %1. Copy it to the SD card."
+
+flow-sd-load-title => "2. Sign on the device, then load the signed file"
+
+flow-sd-load-body => "Insert the card in the device, sign, then load %1 back."
+
+flow-sd-write-error-title => "Could not save the file"
+
+flow-sd-write-error-body
+=> "The SD card is full or read-only. Check the card, then try again.";;
+
+flow-sd-read-error-title => "Could not read the signed file"
+
+flow-sd-read-error-body
+=> "The file is not a signed transaction for this wallet. Pick the file the device wrote.";;
+
+flow-verify-matched-title => "Address Confirmed"
+
+flow-verify-matched-body => "%1 derived the same address. It belongs to this wallet."
+
+flow-verify-mismatch-title => "Address Does Not Match"
+
+flow-verify-mismatch-body
+=> "%1 did not confirm this address. Do not use it to receive coins.";;
+
+flow-verify-error-title => "Could Not Verify"
+
+flow-verify-error-body => "%1 did not return an answer. The address was not checked."
