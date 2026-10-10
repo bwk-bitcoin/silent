@@ -126,7 +126,7 @@ auto Theme::inputPalette() const -> const InputPalette & {
 void Theme::apply() {
     const auto &p = m_palette;
 
-    // Build QPalette — Fusion style respects all these roles
+    // Build QPalette: Fusion style respects all these roles
     QPalette pal;
 
     pal.setColor(QPalette::Window, p.bg);
