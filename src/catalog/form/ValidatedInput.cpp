@@ -24,8 +24,9 @@ ValidatedInput::ValidatedInput(InputRole role, QWidget *parent) : QWidget(parent
 void ValidatedInput::resizeEvent(QResizeEvent *event) {
     QWidget::resizeEvent(event);
     int markWidth = metric::VALIDATION_MARK_WIDTH;
-    int markX = m_input->width() - markWidth - resolve(Spacing::XS);
-    m_mark->setGeometry(markX, 0, markWidth, m_input->height());
+    // The input fills this widget, and is not resized yet when this one is.
+    int markX = width() - markWidth - resolve(Spacing::XS);
+    m_mark->setGeometry(markX, 0, markWidth, height());
 }
 
 auto ValidatedInput::input() const -> Input * {
