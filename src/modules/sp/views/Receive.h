@@ -42,7 +42,10 @@ protected:
     void view() override;
     void changeEvent(QEvent *event) override;
     void retranslateUi();
+    // Runs the verify flow; a reason it could not start is left in m_verify_error.
     void showVerifyModal(const QString &address);
+    // Why the addresses cannot be verified here, empty when they can.
+    [[nodiscard]] static auto verifyUnavailableNote() -> QString;
     void showAddressHistory(const QString &title, const QList<QPair<QString, QString>> &addresses);
 
 private:
@@ -62,6 +65,7 @@ private:
     // The address the history modal asked to verify, set as it closes for the flow.
     QString m_history_verify_address;
     ReqId m_verify_req_id = 0;
+    QString m_verify_error;
 };
 
 } // namespace view

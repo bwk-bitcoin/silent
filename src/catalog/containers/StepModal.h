@@ -43,6 +43,8 @@ protected:
     void setHeaderEndVisible(bool visible);
     void showStep(int step);
     [[nodiscard]] auto currentStep() const -> int;
+    // Scrolls the shown step so `widget`, in its body, starts at the top of the area.
+    void scrollTo(QWidget *widget);
 
 private:
     QStackedWidget *m_stack = nullptr;

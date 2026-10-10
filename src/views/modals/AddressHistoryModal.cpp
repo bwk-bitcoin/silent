@@ -1,22 +1,19 @@
 #include "AddressHistoryModal.h"
 
-#include "../utils.h"
 #include "catalog/Button.h"
 #include "catalog/CopyButton.h"
 #include "catalog/Variants.h"
-#include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/Separator.h"
 #include "catalog/display/Label.h"
+#include "catalog/form/FieldNote.h"
 #include "catalog/panels/receive/ChunkedAddress.h"
 #include "catalog/panels/receive/IndexPill.h"
 #include "catalog/panels/receive/LabelRow.h"
 #include "catalog/panels/receive/QrCode.h"
 #include "i18n/Tr.h"
+#include "theme/Icon.h"
 
-#include <QGuiApplication>
 #include <QPushButton>
-#include <QScreen>
-#include <QScrollBar>
 #include <QSizePolicy>
 #include <common.h>
 
@@ -27,48 +24,36 @@ using catalog::LabelRole;
 
 namespace {
 constexpr int QR_SIZE = 256;
-constexpr double MAX_HEIGHT_FRAC = 0.7; // grow up to 70% of the screen, then scroll
 } // namespace
 
 AddressHistoryModal::AddressHistoryModal(const QString &title,
                                          const QList<QPair<QString, QString>> &entries,
-                                         QWidget *parent) {
-    Q_UNUSED(parent);
-    setWindowTitle(title);
-    build(title, entries);
+                                         bool verifiable, const QString &verify_note)
+    : m_title(title),
+      m_entries(entries),
+      m_verifiable(verifiable),
+      m_verify_note(verify_note) {
+    init();
+    doConnect();
+    view();
 }
 
-void AddressHistoryModal::build(const QString &title,
-                                const QList<QPair<QString, QString>> &entries) {
-    // Header: just the title; the window frame provides the close button.
-    auto *header = (new qontrol::Row)->push(new Label(title, LabelRole::Heading))->pushSpacer();
-
-    // "Index" eyebrow column header.
-    auto *eyebrow =
-        (new qontrol::Row)->push(new Label(TR("receive-index"), LabelRole::Eyebrow))->pushSpacer();
-
-    auto *list = new qontrol::Column;
-    if (entries.isEmpty()) {
-        list->push(new Label(TR("receive-no-previous-addresses"), LabelRole::Caption));
-    }
-
-    for (int i = 0; i < entries.size(); ++i) {
-        const QString &addr = entries.at(i).first;
-        const QString &label = entries.at(i).second;
-        const int derivation = entries.size() - 1 - i; // newest highest (BIP-style)
+void AddressHistoryModal::init() {
+    for (int i = 0; i < m_entries.size(); ++i) {
+        const QString &addr = m_entries.at(i).first;
+        const QString &label = m_entries.at(i).second;
+        int derivation = static_cast<int>(m_entries.size()) - 1 - i; // newest highest (BIP-style)
 
         auto *pill = new catalog::IndexPill;
         pill->setIndex(derivation);
         pill->setProperty("rowIndex", i);
-        connect(pill, &catalog::IndexPill::clicked, this, &AddressHistoryModal::onPillClicked,
-                qontrol::UNIQUE);
         m_pills.append(pill);
 
         auto *verifyBtn = catalog::btnVerifyOnDeviceSm();
         verifyBtn->setToolTip(TR("receive-verify-tooltip"));
         verifyBtn->setProperty("address", addr);
-        connect(verifyBtn, &QPushButton::clicked, this, &AddressHistoryModal::onVerifyClicked,
-                qontrol::UNIQUE);
+        verifyBtn->setVisible(m_verifiable);
+        m_verify_buttons.append(verifyBtn);
 
         auto *copyBtn = catalog::btnCopySm();
         copyBtn->setTextToCopy(addr);
@@ -87,61 +72,72 @@ void AddressHistoryModal::build(const QString &title,
         addressStack->push(chunked);
 
         auto *rowContent = (new qontrol::Row)
+                               ->spacing(resolve(Spacing::M))
                                ->push(pill)
-                               ->pushSpacer(resolve(Spacing::M))
                                ->push(verifyBtn)
-                               ->pushSpacer(resolve(Spacing::M))
                                ->push(addressStack)
-                               ->pushSpacer(resolve(Spacing::M))
                                ->push(copyBtn);
 
         // Hidden QR + label-editor expansion, revealed by the index pill.
         auto *qr = new catalog::QrCode;
         qr->setData(addr);
         qr->setFixedSize(QR_SIZE, QR_SIZE);
-        auto *qrRow = (new qontrol::Row)->pushSpacer()->push(qr)->pushSpacer();
 
         auto *labelRow = new catalog::LabelRow;
         labelRow->setLabel(label);
         labelRow->setProperty("address", addr);
-        connect(labelRow, &catalog::LabelRow::labelChanged, this,
-                &AddressHistoryModal::onLabelChanged, qontrol::UNIQUE);
-        auto *labelRowWrap = (new qontrol::Row)->pushSpacer()->push(labelRow)->pushSpacer();
+        m_label_rows.append(labelRow);
 
-        auto *expansion = new qontrol::Column;
+        auto *expansion = (new qontrol::Column)
+                              ->spacing(resolve(Spacing::M))
+                              ->push(qr, 0, Qt::AlignHCenter)
+                              ->push(labelRow, 0, Qt::AlignHCenter);
         expansion->layout()->setContentsMargins(0, resolve(Spacing::M), 0, 0);
-        expansion->push(qrRow)->pushSpacer(resolve(Spacing::M))->push(labelRowWrap);
         expansion->setVisible(false);
         m_expansions.append(expansion);
 
-        auto *rowBlock = new qontrol::Column;
-        rowBlock->push(new catalog::Separator)
-            ->pushSpacer(resolve(Spacing::XS))
-            ->push(rowContent)
-            ->push(expansion)
-            ->pushSpacer(resolve(Spacing::XS));
-        list->push(rowBlock);
+        auto *rowBlock = (new qontrol::Column)
+                             ->push(new catalog::Separator)
+                             ->pushSpacer(resolve(Spacing::XS))
+                             ->push(rowContent)
+                             ->push(expansion)
+                             ->pushSpacer(resolve(Spacing::XS));
         m_rows.append(rowBlock);
     }
+}
 
-    m_scroll = new catalog::ScrollArea;
-    m_scroll->setWidget(list);
-    // Report the content height so the dialog grows with it; only scroll once it
-    // would exceed most of the screen.
-    m_scroll->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
-    int screenHeight = QGuiApplication::primaryScreen()->availableGeometry().height();
-    m_scroll->setMaximumHeight(static_cast<int>(screenHeight * MAX_HEIGHT_FRAC));
+void AddressHistoryModal::doConnect() {
+    for (auto *pill : m_pills) {
+        connect(pill, &catalog::IndexPill::clicked, this, &AddressHistoryModal::onPillClicked,
+                qontrol::UNIQUE);
+    }
+    for (auto *verifyBtn : m_verify_buttons) {
+        connect(verifyBtn, &QPushButton::clicked, this, &AddressHistoryModal::onVerifyClicked,
+                qontrol::UNIQUE);
+    }
+    for (auto *labelRow : m_label_rows) {
+        connect(labelRow, &catalog::LabelRow::labelChanged, this,
+                &AddressHistoryModal::onLabelChanged, qontrol::UNIQUE);
+    }
+}
 
-    auto *content = new qontrol::Column;
-    content->push(header)
-        ->pushSpacer(resolve(Spacing::M))
-        ->push(eyebrow)
-        ->pushSpacer(resolve(Spacing::XS))
-        ->push(m_scroll);
-    content->setMinimumWidth(resolve(Size::XXL));
+void AddressHistoryModal::view() {
+    auto *list = (new qontrol::Column)
+                     ->push(new Label(TR("receive-index"), LabelRole::Eyebrow))
+                     ->pushSpacer(resolve(Spacing::XS));
+    if (!m_verify_note.isEmpty()) {
+        list->push(
+                new catalog::FieldNote(m_verify_note, catalog::FieldNote::Tone::Muted, icon::info))
+            ->pushSpacer(resolve(Spacing::XS));
+    }
+    if (m_entries.isEmpty()) {
+        list->push(new Label(TR("receive-no-previous-addresses"), LabelRole::Caption));
+    }
+    for (auto *row : m_rows) {
+        list->push(row);
+    }
 
-    // Design modal padding is space-m (20px), matching Padding::L.
-    setMainWidget(margin(content, resolve(Padding::L)));
+    showStep(addStep(m_title, ModalWidth::XL, list, nullptr));
 }
 
 void AddressHistoryModal::onPillClicked() {
@@ -149,43 +145,24 @@ void AddressHistoryModal::onPillClicked() {
     if (pill == nullptr) {
         return;
     }
-    const int idx = pill->property("rowIndex").toInt();
+    int idx = pill->property("rowIndex").toInt();
     if (idx < 0 || idx >= m_expansions.size()) {
         return;
     }
-    if (m_open == idx) {
-        m_expansions[idx]->setVisible(false);
-        m_pills[idx]->setActive(false);
-        m_open = -1;
-    } else {
-        if (m_open >= 0 && m_open < m_expansions.size()) {
-            m_expansions[m_open]->setVisible(false);
-            m_pills[m_open]->setActive(false);
-        }
-        m_expansions[idx]->setVisible(true);
-        m_pills[idx]->setActive(true);
-        m_open = idx;
-    }
-    // Regrow the dialog and bring the expanded row to the top of the viewport so
-    // its QR is visible; queued so the layout settles first.
-    QMetaObject::invokeMethod(this, "onScrollToOpen", Qt::QueuedConnection);
-}
-
-void AddressHistoryModal::onScrollToOpen() {
-    // Grow (or shrink) the dialog to fit the now-(collapsed/expanded) content,
-    // capped by the scroll area's max height.
-    adjustSize();
     if (m_open >= 0) {
-        // Align after the resize has propagated (scrollbar range updated).
-        QMetaObject::invokeMethod(this, "onScrollAlign", Qt::QueuedConnection);
+        m_expansions[m_open]->setVisible(false);
+        m_pills[m_open]->setActive(false);
     }
-}
-
-void AddressHistoryModal::onScrollAlign() {
-    if (m_open < 0 || m_open >= m_rows.size() || m_scroll == nullptr) {
-        return;
+    m_open = m_open == idx ? -1 : idx;
+    if (m_open >= 0) {
+        m_expansions[m_open]->setVisible(true);
+        m_pills[m_open]->setActive(true);
     }
-    m_scroll->verticalScrollBar()->setValue(m_rows[m_open]->y());
+    // Fit the window to the list again, then bring the open row's QR into view.
+    showStep(currentStep());
+    if (m_open >= 0) {
+        scrollTo(m_rows[m_open]);
+    }
 }
 
 void AddressHistoryModal::onVerifyClicked() {

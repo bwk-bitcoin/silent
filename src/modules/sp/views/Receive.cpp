@@ -44,13 +44,13 @@ void Receive::init() {
         m_segwit_section = new catalog::FoldSection(TR("receive-segwit-address"));
         m_segwit_row = new catalog::AddressRow;
         m_segwit_row->setLabelVisible(true);
-        m_segwit_row->setVerifyVisible(true);
+        m_segwit_row->setVerifyVisible(verifyUnavailableNote().isEmpty());
         m_segwit_section->setExpanded(false);
         m_segwit_section->setContent(m_segwit_row);
         m_taproot_section = new catalog::FoldSection(TR("receive-taproot-address"));
         m_taproot_row = new catalog::AddressRow;
         m_taproot_row->setLabelVisible(true);
-        m_taproot_row->setVerifyVisible(true);
+        m_taproot_row->setVerifyVisible(verifyUnavailableNote().isEmpty());
         m_taproot_section->setExpanded(false);
         m_taproot_section->setContent(m_taproot_row);
     }
@@ -129,14 +129,24 @@ void Receive::onShowTaprootHistory() {
 
 void Receive::onVerifyAddress() {
     auto *row = qobject_cast<catalog::AddressRow *>(sender());
-    showVerifyModal(row != nullptr ? row->address() : QString());
+    if (row == nullptr) {
+        return;
+    }
+    showVerifyModal(row->address());
+    row->setVerifyNote(m_verify_error);
+}
+
+auto Receive::verifyUnavailableNote() -> QString {
+    if (Host::get()->keys() == nullptr) {
+        return TR("receive-verify-unavailable");
+    }
+    return QString();
 }
 
 void Receive::showVerifyModal(const QString &address) {
+    m_verify_error = verifyUnavailableNote();
     auto *keys = Host::get()->keys();
     if (keys == nullptr) {
-        AppController::execModal(
-            new qontrol::Modal(TR("receive-verify-title"), TR("receive-verify-unavailable")));
         return;
     }
 
@@ -144,12 +154,13 @@ void Receive::showVerifyModal(const QString &address) {
     auto descriptor = keys::KeysModule::toQt(info.descriptor);
     auto path = keys::KeysModule::toQt(info.path);
     if (descriptor.isEmpty()) {
-        AppController::execModal(
-            new qontrol::Modal(TR("receive-verify-title"), TR("receive-verify-unavailable")));
+        qWarning() << "Receive: no descriptor for address" << address;
+        m_verify_error = TR("receive-verify-unavailable");
         return;
     }
 
     m_verify_req_id = keys->newRequest();
+    // Returns once the flow has closed.
     keys->verifyAddress(m_verify_req_id, descriptor, path, address);
 }
 
@@ -158,7 +169,7 @@ void Receive::onKeysError(std::optional<ReqId> req_id, const QString &message) {
         return;
     }
     m_verify_req_id = 0;
-    AppController::execModal(new qontrol::Modal(TR("receive-verify-title"), message));
+    m_verify_error = message;
 }
 
 void Receive::onSpSectionToggled(bool expanded) {
@@ -219,6 +230,7 @@ void Receive::onHistoryLabelEdited(const QString &address, const QString &label)
 void Receive::showAddressHistory(const QString &title,
                                  const QList<QPair<QString, QString>> &addresses) {
     m_active_history_section = title == TR("receive-awaiting-segwit") ? "segwit" : "taproot";
+    m_verify_error = verifyUnavailableNote();
     // The verify flow takes the list's place while it runs, then the list comes back.
     while (true) {
         // Prepend the current (newest) address so the modal lists it alongside the
@@ -234,7 +246,8 @@ void Receive::showAddressHistory(const QString &title,
         }
 
         m_history_verify_address.clear();
-        auto *historyModal = new modal::AddressHistoryModal(title, fullList);
+        auto *historyModal = new modal::AddressHistoryModal(
+            title, fullList, verifyUnavailableNote().isEmpty(), m_verify_error);
         connect(historyModal, &modal::AddressHistoryModal::verifyRequested, this,
                 &Receive::onVerifyHistoryAddress, qontrol::UNIQUE);
         connect(historyModal, &modal::AddressHistoryModal::labelEdited, this,
@@ -243,7 +256,6 @@ void Receive::showAddressHistory(const QString &title,
         if (m_history_verify_address.isEmpty()) {
             return;
         }
-        // Returns once the flow has closed.
         showVerifyModal(m_history_verify_address);
     }
 }
@@ -284,12 +296,14 @@ void Receive::retranslateUi() {
     }
     if (m_segwit_row != nullptr) {
         m_segwit_row->setPlaceholderText(TR("receive-not-generated"));
+        m_segwit_row->setVerifyNote(verifyUnavailableNote());
     }
     if (m_taproot_section != nullptr) {
         m_taproot_section->setTitle(TR("receive-taproot-address"));
     }
     if (m_taproot_row != nullptr) {
         m_taproot_row->setPlaceholderText(TR("receive-not-generated"));
+        m_taproot_row->setVerifyNote(verifyUnavailableNote());
     }
 }
 

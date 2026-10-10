@@ -5,6 +5,7 @@
 
 #include <QLayout>
 #include <QScreen>
+#include <QScrollBar>
 #include <QShowEvent>
 #include <QStackedWidget>
 #include <algorithm>
@@ -121,6 +122,11 @@ void StepModal::showEvent(QShowEvent *event) {
 
 auto StepModal::currentStep() const -> int {
     return m_stack->currentIndex();
+}
+
+void StepModal::scrollTo(QWidget *widget) {
+    auto *scroll = m_steps.at(currentStep()).scroll;
+    scroll->verticalScrollBar()->setValue(widget->mapTo(scroll->widget(), QPoint(0, 0)).y());
 }
 
 } // namespace catalog

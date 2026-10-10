@@ -577,7 +577,6 @@ receive-sp-verify-note
 => "NONE";;
 receive-taproot-address => "Taproot Address:" => "Direccion Taproot:"
 receive-title => "Receive" => "Recibir"
-receive-verify-title => "Verify" => "Verificar"
 receive-verify-tooltip => "Verify on signing device" => "NONE"
 receive-verify-unavailable
 => "No signing device is available for address verification in this build."
