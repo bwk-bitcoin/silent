@@ -34,7 +34,7 @@ public slots:
     void onSpSectionToggled(bool expanded);
     void onSegwitSectionToggled(bool expanded);
     void onTaprootSectionToggled(bool expanded);
-    void onKeysError(std::optional<ReqId> req_id, QString message);
+    void onKeysError(std::optional<ReqId> req_id, const QString &message);
 
 protected:
     void init() override;

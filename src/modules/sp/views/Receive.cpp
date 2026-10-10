@@ -44,14 +44,12 @@ void Receive::init() {
         m_segwit_section = new catalog::FoldSection(TR("receive-segwit-address"));
         m_segwit_row = new catalog::AddressRow;
         m_segwit_row->setLabelVisible(true);
-        m_segwit_row->setPlaceholderText(TR("receive-not-generated"));
         m_segwit_row->setVerifyVisible(true);
         m_segwit_section->setExpanded(false);
         m_segwit_section->setContent(m_segwit_row);
         m_taproot_section = new catalog::FoldSection(TR("receive-taproot-address"));
         m_taproot_row = new catalog::AddressRow;
         m_taproot_row->setLabelVisible(true);
-        m_taproot_row->setPlaceholderText(TR("receive-not-generated"));
         m_taproot_row->setVerifyVisible(true);
         m_taproot_section->setExpanded(false);
         m_taproot_section->setContent(m_taproot_row);
@@ -101,8 +99,7 @@ void Receive::onNewSegwitAddr() {
     }
     m_segwit_row->setAddress(addr);
     m_segwit_row->setLabelText(QString()); // the new address starts unlabeled
-    m_segwit_row->setHistoryVisible(!m_segwit_history.isEmpty());
-    m_segwit_row->setHistoryText(TR("receive-awaiting-payment").arg(m_segwit_history.size()));
+    m_segwit_row->setHistoryCount(static_cast<int>(m_segwit_history.size()));
 }
 
 void Receive::onNewTaprootAddr() {
@@ -119,8 +116,7 @@ void Receive::onNewTaprootAddr() {
     }
     m_taproot_row->setAddress(addr);
     m_taproot_row->setLabelText(QString()); // the new address starts unlabeled
-    m_taproot_row->setHistoryVisible(!m_taproot_history.isEmpty());
-    m_taproot_row->setHistoryText(TR("receive-awaiting-payment").arg(m_taproot_history.size()));
+    m_taproot_row->setHistoryCount(static_cast<int>(m_taproot_history.size()));
 }
 
 void Receive::onShowSegwitHistory() {
@@ -157,7 +153,7 @@ void Receive::showVerifyModal(const QString &address) {
     keys->verifyAddress(m_verify_req_id, descriptor, path, address);
 }
 
-void Receive::onKeysError(std::optional<ReqId> req_id, QString message) {
+void Receive::onKeysError(std::optional<ReqId> req_id, const QString &message) {
     if (!req_id.has_value() || req_id.value() != m_verify_req_id) {
         return;
     }
@@ -282,25 +278,18 @@ void Receive::changeEvent(QEvent *event) {
 
 void Receive::retranslateUi() {
     m_sp_section->setTitle(TR("receive-silent-payment-address"));
-    m_sp_row->setCopyText(TR("common-copy"));
     m_sp_row->setVerifyNote(TR("receive-sp-verify-note"));
     if (m_segwit_section != nullptr) {
         m_segwit_section->setTitle(TR("receive-segwit-address"));
     }
     if (m_segwit_row != nullptr) {
-        m_segwit_row->setCopyText(TR("common-copy"));
-        m_segwit_row->setGenerateText(TR("common-generate"));
-        m_segwit_row->setVerifyText(TR("receive-verify-title"));
-        m_segwit_row->setHistoryText(TR("receive-awaiting-payment").arg(m_segwit_history.size()));
+        m_segwit_row->setPlaceholderText(TR("receive-not-generated"));
     }
     if (m_taproot_section != nullptr) {
         m_taproot_section->setTitle(TR("receive-taproot-address"));
     }
     if (m_taproot_row != nullptr) {
-        m_taproot_row->setCopyText(TR("common-copy"));
-        m_taproot_row->setGenerateText(TR("common-generate"));
-        m_taproot_row->setVerifyText(TR("receive-verify-title"));
-        m_taproot_row->setHistoryText(TR("receive-awaiting-payment").arg(m_taproot_history.size()));
+        m_taproot_row->setPlaceholderText(TR("receive-not-generated"));
     }
 }
 

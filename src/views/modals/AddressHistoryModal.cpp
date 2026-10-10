@@ -3,6 +3,7 @@
 #include "../utils.h"
 #include "catalog/Button.h"
 #include "catalog/CopyButton.h"
+#include "catalog/Variants.h"
 #include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/Separator.h"
 #include "catalog/display/Label.h"
@@ -11,9 +12,7 @@
 #include "catalog/panels/receive/LabelRow.h"
 #include "catalog/panels/receive/QrCode.h"
 #include "i18n/Tr.h"
-#include "theme/Icon.h"
 
-#include <QFont>
 #include <QGuiApplication>
 #include <QPushButton>
 #include <QScreen>
@@ -23,8 +22,6 @@
 
 namespace modal {
 
-using catalog::Button;
-using catalog::ButtonRole;
 using catalog::Label;
 using catalog::LabelRole;
 
@@ -47,7 +44,8 @@ void AddressHistoryModal::build(const QString &title,
     auto *header = (new qontrol::Row)->push(new Label(title, LabelRole::Heading))->pushSpacer();
 
     // "Index" eyebrow column header.
-    auto *eyebrow = (new qontrol::Row)->push(new Label("INDEX", LabelRole::Caption))->pushSpacer();
+    auto *eyebrow =
+        (new qontrol::Row)->push(new Label(TR("receive-index"), LabelRole::Eyebrow))->pushSpacer();
 
     auto *list = new qontrol::Column;
     if (entries.isEmpty()) {
@@ -66,14 +64,13 @@ void AddressHistoryModal::build(const QString &title,
                 qontrol::UNIQUE);
         m_pills.append(pill);
 
-        auto *verifyBtn = new Button(ButtonRole::InlineIcon);
-        verifyBtn->setIcon(icon::usb());
-        verifyBtn->setToolTip(TR("receive-verify-title"));
+        auto *verifyBtn = catalog::btnVerifyOnDeviceSm();
+        verifyBtn->setToolTip(TR("receive-verify-tooltip"));
         verifyBtn->setProperty("address", addr);
         connect(verifyBtn, &QPushButton::clicked, this, &AddressHistoryModal::onVerifyClicked,
                 qontrol::UNIQUE);
 
-        auto *copyBtn = new catalog::CopyButton(catalog::CopyButton::Size::Small);
+        auto *copyBtn = catalog::btnCopySm();
         copyBtn->setTextToCopy(addr);
 
         auto *chunked = new catalog::ChunkedAddress;
@@ -82,14 +79,9 @@ void AddressHistoryModal::build(const QString &title,
         auto *addressStack = new qontrol::Column;
         addressStack->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         if (!label.isEmpty()) {
-            // Secondary, demibold label above the address (InfoLabel is secondary;
-            // reset its fixed form-width).
-            auto *labelText = new Label(label, LabelRole::InfoLabel);
-            labelText->setMinimumWidth(0);
-            labelText->setMaximumWidth(QWIDGETSIZE_MAX);
-            auto labelFont = labelText->font();
-            labelFont.setWeight(QFont::DemiBold);
-            labelText->setFont(labelFont);
+            auto *labelText = new Label(label, LabelRole::Section);
+            labelText->setTone(catalog::LabelTone::Secondary);
+            labelText->setSize(catalog::LabelSize::Sm);
             addressStack->push(labelText)->pushSpacer(resolve(Spacing::XXS));
         }
         addressStack->push(chunked);

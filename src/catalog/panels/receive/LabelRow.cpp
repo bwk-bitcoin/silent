@@ -1,13 +1,12 @@
 #include "catalog/panels/receive/LabelRow.h"
 
 #include "catalog/Button.h"
+#include "catalog/Variants.h"
 #include "catalog/display/Label.h"
 #include "catalog/inputs/Input.h"
 #include "i18n/Tr.h"
-#include "theme/Icon.h"
 #include "theme/Palette.h"
 
-#include <QFont>
 #include <Qontrol>
 #include <common.h>
 
@@ -16,26 +15,14 @@ namespace catalog {
 LabelRow::LabelRow(QWidget *parent) : QWidget(parent) {
     setProperty("class", "label-row");
 
-    m_add = new Button(TR("receive-add-label"), ButtonRole::Inline, this);
-    m_add->setIcon(icon::plus());
-
-    // Design: a demibold body-sized label (not a heading). Our font sizes are in
-    // points, so Body (10pt ~ 13px) matches the design's 14px far better than a
-    // heading role would.
-    m_text = new Label(LabelRole::Body, this);
-    auto font = m_text->font();
-    font.setWeight(QFont::DemiBold);
-    m_text->setFont(font);
-
-    m_edit = new Button(ButtonRole::InlineIcon, this);
-    m_edit->setIcon(icon::pencil());
-
+    m_add = btnAddLabel();
+    m_text = new Label(LabelRole::Section, this);
+    m_edit = btnEditLabel();
     m_input = new Input(InputRole::Default, this);
     m_input->setWidth(Size::M);
     m_input->setPlaceholderText(TR("receive-label-placeholder"));
 
-    m_save = new Button(ButtonRole::InlineIcon, this);
-    m_save->setIcon(icon::check());
+    m_save = btnSaveLabel();
 
     (new qontrol::Row)
         ->spacing(resolve(Spacing::S))

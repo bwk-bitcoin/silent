@@ -538,20 +538,18 @@ pill-unloading => "Unloading…" => "NONE"
 pill-unsupported => "Unsupported" => "NONE"
 pill-used => "Used" => "NONE"
 pill-waiting => "Waiting" => "NONE"
-receive-add-label => "Add a label" => "Ajouter un libelle"
-receive-awaiting-payment
-=> "Addr. awaiting payment (%1)"
-=> "En attente de paiement (%1)";;
 receive-awaiting-segwit
 => "Segwit Addresses Awaiting Payment"
 => "Adresses Segwit en attente de paiement";;
 receive-awaiting-taproot
 => "Taproot Addresses Awaiting Payment"
 => "Adresses Taproot en attente de paiement";;
+receive-index => "Index" => "NONE"
 receive-label-placeholder => "Address label" => "Libelle de l'adresse"
 receive-no-previous-addresses
 => "No previous addresses."
 => "Aucune adresse precedente.";;
+receive-not-generated => "Not generated yet. Click Generate." => "NONE"
 receive-segwit-address => "Segwit Address:" => "Adresse Segwit:"
 receive-show-qr => "Show QR code" => "NONE"
 receive-silent-payment-address
@@ -563,6 +561,7 @@ receive-sp-verify-note
 receive-taproot-address => "Taproot Address:" => "Adresse Taproot:"
 receive-title => "Receive" => "Recevoir"
 receive-verify-title => "Verify" => "Verifier"
+receive-verify-tooltip => "Verify on signing device" => "NONE"
 receive-verify-unavailable
 => "No signing device is available for address verification in this build."
 => "Aucun appareil de signature n'est disponible pour verifier l'adresse dans cette build.";;

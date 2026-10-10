@@ -10,7 +10,7 @@ class Input;
 class Label;
 
 // A compact label editor with three states (design Receive LabelRow):
-//   - no label  : an "Add a label" inline button (plus icon)
+//   - no label  : an "Add a Label" inline button (plus icon)
 //   - has label : the label text + a pencil edit button
 //   - editing   : an input + a save (check) button
 // Commits on Enter, focus-out, or the save button.

@@ -63,11 +63,9 @@ network-bitcoin => "Bitcoin"
 network-regtest => "Regtest"
 network-signet => "Signet"
 network-testnet => "Testnet"
-receive-add-label => "Add a label"
 receive-segwit-address => "Segwit Address:"
 receive-silent-payment-address => "Silent Payment Address:"
 receive-taproot-address => "Taproot Address:"
-receive-awaiting-payment => "Addr. awaiting payment (%1)"
 receive-awaiting-segwit => "Segwit Addresses Awaiting Payment"
 receive-awaiting-taproot => "Taproot Addresses Awaiting Payment"
 receive-label-placeholder => "Address label"
@@ -934,3 +932,9 @@ create-account-reason-descriptor-network
 create-account-reason-backends => "Test both backends first."
 
 create-account-backend-network => "The server runs on %1, not %2."
+
+receive-not-generated => "Not generated yet. Click Generate."
+
+receive-verify-tooltip => "Verify on signing device"
+
+receive-index => "Index"
