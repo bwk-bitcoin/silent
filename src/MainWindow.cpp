@@ -1,14 +1,16 @@
 #include "MainWindow.h"
 #include "AppController.h"
+#include "catalog/Button.h"
+#include "catalog/Variants.h"
+#include "catalog/containers/Tabs.h"
 #include "host/Host.h"
-#include "interfaces/instance.h"
 #include "i18n/Tr.h"
+#include "interfaces/instance.h"
+#include "theme/Palette.h"
 #include "views/DashboardLayout.h"
 #include "views/MenuTab.h"
-#include "catalog/Button.h"
-#include "theme/Icon.h"
-#include "theme/Palette.h"
-#include "catalog/containers/Tabs.h"
+#include <QFrame>
+#include <Qontrol>
 #include <algorithm>
 #include <common.h>
 #include <qlogging.h>
@@ -37,44 +39,30 @@ auto MainWindow::initWindow() -> void {
     m_tab->setTabsClosable(true);
     m_tab->setMovable(true);
 
-    // Floated over the tab widget rather than installed as its corner widget: the
-    // corner geometry is derived from the widget's size hint while the stylesheet
-    // paints it larger, which left the button laid out past the window's right edge.
-    m_settings_btn = new catalog::Button(catalog::ButtonRole::InlineIcon, m_tab);
-    m_settings_btn->setIcon(icon::settings());
-    m_settings_btn->setIconSize(QSize(metric::ICON_SIZE, metric::ICON_SIZE));
-    // Sized to sit inside the tab strip rather than overhang it.
-    m_settings_btn->setFixedSize(metric::ICON_SIZE + 2 * resolve(Padding::XXS),
-                                 metric::ICON_SIZE + 2 * resolve(Padding::XXS));
-    m_settings_btn->setToolTip(TR("settings-title"));
+    m_settings_btn = catalog::btnSettingsGear();
     connect(m_settings_btn, &QPushButton::clicked, AppController::get(),
             &AppController::openAppSettings, qontrol::UNIQUE);
+    // The gear has its own slot after the tabs: they scroll in what is left, never under it.
+    auto *settingsSlot = new QFrame;
+    settingsSlot->setProperty("class", "tabstrip-end");
+    (new qontrol::Row)
+        ->margins(resolve(Padding::S), 0, 0, resolve(Padding::XXS))
+        ->push(m_settings_btn)
+        ->into(settingsSlot);
+    auto *corner = (new qontrol::Row)
+                       ->margins(resolve(Spacing::XS), 0, resolve(Padding::XS), 0)
+                       ->push(settingsSlot);
+    m_tab->setCornerWidget(corner, Qt::TopRightCorner);
+    m_tab->setUsesScrollButtons(true);
 
     updateTabs();
 
     setCentralWidget(m_tab);
-    positionSettingsButton();
 
     connect(m_tab, &QTabWidget::tabCloseRequested, this, &MainWindow::onTabCloseRequested,
             qontrol::UNIQUE);
 
     m_init = true;
-}
-
-auto MainWindow::positionSettingsButton() -> void {
-    if (m_settings_btn == nullptr || m_tab == nullptr) {
-        return;
-    }
-    // Top-right of the tab strip, vertically centred on the tab bar.
-    int barHeight = m_tab->tabBar()->height();
-    int top = barHeight > m_settings_btn->height() ? (barHeight - m_settings_btn->height()) / 2 : 0;
-    m_settings_btn->move(m_tab->width() - m_settings_btn->width() - resolve(Spacing::XS), top);
-    m_settings_btn->raise();
-}
-
-auto MainWindow::resizeEvent(QResizeEvent *event) -> void {
-    qontrol::Window::resizeEvent(event);
-    positionSettingsButton();
 }
 
 auto MainWindow::updateTabs() -> void {
@@ -98,9 +86,6 @@ auto MainWindow::updateTabs() -> void {
     // Menu tab has no close button
     int menuIndex = m_tab->addTab(m_menu_tab, TR("main-menu-tab"));
     m_tab->tabBar()->setTabButton(menuIndex, QTabBar::RightSide, nullptr);
-
-    // Adding tabs resizes the tab bar, which the floating button is centred on.
-    positionSettingsButton();
 }
 
 void MainWindow::showKeysTab() {
@@ -110,7 +95,8 @@ void MainWindow::showKeysTab() {
 }
 
 auto MainWindow::tabExists(QWidget *content) const -> bool {
-    return std::ranges::any_of(m_tabs, [content](const auto &tab) { return tab.second == content; });
+    return std::ranges::any_of(m_tabs,
+                               [content](const auto &tab) { return tab.second == content; });
 }
 
 auto MainWindow::addTab(QWidget *content, const QString &title) -> int {
@@ -171,7 +157,7 @@ auto MainWindow::changeEvent(QEvent *event) -> void {
 auto MainWindow::retranslateUi() -> void {
     setWindowTitle(TR("main-window-title"));
     if (m_settings_btn != nullptr) {
-        m_settings_btn->setToolTip(TR("settings-title"));
+        m_settings_btn->setToolTip(TR("btn-settings"));
     }
 }
 

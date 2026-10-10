@@ -10,7 +10,7 @@
 namespace catalog {
 class Button;
 class Tabs;
-}
+} // namespace catalog
 
 class MainWindow : public qontrol::Window {
     Q_OBJECT
@@ -35,12 +35,10 @@ public slots:
 protected:
     auto closeEvent(QCloseEvent *event) -> void override;
     auto changeEvent(QEvent *event) -> void override;
-    auto resizeEvent(QResizeEvent *event) -> void override;
 
 protected:
     auto initWindow() -> void;
     auto retranslateUi() -> void;
-    auto positionSettingsButton() -> void;
 
 private:
     bool m_init = false;
