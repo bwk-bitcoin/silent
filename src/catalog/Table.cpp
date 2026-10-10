@@ -1,12 +1,12 @@
 #include "catalog/Table.h"
 
 #include "catalog/Button.h"
+#include "catalog/Variants.h"
 #include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/Separator.h"
 #include "catalog/display/Label.h"
 #include "catalog/inputs/Checkbox.h"
 #include "catalog/inputs/Input.h"
-#include "theme/Icon.h"
 
 #include <QStyle>
 #include <QVariant>
@@ -372,8 +372,7 @@ auto Table::buildCell(const Row &row, int column, int row_index) -> QWidget * {
         }
 
         if (m_columns[column].editable) {
-            auto *button = new Button(ButtonRole::InlineIcon, cell);
-            button->setIcon(icon::pencil());
+            auto *button = btnEditLabelRow();
             button->setProperty("rowId", row.id);
             button->setProperty("column", column);
             cell->push(button);
