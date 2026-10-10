@@ -61,12 +61,12 @@ HotKey::~HotKey() {
 
 void HotKey::init() {
     m_generate_tab = new catalog::SelectRow;
-    m_generate_tab->setIcon(icon::key(IconColor::Accent));
+    m_generate_tab->setIcon(icon::key);
     m_generate_tab->setTitle(TR("keys-hot-generate"));
     m_generate_tab->setProperty(K_HOT_KEY_MODE, static_cast<int>(Mode::Generate));
 
     m_import_tab = new catalog::SelectRow;
-    m_import_tab->setIcon(icon::lock(IconColor::Accent));
+    m_import_tab->setIcon(icon::lock);
     m_import_tab->setTitle(TR("keys-hot-import"));
     m_import_tab->setProperty(K_HOT_KEY_MODE, static_cast<int>(Mode::Import));
 

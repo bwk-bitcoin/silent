@@ -180,9 +180,9 @@ void KeysTab::rebuildDevices() {
         }
 
         auto *row = new catalog::SelectRow;
-        row->setIcon(icon::usb(IconColor::Accent));
+        row->setIcon(icon::usb);
         row->setTitle(title);
-        row->setMetadata(parts.join(QStringLiteral("  ")));
+        row->setMeta(parts.join(QStringLiteral("  ")));
         row->setProperty(K_DEVICE_INSTANCE_ID, entry.instanceId);
         connect(row, &catalog::SelectRow::clicked, this, &KeysTab::onDeviceClicked,
                 qontrol::UNIQUE);
@@ -223,9 +223,9 @@ void KeysTab::rebuildKeys() {
         QString title = alias.isEmpty() ? fingerprint : alias;
 
         auto *row = new catalog::SelectRow;
-        row->setIcon(icon::key(IconColor::Accent));
+        row->setIcon(icon::key);
         row->setTitle(title);
-        row->setMetadata(fingerprint);
+        row->setMeta(fingerprint);
         row->setProperty(K_FINGERPRINT, fingerprint);
         connect(row, &catalog::SelectRow::clicked, this, &KeysTab::onKeyClicked, qontrol::UNIQUE);
 

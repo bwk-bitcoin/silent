@@ -81,7 +81,7 @@ auto SignerPicker::buildCandidateRow(const SigningCandidate &candidate) const
     QString alias = KeysModule::toQt(candidate.alias);
 
     auto *row = new catalog::SelectRow;
-    row->setIcon(catalog::routeIcon(candidate.route)(IconColor::Accent));
+    row->setIcon(catalog::routeIcon(candidate.route));
     row->setTitle(alias.isEmpty() ? fingerprint : alias);
 
     bool unusable = !candidate.can_sign || candidate.unusable != KeyUnusableReason::None;
@@ -103,7 +103,7 @@ auto SignerPicker::buildCandidateRow(const SigningCandidate &candidate) const
         metadata += "  " + TR("keys-picker-waiting-for-sp");
     }
 
-    row->setMetadata(metadata);
+    row->setMeta(metadata);
     row->setEnabled(enabled);
     row->setProperty("fingerprint", fingerprint);
     if (enabled) {
@@ -116,7 +116,7 @@ auto SignerPicker::buildCandidateRow(const SigningCandidate &candidate) const
 auto SignerPicker::buildHintRow(ISigner *signer) -> catalog::SelectRow * {
     auto *row = new catalog::SelectRow;
     row->setTitle(signer->id());
-    row->setMetadata(signer->fingerprint() + "  " + TR("keys-picker-unrelated"));
+    row->setMeta(signer->fingerprint() + "  " + TR("keys-picker-unrelated"));
     row->setEnabled(false);
     return row;
 }

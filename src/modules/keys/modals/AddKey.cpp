@@ -105,27 +105,27 @@ AddKey::AddKey(KeysModule *module, QWidget *parent) : m_module(module) {
 
 void AddKey::init() {
     auto *qrRow = new catalog::SelectRow;
-    qrRow->setIcon(icon::qr(IconColor::Accent));
+    qrRow->setIcon(icon::qr);
     qrRow->setTitle(TR("keys-mode-qr"));
     qrRow->setProperty(K_ADD_KEY_MODE, static_cast<int>(Mode::AirgapQr));
 
     auto *sdRow = new catalog::SelectRow;
-    sdRow->setIcon(icon::sdCard(IconColor::Accent));
+    sdRow->setIcon(icon::sdCard);
     sdRow->setTitle(TR("keys-mode-sd"));
     sdRow->setProperty(K_ADD_KEY_MODE, static_cast<int>(Mode::AirgapSd));
 
     auto *xpubRow = new catalog::SelectRow;
-    xpubRow->setIcon(icon::key(IconColor::Accent));
+    xpubRow->setIcon(icon::key);
     xpubRow->setTitle(TR("keys-mode-xpub"));
     xpubRow->setProperty(K_ADD_KEY_MODE, static_cast<int>(Mode::ImportXpub));
 
     auto *fileRow = new catalog::SelectRow;
-    fileRow->setIcon(icon::folder(IconColor::Accent));
+    fileRow->setIcon(icon::folder);
     fileRow->setTitle(TR("keys-mode-file"));
     fileRow->setProperty(K_ADD_KEY_MODE, static_cast<int>(Mode::ImportFile));
 
     auto *hotRow = new catalog::SelectRow;
-    hotRow->setIcon(icon::lock(IconColor::Accent));
+    hotRow->setIcon(icon::lock);
     hotRow->setTitle(TR("keys-mode-hot"));
     hotRow->setProperty(K_ADD_KEY_MODE, static_cast<int>(Mode::HotKey));
 
