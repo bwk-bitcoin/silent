@@ -8,6 +8,7 @@
 #include <QPluginLoader>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <optional>
 
 #include "interfaces/module.h"
@@ -26,9 +27,19 @@ public:
     };
 
     void registerBuiltin(IPlugin *plugin);
-    void rescanDiscoveredPlugins();
+    // Returns how many plugins it found that were not discovered before.
+    auto rescanDiscoveredPlugins() -> int;
     void reloadEnabledPlugins();
-    void setEnabled(const QString &plugin_id, bool enabled);
+    // False when the plugin refused: it failed to load, or to unload.
+    auto setEnabled(const QString &plugin_id, bool enabled) -> bool;
+    // False when the plugins folder exists but cannot be read.
+    [[nodiscard]] auto isAvailable() const -> bool;
+    [[nodiscard]] auto pluginName(const QString &plugin_id) const -> QString;
+    [[nodiscard]] auto pluginDescription(const QString &plugin_id) const -> QString;
+    // Why the plugin failed to load, empty when it did not fail.
+    [[nodiscard]] auto pluginLoadError(const QString &plugin_id) const -> QString;
+    // The open accounts that close with the plugin.
+    [[nodiscard]] auto pluginAccountNames(const QString &plugin_id) const -> QStringList;
 
     [[nodiscard]] static bool isCreatorInstanceId(const QString &id);
     [[nodiscard]] QList<IPlugin *> plugins() const;
@@ -63,6 +74,9 @@ protected:
                               QList<QPair<QString, QString>> instances);
     void applyModuleAutoStart(IModule *module, ReqId req_id, QStringList ids);
 
+    [[nodiscard]] auto instanceName(const QList<IModule *> &modules,
+                                    const QString &instance_id) const -> QString;
+
 private:
     struct PluginRecord {
         QString id;
@@ -70,6 +84,7 @@ private:
         QString version;
         QString library_path;
         QString i18n_dir;
+        QString load_error;
         QMap<QString, QString> meta;
         QPluginLoader *loader = nullptr;
         QObject *plugin_object = nullptr;
@@ -109,4 +124,5 @@ private:
     QHash<IModule *, QPair<ReqId, QList<QPair<QString, QString>>>> m_sync_list_responses;
     QHash<IModule *, QPair<ReqId, QStringList>> m_sync_auto_start_responses;
     bool m_signer_polling = false;
+    bool m_available = true;
 };

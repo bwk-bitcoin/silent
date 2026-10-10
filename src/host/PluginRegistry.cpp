@@ -1,5 +1,6 @@
 #include "PluginRegistry.h"
 #include "Host.h"
+#include "i18n/Tr.h"
 #include "interfaces/instance.h"
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
+#include <QSet>
 #include <QStringList>
 #include <common.h>
 #include <silent.h>
@@ -106,21 +108,33 @@ PluginRegistry::~PluginRegistry() {
     m_metadata_plugins.clear();
 }
 
-void PluginRegistry::rescanDiscoveredPlugins() {
+auto PluginRegistry::rescanDiscoveredPlugins() -> int {
+    QSet<QString> known;
     for (auto it = m_records.begin(); it != m_records.end(); ++it) {
-        if (it->external) {
-            it->discovered = false;
+        if (!it->external) {
+            continue;
+        }
+        if (it->discovered) {
+            known.insert(it.key());
+        }
+        it->discovered = false;
+        // A scan gives a plugin that failed to load another chance.
+        if (it->plugin == nullptr) {
+            it->load_error.clear();
         }
     }
 
     QString pluginsRoot = QDir::homePath() + QStringLiteral("/.silent/plugins");
     QDir rootDir(pluginsRoot);
+    // A missing folder only means no plugin is installed yet.
+    m_available = !rootDir.exists() || QFileInfo(pluginsRoot).isReadable();
     if (!rootDir.exists()) {
         rebuildPluginList();
         emit enabledPluginsChanged();
-        return;
+        return 0;
     }
 
+    int found = 0;
     auto pluginDirs = rootDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     for (const auto &pluginDirInfo : pluginDirs) {
         QString pluginDir = pluginDirInfo.absoluteFilePath();
@@ -150,6 +164,9 @@ void PluginRegistry::rescanDiscoveredPlugins() {
         record.i18n_dir = pluginDir + QStringLiteral("/i18n");
         record.library_path = resolvePluginLibraryPath(pluginDir, meta);
         record.discovered = true;
+        if (!known.contains(pluginId)) {
+            ++found;
+        }
 
         if (record.plugin == nullptr) {
             record.plugin_object = nullptr;
@@ -169,6 +186,7 @@ void PluginRegistry::rescanDiscoveredPlugins() {
 
     rebuildPluginList();
     emit enabledPluginsChanged();
+    return found;
 }
 
 void PluginRegistry::reloadEnabledPlugins() {
@@ -370,30 +388,30 @@ bool PluginRegistry::pluginHasBuiltinModules(const QString &plugin_id) const {
     });
 }
 
-void PluginRegistry::setEnabled(const QString &plugin_id, bool enabled) {
+auto PluginRegistry::setEnabled(const QString &plugin_id, bool enabled) -> bool {
     if (plugin_id.trimmed().isEmpty()) {
-        return;
+        return false;
     }
 
     if (pluginHasBuiltinModules(plugin_id) && !enabled) {
-        return;
+        return false;
     }
 
     bool previous = isPluginEnabled(plugin_id);
     if (previous == enabled) {
-        return;
+        return true;
     }
 
     if (enabled) {
         m_records[plugin_id].enabled = true;
         if (!enablePlugin(plugin_id)) {
             m_records[plugin_id].enabled = false;
-            return;
+            return false;
         }
     } else {
         if (!disablePlugin(plugin_id)) {
             m_records[plugin_id].enabled = true;
-            return;
+            return false;
         }
         m_records[plugin_id].enabled = false;
     }
@@ -401,6 +419,78 @@ void PluginRegistry::setEnabled(const QString &plugin_id, bool enabled) {
     syncPluginTranslations(plugin_id, enabled);
     ::app_set_plugin_enabled(rust::String(plugin_id.toStdString()), enabled);
     emit enabledPluginsChanged();
+    return true;
+}
+
+auto PluginRegistry::isAvailable() const -> bool {
+    return m_available;
+}
+
+auto PluginRegistry::pluginName(const QString &plugin_id) const -> QString {
+    auto recordIt = m_records.find(plugin_id);
+    if (recordIt == m_records.end()) {
+        return plugin_id;
+    }
+    if (!recordIt->name.isEmpty()) {
+        return recordIt->name;
+    }
+    if (recordIt->plugin != nullptr) {
+        QString name = recordIt->plugin->meta().value(QStringLiteral("name")).trimmed();
+        if (!name.isEmpty()) {
+            return name;
+        }
+    }
+    return plugin_id;
+}
+
+auto PluginRegistry::pluginDescription(const QString &plugin_id) const -> QString {
+    auto recordIt = m_records.find(plugin_id);
+    if (recordIt == m_records.end()) {
+        return {};
+    }
+    // The sidecar describes an external plugin; a builtin describes itself.
+    QString description = recordIt->meta.value(QStringLiteral("description")).trimmed();
+    if (description.isEmpty() && recordIt->plugin != nullptr) {
+        description = recordIt->plugin->meta().value(QStringLiteral("description")).trimmed();
+    }
+    return description;
+}
+
+auto PluginRegistry::pluginLoadError(const QString &plugin_id) const -> QString {
+    return m_records.value(plugin_id).load_error;
+}
+
+auto PluginRegistry::pluginAccountNames(const QString &plugin_id) const -> QStringList {
+    QStringList names;
+    auto *host = Host::get();
+    auto recordIt = m_records.find(plugin_id);
+    if (host == nullptr || recordIt == m_records.end()) {
+        return names;
+    }
+    for (auto *instance : host->instances()) {
+        if (instance == nullptr || m_instance_owner_by_id.value(instance->id()) != plugin_id) {
+            continue;
+        }
+        auto *account = instance->account();
+        if (account == nullptr || !account->implemented()) {
+            continue;
+        }
+        names.append(instanceName(recordIt->modules, instance->id()));
+    }
+    return names;
+}
+
+auto PluginRegistry::instanceName(const QList<IModule *> &modules, const QString &instance_id) const
+    -> QString {
+    // The name the module gave when it listed its instances.
+    for (auto *module : modules) {
+        for (const auto &instance : m_launcher_instances.value(module)) {
+            if (instance.first == instance_id && !instance.second.trimmed().isEmpty()) {
+                return instance.second.trimmed();
+            }
+        }
+    }
+    return instance_id;
 }
 
 void PluginRegistry::onModuleInstances(ReqId req_id, QList<QPair<QString, QString>> instances) {
@@ -586,12 +676,14 @@ bool PluginRegistry::enablePlugin(const QString &plugin_id) {
 
     if (record.library_path.isEmpty()) {
         qWarning() << "Enable failed: plugin library missing" << plugin_id;
+        record.load_error = TR("settings-plugin-no-library");
         return false;
     }
 
     record.loader = new QPluginLoader(record.library_path);
     if (!record.loader->load()) {
         qWarning() << "Plugin load failed:" << plugin_id << record.loader->errorString();
+        record.load_error = record.loader->errorString();
         delete record.loader;
         record.loader = nullptr;
         return false;
@@ -600,6 +692,7 @@ bool PluginRegistry::enablePlugin(const QString &plugin_id) {
     QObject *root = record.loader->instance();
     if (root == nullptr) {
         qWarning() << "Plugin instance failed:" << plugin_id << record.loader->errorString();
+        record.load_error = record.loader->errorString();
         record.loader->unload();
         delete record.loader;
         record.loader = nullptr;
@@ -609,12 +702,14 @@ bool PluginRegistry::enablePlugin(const QString &plugin_id) {
     auto *plugin = qobject_cast<IPlugin *>(root);
     if (plugin == nullptr) {
         qWarning() << "Plugin interface cast failed:" << plugin_id << record.loader->errorString();
+        record.load_error = TR("settings-plugin-not-silent");
         record.loader->unload();
         delete record.loader;
         record.loader = nullptr;
         return false;
     }
 
+    record.load_error.clear();
     record.plugin_object = root;
     record.plugin = plugin;
     record.modules = plugin->modules();

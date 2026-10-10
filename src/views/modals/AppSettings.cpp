@@ -1,377 +1,591 @@
 #include "AppSettings.h"
+
 #include "AppController.h"
-#include "i18n/I18nManager.h"
-#include "i18n/Tr.h"
+#include "catalog/Button.h"
+#include "catalog/SelectRow.h"
+#include "catalog/Variants.h"
+#include "catalog/containers/Card.h"
+#include "catalog/containers/ModalActions.h"
+#include "catalog/containers/Section.h"
+#include "catalog/containers/SectionHeader.h"
+#include "catalog/containers/Separator.h"
+#include "catalog/display/Badge.h"
+#include "catalog/display/Label.h"
+#include "catalog/feedback/EmptyState.h"
+#include "catalog/feedback/ModalStatus.h"
+#include "catalog/feedback/Notice.h"
+#include "catalog/form/FieldGroup.h"
+#include "catalog/form/FieldNote.h"
+#include "catalog/inputs/ComboBox.h"
+#include "catalog/inputs/Toggle.h"
 #include "host/Host.h"
 #include "host/PluginRegistry.h"
+#include "i18n/I18nManager.h"
+#include "i18n/Tr.h"
 #include "interfaces/instance.h"
+#include "interfaces/module.h"
 #include "interfaces/theme.h"
-#include "views/utils.h"
-#include "catalog/Button.h"
-#include "catalog/inputs/ComboBox.h"
-#include "catalog/display/Label.h"
-#include "catalog/containers/ScrollArea.h"
+#include "theme/Icon.h"
 #include "theme/Theme.h"
-#include "catalog/inputs/Toggle.h"
 #include <QCheckBox>
+#include <QEvent>
 #include <QVariant>
-#include <QVBoxLayout>
+#include <Qontrol>
 #include <common.h>
 
 namespace modal {
 
-using catalog::Button;
 using catalog::Label;
 using catalog::LabelRole;
-using catalog::ComboBox;
-using catalog::Toggle;
-using catalog::ToggleRole;
+using catalog::LabelTone;
+using catalog::Notice;
 
-AppSettings::AppSettings([[maybe_unused]] QWidget *parent) : qontrol::Modal() {
-    setWindowTitle(TR("settings-title"));
-    resize(1040, 640);
+namespace {
+
+const char *const K_PLUGIN_ID = "pluginId";
+const char *const K_SECTION_ID = "sectionId";
+const QString LIGHT = QStringLiteral("light");
+const QString DARK = QStringLiteral("dark");
+
+struct LanguageOption {
+    const char *label;
+    const char *code;
+};
+
+// Each language under its own name.
+constexpr LanguageOption LANGUAGES[] = {
+    {.label = "English", .code = "en"},   {.label = "Français", .code = "fr"},
+    {.label = "Italiano", .code = "it"},  {.label = "Deutsch", .code = "de"},
+    {.label = "Português", .code = "pt"}, {.label = "Español", .code = "es"},
+};
+
+auto foldable(const QString &label) -> catalog::Section * {
+    auto *section = new catalog::Section(label);
+    section->header()->setFoldable(true);
+    return section;
+}
+
+// A field over its note, as wide as the wider of the two.
+auto withNote(catalog::FieldGroup *field, catalog::FieldNote *note) -> QWidget * {
+    field->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+    return (new qontrol::Column)->spacing(resolve(Spacing::XS))->push(field)->push(note);
+}
+
+auto wrapped(LabelRole role) -> Label * {
+    auto *label = new Label(role);
+    label->setWordWrap(true);
+    return label;
+}
+
+} // namespace
+
+AppSettings::AppSettings() {
     init();
     doConnect();
     view();
-    rebuildPluginRows();
-    rebuildSettingSectionRows();
     refreshThemeProviders();
     requestThemeList();
     applyPersistedTheme();
+    showStep(m_main_step);
+}
+
+AppSettings::~AppSettings() {
+    // Hand the module its widget back before the slot and its children go.
+    if (m_open_section != nullptr) {
+        m_section_slot->take(m_open_section.data());
+    }
 }
 
 void AppSettings::init() {
-    m_title = new Label(TR("settings-title"), LabelRole::Title);
-    m_title->setAlignment(Qt::AlignCenter);
-    m_general_title = new Label(TR("settings-general"), LabelRole::Section);
-    m_theme_label = new Label(TR("settings-theme"), LabelRole::Body);
-    m_theme_label->setFixedWidth(resolve(Size::S));
-    m_language_label = new Label(TR("settings-language"), LabelRole::Body);
-    m_language_label->setFixedWidth(resolve(Size::S));
-    m_plugin_manager_title = new Label(TR("settings-plugin-manager"), LabelRole::Section);
-    m_extension_settings_title = new Label(TR("settings-extension-settings"), LabelRole::Section);
-    m_scan_plugins_btn = new Button(TR("settings-scan-plugins"));
+    auto *controller = AppController::get();
+    if (controller != nullptr) {
+        m_plugin_registry = controller->pluginRegistry();
+    }
+    // The unavailable notice asks to reopen Settings once the folder is fixed: look again.
+    if (m_plugin_registry != nullptr && !m_plugin_registry->isAvailable()) {
+        m_plugin_registry->rescanDiscoveredPlugins();
+    }
+    m_host = Host::get();
+    if (m_host != nullptr) {
+        m_host_events = m_host->events();
+    }
 
-    m_theme_picker = new ComboBox;
-    m_theme_picker->setWidth(Size::L);
+    m_theme_picker = new catalog::ComboBox;
+    m_theme_picker->setWidth(Size::S);
     m_theme_picker->setEnabled(false);
+    m_theme_note = new catalog::FieldNote;
+    m_theme_note->setVisible(false);
 
-    m_language_picker = new ComboBox;
-    m_language_picker->setWidth(Size::L);
-    struct LanguageOption {
-        const char *label;
-        const char *code;
-    };
-    static constexpr LanguageOption languages[] = {
-        {.label = "English", .code = "en"},   {.label = "Francais", .code = "fr"},
-        {.label = "Italiano", .code = "it"},  {.label = "Deutsch", .code = "de"},
-        {.label = "Portugues", .code = "pt"}, {.label = "Espanol", .code = "es"},
-    };
-    for (const auto &language : languages) {
-        m_language_picker->addItem(QString::fromLatin1(language.label),
+    m_language_picker = new catalog::ComboBox;
+    m_language_picker->setWidth(Size::S);
+    for (const auto &language : LANGUAGES) {
+        m_language_picker->addItem(QString::fromUtf8(language.label),
                                    QString::fromLatin1(language.code));
     }
     int localeIndex = m_language_picker->findData(i18n::I18nManager::get()->selectedLocale());
     if (localeIndex < 0) {
         localeIndex = m_language_picker->findData(QStringLiteral("en"));
     }
-    if (localeIndex >= 0) {
-        m_updating_language_picker = true;
-        m_language_picker->setCurrentIndex(localeIndex);
-        m_updating_language_picker = false;
-    }
+    m_language_picker->setCurrentIndex(localeIndex);
+    m_language_note = new catalog::FieldNote(QString(), catalog::FieldNote::Tone::Success);
+    m_language_note->setVisible(false);
 
-    m_plugins_column = new qontrol::Column;
-    m_section_column = new qontrol::Column;
+    m_scan_btn = catalog::btnScanPlugins();
+    m_scanning_btn = catalog::btnScanningPlugins();
+    m_scanning_btn->setEnabled(false);
+    m_scanning_btn->setVisible(false);
+    m_registry_notice = new Notice(Notice::Tone::Error);
+    m_plugin_notice = new Notice(Notice::Tone::Error);
+    m_plugin_notice->setVisible(false);
+    m_scan_result = new Label(LabelRole::Caption);
+    m_scan_result->setTone(LabelTone::Success);
+    m_scan_result->setVisible(false);
+    m_plugins_column = (new qontrol::Column)->spacing(resolve(Spacing::S));
+    m_plugins_empty = new catalog::EmptyState(icon::puzzle, QString());
+    m_scanning = new catalog::ModalStatus;
+    m_scanning->setSpinner();
+    m_scanning->setPadding(resolve(Spacing::M), resolve(Spacing::M));
+    m_scanning->setVisible(false);
 
-    auto *controller = AppController::get();
-    if (controller != nullptr) {
-        m_plugin_registry = controller->pluginRegistry();
-    }
+    m_extensions_separator = new catalog::Separator;
+    m_section_column = (new qontrol::Column)->spacing(resolve(Spacing::S));
 
-    m_host = Host::get();
-    if (m_host != nullptr) {
-        m_host_events = m_host->events();
-    }
+    m_disable_question = wrapped(LabelRole::Body);
+    m_disable_accounts = new Notice;
+    m_disable_themes = new Notice;
+    m_disable_actions = new catalog::ModalActions;
+    m_disable_actions->setBack(catalog::ModalActions::Back::Back);
+    m_disable_btn = catalog::btnDisablePlugin();
+    m_disable_actions->addAction(m_disable_btn);
+
+    m_section_text = wrapped(LabelRole::Body);
+    m_section_text->setTone(LabelTone::Secondary);
+    m_section_slot = new qontrol::Column;
+    m_section_actions = new catalog::ModalActions;
+    m_section_actions->setBack(catalog::ModalActions::Back::AllSettings);
+    m_done_btn = catalog::btnDone();
+    m_section_actions->addAction(m_done_btn);
 }
 
 void AppSettings::doConnect() {
-    connect(m_scan_plugins_btn, &QPushButton::clicked, this, &AppSettings::onScanPluginsClicked,
+    connect(m_theme_picker, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            &AppSettings::onThemeSelectionChanged, qontrol::UNIQUE);
+    connect(m_language_picker, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            &AppSettings::onLanguageSelectionChanged, qontrol::UNIQUE);
+    connect(m_scan_btn, &QPushButton::clicked, this, &AppSettings::scanPlugins, qontrol::UNIQUE);
+    connect(m_disable_btn, &QPushButton::clicked, this, &AppSettings::disablePlugin,
             qontrol::UNIQUE);
+    connect(m_disable_actions, &catalog::ModalActions::backClicked, this, &AppSettings::showMain,
+            qontrol::UNIQUE);
+    connect(m_done_btn, &QPushButton::clicked, this, &AppSettings::closeSection, qontrol::UNIQUE);
+    connect(m_section_actions, &catalog::ModalActions::backClicked, this,
+            &AppSettings::closeSection, qontrol::UNIQUE);
     if (m_plugin_registry != nullptr) {
         connect(m_plugin_registry, &PluginRegistry::enabledPluginsChanged, this,
                 &AppSettings::rebuildPluginRows, qontrol::UNIQUE);
     }
-    if (m_theme_picker != nullptr) {
-        connect(m_theme_picker,
-                qOverload<int>(&QComboBox::currentIndexChanged),
-                this,
-                &AppSettings::onThemeSelectionChanged,
-                qontrol::UNIQUE);
-    }
-    if (m_language_picker != nullptr) {
-        connect(m_language_picker,
-                qOverload<int>(&QComboBox::currentIndexChanged),
-                this,
-                &AppSettings::onLanguageSelectionChanged,
-                qontrol::UNIQUE);
-    }
     if (m_host_events != nullptr) {
         connect(m_host_events, &HostEvents::settingSectionsChanged, this,
                 &AppSettings::onHostSettingsSectionsChanged, qontrol::UNIQUE);
-        connect(m_host_events, &HostEvents::instanceRegistered, this, &AppSettings::onHostInstanceChanged,
-                qontrol::UNIQUE);
-        connect(m_host_events, &HostEvents::instanceRemoved, this, &AppSettings::onHostInstanceChanged,
-                qontrol::UNIQUE);
+        connect(m_host_events, &HostEvents::instanceRegistered, this,
+                &AppSettings::onHostInstanceChanged, qontrol::UNIQUE);
+        connect(m_host_events, &HostEvents::instanceRemoved, this,
+                &AppSettings::onHostInstanceChanged, qontrol::UNIQUE);
     }
 }
 
 void AppSettings::view() {
-    auto *titleRow = (new qontrol::Row)->pushSpacer()->push(m_title)->pushSpacer();
+    m_extensions = foldable(QString());
+    m_extensions->setContent(m_section_column);
+    auto *main = (new qontrol::Column)
+                     ->spacing(resolve(Spacing::S))
+                     ->push(buildGeneral())
+                     ->push(new catalog::Separator)
+                     ->push(buildPlugins())
+                     ->push(m_extensions_separator)
+                     ->push(m_extensions);
+    for (auto *section : {m_general, m_plugins, m_extensions}) {
+        connect(section->header(), &catalog::SectionHeader::toggled, this, &AppSettings::refit,
+                qontrol::UNIQUE);
+    }
+    m_main_step = addStep(QString(), ModalWidth::Wide, main, nullptr);
+    m_disable_step = addStep(QString(), ModalWidth::Wide, buildDisable(), m_disable_actions);
+    m_section_step = addStep(QString(), ModalWidth::Wide, buildSection(), m_section_actions);
+    retranslateUi();
+}
 
-    auto *themeRow = (new qontrol::Row)
-                         ->push(m_theme_label)
-                         ->pushSpacer(resolve(Spacing::S))
-                         ->push(m_theme_picker)
-                         ->pushSpacer();
-    auto *languageRow = (new qontrol::Row)
-                            ->push(m_language_label)
-                            ->pushSpacer(resolve(Spacing::S))
-                            ->push(m_language_picker)
-                            ->pushSpacer();
-    auto *pluginManagerRow = (new qontrol::Row)
-                                 ->push(m_plugin_manager_title)
-                                 ->pushSpacer()
-                                 ->push(m_scan_plugins_btn);
+auto AppSettings::buildGeneral() -> QWidget * {
+    m_theme_field = new catalog::FieldGroup;
+    m_theme_field->addField(QString(), m_theme_picker);
+    m_language_field = new catalog::FieldGroup;
+    m_language_field->addField(QString(), m_language_picker);
 
-    auto *content = (new qontrol::Column)
-                        ->push(titleRow)
-                        ->pushSpacer(resolve(Spacing::M))
-                        ->push((new qontrol::Row)->push(m_general_title)->pushSpacer())
-                        ->pushSpacer(resolve(Spacing::S))
-                        ->push(themeRow)
-                        ->pushSpacer(resolve(Spacing::S))
-                        ->push(languageRow)
-                        ->pushSpacer(resolve(Spacing::M))
-                        ->push(pluginManagerRow)
-                        ->pushSpacer(resolve(Spacing::S))
-                        ->push(m_plugins_column);
+    m_general = foldable(QString());
+    m_general->setContent((new qontrol::Row)
+                              ->spacing(resolve(Spacing::XL))
+                              ->push(withNote(m_theme_field, m_theme_note), 0, Qt::AlignTop)
+                              ->push(withNote(m_language_field, m_language_note), 0, Qt::AlignTop)
+                              ->pushSpacer());
+    return m_general;
+}
 
-    m_extension_section = (new qontrol::Column)
-                              ->push((new qontrol::Row)->push(m_extension_settings_title)->pushSpacer())
-                              ->pushSpacer(resolve(Spacing::S))
-                              ->push(m_section_column);
-    content->pushSpacer(resolve(Spacing::M))->push(m_extension_section);
+auto AppSettings::buildPlugins() -> QWidget * {
+    m_plugins = foldable(QString());
+    m_plugins->header()->setAction((new qontrol::Row)->push(m_scan_btn)->push(m_scanning_btn));
+    m_plugins->setContent((new qontrol::Column)
+                              ->spacing(resolve(Spacing::S))
+                              ->push(m_registry_notice)
+                              ->push(m_plugin_notice)
+                              ->push(m_scan_result)
+                              ->push(m_plugins_column)
+                              ->push(m_plugins_empty)
+                              ->push(m_scanning));
+    return m_plugins;
+}
 
-    auto *scroll = new catalog::ScrollArea;
-    scroll->setWidget(margin(content));
+auto AppSettings::buildDisable() -> QWidget * {
+    return (new qontrol::Column)
+        ->spacing(resolve(Spacing::M))
+        ->push(m_disable_question)
+        ->push(m_disable_accounts)
+        ->push(m_disable_themes);
+}
 
-    setMainWidget(scroll);
+auto AppSettings::buildSection() -> QWidget * {
+    auto *card = new catalog::Card(catalog::Card::Role::Inset);
+    card->setPad(catalog::Card::Pad::M);
+    card->setContent(m_section_slot);
+    return (new qontrol::Column)->spacing(resolve(Spacing::S))->push(m_section_text)->push(card);
+}
+
+void AppSettings::refit() {
+    showStep(currentStep());
+}
+
+void AppSettings::showMain() {
+    // A Back from the disable step leaves the plugin enabled: its toggle shows it again.
+    rebuildPluginRows();
+    showStep(m_main_step);
 }
 
 void AppSettings::rebuildPluginRows() {
-    if (m_plugins_column == nullptr) {
-        return;
-    }
-
     m_plugins_column->clear();
-    m_plugin_rows.clear();
-    m_toggle_plugin_ids.clear();
+    m_plugin_meta.clear();
 
-    if (m_plugin_registry == nullptr) {
-        auto *empty = new Label(TR("settings-registry-unavailable"), LabelRole::Caption);
-        auto *emptyRow = (new qontrol::Row)->push(empty)->pushSpacer();
-        m_plugin_rows.append(emptyRow);
-        m_plugins_column->push(emptyRow);
+    bool available = m_plugin_registry != nullptr && m_plugin_registry->isAvailable();
+    m_registry_notice->setVisible(!available);
+    m_scan_btn->setEnabled(available);
+    int count = 0;
+    if (available) {
+        for (auto *plugin : m_plugin_registry->plugins()) {
+            if (plugin == nullptr) {
+                continue;
+            }
+            auto meta = plugin->meta();
+            QString id = meta.value(QStringLiteral("id")).trimmed();
+            // Built-in modules are not user-managed: only external plugins are listed.
+            if (id.isEmpty() || m_plugin_registry->pluginHasBuiltinModules(id)) {
+                continue;
+            }
+            QString version = meta.value(QStringLiteral("version")).trimmed();
+            QString line = version.isEmpty() ? id : QStringLiteral("%1  v%2").arg(id, version);
+            m_plugin_meta.insert(id, line);
+            auto *row = pluginRow(id, line);
+            m_plugins_column->push(row);
+            // A row added to a shown column stays hidden until the event loop shows it,
+            // so the step would be measured without it.
+            row->show();
+            ++count;
+        }
+    }
+    m_plugins->header()->setCount(count > 0 ? QString::number(count) : QString());
+    m_plugins_column->setVisible(count > 0);
+    m_plugins_empty->setVisible(available && count == 0 && !m_scanning_plugins);
+    m_scanning->setVisible(m_scanning_plugins && count == 0);
+    refit();
+}
+
+auto AppSettings::pluginRow(const QString &id, const QString &meta) -> catalog::SelectRow * {
+    QString error = m_plugin_registry->pluginLoadError(id);
+    bool failed = !error.isEmpty();
+    bool unloading = id == m_unloading_id;
+
+    auto *row = new catalog::SelectRow;
+    row->setIcon(failed ? icon::circleX : icon::puzzle);
+    row->setTone(failed ? catalog::SelectRow::Tone::Error : catalog::SelectRow::Tone::Default);
+    row->setTitle(m_plugin_registry->pluginName(id));
+    row->setSub(failed ? error : m_plugin_registry->pluginDescription(id));
+    row->setMeta(meta);
+    if (unloading) {
+        row->setStatus(catalog::pillPluginUnloading());
+    }
+    // Kept when empty, so the meta lines up on every row.
+    row->setTrailingWidth(metric::TOGGLE_WIDTH);
+    row->setChevron(false);
+    row->setClickable(false);
+    // A plugin that failed to load has nothing to switch.
+    if (!failed) {
+        auto *toggle = new catalog::Toggle;
+        toggle->setChecked(m_plugin_registry->isPluginEnabled(id));
+        toggle->setEnabled(!unloading);
+        toggle->setProperty(K_PLUGIN_ID, id);
+        connect(toggle, &QCheckBox::toggled, this, &AppSettings::onPluginToggled, qontrol::UNIQUE);
+        row->setTrailing(toggle);
+    }
+    return row;
+}
+
+void AppSettings::onPluginToggled(bool enabled) {
+    auto *toggle = qobject_cast<catalog::Toggle *>(sender());
+    if (toggle == nullptr || m_plugin_registry == nullptr) {
         return;
     }
-
-    auto plugins = m_plugin_registry->plugins();
-    for (auto *plugin : plugins) {
-        if (plugin == nullptr) {
-            continue;
-        }
-
-        auto meta = plugin->meta();
-        QString id = meta.value(QStringLiteral("id")).trimmed();
-        if (id.isEmpty()) {
-            continue;
-        }
-        // Static-linked builtins are not user-managed; only external plugins are listed.
-        if (m_plugin_registry->pluginHasBuiltinModules(id)) {
-            continue;
-        }
-
-        QString name = meta.value(QStringLiteral("name")).trimmed().isEmpty()
-            ? id
-            : meta.value(QStringLiteral("name")).trimmed();
-        QString version = meta.value(QStringLiteral("version")).trimmed();
-
-        auto *nameLabel = new Label(name, LabelRole::Body);
-        QString subtitle = id;
-        if (!version.isEmpty()) {
-            subtitle += QStringLiteral("  v") + version;
-        }
-        auto *metaLabel = new Label(subtitle, LabelRole::Caption);
-
-        auto *labelCol = (new qontrol::Column)->push(nameLabel)->push(metaLabel);
-        auto *toggle = new Toggle(ToggleRole::Default);
-        toggle->setChecked(m_plugin_registry->isPluginEnabled(id));
-        toggle->setProperty("pluginId", id);
-        m_toggle_plugin_ids.insert(toggle, id);
-        connect(toggle, &QCheckBox::toggled, this, &AppSettings::onPluginToggled, qontrol::UNIQUE);
-
-        auto *row = (new qontrol::Row)
-                        ->push(labelCol)
-                        ->pushSpacer()
-                        ->push(toggle);
-        m_plugin_rows.append(row);
-        m_plugins_column->push(row);
+    QString id = toggle->property(K_PLUGIN_ID).toString();
+    m_plugin_notice->setVisible(false);
+    m_scan_result->setVisible(false);
+    if (!enabled) {
+        showDisable(id);
+        return;
+    }
+    // A plugin that fails to load gets its error row; a loaded one rebuilds the rows
+    // through enabledPluginsChanged.
+    if (!m_plugin_registry->setEnabled(id, true)) {
+        rebuildPluginRows();
     }
 }
 
-void AppSettings::rebuildSettingSectionRows() {
-    if (m_section_column == nullptr) {
-        return;
+void AppSettings::showDisable(const QString &id) {
+    m_disabling_id = id;
+    QString name = m_plugin_registry->pluginName(id);
+    m_disable_question->setText(TR("settings-disable-question").arg(name, m_plugin_meta.value(id)));
+
+    QStringList accounts = m_plugin_registry->pluginAccountNames(id);
+    if (accounts.isEmpty()) {
+        m_disable_accounts->setTone(Notice::Tone::Info);
+        m_disable_accounts->setTitle(QString());
+        m_disable_accounts->setText(TR("settings-disable-no-account"));
+    } else if (accounts.size() == 1) {
+        m_disable_accounts->setTone(Notice::Tone::Warning);
+        m_disable_accounts->setTitle(TR("settings-disable-account-one"));
+        m_disable_accounts->setText(TR("settings-disable-account-one-text").arg(accounts.first()));
+    } else {
+        m_disable_accounts->setTone(Notice::Tone::Warning);
+        m_disable_accounts->setTitle(TR("settings-disable-accounts").arg(accounts.size()));
+        m_disable_accounts->setText(
+            TR("settings-disable-accounts-text").arg(accounts.join(QStringLiteral(", "))));
     }
 
-    m_section_column->clear();
-    m_setting_section_rows.clear();
-
-    if (m_host == nullptr) {
-        if (m_extension_section != nullptr) {
-            m_extension_section->setVisible(false);
+    QStringList themes;
+    for (auto it = m_theme_plugin.constBegin(); it != m_theme_plugin.constEnd(); ++it) {
+        if (it.value() == id) {
+            themes.append(it.key());
         }
+    }
+    themes.sort();
+    m_disable_themes->setTone(Notice::Tone::Info);
+    m_disable_themes->setText(TR("settings-disable-themes").arg(themes.join(QStringLiteral(", "))));
+    m_disable_themes->setVisible(!themes.isEmpty());
+
+    showStep(m_disable_step);
+}
+
+void AppSettings::disablePlugin() {
+    QString id = m_disabling_id;
+    QString activeTheme = m_theme_picker->currentData().toString();
+    bool themeGoes = !id.isEmpty() && m_theme_plugin.value(activeTheme) == id;
+
+    m_unloading_id = id;
+    showMain();
+    // Unloading runs on this thread: paint the Unloading row before it starts.
+    repaint();
+    bool disabled = m_plugin_registry->setEnabled(id, false);
+    m_unloading_id.clear();
+
+    if (!disabled) {
+        m_plugin_notice->setTitle(
+            TR("settings-disable-refused").arg(m_plugin_registry->pluginName(id)));
+        m_plugin_notice->setText(TR("settings-disable-refused-text"));
+        m_plugin_notice->setVisible(true);
+    } else if (themeGoes) {
+        switchToLightTheme();
+    }
+    rebuildPluginRows();
+}
+
+void AppSettings::setScanning(bool scanning) {
+    m_scanning_plugins = scanning;
+    m_scan_btn->setVisible(!scanning);
+    m_scanning_btn->setVisible(scanning);
+    rebuildPluginRows();
+}
+
+void AppSettings::scanPlugins() {
+    if (m_plugin_registry == nullptr) {
         return;
     }
-
-    auto sections = m_host->settingSections();
-    if (m_extension_section != nullptr) {
-        m_extension_section->setVisible(!sections.isEmpty());
+    m_plugin_notice->setVisible(false);
+    m_scan_result->setVisible(false);
+    setScanning(true);
+    // The scan reads the plugins folder on this thread: paint Scanning before it starts.
+    repaint();
+    int found = m_plugin_registry->rescanDiscoveredPlugins();
+    if (found > 0) {
+        m_scan_result->setText(found == 1 ? TR("settings-plugin-found-one")
+                                          : TR("settings-plugins-found").arg(found));
+        m_scan_result->setVisible(true);
     }
-    if (sections.isEmpty()) {
-        return;
+    setScanning(false);
+}
+
+void AppSettings::rebuildSettingSectionRows() {
+    m_section_column->clear();
+    QList<Host::SettingSectionView> sections;
+    if (m_host != nullptr) {
+        sections = m_host->settingSections();
     }
 
+    int count = 0;
     for (const auto &entry : sections) {
         if (entry.content == nullptr) {
             continue;
         }
-
         QString title = entry.title.trimmed().isEmpty()
-            ? TR("settings-section-fallback").arg(entry.id)
-            : entry.title.trimmed();
+                            ? TR("settings-section-fallback").arg(entry.id)
+                            : entry.title.trimmed();
+        QString module = sectionModuleName(entry.id);
 
-        // The widget is shown only inside the modal the button opens, never parented
-        // here: a section that lives in this dialog dies with it, and the module owns it.
-        auto *openBtn = new Button(TR("settings-section-open"));
-        openBtn->setProperty("sectionId", QVariant::fromValue(entry.id));
-        connect(openBtn, &QPushButton::clicked, this, &AppSettings::onOpenSectionClicked,
+        auto *open = catalog::btnOpen();
+        open->setProperty(K_SECTION_ID, QVariant::fromValue(entry.id));
+        connect(open, &QPushButton::clicked, this, &AppSettings::onOpenSectionClicked,
                 qontrol::UNIQUE);
-
-        auto *row = (new qontrol::Row)
-                        ->push(new Label(title, LabelRole::Body))
-                        ->pushSpacer()
-                        ->push(openBtn);
-
-        m_setting_section_rows.append(row);
+        auto *row = new catalog::SelectRow;
+        row->setIcon(icon::settings);
+        row->setTitle(title);
+        row->setSub(module.isEmpty() ? QString() : TR("settings-section-from").arg(module));
+        row->setTrailing(open);
+        row->setProperty(K_SECTION_ID, QVariant::fromValue(entry.id));
+        connect(row, &catalog::SelectRow::clicked, this, &AppSettings::onOpenSectionClicked,
+                qontrol::UNIQUE);
         m_section_column->push(row);
-        m_section_column->pushSpacer(resolve(Spacing::S));
+        row->show();
+        ++count;
     }
+    m_extensions->header()->setCount(QString::number(count));
+    m_extensions->setVisible(count > 0);
+    m_extensions_separator->setVisible(count > 0);
+    refit();
+}
+
+auto AppSettings::sectionModuleName(Host::SectionId section) const -> QString {
+    auto *hostImpl = dynamic_cast<HostImpl *>(m_host);
+    if (hostImpl == nullptr) {
+        return {};
+    }
+    auto *module = hostImpl->settingSectionModule(section);
+    if (module == nullptr) {
+        return {};
+    }
+    return module->meta().value(QStringLiteral("name")).trimmed();
 }
 
 void AppSettings::onOpenSectionClicked() {
-    auto *button = qobject_cast<QPushButton *>(sender());
-    if (button == nullptr || m_host == nullptr) {
+    if (sender() == nullptr || m_host == nullptr) {
         return;
     }
-    auto sectionId = button->property("sectionId").value<Host::SectionId>();
-
-    // Re-query rather than capturing the widget: a module can drop its section while
-    // the settings dialog is open.
-    QWidget *content = nullptr;
-    QString title;
+    auto sectionId = sender()->property(K_SECTION_ID).value<Host::SectionId>();
+    // Re-queried rather than kept: a module can drop its section while Settings is open.
     for (const auto &entry : m_host->settingSections()) {
-        if (entry.id == sectionId && entry.content != nullptr) {
-            content = entry.content;
-            title = entry.title.trimmed();
-            break;
+        if (entry.id != sectionId || entry.content == nullptr) {
+            continue;
+        }
+        QString title = entry.title.trimmed().isEmpty()
+                            ? TR("settings-section-fallback").arg(entry.id)
+                            : entry.title.trimmed();
+        QString module = sectionModuleName(entry.id);
+        m_section_text->setText(
+            TR("settings-section-belongs").arg(module.isEmpty() ? title : module));
+        m_open_section = entry.content;
+        m_open_section_id = entry.id;
+        m_section_slot->push(entry.content);
+        entry.content->show();
+        setStepTitle(m_section_step, title);
+        showStep(m_section_step);
+        return;
+    }
+}
+
+void AppSettings::closeSection() {
+    if (m_open_section != nullptr) {
+        m_section_slot->take(m_open_section.data());
+    }
+    m_open_section = nullptr;
+    m_open_section_id = 0;
+    showStep(m_main_step);
+}
+
+void AppSettings::onHostSettingsSectionsChanged() {
+    rebuildSettingSectionRows();
+    if (m_open_section_id == 0 || m_host == nullptr) {
+        return;
+    }
+    for (const auto &entry : m_host->settingSections()) {
+        if (entry.id == m_open_section_id) {
+            return;
         }
     }
-    if (content == nullptr) {
-        return;
-    }
-
-    auto *modal = new qontrol::Modal;
-    modal->setWindowTitle(title.isEmpty() ? TR("settings-section-fallback").arg(sectionId) : title);
-    auto *closeBtn = new Button(TR("common-close"));
-    connect(closeBtn, &QPushButton::clicked, modal, &QDialog::accept, qontrol::UNIQUE);
-
-    auto *column = (new qontrol::Column)
-                       ->push(content)
-                       ->pushSpacer(resolve(Spacing::M))
-                       ->push((new qontrol::Row)->pushSpacer()->push(closeBtn));
-    modal->setMainWidget(margin(column));
-    modal->exec();
-
-    // setMainWidget reparented the section into the modal; take it back before the
-    // modal is destroyed or the module's widget goes with it.
-    content->setParent(nullptr);
-    modal->deleteLater();
+    // The module dropped the section on display.
+    closeSection();
 }
 
 void AppSettings::refreshThemeProviders() {
     m_theme_providers.clear();
+    m_provider_plugin.clear();
     m_pending_theme_list.clear();
     m_pending_palette.clear();
     m_provider_for_theme_name.clear();
+    m_theme_plugin.clear();
 
     if (m_host == nullptr) {
         return;
     }
 
-    auto instances = m_host->instances();
-    for (auto *instance : instances) {
+    for (auto *instance : m_host->instances()) {
         if (instance == nullptr) {
             continue;
         }
         auto *provider = instance->theme();
-        if (provider == nullptr || !provider->implemented()) {
+        if (provider == nullptr || !provider->implemented() ||
+            m_theme_providers.contains(provider)) {
             continue;
         }
-        if (!m_theme_providers.contains(provider)) {
-            m_theme_providers.append(provider);
-            connect(provider, qOverload<ReqId, QStringList>(&IThemeProvider::themes), this,
-                    &AppSettings::onThemeNames, qontrol::UNIQUE);
-            connect(provider, qOverload<ReqId, theme::Palette>(&IThemeProvider::palette), this,
-                    &AppSettings::onThemePalette, qontrol::UNIQUE);
+        m_theme_providers.append(provider);
+        if (m_plugin_registry != nullptr) {
+            m_provider_plugin.insert(provider,
+                                     m_plugin_registry->instanceOwnerPluginId(instance->id()));
         }
+        connect(provider, qOverload<ReqId, QStringList>(&IThemeProvider::themes), this,
+                &AppSettings::onThemeNames, qontrol::UNIQUE);
+        connect(provider, qOverload<ReqId, theme::Palette>(&IThemeProvider::palette), this,
+                &AppSettings::onThemePalette, qontrol::UNIQUE);
     }
 }
 
 void AppSettings::requestThemeList() {
-    if (m_theme_picker == nullptr) {
-        return;
-    }
-
     m_updating_theme_picker = true;
     m_theme_picker->clear();
-    m_theme_picker->addItem(TR("settings-theme-light"), QStringLiteral("light"));
-    m_theme_picker->addItem(TR("settings-theme-dark"), QStringLiteral("dark"));
+    m_theme_picker->addItem(TR("settings-theme-light"), LIGHT);
+    m_theme_picker->addItem(TR("settings-theme-dark"), DARK);
     m_updating_theme_picker = false;
 
     for (auto *provider : m_theme_providers) {
-        if (provider == nullptr) {
-            continue;
-        }
         ReqId reqId = provider->themes();
-        if (reqId == 0) {
-            continue;
+        if (reqId != 0) {
+            m_pending_theme_list.insert(reqId, provider);
         }
-        m_pending_theme_list.insert(reqId, provider);
     }
 
     m_theme_picker->setEnabled(true);
+    updateThemeNote();
 }
 
 void AppSettings::applyPersistedTheme() {
@@ -380,83 +594,83 @@ void AppSettings::applyPersistedTheme() {
         return;
     }
 
-    if (activeTheme == QStringLiteral("light") || activeTheme == QStringLiteral("dark")) {
-        if (m_theme_picker != nullptr) {
-            int index = m_theme_picker->findData(activeTheme);
-            if (index >= 0) {
-                setThemePickerIndexSilently(index);
-            }
+    if (activeTheme == LIGHT || activeTheme == DARK) {
+        int index = m_theme_picker->findData(activeTheme);
+        if (index >= 0) {
+            setThemePickerIndexSilently(index);
         }
         if (auto *theme = Theme::get(); theme != nullptr) {
-            theme->setMode(activeTheme == QStringLiteral("dark") ? ThemeMode::Dark : ThemeMode::Light);
+            theme->setMode(activeTheme == DARK ? ThemeMode::Dark : ThemeMode::Light);
         }
         return;
     }
 
     m_pending_theme_to_apply = activeTheme;
-    if (m_theme_picker != nullptr) {
-        int index = m_theme_picker->findData(activeTheme);
-        if (index >= 0) {
-            setThemePickerIndexSilently(index);
-        }
+    int index = m_theme_picker->findData(activeTheme);
+    if (index >= 0) {
+        setThemePickerIndexSilently(index);
     }
 
-    if (m_provider_for_theme_name.contains(activeTheme)) {
-        auto *provider = m_provider_for_theme_name.value(activeTheme);
-        if (provider != nullptr) {
-            ReqId reqId = provider->palette(activeTheme);
-            if (reqId != 0) {
-                m_pending_palette.insert(reqId, provider);
-            }
+    auto *provider = m_provider_for_theme_name.value(activeTheme, nullptr);
+    if (provider != nullptr) {
+        ReqId reqId = provider->palette(activeTheme);
+        if (reqId != 0) {
+            m_pending_palette.insert(reqId, provider);
         }
     }
 }
 
 void AppSettings::setThemePickerIndexSilently(int index) {
-    if (m_theme_picker == nullptr) {
-        return;
-    }
     m_updating_theme_picker = true;
     m_theme_picker->setCurrentIndex(index);
     m_updating_theme_picker = false;
+    updateThemeNote();
 }
 
-void AppSettings::onPluginToggled(bool enabled) {
-    auto *toggle = qobject_cast<Toggle *>(sender());
-    if (toggle == nullptr || m_plugin_registry == nullptr) {
+void AppSettings::updateThemeNote() {
+    QString pluginId = m_theme_plugin.value(m_theme_picker->currentData().toString());
+    if (pluginId.isEmpty() || m_plugin_registry == nullptr) {
+        m_theme_note->setVisible(false);
         return;
     }
+    m_theme_note->setText(
+        TR("settings-theme-provided-by").arg(m_plugin_registry->pluginName(pluginId)));
+    m_theme_note->setVisible(true);
+}
 
-    QString id = m_toggle_plugin_ids.value(toggle);
-    if (id.isEmpty()) {
-        return;
+void AppSettings::switchToLightTheme() {
+    m_pending_theme_to_apply.clear();
+    if (auto *theme = Theme::get(); theme != nullptr) {
+        theme->setMode(ThemeMode::Light);
     }
-
-    m_plugin_registry->setEnabled(id, enabled);
+    app_set_active_theme(rust::String(LIGHT.toStdString()));
+    int index = m_theme_picker->findData(LIGHT);
+    if (index >= 0) {
+        setThemePickerIndexSilently(index);
+    }
 }
 
 void AppSettings::onThemeSelectionChanged(int index) {
-    if (m_updating_theme_picker || m_theme_picker == nullptr || index < 0) {
+    if (m_updating_theme_picker || index < 0) {
         return;
     }
+    updateThemeNote();
+    refit();
 
     QString themeName = m_theme_picker->itemData(index).toString().trimmed();
     if (themeName.isEmpty()) {
         return;
     }
 
-    if (themeName == QStringLiteral("light") || themeName == QStringLiteral("dark")) {
+    if (themeName == LIGHT || themeName == DARK) {
         if (auto *theme = Theme::get(); theme != nullptr) {
-            theme->setMode(themeName == QStringLiteral("dark") ? ThemeMode::Dark : ThemeMode::Light);
+            theme->setMode(themeName == DARK ? ThemeMode::Dark : ThemeMode::Light);
         }
         app_set_active_theme(rust::String(themeName.toStdString()));
         return;
     }
 
-    if (!m_provider_for_theme_name.contains(themeName)) {
-        return;
-    }
-    auto *provider = m_provider_for_theme_name.value(themeName);
+    auto *provider = m_provider_for_theme_name.value(themeName, nullptr);
     if (provider == nullptr) {
         return;
     }
@@ -469,7 +683,7 @@ void AppSettings::onThemeSelectionChanged(int index) {
 }
 
 void AppSettings::onLanguageSelectionChanged(int index) {
-    if (m_updating_language_picker || m_language_picker == nullptr || index < 0) {
+    if (index < 0) {
         return;
     }
     QString locale = m_language_picker->itemData(index).toString().trimmed();
@@ -477,19 +691,12 @@ void AppSettings::onLanguageSelectionChanged(int index) {
         return;
     }
     static_cast<void>(i18n::I18nManager::get()->applyLocale(locale, true));
-}
-
-void AppSettings::onScanPluginsClicked() {
-    if (m_plugin_registry != nullptr) {
-        m_plugin_registry->rescanDiscoveredPlugins();
-    }
+    m_language_note->setText(TR("settings-language-saved"));
+    m_language_note->setVisible(true);
+    refit();
 }
 
 void AppSettings::onThemeNames(ReqId req_id, const QStringList &themes) {
-    if (!m_pending_theme_list.contains(req_id) || m_theme_picker == nullptr) {
-        return;
-    }
-
     auto *provider = m_pending_theme_list.take(req_id);
     if (provider == nullptr) {
         return;
@@ -502,6 +709,7 @@ void AppSettings::onThemeNames(ReqId req_id, const QStringList &themes) {
         }
         if (!m_provider_for_theme_name.contains(themeName)) {
             m_provider_for_theme_name.insert(themeName, provider);
+            m_theme_plugin.insert(themeName, m_provider_plugin.value(provider));
         }
         if (m_theme_picker->findData(themeName) < 0) {
             m_updating_theme_picker = true;
@@ -510,20 +718,22 @@ void AppSettings::onThemeNames(ReqId req_id, const QStringList &themes) {
         }
     }
 
-    if (!m_pending_theme_to_apply.isEmpty()) {
-        int activeIndex = m_theme_picker->findData(m_pending_theme_to_apply);
-        if (activeIndex >= 0) {
-            setThemePickerIndexSilently(activeIndex);
-            auto *paletteProvider = m_provider_for_theme_name.value(m_pending_theme_to_apply, nullptr);
-            if (paletteProvider != nullptr) {
-                ReqId paletteReqId = paletteProvider->palette(m_pending_theme_to_apply);
-                if (paletteReqId != 0) {
-                    m_pending_palette.insert(paletteReqId, paletteProvider);
-                }
-            }
-            m_pending_theme_to_apply.clear();
+    if (m_pending_theme_to_apply.isEmpty()) {
+        return;
+    }
+    int activeIndex = m_theme_picker->findData(m_pending_theme_to_apply);
+    if (activeIndex < 0) {
+        return;
+    }
+    setThemePickerIndexSilently(activeIndex);
+    auto *paletteProvider = m_provider_for_theme_name.value(m_pending_theme_to_apply, nullptr);
+    if (paletteProvider != nullptr) {
+        ReqId paletteReqId = paletteProvider->palette(m_pending_theme_to_apply);
+        if (paletteReqId != 0) {
+            m_pending_palette.insert(paletteReqId, paletteProvider);
         }
     }
+    m_pending_theme_to_apply.clear();
 }
 
 void AppSettings::onThemePalette(ReqId req_id, theme::Palette palette) {
@@ -544,12 +754,7 @@ void AppSettings::onThemePalette(ReqId req_id, theme::Palette palette) {
     }
 }
 
-void AppSettings::onHostSettingsSectionsChanged() {
-    rebuildSettingSectionRows();
-}
-
-void AppSettings::onHostInstanceChanged(const QString &id) {
-    Q_UNUSED(id);
+void AppSettings::onHostInstanceChanged([[maybe_unused]] const QString &id) {
     refreshThemeProviders();
     requestThemeList();
     applyPersistedTheme();
@@ -559,30 +764,39 @@ void AppSettings::changeEvent(QEvent *event) {
     if (event->type() == QEvent::LanguageChange) {
         retranslateUi();
     }
-    qontrol::Modal::changeEvent(event);
+    catalog::StepModal::changeEvent(event);
 }
 
 void AppSettings::retranslateUi() {
-    setWindowTitle(TR("settings-title"));
-    m_title->setText(TR("settings-title"));
-    m_general_title->setText(TR("settings-general"));
-    m_theme_label->setText(TR("settings-theme"));
-    m_language_label->setText(TR("settings-language"));
-    m_plugin_manager_title->setText(TR("settings-plugin-manager"));
-    m_extension_settings_title->setText(TR("settings-extension-settings"));
-    m_scan_plugins_btn->setText(TR("settings-scan-plugins"));
-    if (m_theme_picker != nullptr) {
-        m_updating_theme_picker = true;
-        int lightIdx = m_theme_picker->findData(QStringLiteral("light"));
-        if (lightIdx >= 0) {
-            m_theme_picker->setItemText(lightIdx, TR("settings-theme-light"));
-        }
-        int darkIdx = m_theme_picker->findData(QStringLiteral("dark"));
-        if (darkIdx >= 0) {
-            m_theme_picker->setItemText(darkIdx, TR("settings-theme-dark"));
-        }
-        m_updating_theme_picker = false;
-    }
+    setStepTitle(m_main_step, TR("settings-title"));
+    setStepTitle(m_disable_step, TR("settings-disable-title"));
+
+    m_general->header()->setLabel(TR("settings-general"));
+    m_theme_field->setFieldLabel(m_theme_picker, TR("settings-theme"));
+    m_language_field->setFieldLabel(m_language_picker, TR("settings-language"));
+    m_updating_theme_picker = true;
+    m_theme_picker->setItemText(m_theme_picker->findData(LIGHT), TR("settings-theme-light"));
+    m_theme_picker->setItemText(m_theme_picker->findData(DARK), TR("settings-theme-dark"));
+    m_updating_theme_picker = false;
+    updateThemeNote();
+    m_language_note->setText(TR("settings-language-saved"));
+
+    // Helper buttons keep the language they were built in: retitle them here.
+    m_plugins->header()->setLabel(TR("settings-plugin-manager"));
+    m_scan_btn->setText(TR("btn-scan-for-plugins"));
+    m_scanning_btn->setText(TR("btn-scanning"));
+    m_registry_notice->setTitle(TR("settings-registry-unavailable"));
+    m_registry_notice->setText(TR("settings-registry-unavailable-text"));
+    m_plugins_empty->setTitle(TR("settings-no-plugin"));
+    m_plugins_empty->setSubtitle(TR("settings-no-plugin-text"));
+    m_scanning->setTitle(TR("settings-scanning-plugins"));
+    m_extensions->header()->setLabel(TR("settings-extension-settings"));
+
+    m_disable_actions->setBack(catalog::ModalActions::Back::Back);
+    m_disable_btn->setText(TR("btn-disable-plugin"));
+    m_section_actions->setBack(catalog::ModalActions::Back::AllSettings);
+    m_done_btn->setText(TR("btn-done"));
+
     rebuildPluginRows();
     rebuildSettingSectionRows();
 }

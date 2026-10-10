@@ -74,7 +74,6 @@ coins-type => "Type" => "Typ"
 coins-unconfirmed => "Unconfirmed:" => "Unbestaetigt:"
 coins-unconfirmed-no-colon => "Unconfirmed" => "Unbestaetigt"
 coins-value => "Value" => "Wert"
-common-apply => "Apply" => "Anwenden"
 common-broadcast => "Broadcast" => "Senden"
 common-cancel => "Cancel" => "Abbrechen"
 common-clear => "Clear" => "Leeren"
@@ -642,6 +641,26 @@ settings-capabilities-template
 => "Tweaks Only: %1\nFull Basic: %2\nFull + Dust Filter: %3\nCut-Through + Dust Filter: %4";;
 settings-connection => "Connection" => "Verbindung"
 settings-connection-failed => "Connection Failed" => "Verbindung fehlgeschlagen"
+settings-disable-account-one => "1 open account closes" => "NONE"
+settings-disable-account-one-text
+=> "%1 comes from this plugin and will close. Enable the plugin again to reopen it."
+=> "NONE";;
+settings-disable-accounts => "%1 open accounts close" => "NONE"
+settings-disable-accounts-text
+=> "%1 come from this plugin and will close. Enable the plugin again to reopen them."
+=> "NONE";;
+settings-disable-no-account => "No open account uses this plugin." => "NONE"
+settings-disable-question
+=> "Disable “%1” (%2)? Silent stops all of its modules and unloads it."
+=> "NONE";;
+settings-disable-refused => "Could not disable %1" => "NONE"
+settings-disable-refused-text
+=> "The plugin refused to unload. It stays enabled. Close its accounts, then try again."
+=> "NONE";;
+settings-disable-themes
+=> "Its themes (%1) are removed. If one is in use, Silent switches to Light."
+=> "NONE";;
+settings-disable-title => "Disable Plugin" => "NONE"
 settings-electrum-empty => "Electrum address is empty" => "Electrum-Adresse ist leer"
 settings-electrum-server => "Electrum Server:" => "Electrum-Server:"
 settings-electrum-test-failed
@@ -656,33 +675,47 @@ settings-failed-start-scanner
 => "Failed to start scanner";;
 settings-general => "General" => "Allgemein"
 settings-language => "Language:" => "Sprache:"
-settings-language-applied => "Language applied." => "Sprache angewendet."
-settings-language-saved-restart
-=> "Language saved. Restart may be required."
-=> "Language saved. Restart may be required.";;
+settings-language-saved
+=> "Language saved. Restart Silent to apply it everywhere."
+=> "NONE";;
 settings-network => "Network:" => "Netzwerk:"
 settings-network-mismatch => "Network Mismatch" => "Netzwerkabweichung"
 settings-network-mismatch-message
 => "Backend network is %1 but account network is %2"
 => "Backend network is %1 but account network is %2";;
 settings-no-account-loaded => "No account loaded" => "Kein Konto geladen"
+settings-no-plugin => "No Plugin Found" => "NONE"
+settings-no-plugin-text
+=> "Put a plugin and its metadata file in ~/.silent/plugins/, then scan. Built-in modules are not listed here."
+=> "NONE";;
 settings-placeholder-blindbit
 => "https://blindbit.example.com"
 => "https://blindbit.example.com";;
 settings-placeholder-electrum
 => "host:port (e.g. 127.0.0.1:50001)"
 => "host:port (e.g. 127.0.0.1:50001)";;
+settings-plugin-found-one => "1 new plugin found." => "NONE"
 settings-plugin-manager => "Plugin Manager" => "Plugin-Verwaltung"
+settings-plugin-no-library => "No plugin library found in its folder." => "NONE"
+settings-plugin-not-silent => "This library is not a Silent plugin." => "NONE"
+settings-plugins-found => "%1 new plugins found." => "NONE"
 settings-registry-unavailable
 => "Plugin registry unavailable"
 => "Plugin-Registry nicht verfugbar";;
-settings-scan-plugins => "Scan for plugins" => "Nach Plugins suchen"
+settings-registry-unavailable-text
+=> "Silent could not read the plugin folder ~/.silent/plugins/. Check that it exists and is readable, then reopen Settings."
+=> "NONE";;
+settings-scanning-plugins => "Scanning for plugins…" => "NONE"
+settings-section-belongs
+=> "These settings belong to %1. Changes apply when you leave this page."
+=> "NONE";;
 settings-section-fallback => "Section %1" => "Abschnitt %1"
-settings-section-open => "Open" => "Open"
+settings-section-from => "From %1." => "NONE"
 settings-status => "Status:" => "Status:"
 settings-theme => "Theme:" => "Thema:"
 settings-theme-dark => "Dark" => "Dunkel"
 settings-theme-light => "Light" => "Hell"
+settings-theme-provided-by => "Provided by %1." => "NONE"
 settings-title => "Settings" => "Einstellungen"
 sp-create-account => "Create New Account" => "Neues Konto erstellen"
 sp-instance-not-found

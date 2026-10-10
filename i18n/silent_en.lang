@@ -12,7 +12,6 @@ coins-type => "Type"
 coins-unconfirmed => "Unconfirmed:"
 coins-unconfirmed-no-colon => "Unconfirmed"
 coins-value => "Value"
-common-apply => "Apply"
 common-cancel => "Cancel"
 common-clear => "Clear"
 common-close => "Close"
@@ -138,8 +137,6 @@ settings-failed-start-electrum => "Failed to start electrum"
 settings-failed-start-scanner => "Failed to start scanner"
 settings-general => "General"
 settings-language => "Language:"
-settings-language-applied => "Language applied."
-settings-language-saved-restart => "Language saved. Restart may be required."
 settings-network => "Network:"
 settings-network-mismatch => "Network Mismatch"
 settings-network-mismatch-message => "Backend network is %1 but account network is %2"
@@ -148,9 +145,7 @@ settings-placeholder-blindbit => "https://blindbit.example.com"
 settings-placeholder-electrum => "host:port (e.g. 127.0.0.1:50001)"
 settings-plugin-manager => "Plugin Manager"
 settings-registry-unavailable => "Plugin registry unavailable"
-settings-scan-plugins => "Scan for plugins"
 settings-section-fallback => "Section %1"
-settings-section-open => "Open"
 settings-status => "Status:"
 settings-theme => "Theme:"
 settings-theme-dark => "Dark"
@@ -948,3 +943,55 @@ keys-register-account-refused => "The device did not register this account."
 keys-register-account-failed => "Could not register this account on the device: %1"
 
 keys-check-account-failed => "Could not check this account on the device: %1"
+
+settings-theme-provided-by => "Provided by %1."
+
+settings-language-saved => "Language saved. Restart Silent to apply it everywhere."
+
+settings-registry-unavailable-text
+=> "Silent could not read the plugin folder ~/.silent/plugins/. Check that it exists and is readable, then reopen Settings.";;
+
+settings-plugin-found-one => "1 new plugin found."
+
+settings-plugins-found => "%1 new plugins found."
+
+settings-no-plugin => "No Plugin Found"
+
+settings-no-plugin-text
+=> "Put a plugin and its metadata file in ~/.silent/plugins/, then scan. Built-in modules are not listed here.";;
+
+settings-scanning-plugins => "Scanning for plugins…"
+
+settings-disable-title => "Disable Plugin"
+
+settings-disable-question
+=> "Disable “%1” (%2)? Silent stops all of its modules and unloads it.";;
+
+settings-disable-account-one => "1 open account closes"
+
+settings-disable-accounts => "%1 open accounts close"
+
+settings-disable-account-one-text
+=> "%1 comes from this plugin and will close. Enable the plugin again to reopen it.";;
+
+settings-disable-accounts-text
+=> "%1 come from this plugin and will close. Enable the plugin again to reopen them.";;
+
+settings-disable-no-account => "No open account uses this plugin."
+
+settings-disable-themes
+=> "Its themes (%1) are removed. If one is in use, Silent switches to Light.";;
+
+settings-disable-refused => "Could not disable %1"
+
+settings-disable-refused-text
+=> "The plugin refused to unload. It stays enabled. Close its accounts, then try again.";;
+
+settings-section-from => "From %1."
+
+settings-section-belongs
+=> "These settings belong to %1. Changes apply when you leave this page.";;
+
+settings-plugin-no-library => "No plugin library found in its folder."
+
+settings-plugin-not-silent => "This library is not a Silent plugin."

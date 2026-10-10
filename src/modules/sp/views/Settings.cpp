@@ -10,7 +10,6 @@
 #include "catalog/form/FieldGroup.h"
 #include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
-#include "i18n/I18nManager.h"
 #include "i18n/Tr.h"
 #include "views/utils.h"
 #include <Qontrol>
@@ -99,26 +98,6 @@ void Settings::init() {
     m_info_height_label = new Label("--");
     m_capabilities = new Label("--");
 
-    m_language_selector = new ComboBox;
-    m_language_selector->addItem("English", "en");
-    m_language_selector->addItem("Francais", "fr");
-    m_language_selector->addItem("Italiano", "it");
-    m_language_selector->addItem("Deutsch", "de");
-    m_language_selector->addItem("Portugues", "pt");
-    m_language_selector->addItem("Espanol", "es");
-    m_language_selector->setWidth(Size::M);
-
-    int localeIndex = m_language_selector->findData(i18n::I18nManager::get()->selectedLocale());
-    if (localeIndex == -1) {
-        localeIndex = m_language_selector->findData("en");
-    }
-    if (localeIndex != -1) {
-        m_language_selector->setCurrentIndex(localeIndex);
-    }
-
-    m_apply_language_btn = new Button;
-    m_language_status_label = new Label;
-
     m_save_btn = catalog::btnSaveSettings();
     m_connect_blindbit_btn = catalog::btnConnectBlindbit();
     m_disconnect_blindbit_btn = catalog::btnDisconnectBlindbit();
@@ -159,8 +138,6 @@ void Settings::doConnect() {
     connect(m_test_electrum_btn, &QPushButton::clicked, this, &Settings::onActionTestElectrum,
             qontrol::UNIQUE);
     connect(m_test_ok_electrum_btn, &QPushButton::clicked, this, &Settings::onActionTestElectrum,
-            qontrol::UNIQUE);
-    connect(m_apply_language_btn, &QPushButton::clicked, this, &Settings::onActionApplyLanguage,
             qontrol::UNIQUE);
     connect(m_electrum_url_input, &QLineEdit::textChanged, this, &Settings::invalidateElectrumTest,
             qontrol::UNIQUE);
@@ -453,13 +430,6 @@ void Settings::onUpdateElectrumToggleButton() {
     updateButtons();
 }
 
-void Settings::onActionApplyLanguage() {
-    auto locale = m_language_selector->currentData().toString();
-    bool ok = i18n::I18nManager::get()->applyLocale(locale, true);
-    m_language_status_label->setText(ok ? TR("settings-language-applied")
-                                        : TR("settings-language-saved-restart"));
-}
-
 void Settings::view() {
     auto *urlControl = (new qontrol::Row)
                            ->spacing(resolve(Spacing::XS))
@@ -526,8 +496,6 @@ void Settings::changeEvent(QEvent *event) {
 void Settings::retranslateUi() {
     m_blindbit_url_input->setPlaceholderText(TR("settings-placeholder-blindbit"));
     m_electrum_url_input->setPlaceholderText(TR("settings-placeholder-electrum"));
-
-    m_apply_language_btn->setText(TR("common-apply"));
 
     m_network_selector->setItemText(0, TR("network-regtest"));
     m_network_selector->setItemText(1, TR("network-signet"));

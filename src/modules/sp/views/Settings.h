@@ -43,7 +43,6 @@ public slots:
     void onActionToggleElectrum();
     void onActionTestBackend();
     void onActionTestElectrum();
-    void onActionApplyLanguage();
     void onUpdateBlindbitToggleButton(bool running);
     void onUpdateElectrumToggleButton();
     void onScanProgress(uint32_t height, uint32_t tip);
@@ -79,7 +78,6 @@ private:
     catalog::Input *m_blindbit_url_input = nullptr;
     catalog::Input *m_electrum_url_input = nullptr;
     catalog::ComboBox *m_network_selector = nullptr;
-    catalog::ComboBox *m_language_selector = nullptr;
     catalog::Button *m_save_btn = nullptr;
     catalog::Button *m_connect_blindbit_btn = nullptr;
     catalog::Button *m_disconnect_blindbit_btn = nullptr;
@@ -91,11 +89,9 @@ private:
     catalog::Button *m_test_electrum_btn = nullptr;
     catalog::Button *m_testing_electrum_btn = nullptr;
     catalog::Button *m_test_ok_electrum_btn = nullptr;
-    catalog::Button *m_apply_language_btn = nullptr;
     catalog::Label *m_info_network_label = nullptr;
     catalog::Label *m_info_height_label = nullptr;
     catalog::Label *m_capabilities = nullptr;
-    catalog::Label *m_language_status_label = nullptr;
     QString m_current_url;
     QString m_current_electrum_url;
     Network m_current_network = Network::Signet;

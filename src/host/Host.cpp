@@ -386,6 +386,15 @@ QList<Host::SettingSectionView> HostImpl::settingSections() const {
     return sections;
 }
 
+auto HostImpl::settingSectionModule(SectionId section) const -> IModule * {
+    assertGuiThread();
+    auto *owner = m_sections.value(section).owner;
+    if (owner == nullptr) {
+        return nullptr;
+    }
+    return m_instance_owner.value(owner->id(), nullptr);
+}
+
 void HostImpl::onHostedTabCloseRequested(QWidget *content) {
     assertGuiThread();
     IInstance *owner = nullptr;

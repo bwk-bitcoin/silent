@@ -44,6 +44,8 @@ public:
     void removeInstance(const QString &id);
     [[nodiscard]] IModule *instanceOwner(const QString &id) const;
     [[nodiscard]] QList<SettingSectionView> settingSections() const override;
+    // The module whose instance added the section.
+    [[nodiscard]] auto settingSectionModule(SectionId section) const -> IModule *;
 
 signals:
     // Emitted by the matching public method so the work always lands on the GUI

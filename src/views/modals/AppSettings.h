@@ -1,84 +1,141 @@
 #pragma once
 
+#include "catalog/containers/StepModal.h"
+#include "interfaces/host.h"
 #include "interfaces/types.h"
 #include "theme/Palette.h"
 #include <QHash>
 #include <QList>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 #include <QWidget>
-#include <Qontrol>
-#include <qevent.h>
+
+class QEvent;
 
 namespace catalog {
 class Button;
 class ComboBox;
+class EmptyState;
+class FieldGroup;
+class FieldNote;
 class Label;
-class Toggle;
-}
+class ModalActions;
+class ModalStatus;
+class Notice;
+class Section;
+class SelectRow;
+class Separator;
+} // namespace catalog
 
 class PluginRegistry;
-class Host;
-class HostEvents;
 class IThemeProvider;
 
 namespace modal {
 
-class AppSettings : public qontrol::Modal {
+// The global Settings: General, Plugin Manager and Extension Settings on the main
+// step; disabling a plugin and a module's settings section replace it in place.
+class AppSettings : public catalog::StepModal {
     Q_OBJECT
 
 public:
-    explicit AppSettings(QWidget *parent = nullptr);
+    AppSettings();
+    ~AppSettings() override;
 
 public slots:
-    void onPluginToggled(bool enabled);
     void onThemeSelectionChanged(int index);
     void onLanguageSelectionChanged(int index);
-    void onScanPluginsClicked();
+    void scanPlugins();
+    void onPluginToggled(bool enabled);
+    void disablePlugin();
+    void showMain();
     void onThemeNames(ReqId req_id, const QStringList &themes);
     void onThemePalette(ReqId req_id, theme::Palette palette);
     void onHostSettingsSectionsChanged();
     void onOpenSectionClicked();
+    void closeSection();
     void onHostInstanceChanged(const QString &id);
+    void rebuildPluginRows();
+    void refit();
 
 protected:
     void init();
     void doConnect();
     void view();
-    void rebuildPluginRows();
+    auto buildGeneral() -> QWidget *;
+    auto buildPlugins() -> QWidget *;
+    auto buildDisable() -> QWidget *;
+    auto buildSection() -> QWidget *;
+    auto pluginRow(const QString &id, const QString &meta) -> catalog::SelectRow *;
     void rebuildSettingSectionRows();
+    [[nodiscard]] auto sectionModuleName(Host::SectionId section) const -> QString;
+    void showDisable(const QString &id);
+    void setScanning(bool scanning);
     void refreshThemeProviders();
     void requestThemeList();
     void applyPersistedTheme();
     void setThemePickerIndexSilently(int index);
+    void updateThemeNote();
+    void switchToLightTheme();
     void changeEvent(QEvent *event) override;
     void retranslateUi();
 
 private:
-    catalog::Label *m_title = nullptr;
-    catalog::Label *m_general_title = nullptr;
-    catalog::Label *m_theme_label = nullptr;
-    catalog::Label *m_language_label = nullptr;
-    catalog::Label *m_plugin_manager_title = nullptr;
-    catalog::Label *m_extension_settings_title = nullptr;
-    catalog::Button *m_scan_plugins_btn = nullptr;
+    int m_main_step = 0;
+    int m_disable_step = 0;
+    int m_section_step = 0;
+
+    catalog::Section *m_general = nullptr;
+    catalog::FieldGroup *m_theme_field = nullptr;
+    catalog::FieldGroup *m_language_field = nullptr;
     catalog::ComboBox *m_theme_picker = nullptr;
     catalog::ComboBox *m_language_picker = nullptr;
+    catalog::FieldNote *m_theme_note = nullptr;
+    catalog::FieldNote *m_language_note = nullptr;
+
+    catalog::Section *m_plugins = nullptr;
+    catalog::Button *m_scan_btn = nullptr;
+    catalog::Button *m_scanning_btn = nullptr;
+    catalog::Notice *m_registry_notice = nullptr;
+    catalog::Notice *m_plugin_notice = nullptr;
+    catalog::Label *m_scan_result = nullptr;
     qontrol::Column *m_plugins_column = nullptr;
+    catalog::EmptyState *m_plugins_empty = nullptr;
+    catalog::ModalStatus *m_scanning = nullptr;
+
+    catalog::Separator *m_extensions_separator = nullptr;
+    catalog::Section *m_extensions = nullptr;
     qontrol::Column *m_section_column = nullptr;
-    QWidget *m_extension_section = nullptr;
+
+    catalog::Label *m_disable_question = nullptr;
+    catalog::Notice *m_disable_accounts = nullptr;
+    catalog::Notice *m_disable_themes = nullptr;
+    catalog::ModalActions *m_disable_actions = nullptr;
+    catalog::Button *m_disable_btn = nullptr;
+
+    catalog::Label *m_section_text = nullptr;
+    qontrol::Column *m_section_slot = nullptr;
+    catalog::ModalActions *m_section_actions = nullptr;
+    catalog::Button *m_done_btn = nullptr;
+    // The module owns its section widget: it is only lent to the slot while open.
+    QPointer<QWidget> m_open_section;
+    Host::SectionId m_open_section_id = 0;
+
     PluginRegistry *m_plugin_registry = nullptr;
     Host *m_host = nullptr;
     HostEvents *m_host_events = nullptr;
-    QList<QWidget *> m_plugin_rows;
-    QList<QWidget *> m_setting_section_rows;
-    QHash<catalog::Toggle *, QString> m_toggle_plugin_ids;
+    QHash<QString, QString> m_plugin_meta;
+    QString m_disabling_id;
+    QString m_unloading_id;
+    bool m_scanning_plugins = false;
+
     QList<IThemeProvider *> m_theme_providers;
+    QHash<IThemeProvider *, QString> m_provider_plugin;
     QHash<ReqId, IThemeProvider *> m_pending_theme_list;
     QHash<ReqId, IThemeProvider *> m_pending_palette;
     QHash<QString, IThemeProvider *> m_provider_for_theme_name;
+    QHash<QString, QString> m_theme_plugin;
     bool m_updating_theme_picker = false;
-    bool m_updating_language_picker = false;
     QString m_pending_theme_to_apply;
 };
 
