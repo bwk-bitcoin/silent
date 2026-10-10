@@ -2,6 +2,7 @@
 
 #include "theme/Theme.h"
 
+#include <QFontMetrics>
 #include <QLabel>
 #include <QStyle>
 #include <Qontrol>
@@ -19,13 +20,7 @@ Badge::Badge(Role role, QWidget *parent) : QFrame(parent), m_role(role) {
     m_icon->setVisible(false);
     m_text = new QLabel(this);
 
-    const auto &font = Theme::get()->fontPalette().caption;
-    auto badgeFont = m_text->font();
-    badgeFont.setFamily(font.family);
-    badgeFont.setPointSize(font.size);
-    badgeFont.setWeight(QFont::DemiBold);
-    badgeFont.setLetterSpacing(QFont::PercentageSpacing, 102); // design 0.02em tracking
-    m_text->setFont(badgeFont);
+    m_text->setFont(textFont());
 
     (new qontrol::Row)
         ->margins(metric::BADGE_PADDING_H, metric::BADGE_PADDING_V, metric::BADGE_PADDING_H,
@@ -38,6 +33,7 @@ Badge::Badge(Role role, QWidget *parent) : QFrame(parent), m_role(role) {
         ->into(this);
 
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    setFixedHeight(pillHeight());
     applyRole();
 }
 
@@ -77,6 +73,20 @@ void Badge::setWidth(PillWidth width) {
     setFixedWidth(resolve(width));
 }
 
+auto Badge::textFont() -> QFont {
+    const auto &font = Theme::get()->fontPalette().caption;
+    QFont badgeFont;
+    badgeFont.setFamily(font.family);
+    badgeFont.setPointSize(font.size);
+    badgeFont.setWeight(QFont::DemiBold);
+    badgeFont.setLetterSpacing(QFont::PercentageSpacing, 102); // design 0.02em tracking
+    return badgeFont;
+}
+
+auto Badge::pillHeight() -> int {
+    return QFontMetrics(textFont()).height() + (2 * metric::BADGE_PADDING_V) + 2;
+}
+
 void Badge::applyRole() {
     switch (m_role) {
     case Role::Success:
@@ -98,6 +108,8 @@ void Badge::applyRole() {
 }
 
 auto Badge::qss(const Palette &p) -> QString {
+    // Qt paints square corners when the radius exceeds half the height, so the pill
+    // has a fixed height and a radius of exactly half of it.
     return QString(
                "QFrame[class=\"badge\"] { border: 1px solid transparent; "
                "border-radius: %1px; }"
@@ -111,7 +123,7 @@ auto Badge::qss(const Palette &p) -> QString {
                "QFrame[class=\"badge\"][role=\"neutral\"] QLabel { color: %13; }"
                "QFrame[class=\"badge\"][role=\"off\"] { background: %14; border-color: %15; }"
                "QFrame[class=\"badge\"][role=\"off\"] QLabel { color: %16; }")
-        .arg(radius::BADGE)
+        .arg(pillHeight() / 2)
         .arg(qssColor(p.badgeSuccessBg))
         .arg(qssColor(p.badgeSuccessBorder))
         .arg(p.badgeSuccessText.name())

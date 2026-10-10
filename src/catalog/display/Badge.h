@@ -27,11 +27,14 @@ public:
     void setIcon(const QIcon &icon);
     void setWidth(PillWidth width);
     static auto qss(const Palette &p) -> QString;
+    [[nodiscard]] static auto pillHeight() -> int;
 
 protected:
     void applyRole();
 
 private:
+    static auto textFont() -> QFont;
+
     Role m_role = Role::Neutral;
     QLabel *m_icon = nullptr;
     QLabel *m_text = nullptr;

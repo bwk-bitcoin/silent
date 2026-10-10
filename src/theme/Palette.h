@@ -91,7 +91,6 @@ const int COMBO = 8;
 const int ICON = 4;
 const int TAB = 4;
 const int CHECKBOX = 4;
-const int BADGE = 999;
 const int QR_CARD = 12;
 
 } // namespace radius
