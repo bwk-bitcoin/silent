@@ -214,6 +214,7 @@ void Table::rebuild() {
     if (m_header_visible && !m_columns.empty()) {
         m_header = buildHeader();
         m_root->insert(0, m_header);
+        m_header->show();
     }
 
     for (int i = 0; i < m_rows.size(); ++i) {

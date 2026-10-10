@@ -82,20 +82,26 @@ void PickerStep::setRows(const QString &lead, const QList<FlowRow> &rows,
     m_column->clear();
     m_column->spacing(resolve(Spacing::M));
 
+    // Each part added to the shown step is shown at once, or the step would be measured
+    // without it until the next event loop pass.
     if (rows.isEmpty()) {
-        m_column->push(new catalog::EmptyState(icon::key, TR("flow-no-signer-title"), empty));
+        auto *emptyState = new catalog::EmptyState(icon::key, TR("flow-no-signer-title"), empty);
+        m_column->push(emptyState);
+        emptyState->show();
     } else {
         if (!lead.isEmpty()) {
             auto *leadLabel = new catalog::Label(lead, catalog::LabelRole::Body);
             leadLabel->setTone(catalog::LabelTone::Secondary);
             leadLabel->setWordWrap(true);
             m_column->push(leadLabel);
+            leadLabel->show();
         }
         auto *rowsColumn = (new qontrol::Column)->spacing(resolve(Spacing::S));
         for (int index = 0; index < rows.size(); ++index) {
             rowsColumn->push(buildRow(rows.at(index), index));
         }
         m_column->push(rowsColumn);
+        rowsColumn->show();
     }
 
     if (!others.isEmpty()) {
@@ -107,6 +113,7 @@ void PickerStep::setRows(const QString &lead, const QList<FlowRow> &rows,
             othersColumn->push(buildOtherRow(device, other_sub));
         }
         m_column->push(othersColumn);
+        othersColumn->show();
     }
 }
 

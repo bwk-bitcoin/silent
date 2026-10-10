@@ -310,6 +310,9 @@ void CreateAccount::populateKeys() {
         connect(row, &catalog::SelectRow::clicked, this, &CreateAccount::onKeyClicked,
                 qontrol::UNIQUE);
         m_keys_column->push(row);
+        // A row added to a shown column stays hidden until the event loop shows it,
+        // so the step would be measured without it.
+        row->show();
         m_key_rows.append(row);
     }
 
@@ -346,6 +349,7 @@ void CreateAccount::populateKeys() {
                 qontrol::UNIQUE);
         empty->setAction(openKeys);
         m_keys_column->push(empty);
+        empty->show();
     }
 
     m_fetch_row->setVisible(!m_keys.isEmpty());

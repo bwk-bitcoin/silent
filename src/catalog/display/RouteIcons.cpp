@@ -55,6 +55,8 @@ void RouteIcons::setRoutes(const QList<KeyRouteKind> &routes) {
         glyph->setToolTip(index == 0 ? TR("route-primary-tooltip").arg(routeLabel(kind))
                                      : routeLabel(kind));
         m_row->push(glyph);
+        // Added to a shown row, it would only show on the next event loop pass.
+        glyph->show();
     }
 }
 
