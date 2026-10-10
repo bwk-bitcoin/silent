@@ -262,7 +262,7 @@ private:
     // The network the Rust manager holds. network() answers from it rather than from
     // ::hwi_config_network(), which is read from disk and can drift from the manager
     // (a failed config write, another process), so a sealed key always matches.
-    static Network s_network;
+    static Network s_network; // NOLINT(readability-identifier-naming)
     // Module-supplied signers (hot, QR, SD card), parented to this module and
     // deleted with it. Reused while a fingerprint's chosen route stays the same;
     // replaced, never mutated, when it changes.
