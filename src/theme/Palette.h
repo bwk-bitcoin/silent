@@ -117,6 +117,8 @@ const int TABLE_CELL_PAD = 7;
 const int BADGE_PADDING_H = 11;
 const int BADGE_PADDING_V = 5;
 const int BADGE_ICON_SIZE = 14;
+const int ROUTE_ICON_SIZE = 16;
+const int SCAN_PROGRESS_HEIGHT = 6;
 
 } // namespace metric
 

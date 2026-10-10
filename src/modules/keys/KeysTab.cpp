@@ -2,7 +2,6 @@
 
 #include "KeysModule.h"
 
-#include "RouteDisplay.h"
 #include "modals/AddKey.h"
 #include "modals/DeviceModal.h"
 #include "modals/KeyModal.h"
@@ -14,6 +13,7 @@
 #include "catalog/containers/Separator.h"
 #include "catalog/display/Badge.h"
 #include "catalog/display/Label.h"
+#include "catalog/display/RouteIcons.h"
 #include "catalog/form/FormRow.h"
 #include "catalog/inputs/ComboBox.h"
 #include "i18n/Tr.h"
@@ -22,7 +22,6 @@
 #include "theme/Icon.h"
 #include "views/utils.h"
 
-#include <QLabel>
 #include <QStringList>
 #include <QVariant>
 
@@ -35,6 +34,7 @@ using catalog::ComboBox;
 using catalog::FormRow;
 using catalog::Label;
 using catalog::LabelRole;
+using catalog::RouteIcons;
 
 namespace keys {
 
@@ -229,14 +229,12 @@ void KeysTab::rebuildKeys() {
         row->setProperty(K_FINGERPRINT, fingerprint);
         connect(row, &catalog::SelectRow::clicked, this, &KeysTab::onKeyClicked, qontrol::UNIQUE);
 
-        auto *routeStrip = new qontrol::Row;
+        QList<KeyRouteKind> routes;
         for (const auto &routeKind : keyInfo.routes) {
-            auto *routeIconLabel = new QLabel;
-            routeIconLabel->setPixmap(routeIcon(routeKind).pixmap(metric::SELECT_ROW_ICON_SIZE,
-                                                                  metric::SELECT_ROW_ICON_SIZE));
-            routeIconLabel->setToolTip(routeLabel(routeKind));
-            routeStrip->push(routeIconLabel);
+            routes.append(routeKind);
         }
+        auto *routeIcons = new RouteIcons;
+        routeIcons->setRoutes(routes);
 
         Badge *statusBadge = nullptr;
         if (keyInfo.is_connected) {
@@ -246,7 +244,7 @@ void KeysTab::rebuildKeys() {
         }
 
         auto *keyRow =
-            (new qontrol::Row)->push(row)->pushSpacer()->push(routeStrip)->push(statusBadge);
+            (new qontrol::Row)->push(row)->pushSpacer()->push(routeIcons)->push(statusBadge);
         m_key_column->push(keyRow)->pushSpacer(resolve(Spacing::S));
     }
 }

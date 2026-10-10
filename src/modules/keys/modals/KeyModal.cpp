@@ -3,7 +3,6 @@
 #include "PasswordPrompt.h"
 
 #include "modules/keys/KeysModule.h"
-#include "modules/keys/RouteDisplay.h"
 
 #include "AppController.h"
 #include "catalog/Button.h"
@@ -12,6 +11,7 @@
 #include "catalog/containers/Separator.h"
 #include "catalog/display/Badge.h"
 #include "catalog/display/Label.h"
+#include "catalog/display/RouteIcons.h"
 #include "catalog/form/FormRow.h"
 #include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
@@ -266,7 +266,8 @@ void KeyModal::rebuildRoutes() {
 
         auto *iconLabel = new QLabel;
         iconLabel->setPixmap(
-            routeIcon(kind).pixmap(metric::SELECT_ROW_ICON_SIZE, metric::SELECT_ROW_ICON_SIZE));
+            catalog::routeIcon(kind)(IconColor::Accent)
+                .pixmap(metric::SELECT_ROW_ICON_SIZE, metric::SELECT_ROW_ICON_SIZE));
 
         auto *upBtn = new Button(ButtonRole::InlineIcon);
         upBtn->setIcon(icon::chevronLeft(IconColor::Accent));
@@ -293,7 +294,7 @@ void KeyModal::rebuildRoutes() {
 
         auto *row = (new qontrol::Row)
                         ->push(iconLabel)
-                        ->push(new Label(routeLabel(kind), LabelRole::Body))
+                        ->push(new Label(catalog::routeLabel(kind), LabelRole::Body))
                         ->pushSpacer();
         if (index == 0) {
             row->push(new Badge(TR("keys-route-primary"), Badge::Role::Success));

@@ -4,6 +4,7 @@
 #include "catalog/SelectRow.h"
 #include "catalog/containers/Separator.h"
 #include "catalog/display/Label.h"
+#include "catalog/display/RouteIcons.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/signer.h"
@@ -57,22 +58,6 @@ void SignerPicker::onRowClicked() {
     accept();
 }
 
-auto SignerPicker::routeIcon(KeyRouteKind route) -> QIcon {
-    switch (route) {
-    case KeyRouteKind::Usb:
-        return icon::usb(IconColor::Accent);
-    case KeyRouteKind::Qr:
-        return icon::qr(IconColor::Accent);
-    case KeyRouteKind::SdCard:
-        return icon::sdCard(IconColor::Accent);
-    case KeyRouteKind::Hot:
-        return icon::key(IconColor::Accent);
-    case KeyRouteKind::Unknown:
-    default:
-        return icon::key(IconColor::Accent);
-    }
-}
-
 auto SignerPicker::reasonText(KeyUnusableReason reason) -> QString {
     switch (reason) {
     case KeyUnusableReason::NotRegistered:
@@ -96,7 +81,7 @@ auto SignerPicker::buildCandidateRow(const SigningCandidate &candidate) const
     QString alias = KeysModule::toQt(candidate.alias);
 
     auto *row = new catalog::SelectRow;
-    row->setIcon(routeIcon(candidate.route));
+    row->setIcon(catalog::routeIcon(candidate.route)(IconColor::Accent));
     row->setTitle(alias.isEmpty() ? fingerprint : alias);
 
     bool unusable = !candidate.can_sign || candidate.unusable != KeyUnusableReason::None;

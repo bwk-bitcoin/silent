@@ -1,8 +1,8 @@
 #include "RouteSigner.h"
 
 #include "modules/keys/KeysModule.h"
-#include "modules/keys/RouteDisplay.h"
 
+#include "catalog/display/RouteIcons.h"
 #include "i18n/Tr.h"
 
 #include <QMap>
@@ -306,7 +306,7 @@ void RouteSigner::onDeferredInfo(ReqId req_id) {
     QMap<QString, QString> details;
     details.insert(QStringLiteral("alias"), m_alias);
     details.insert(QStringLiteral("fingerprint"), m_fingerprint);
-    details.insert(QStringLiteral("route"), routeLabel(m_route));
+    details.insert(QStringLiteral("route"), catalog::routeLabel(m_route));
     details.insert(QStringLiteral("brand"), brand());
     details.insert(QStringLiteral("model"), model());
     details.insert(QStringLiteral("serial"), serial());

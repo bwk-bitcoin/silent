@@ -220,13 +220,13 @@ keys-connected => "Connected"
 
 keys-offline => "Offline"
 
-keys-route-hot => "Hot key"
+keys-route-hot => "Hot Key"
 
 keys-route-usb => "USB"
 
-keys-route-qr => "QR code"
+keys-route-qr => "QR Code"
 
-keys-route-sd => "SD card"
+keys-route-sd => "SD Card"
 
 keys-device-title => "Device"
 
@@ -628,3 +628,11 @@ pill-unloading => "Unloading…"
 btn-copied => "Copied"
 
 btn-awaiting-payment => "Addr. awaiting payment (%1)"
+
+route-primary-tooltip => "%1 · Primary"
+
+scan-progress-waiting => "Waiting for the first part…"
+
+scan-progress-done => "All %1 parts received"
+
+scan-progress-parts => "%1 of %2 parts"

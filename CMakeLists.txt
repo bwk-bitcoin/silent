@@ -107,8 +107,6 @@ set(SILENT_APP_SOURCES
     src/modules/keys/KeysTab.cpp
     src/modules/keys/QrRoute.h
     src/modules/keys/QrRoute.cpp
-    src/modules/keys/RouteDisplay.h
-    src/modules/keys/RouteDisplay.cpp
     src/modules/keys/signers/RouteSigner.h
     src/modules/keys/signers/RouteSigner.cpp
     src/modules/keys/signers/OfflineSigner.h
@@ -186,6 +184,8 @@ set(SILENT_APP_SOURCES
     src/catalog/containers/Card.cpp
     src/catalog/display/Badge.h
     src/catalog/display/Badge.cpp
+    src/catalog/display/RouteIcons.h
+    src/catalog/display/RouteIcons.cpp
     src/catalog/form/ValidationMark.h
     src/catalog/form/ValidationMark.cpp
     src/catalog/form/ValidatedInput.h
@@ -220,6 +220,8 @@ set(SILENT_APP_SOURCES
     src/catalog/inputs/Stepper.cpp
     src/catalog/feedback/ModalStatus.h
     src/catalog/feedback/ModalStatus.cpp
+    src/catalog/feedback/ScanProgress.h
+    src/catalog/feedback/ScanProgress.cpp
     src/catalog/StatusBarItem.h
     src/catalog/StatusBarItem.cpp
     src/catalog/feedback/Tooltip.h

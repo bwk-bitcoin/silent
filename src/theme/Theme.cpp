@@ -12,6 +12,7 @@
 #include "catalog/display/Badge.h"
 #include "catalog/display/Display.h"
 #include "catalog/display/Label.h"
+#include "catalog/feedback/ScanProgress.h"
 #include "catalog/feedback/Tooltip.h"
 #include "catalog/form/LabelledInput.h"
 #include "catalog/form/ValidatedInput.h"
@@ -183,6 +184,7 @@ void Theme::apply() {
     qss += catalog::Table::qss(p);
     qss += catalog::SelectRow::qss(p);
     qss += catalog::Tooltip::qss(p);
+    qss += catalog::ScanProgress::qss(p);
     qss += catalog::BalanceHeader::qss(p);
     qss += catalog::LabelledInput::qss(p);
     qss += catalog::FoldSection::qss(p);

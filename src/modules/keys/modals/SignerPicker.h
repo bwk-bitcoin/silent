@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QIcon>
 #include <QList>
 #include <QString>
 
@@ -42,7 +41,6 @@ protected:
         -> catalog::SelectRow *;
     static auto buildHintRow(ISigner *signer) -> catalog::SelectRow *;
     [[nodiscard]] static auto reasonText(KeyUnusableReason reason) -> QString;
-    [[nodiscard]] static auto routeIcon(KeyRouteKind route) -> QIcon;
 
 private:
     QString m_title;
