@@ -27,6 +27,8 @@ public:
     auto addNote(FieldNote *note) -> FieldGroup *;
     // Shows or hides a field: its control and its label.
     void setFieldVisible(QWidget *control, bool visible);
+    // Retitles a field, e.g. on a language change.
+    void setFieldLabel(QWidget *control, const QString &label);
 
 private:
     Labels m_labels_style = Labels::Plain;

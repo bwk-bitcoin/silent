@@ -45,4 +45,11 @@ void FieldGroup::setFieldVisible(QWidget *control, bool visible) {
     }
 }
 
+void FieldGroup::setFieldLabel(QWidget *control, const QString &label) {
+    auto *labelWidget = m_labels.value(control, nullptr);
+    if (labelWidget != nullptr) {
+        labelWidget->setText(label);
+    }
+}
+
 } // namespace catalog
