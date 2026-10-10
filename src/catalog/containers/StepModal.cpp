@@ -54,8 +54,10 @@ auto StepModal::addStep(const QString &title, ModalWidth width, QWidget *body,
                         ModalActions *actions) -> int {
     auto *scroll = new ScrollArea;
     scroll->setFitContent(true);
-    // The stretch keeps the body packed at the top of a step taller than it.
-    scroll->setWidget((new qontrol::Column)->push(body)->pushStretch(1));
+    // The spacers centre the body across the step, the stretch keeps it packed at the
+    // top of a step taller than it; the actions bar below is not centred.
+    auto *centred = (new qontrol::Row)->pushSpacer()->push(body)->pushSpacer();
+    scroll->setWidget((new qontrol::Column)->push(centred)->pushStretch(1));
     // The step's own gap before its actions bar (design Stack gap m).
     auto *page = (new qontrol::Column)->spacing(resolve(Spacing::M))->push(scroll, 1);
     if (actions != nullptr) {
