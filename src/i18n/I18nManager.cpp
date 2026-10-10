@@ -150,6 +150,12 @@ public:
         return *it;
     }
 
+    // QTranslator reports itself empty unless it loaded a .qm file, and Qt neither
+    // installs an empty translator nor sends LanguageChange for it.
+    [[nodiscard]] auto isEmpty() const -> bool override {
+        return m_messages.isEmpty();
+    }
+
 private:
     QHash<QString, QString> m_messages;
 };
