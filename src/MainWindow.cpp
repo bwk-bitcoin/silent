@@ -103,6 +103,12 @@ auto MainWindow::updateTabs() -> void {
     positionSettingsButton();
 }
 
+void MainWindow::showKeysTab() {
+    if (m_keys_tab != nullptr) {
+        m_tab->setCurrentWidget(m_keys_tab);
+    }
+}
+
 auto MainWindow::tabExists(QWidget *content) const -> bool {
     return std::ranges::any_of(m_tabs, [content](const auto &tab) { return tab.second == content; });
 }

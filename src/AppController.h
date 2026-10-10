@@ -56,6 +56,7 @@ public slots:
     auto openAccount(const QString &name) -> void;
     auto deleteAccount(const QString &name) -> void;
     auto openAppSettings() -> void;
+    void showKeysTab();
     auto onDeleteConfirmed(const QString &account) -> void;
     auto onHostInstanceRemoved(const QString &id) -> void;
     auto onHostInstanceRegistered(const QString &id) -> void;

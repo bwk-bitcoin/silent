@@ -24,6 +24,7 @@ public:
     auto setTabTitle(QWidget *content, const QString &title) -> void;
     auto tabExists(QWidget *content) const -> bool;
     auto updateTabs() -> void;
+    void showKeysTab();
 
 signals:
     void hostedTabCloseRequested(QWidget *content);

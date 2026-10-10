@@ -259,6 +259,7 @@ auto KeysModule::buildKeyEntry(const KeyInfo &info) -> KeyEntry {
     KeyEntry entry;
     entry.fingerprint = fingerprint;
     entry.alias = toQt(info.alias);
+    entry.descriptor_route = descriptorRoute(info);
 
     for (const auto &route : info.routes) {
         switch (route) {

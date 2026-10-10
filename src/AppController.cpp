@@ -1,4 +1,5 @@
 #include "AppController.h"
+#include "MainWindow.h"
 #include "host/Host.h"
 #include "host/PluginRegistry.h"
 #include "interfaces/instance.h"
@@ -262,6 +263,14 @@ auto AppController::deleteAccount(const QString &name) -> void {
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 auto AppController::openAppSettings() -> void {
     AppController::execModal(new modal::AppSettings());
+}
+
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+void AppController::showKeysTab() {
+    auto *window = dynamic_cast<MainWindow *>(AppController::window());
+    if (window != nullptr) {
+        window->showKeysTab();
+    }
 }
 
 auto AppController::onDeleteConfirmed(const QString &account) -> void {

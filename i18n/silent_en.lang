@@ -31,15 +31,8 @@ confirm-send-failed => "Broadcast Failed\n\n%1"
 confirm-send-signed => "Signed. Ready to broadcast."
 confirm-send-success => "Transaction Sent\n\nTxid: %1"
 confirm-transaction-title => "Confirm Transaction"
-create-account-action-create => "Create"
-create-account-blindbit-empty => "BlindBit URL cannot be empty."
-create-account-default-blindbit => "http://localhost:8080"
 create-account-electrum => "Electrum:"
-create-account-electrum-empty => "Electrum address cannot be empty."
-create-account-invalid-input => "Invalid Input"
 create-account-name => "Account Name:"
-create-account-placeholder-blindbit => "http://localhost:8080"
-create-account-placeholder-name => "Enter account name"
 create-account-title => "Create Account"
 delete-wallet-confirmation => "Delete wallet '%1'? This cannot be undone."
 delete-wallet-title => "Delete Wallet"
@@ -252,14 +245,6 @@ keys-qr-contrast => "Contrast"
 keys-qr-density => "Density"
 
 keys-qr-frame-failed => "Could not render this frame: %1"
-
-create-account-key => "Key:"
-
-create-account-fetch-descriptor => "Get descriptor"
-
-create-account-descriptor-pending => "No descriptor fetched yet."
-
-create-account-no-keys => "Register a key first: an account is created from a key."
 
 keys-sp-descriptor-unavailable
 => "This key cannot return a silent payment descriptor.";;
@@ -910,3 +895,44 @@ keys-seal-failed-title => "Could Not Seal the Key"
 keys-added-title => "Key Added"
 
 keys-added-sub => "“%1” (%2) is stored on this computer and ready to sign."
+
+create-account-name-placeholder => "e.g. savings"
+
+create-account-key-section => "Key"
+
+create-account-backends-section => "Backends"
+
+create-account-pick-key => "Pick a key first."
+
+create-account-key-route => "Gets the descriptor with %1."
+
+create-account-key-no-route
+=> "Only a QR Code or Hot Key route can return a descriptor.";;
+
+create-account-no-key-title => "No Key Registered"
+
+create-account-no-key-sub
+=> "An account is created from a key. Register one in the Keys tab first.";;
+
+create-account-no-key-on-title => "No Key on %1"
+
+create-account-no-key-on-sub-one
+=> "1 key is registered on %1. Pick that network, or add a %2 key.";;
+
+create-account-no-key-on-sub-many
+=> "%1 keys are registered on %2. Pick that network, or add a %3 key.";;
+
+create-account-reason-name => "Enter an account name."
+
+create-account-reason-spaces => "The account name cannot contain spaces."
+
+create-account-reason-exists => "An account named “%1” already exists."
+
+create-account-reason-descriptor => "Get the descriptor of a key first."
+
+create-account-reason-descriptor-network
+=> "The descriptor is for %1, not %2. Get it again.";;
+
+create-account-reason-backends => "Test both backends first."
+
+create-account-backend-network => "The server runs on %1, not %2."

@@ -95,27 +95,36 @@ confirm-send-success
 => "Transaction Sent\n\nTxid: %1"
 => "Transazione inviata\n\nTxid: %1";;
 confirm-transaction-title => "Confirm Transaction" => "Conferma transazione"
-create-account-action-create => "Create" => "Crea"
-create-account-blindbit-empty
-=> "BlindBit URL cannot be empty."
-=> "L'URL BlindBit non puo essere vuoto.";;
-create-account-default-blindbit => "http://localhost:8080" => "http://localhost:8080"
-create-account-descriptor-pending => "No descriptor fetched yet." => "NONE"
+create-account-backend-network => "The server runs on %1, not %2." => "NONE"
+create-account-backends-section => "Backends" => "NONE"
 create-account-electrum => "Electrum:" => "Electrum:"
-create-account-electrum-empty
-=> "Electrum address cannot be empty."
-=> "L'indirizzo Electrum non puo essere vuoto.";;
-create-account-fetch-descriptor => "Get descriptor" => "NONE"
-create-account-invalid-input => "Invalid Input" => "Input non valido"
-create-account-key => "Key:" => "NONE"
-create-account-name => "Account Name:" => "Nome account:"
-create-account-no-keys
-=> "Register a key first: an account is created from a key."
+create-account-key-no-route
+=> "Only a QR Code or Hot Key route can return a descriptor."
 => "NONE";;
-create-account-placeholder-blindbit
-=> "http://localhost:8080"
-=> "http://localhost:8080";;
-create-account-placeholder-name => "Enter account name" => "Inserisci nome account"
+create-account-key-route => "Gets the descriptor with %1." => "NONE"
+create-account-key-section => "Key" => "NONE"
+create-account-name => "Account Name:" => "Nome account:"
+create-account-name-placeholder => "e.g. savings" => "NONE"
+create-account-no-key-on-sub-many
+=> "%1 keys are registered on %2. Pick that network, or add a %3 key."
+=> "NONE";;
+create-account-no-key-on-sub-one
+=> "1 key is registered on %1. Pick that network, or add a %2 key."
+=> "NONE";;
+create-account-no-key-on-title => "No Key on %1" => "NONE"
+create-account-no-key-sub
+=> "An account is created from a key. Register one in the Keys tab first."
+=> "NONE";;
+create-account-no-key-title => "No Key Registered" => "NONE"
+create-account-pick-key => "Pick a key first." => "NONE"
+create-account-reason-backends => "Test both backends first." => "NONE"
+create-account-reason-descriptor => "Get the descriptor of a key first." => "NONE"
+create-account-reason-descriptor-network
+=> "The descriptor is for %1, not %2. Get it again."
+=> "NONE";;
+create-account-reason-exists => "An account named “%1” already exists." => "NONE"
+create-account-reason-name => "Enter an account name." => "NONE"
+create-account-reason-spaces => "The account name cannot contain spaces." => "NONE"
 create-account-title => "Create Account" => "Crea account"
 delete-wallet-confirmation
 => "Delete wallet '%1'? This cannot be undone."
