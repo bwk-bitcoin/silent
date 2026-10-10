@@ -2,7 +2,6 @@
 #include "Theme.h"
 #include "resources/icon/arrow_down.h"
 #include "resources/icon/arrow_up.h"
-#include "resources/icon/bitcoin.h"
 #include "resources/icon/check.h"
 #include "resources/icon/chevron_down.h"
 #include "resources/icon/chevron_left.h"
@@ -20,7 +19,6 @@
 #include "resources/icon/key_round.h"
 #include "resources/icon/layout_dashboard.h"
 #include "resources/icon/lock.h"
-#include "resources/icon/lock_open.h"
 #include "resources/icon/minus.h"
 #include "resources/icon/network.h"
 #include "resources/icon/pencil.h"
@@ -29,15 +27,12 @@
 #include "resources/icon/qr_code.h"
 #include "resources/icon/refresh_cw.h"
 #include "resources/icon/sd_card.h"
-#include "resources/icon/server.h"
 #include "resources/icon/settings.h"
-#include "resources/icon/shield.h"
 #include "resources/icon/silent_mark.h"
 #include "resources/icon/trash_2.h"
 #include "resources/icon/triangle_alert.h"
 #include "resources/icon/upload.h"
 #include "resources/icon/usb.h"
-#include "resources/icon/wallet.h"
 #include "resources/icon/x.h"
 #include <QIconEngine>
 #include <QPainter>
@@ -179,32 +174,12 @@ auto x(IconColor color) -> QIcon {
     return renderIcon(embedded_icon::X, defaultStroke(), color);
 }
 
-auto shield(IconColor color) -> QIcon {
-    return renderIcon(embedded_icon::SHIELD, defaultStroke(), color);
-}
-
-auto wallet(IconColor color) -> QIcon {
-    return renderIcon(embedded_icon::WALLET, defaultStroke(), color);
-}
-
-auto server(IconColor color) -> QIcon {
-    return renderIcon(embedded_icon::SERVER, defaultStroke(), color);
-}
-
 auto network(IconColor color) -> QIcon {
     return renderIcon(embedded_icon::NETWORK, defaultStroke(), color);
 }
 
 auto eyeOff(IconColor color) -> QIcon {
     return renderIcon(embedded_icon::EYE_OFF, defaultStroke(), color);
-}
-
-auto lockOpen(IconColor color) -> QIcon {
-    return renderIcon(embedded_icon::LOCK_OPEN, defaultStroke(), color);
-}
-
-auto bitcoin(IconColor color) -> QIcon {
-    return renderIcon(embedded_icon::BITCOIN, defaultStroke(), color);
 }
 
 auto coins(IconColor color) -> QIcon {

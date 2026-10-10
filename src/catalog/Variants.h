@@ -63,7 +63,6 @@ auto btnGetDescriptor() -> Button *;
 auto btnOpen() -> Button *;
 auto btnOpenKeysTab() -> Button *;
 auto btnRevealMnemonic() -> Button *;
-auto btnSave() -> Button *;
 auto btnScanAgain() -> Button *;
 auto btnTest() -> Button *;
 auto btnTestOk() -> Button *;

@@ -361,10 +361,6 @@ auto btnRevealMnemonic() -> Button * {
                  .width = BtnWidth::XL});
 }
 
-auto btnSave() -> Button * {
-    return make({.role = ButtonRole::Default, .label = TR("btn-save"), .width = BtnWidth::M});
-}
-
 auto btnScanAgain() -> Button * {
     return make({.role = ButtonRole::Default, .label = TR("btn-scan-again"), .width = BtnWidth::M});
 }
