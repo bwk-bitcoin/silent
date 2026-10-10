@@ -11,6 +11,7 @@
 #include "catalog/containers/Separator.h"
 #include "catalog/containers/Tab.h"
 #include "catalog/display/Badge.h"
+#include "catalog/display/CopyField.h"
 #include "catalog/display/Display.h"
 #include "catalog/display/Label.h"
 #include "catalog/feedback/Notice.h"
@@ -189,6 +190,7 @@ void Theme::apply() {
     qss += catalog::ScanProgress::qss(p);
     qss += catalog::Notice::qss(p);
     qss += catalog::SectionHeader::qss(p);
+    qss += catalog::CopyField::qss(p);
     qss += catalog::BalanceHeader::qss(p);
     qss += catalog::LabelledInput::qss(p);
     qss += catalog::FoldSection::qss(p);

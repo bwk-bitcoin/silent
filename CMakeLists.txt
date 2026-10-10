@@ -192,8 +192,12 @@ set(SILENT_APP_SOURCES
     src/catalog/containers/Card.cpp
     src/catalog/display/Badge.h
     src/catalog/display/Badge.cpp
+    src/catalog/display/CopyField.h
+    src/catalog/display/CopyField.cpp
     src/catalog/display/RouteIcons.h
     src/catalog/display/RouteIcons.cpp
+    src/catalog/display/ShortValue.h
+    src/catalog/display/ShortValue.cpp
     src/catalog/form/ValidationMark.h
     src/catalog/form/ValidationMark.cpp
     src/catalog/form/ValidatedInput.h
