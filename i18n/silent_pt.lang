@@ -597,12 +597,12 @@ send-fee-absolute-unit => "sats" => "sats"
 send-fee-estimate => "Fee: %1" => "Taxa: %1"
 send-fee-rate-label => "Fee Rate:" => "Taxa de comissao:"
 send-fee-rate-unit => "sats/vb" => "sats/vb"
-send-inputs => "Coins Selection" => "Inputs"
+send-inputs => "Coins selection" => "Inputs"
 send-inputs-already-spent
 => "Input(s) already spent:\n%1"
 => "Input(s) already spent:\n%1";;
-send-inputs-selected-many => "Coins (%1 selected)" => "Moedas (%1 selecionadas)"
-send-inputs-selected-one => "Coins (1 selected)" => "Moedas (1 selecionada)"
+send-inputs-selected-many => "Coins · %1 selected" => "Moedas (%1 selecionadas)"
+send-inputs-selected-one => "Coins · 1 selected" => "Moedas (1 selecionada)"
 send-invalid-transaction-template
 => "Invalid transaction template."
 => "Invalid transaction template.";;
@@ -616,7 +616,6 @@ send-placeholder-label => "Label" => "Rotulo"
 send-prepare-failed => "Prepare Failed" => "Preparacao falhou"
 send-proceed-anyway => "Proceed anyway?" => "Prosseguir assim mesmo?"
 send-recipients => "Payments" => "Destinatarios"
-send-select-inputs => "Coins Selection" => "Selecionar inputs"
 send-signing-failed => "Signing failed." => "Assinatura falhou."
 send-summary-change => "Change" => "Troco"
 send-summary-fee => "Network Fee" => "Taxa de rede"

@@ -51,11 +51,15 @@ void Coins::view() {
     m_table->addColumn({.title = TR("coins-height"), .width = HEIGHT_W});
     m_table->addColumn(
         {.title = TR("coins-outpoint"), .width = OUTPOINT_W, .role = DisplayRole::Outpoint});
-    m_table->addColumn(
-        {.title = TR("coins-label"), .width = LABEL_W, .grow = true, .editable = true});
+    m_table->addColumn({.title = TR("coins-label"),
+                        .width = LABEL_W,
+                        .grow = true,
+                        .editable = true,
+                        .placeholder = QStringLiteral("-")});
     m_table->addColumn({.title = TR("coins-value"),
                         .width = VALUE_W,
                         .alignment = Qt::AlignRight,
+                        .headerAlignment = Qt::AlignRight,
                         .role = DisplayRole::Amount});
     connect(m_table, &catalog::Table::cellEdited, this, &Coins::onCellEdited, qontrol::UNIQUE);
 

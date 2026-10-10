@@ -401,7 +401,7 @@ void Send::init() {
     m_auto_summary->setPad(catalog::Card::Pad::M);
     m_auto_summary->setContent(autoRow);
 
-    m_inputs_title_label = new Label(TR("send-select-inputs"), LabelRole::Heading);
+    m_inputs_title_label = new Label(TR("send-inputs"), LabelRole::Eyebrow);
     // Pin the title to the button's height so the row does not change height when
     // the (compact) Clear button shows/hides. defaultBtn has no fixed height, so
     // the effective button height is BUTTON_MIN_HEIGHT.
@@ -775,10 +775,12 @@ auto Send::transactionView() -> QWidget * {
     m_sign_btn->setVisible(!isSigned);
     m_broadcast_btn->setVisible(isSigned);
 
-    auto *title = new Label(TR("send-transaction-title"), LabelRole::Heading);
+    // The Coins selection heading's style and height, so the two line up.
+    auto *title = new Label(TR("send-transaction-title"), LabelRole::Eyebrow);
+    title->setMinimumHeight(metric::BUTTON_MIN_HEIGHT);
     auto *col = new qontrol::Column;
     col->push(title)
-        ->pushSpacer(resolve(Spacing::M))
+        ->pushSpacer(resolve(Spacing::S))
         ->push(m_flow_card)
         ->pushStretch(1) // expanding gap: drops the summary block to the column bottom
         ->push(summary)
@@ -828,7 +830,8 @@ auto Send::inputsView() -> QWidget * {
     m_coin_table->addColumn({.title = TR("coins-type"), .width = resolve(Size::XXS)});
     m_coin_table->addColumn(
         {.title = TR("coins-outpoint"), .width = resolve(Size::M), .role = DisplayRole::Outpoint});
-    m_coin_table->addColumn({.title = TR("coins-label"), .grow = true});
+    m_coin_table->addColumn(
+        {.title = TR("coins-label"), .grow = true, .placeholder = QStringLiteral("-")});
     m_coin_table->addColumn({.title = TR("coins-value"),
                              .width = resolve(Size::S),
                              .alignment = Qt::AlignRight,
@@ -839,10 +842,8 @@ auto Send::inputsView() -> QWidget * {
         QString outpoint = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
         QString typeStr = QString::fromUtf8(coin.account_type.data(), coin.account_type.size());
         QString label = QString::fromUtf8(coin.label.data(), coin.label.size());
-        // Design shows a placeholder for empty labels (hyphen, not an em dash).
-        QString labelCell = label.isEmpty() ? QStringLiteral("-") : label;
-        m_coin_table->addRow(
-            outpoint, {typeStr, shortenOutpoint(outpoint), labelCell, toBitcoin(coin.value)});
+        m_coin_table->addRow(outpoint,
+                             {typeStr, shortenOutpoint(outpoint), label, toBitcoin(coin.value)});
     }
     connect(m_coin_table, &catalog::Table::rowSelectionChanged, this, &Send::onCoinSelectionChanged,
             qontrol::UNIQUE);
@@ -854,13 +855,11 @@ auto Send::inputsView() -> QWidget * {
     m_clear_inputs_btn->setVisible(!autoMode); // Clear sits in the coins header, manual only
 
     auto *titleRow = (new qontrol::Row)
-                         ->pushSpacer(resolve(Padding::M))
+                         ->spacing(resolve(Spacing::S))
                          ->push(m_inputs_title_label)
                          ->pushSpacer()
                          ->push(m_clear_inputs_btn)
-                         ->pushSpacer(resolve(Spacing::XS))
-                         ->push(m_auto_coin_selection)
-                         ->pushSpacer(resolve(Padding::M));
+                         ->push(m_auto_coin_selection);
 
     // Update total and minimum displays
     onUpdateInputsTotal();
@@ -873,7 +872,7 @@ auto Send::inputsView() -> QWidget * {
     m_inputs_amounts_row->setVisible(!folded);
 
     auto *col = new qontrol::Column;
-    col->push(titleRow)->pushSpacer(resolve(Spacing::XS))->push(m_auto_summary)->push(m_coin_table);
+    col->push(titleRow)->pushSpacer(resolve(Spacing::S))->push(m_auto_summary)->push(m_coin_table);
     col->pushSpacer(resolve(Spacing::XS))->push(m_inputs_amounts_row);
     // No trailing stretch here: in two-column mode it would inflate and push the
     // separator far below the table. The outputs frame carries the trailing stretch.
@@ -1146,13 +1145,8 @@ void Send::updateCoinCheckboxes() {
 
 void Send::updateInputsTitle() {
     qDebug() << "Send::updateInputsTitle()";
-    int count = 0;
-    if (m_auto_coin_selection->isChecked()) {
-        count = m_auto_selected_outpoints.size();
-    } else {
-        count = m_selected_coins.size();
-    }
-
+    // The automatic selection is not the user's: only a manual one is counted.
+    int count = m_auto_coin_selection->isChecked() ? 0 : static_cast<int>(m_selected_coins.size());
     if (count == 1) {
         m_inputs_title_label->setText(TR("send-inputs-selected-one"));
     } else if (count > 1) {

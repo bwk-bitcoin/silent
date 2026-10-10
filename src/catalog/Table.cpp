@@ -350,6 +350,10 @@ auto Table::buildCell(const Row &row, int column, int row_index) -> QWidget * {
             break;
         }
         auto *label = new Label(text, labelRole, cell);
+        if (text.isEmpty() && !m_columns[column].placeholder.isEmpty()) {
+            label->setText(m_columns[column].placeholder);
+            label->setTone(LabelTone::Muted);
+        }
         // Design rows are align-items:center; a horizontal-only alignment would
         // render the text top-aligned and leave a gap below it in a tall row.
         label->setAlignment(m_columns[column].alignment | Qt::AlignVCenter);

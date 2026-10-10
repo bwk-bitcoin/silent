@@ -595,12 +595,12 @@ send-fee-absolute-unit => "sats" => "sats"
 send-fee-estimate => "Fee: %1" => "Frais: %1"
 send-fee-rate-label => "Fee Rate:" => "Taux de frais:"
 send-fee-rate-unit => "sats/vb" => "sats/vb"
-send-inputs => "Coins Selection" => "Entrees"
+send-inputs => "Coins selection" => "Entrees"
 send-inputs-already-spent
 => "Input(s) already spent:\n%1"
 => "Entree(s) deja depensee(s):\n%1";;
-send-inputs-selected-many => "Coins (%1 selected)" => "Pieces (%1 selectionnees)"
-send-inputs-selected-one => "Coins (1 selected)" => "Pieces (1 selectionnee)"
+send-inputs-selected-many => "Coins · %1 selected" => "Pieces (%1 selectionnees)"
+send-inputs-selected-one => "Coins · 1 selected" => "Pieces (1 selectionnee)"
 send-invalid-transaction-template
 => "Invalid transaction template."
 => "Modele de transaction invalide.";;
@@ -614,7 +614,6 @@ send-placeholder-label => "Label" => "Libelle"
 send-prepare-failed => "Prepare Failed" => "Preparation echouee"
 send-proceed-anyway => "Proceed anyway?" => "Continuer quand meme?"
 send-recipients => "Payments" => "Destinataires"
-send-select-inputs => "Coins Selection" => "Selectionner les entrees"
 send-signing-failed => "Signing failed." => "Echec de signature."
 send-summary-change => "Change" => "Monnaie"
 send-summary-fee => "Network Fee" => "Frais reseau"

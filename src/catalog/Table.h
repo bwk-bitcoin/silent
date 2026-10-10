@@ -23,6 +23,8 @@ struct TableColumn {
     DisplayRole role = DisplayRole::Default;
     bool grow = false;
     bool editable = false;
+    // Shown muted in an empty cell; an edit still starts from the empty text.
+    QString placeholder;
 };
 
 class Table : public QWidget {

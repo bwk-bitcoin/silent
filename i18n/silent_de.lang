@@ -597,12 +597,12 @@ send-fee-absolute-unit => "sats" => "sats"
 send-fee-estimate => "Fee: %1" => "Gebuehr: %1"
 send-fee-rate-label => "Fee Rate:" => "Gebuehrenrate:"
 send-fee-rate-unit => "sats/vb" => "sats/vb"
-send-inputs => "Coins Selection" => "Inputs"
+send-inputs => "Coins selection" => "Inputs"
 send-inputs-already-spent
 => "Input(s) already spent:\n%1"
 => "Input(s) already spent:\n%1";;
-send-inputs-selected-many => "Coins (%1 selected)" => "Coins (%1 ausgewaehlt)"
-send-inputs-selected-one => "Coins (1 selected)" => "Coins (1 ausgewaehlt)"
+send-inputs-selected-many => "Coins · %1 selected" => "Coins (%1 ausgewaehlt)"
+send-inputs-selected-one => "Coins · 1 selected" => "Coins (1 ausgewaehlt)"
 send-invalid-transaction-template
 => "Invalid transaction template."
 => "Invalid transaction template.";;
@@ -616,7 +616,6 @@ send-placeholder-label => "Label" => "Bezeichnung"
 send-prepare-failed => "Prepare Failed" => "Vorbereitung fehlgeschlagen"
 send-proceed-anyway => "Proceed anyway?" => "Trotzdem fortfahren?"
 send-recipients => "Payments" => "Empfaenger"
-send-select-inputs => "Coins Selection" => "Inputs auswaehlen"
 send-signing-failed => "Signing failed." => "Signieren fehlgeschlagen."
 send-summary-change => "Change" => "Wechselgeld"
 send-summary-fee => "Network Fee" => "Netzwerkgebuehr"
