@@ -1,12 +1,12 @@
 #include "catalog/Table.h"
 
 #include "catalog/Button.h"
-#include "catalog/inputs/Checkbox.h"
-#include "theme/Icon.h"
-#include "catalog/inputs/Input.h"
-#include "catalog/display/Label.h"
 #include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/Separator.h"
+#include "catalog/display/Label.h"
+#include "catalog/inputs/Checkbox.h"
+#include "catalog/inputs/Input.h"
+#include "theme/Icon.h"
 
 #include <QScrollArea>
 #include <QStyle>
@@ -61,7 +61,23 @@ void Table::addRow(const QString &id, const QStringList &cells) {
     scheduleRebuild();
 }
 
+void Table::addWidgetRow(const QString &id, const QList<QWidget *> &cells, bool bare) {
+    Row row{.id = id, .bare = bare};
+    for (auto *cell : cells) {
+        row.widgets.append(cell);
+    }
+    m_rows.append(row);
+    scheduleRebuild();
+}
+
 void Table::clearRows() {
+    for (const auto &row : m_rows) {
+        for (const auto &cell : row.widgets) {
+            if (cell != nullptr) {
+                cell->deleteLater();
+            }
+        }
+    }
     m_rows.clear();
     m_selected_ids.clear();
     m_edit_row_id.clear();
@@ -187,6 +203,12 @@ void Table::rebuild() {
         if (existing.widget != nullptr) {
             existing.widget->hide();
         }
+        // Widget cells outlive their old row: it is deleted, they are laid out again.
+        for (const auto &cell : existing.widgets) {
+            if (cell != nullptr && cell->parent() != nullptr) {
+                cell->setParent(nullptr);
+            }
+        }
     }
     m_body->clear();
 
@@ -199,6 +221,9 @@ void Table::rebuild() {
         auto *row = buildRow(i);
         m_rows[i].widget = row;
         m_body->push(row);
+        // A row added to a shown table stays hidden until the event loop shows it, so
+        // the body would leave it out of the height pinned below.
+        row->show();
     }
 
     if (m_body_height == width::NONE) {
@@ -207,7 +232,7 @@ void Table::rebuild() {
         // the rows top-aligned within any extra height.
         m_body->pushSpacer();
         m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        m_scroll->setMinimumHeight(m_body->sizeHint().height());
+        m_scroll->setMinimumHeight(m_body->sizeHint().height() + 2 * m_scroll->frameWidth());
     } else {
         // Bounded: a fixed-height window with an inner scrollbar. No trailing
         // stretch here: with widgetResizable it would let the body shrink to the
@@ -219,6 +244,7 @@ void Table::rebuild() {
     updateScrollRules();
 
     m_in_rebuild = false;
+    emit rebuilt();
 }
 
 auto Table::buildHeader() -> QWidget * {
@@ -257,6 +283,7 @@ auto Table::buildRow(int index) -> QWidget * {
     rowWidget->setProperty("class", "table-row");
     rowWidget->setProperty("alternate", index % 2 == 0 ? "true" : "false");
     rowWidget->setProperty("selected", m_selected_ids.contains(m_rows[index].id));
+    rowWidget->setProperty("bare", m_rows[index].bare);
     rowWidget->setAttribute(Qt::WA_StyledBackground, true);
     rowWidget->setMinimumHeight(metric::TABLE_ROW_HEIGHT);
 
@@ -283,6 +310,9 @@ auto Table::buildRow(int index) -> QWidget * {
 }
 
 auto Table::buildCell(const Row &row, int column, int row_index) -> QWidget * {
+    if (!row.widgets.isEmpty()) {
+        return buildWidgetCell(row, column);
+    }
     bool editing = row.id == m_edit_row_id && column == m_edit_column;
     QString text;
     if (column < row.cells.size()) {
@@ -355,6 +385,30 @@ auto Table::buildCell(const Row &row, int column, int row_index) -> QWidget * {
     return cell;
 }
 
+auto Table::buildWidgetCell(const Row &row, int column) -> QWidget * {
+    auto *cell = new qontrol::Row;
+    const auto &spec = m_columns[column];
+    if (spec.width != width::NONE) {
+        cell->setFixedWidth(spec.width);
+    }
+    QWidget *content = column < row.widgets.size() ? row.widgets[column].data() : nullptr;
+    if (content == nullptr) {
+        return cell;
+    }
+    if (spec.grow) {
+        content->setMinimumWidth(0);
+        // Wrapped text takes the whole column to wrap in; anything else keeps its size.
+        if (content->hasHeightForWidth()) {
+            cell->push(content, 1);
+        } else {
+            cell->push(content, 1, spec.alignment | Qt::AlignVCenter);
+        }
+    } else {
+        cell->push(content, 0, spec.alignment | Qt::AlignVCenter);
+    }
+    return cell;
+}
+
 void Table::finishEdit(bool commit) {
     auto *input = qobject_cast<Input *>(sender());
     if (input == nullptr) {
@@ -381,17 +435,18 @@ void Table::finishEdit(bool commit) {
 }
 
 auto Table::qss(const Palette &p) -> QString {
-    return QString(
-                "QWidget[class=\"table\"] { background: transparent; }"
-                "QWidget[class=\"table-header\"] { background: transparent; }"
-                "QWidget[class=\"table-header\"] QLabel { color: %1; }"
-                "QWidget[class=\"table-row\"] { background: %2; border-left: 2px solid "
-                "transparent; }"
-                "QWidget[class=\"table-row\"][alternate=\"true\"] { background: %3; }"
-                "QWidget[class=\"table-row\"][selected=\"true\"] { background: %2; "
-                "border-left-color: %5; }"
-                "QWidget[class=\"table-row\"]:hover { background: %4; }"
-                "QWidget[class=\"table-row\"] QLabel[tblmono=\"secondary\"] { color: %1; }")
+    return QString("QWidget[class=\"table\"] { background: transparent; }"
+                   "QWidget[class=\"table-header\"] { background: transparent; }"
+                   "QWidget[class=\"table-header\"] QLabel { color: %1; }"
+                   "QWidget[class=\"table-row\"] { background: %2; border-left: 2px solid "
+                   "transparent; }"
+                   "QWidget[class=\"table-row\"][alternate=\"true\"] { background: %3; }"
+                   "QWidget[class=\"table-row\"][selected=\"true\"] { background: %2; "
+                   "border-left-color: %5; }"
+                   "QWidget[class=\"table-row\"]:hover { background: %4; }"
+                   "QWidget[class=\"table-row\"][bare=\"true\"], "
+                   "QWidget[class=\"table-row\"][bare=\"true\"]:hover { background: transparent; }"
+                   "QWidget[class=\"table-row\"] QLabel[tblmono=\"secondary\"] { color: %1; }")
         .arg(p.textSecondary.name()) // %1 header cells + mono-secondary cells
         .arg(p.bg.name())            // %2 odd rows + selected
         .arg(p.bgSecondary.name())   // %3 even rows

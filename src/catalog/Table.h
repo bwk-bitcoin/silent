@@ -3,6 +3,7 @@
 #include "catalog/display/Display.h"
 #include "theme/Palette.h"
 #include <QList>
+#include <QPointer>
 #include <QSet>
 #include <QWidget>
 
@@ -32,6 +33,9 @@ public:
     void addColumn(const TableColumn &column);
     void clearColumns();
     void addRow(const QString &id, const QStringList &cells);
+    // A row of widgets, one per column, owned by the table from here on. A bare row
+    // (the + of an add row) has no fill and no hover.
+    void addWidgetRow(const QString &id, const QList<QWidget *> &cells, bool bare = false);
     void clearRows();
     void setSelectionEnabled(bool enabled);
     void setSelectedIds(const QStringList &ids);
@@ -43,6 +47,8 @@ public:
 signals:
     void rowSelectionChanged(const QString &row_id, bool selected);
     void cellEdited(const QString &row_id, int column, const QString &text);
+    // The rows were laid out again: the table may have changed height.
+    void rebuilt();
 
 public slots:
     void onSelectionToggled(bool checked);
@@ -55,6 +61,8 @@ private:
     struct Row {
         QString id;
         QStringList cells;
+        QList<QPointer<QWidget>> widgets;
+        bool bare = false;
         QWidget *widget = nullptr;
     };
 
@@ -67,6 +75,7 @@ private:
     auto buildHeader() -> QWidget *;
     auto buildRow(int index) -> QWidget *;
     auto buildCell(const Row &row, int column, int row_index) -> QWidget *;
+    auto buildWidgetCell(const Row &row, int column) -> QWidget *;
     void finishEdit(bool commit);
 
     QList<TableColumn> m_columns;
