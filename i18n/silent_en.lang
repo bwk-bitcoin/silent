@@ -54,17 +54,9 @@ history-title => "History"
 history-unconfirmed => "Unconfirmed:"
 history-unconfirmed-no-colon => "Unconfirmed"
 hwi-devices => "Devices"
-hwi-get-xpub => "Get xpub"
-hwi-info => "Info"
-hwi-info-template => "Kind: %1\nFingerprint: %2\nVersion: %3"
 hwi-network => "Network:"
 hwi-no-devices => "No device connected."
 hwi-settings-title => "Hardware Wallets"
-hwi-state-locked => "Locked"
-hwi-state-ready => "Ready"
-hwi-state-unsupported => "Unusable"
-hwi-waiting => "Waiting for the device..."
-hwi-xpub-error => "Requested %1\n%2\nA device only exports an xpub for a standard path on the network it runs on."
 language-english => "English"
 language-french => "French"
 language-german => "German"
@@ -199,21 +191,7 @@ keys-network => "Network:"
 
 keys-devices => "Devices"
 
-keys-no-devices => "No device connected."
-
-keys-register => "Register a key for this device"
-
-keys-register-failed => "Could not register the key: %1"
-
 keys-keys => "Keys"
-
-keys-no-keys => "No key registered yet."
-
-keys-add-key => "Add a key"
-
-keys-connected => "Connected"
-
-keys-offline => "Offline"
 
 keys-route-hot => "Hot Key"
 
@@ -222,8 +200,6 @@ keys-route-usb => "USB"
 keys-route-qr => "QR Code"
 
 keys-route-sd => "SD Card"
-
-keys-device-title => "Device"
 
 keys-key-title => "Key"
 
@@ -780,3 +756,35 @@ flow-password-wrong => "Wrong password. Try again."
 
 receive-sp-verify-note
 => "Silent payment addresses can't be checked on a signing device yet. No device protocol supports it.";;
+
+keys-register-failed-title => "Could not register %1"
+
+keys-devices-empty-title => "No Device Connected"
+
+keys-devices-empty-sub
+=> "Connect a hardware wallet over USB and unlock it. It appears here while it runs on %1.";;
+
+keys-keys-empty-title => "No Key on %1"
+
+keys-keys-empty-sub
+=> "Add a key to sign transactions, verify addresses and create accounts.";;
+
+keys-device-registering => "Registering…"
+
+keys-device-registered-as => "Registered as “%1”"
+
+keys-device-not-registered => "Not registered as a key"
+
+keys-route-primary-suffix => "%1 (primary)"
+
+keys-register-title => "Register as Key"
+
+keys-register-alias => "Alias"
+
+keys-register-alias-placeholder => "Optional. Leave empty to name it “%1”."
+
+keys-alias-taken => "Another key is already named “%1”."
+
+keys-alias-taken-reason => "Another key already has this alias."
+
+keys-register-disconnected => "The device was disconnected."

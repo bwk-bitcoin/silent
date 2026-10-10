@@ -140,6 +140,11 @@ const int QR_REBUILD_SPINNER_SIZE = 28;
 const int CAMERA_STATE_ICON_SIZE = 40;
 const int QR_DISPLAY_SIZE = 400;
 const int QR_DISPLAY_PADDING = 16;
+// The Keys tab is a fixed column, centred.
+const int KEYS_TAB_WIDTH = 700;
+// A list row's pill, gap and glyph, so the Devices and Keys lists line up.
+const int LIST_STATUS_WIDTH = 146;
+const int ROW_SPINNER_SIZE = 14;
 
 } // namespace metric
 

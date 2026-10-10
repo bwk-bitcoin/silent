@@ -109,6 +109,8 @@ set(SILENT_APP_SOURCES
     src/modules/keys/QrRoute.cpp
     src/modules/keys/DeviceName.h
     src/modules/keys/DeviceName.cpp
+    src/modules/keys/KeysView.h
+    src/modules/keys/KeysView.cpp
     src/modules/keys/flow/FlowCopy.h
     src/modules/keys/flow/FlowCopy.cpp
     src/modules/keys/flow/PickerStep.h
@@ -137,8 +139,8 @@ set(SILENT_APP_SOURCES
     src/modules/keys/signers/OfflineSigner.cpp
     src/modules/keys/modals/AddKey.h
     src/modules/keys/modals/AddKey.cpp
-    src/modules/keys/modals/DeviceModal.h
-    src/modules/keys/modals/DeviceModal.cpp
+    src/modules/keys/modals/RegisterDevice.h
+    src/modules/keys/modals/RegisterDevice.cpp
     src/modules/keys/modals/HotKey.h
     src/modules/keys/modals/HotKey.cpp
     src/modules/keys/modals/KeyModal.h

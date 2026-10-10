@@ -23,6 +23,17 @@
 
 namespace keys {
 
+namespace {
+
+auto failedOp(const QString &error) -> KeyOpResult {
+    KeyOpResult result;
+    result.is_ok = false;
+    result.error = rust::String(error.toStdString());
+    return result;
+}
+
+} // namespace
+
 KeysBus::KeysBus(KeysModule *module, QObject *parent) : IKeys(parent), m_module(module) {
 }
 
@@ -419,11 +430,12 @@ void KeysModule::generateMnemonic(ReqId req_id, std::uint32_t word_count) {
     thread->start();
 }
 
-void KeysModule::onMnemonicGenerationFinished(ReqId req_id, MnemonicResult result) {
+void KeysModule::onMnemonicGenerationFinished(ReqId req_id, const MnemonicResult &result) {
     emit mnemonicGenerated(req_id, result);
 }
 
-void KeysModule::importHotKey(ReqId req_id, QString mnemonic, QString alias, QString password) {
+void KeysModule::importHotKey(ReqId req_id, const QString &mnemonic, const QString &alias,
+                              const QString &password) {
     Network network = KeysModule::network();
     auto *thread = QThread::create([this, req_id, mnemonic = mnemonic.toStdString(),
                                     password = password.toStdString(), alias, network]() mutable {
@@ -438,7 +450,7 @@ void KeysModule::importHotKey(ReqId req_id, QString mnemonic, QString alias, QSt
     thread->start();
 }
 
-void KeysModule::onHotKeySealed(ReqId req_id, SealedHotKey *sealed, QString alias) {
+void KeysModule::onHotKeySealed(ReqId req_id, SealedHotKey *sealed, const QString &alias) {
     auto box = rust::Box<SealedHotKey>::from_raw(sealed);
     KeyInfoResult result;
     if (!box->is_ok()) {
@@ -460,9 +472,9 @@ void KeysModule::onHotKeySealed(ReqId req_id, SealedHotKey *sealed, QString alia
     emit hotKeyImported(req_id, result);
 }
 
-void KeysModule::revealMnemonic(ReqId req_id, QString fingerprint, QString password) {
+void KeysModule::revealMnemonic(ReqId req_id, const QString &fingerprint, const QString &password) {
     if (rust() == nullptr) {
-        MnemonicResult result;
+        MnemonicResult result{};
         result.is_ok = false;
         result.error = rust::String("keys: module not ready");
         emit mnemonicRevealFinished(req_id, result);
@@ -470,7 +482,7 @@ void KeysModule::revealMnemonic(ReqId req_id, QString fingerprint, QString passw
     }
     auto material = rust()->hot_material(rust::String(fingerprint.toStdString()));
     if (!material->is_ok()) {
-        MnemonicResult result;
+        MnemonicResult result{};
         result.is_ok = false;
         result.error = material->get_error();
         emit mnemonicRevealFinished(req_id, result);
@@ -488,7 +500,7 @@ void KeysModule::revealMnemonic(ReqId req_id, QString fingerprint, QString passw
     thread->start();
 }
 
-void KeysModule::onMnemonicRevealFinished(ReqId req_id, MnemonicResult result) {
+void KeysModule::onMnemonicRevealFinished(ReqId req_id, const MnemonicResult &result) {
     emit mnemonicRevealed(req_id, result);
 }
 
@@ -687,6 +699,83 @@ auto KeysModule::removeKey(const QString &fingerprint, bool force) -> KeyOpResul
     return result;
 }
 
+auto KeysModule::insertKey(const QString &fingerprint, const QString &alias,
+                           const QList<KeyRouteKind> &routes, const QList<PathXpub> &xpubs)
+    -> KeyOpResult {
+    if (!m_rust.has_value()) {
+        return failedOp(TR("keys-module-not-ready"));
+    }
+    auto key = rust::String(fingerprint.toStdString());
+    auto added = m_rust.value()->add_key(key, rust::String(alias.toStdString()));
+    if (!added.is_ok) {
+        return failedOp(toQt(added.error));
+    }
+    KeyOpResult result{.is_ok = true, .error = rust::String()};
+    for (auto route : routes) {
+        if (result.is_ok) {
+            result = m_rust.value()->add_route(key, route);
+        }
+    }
+    for (const auto &entry : xpubs) {
+        if (result.is_ok) {
+            result = m_rust.value()->cache_xpub(key, rust::String(entry.path.toStdString()),
+                                                rust::String(entry.xpub.toStdString()));
+        }
+    }
+    if (!result.is_ok) {
+        // A key half added would show up without its routes or xpubs.
+        auto removed = m_rust.value()->remove_key(key, true);
+        if (!removed.is_ok) {
+            qWarning() << "keys:" << toQt(removed.error);
+        }
+    }
+    return result;
+}
+
+auto KeysModule::addDeviceKey(const plugin::SignerEntry &entry, const QString &alias,
+                              const QString &path, const QString &xpub) -> KeyOpResult {
+    QString fingerprint = entry.signer->fingerprint();
+    auto result =
+        insertKey(fingerprint, alias, {KeyRouteKind::Usb}, {{.path = path, .xpub = xpub}});
+    if (!result.is_ok) {
+        return result;
+    }
+    result = m_rust.value()->record_device(toLiveDevice(entry));
+    if (!result.is_ok) {
+        auto removed = m_rust.value()->remove_key(rust::String(fingerprint.toStdString()), true);
+        if (!removed.is_ok) {
+            qWarning() << "keys:" << toQt(removed.error);
+        }
+        return result;
+    }
+    emit keysChanged();
+    return result;
+}
+
+auto KeysModule::coinType() -> int {
+    return KeysModule::network() == Network::Bitcoin ? 0 : 1;
+}
+
+auto KeysModule::defaultXpubPath() -> QString {
+    return QStringLiteral("m/84'/%1'/0'").arg(coinType());
+}
+
+auto KeysModule::toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice {
+    LiveDevice device;
+    device.device_id = rust::String(entry.instanceId.toStdString());
+    device.fingerprint = rust::String(entry.signer->fingerprint().toStdString());
+    // The device service reports the device kind as its brand.
+    device.kind = rust::String(entry.signer->brand().toStdString());
+    device.brand = rust::String(entry.signer->brand().toStdString());
+    device.model = rust::String(entry.signer->model().toStdString());
+    device.serial = rust::String(entry.signer->serial().toStdString());
+    if (entry.module != nullptr) {
+        device.module =
+            rust::String(entry.module->meta().value(QStringLiteral("id")).toStdString());
+    }
+    return device;
+}
+
 RustKeys *KeysModule::rust() const {
     return m_rust.has_value() ? m_rust.value().operator->() : nullptr;
 }
@@ -744,17 +833,7 @@ void KeysModule::refreshLiveDevices() {
         if (entry.signer == nullptr) {
             continue;
         }
-        LiveDevice device;
-        device.device_id = rust::String(entry.instanceId.toStdString());
-        device.fingerprint = rust::String(entry.signer->fingerprint().toStdString());
-        device.brand = rust::String(entry.signer->brand().toStdString());
-        device.model = rust::String(entry.signer->model().toStdString());
-        device.serial = rust::String(entry.signer->serial().toStdString());
-        if (entry.module != nullptr) {
-            device.module =
-                rust::String(entry.module->meta().value(QStringLiteral("id")).toStdString());
-        }
-        devices.push_back(std::move(device));
+        devices.push_back(toLiveDevice(entry));
     }
     m_rust.value()->set_live_devices(std::move(devices));
     emit liveDevicesChanged();

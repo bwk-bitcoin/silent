@@ -35,6 +35,12 @@ class KeysModule;
 class KeysTab;
 class QrRoute;
 
+// An xpub and the path it was derived at, as a key caches it.
+struct PathXpub {
+    QString path;
+    QString xpub;
+};
+
 // IModule and IKeys are both QObjects, so one class cannot be both. KeysModule owns
 // this bus, registers it with the host, and answers every call through it.
 class KeysBus final : public IKeys {
@@ -107,6 +113,15 @@ public:
     [[nodiscard]] auto setRouteOrder(const QString &fingerprint, rust::Vec<KeyRouteKind> order)
         -> KeyOpResult;
     [[nodiscard]] auto removeKey(const QString &fingerprint, bool force) -> KeyOpResult;
+    // Registers the key of a ready device: the key with `alias`, its USB route, the
+    // xpub the device gave at `path` and the device itself, or none of them.
+    [[nodiscard]] auto addDeviceKey(const plugin::SignerEntry &entry, const QString &alias,
+                                    const QString &path, const QString &xpub) -> KeyOpResult;
+    // The path a device exports an xpub at without asking: BIP84, account 0, the coin
+    // type of the network.
+    [[nodiscard]] static auto defaultXpubPath() -> QString;
+    // 0 on Bitcoin, 1 on every test network.
+    [[nodiscard]] static auto coinType() -> int;
     // The Rust handle, for the tab and the modals of this module only. Null until the
     // handle is built, so every caller checks.
     [[nodiscard]] RustKeys *rust() const;
@@ -139,8 +154,9 @@ public:
     void generateMnemonic(ReqId req_id, std::uint32_t word_count);
     // The GUI slot always calls commit_hot_key(), even if every caller (HotKey) has
     // already closed: a close during sealing still finishes the import.
-    void importHotKey(ReqId req_id, QString mnemonic, QString alias, QString password);
-    void revealMnemonic(ReqId req_id, QString fingerprint, QString password);
+    void importHotKey(ReqId req_id, const QString &mnemonic, const QString &alias,
+                      const QString &password);
+    void revealMnemonic(ReqId req_id, const QString &fingerprint, const QString &password);
     void signHot(ReqId req_id, const QString &fingerprint, const QString &password,
                  const QString &psbt_v2_hex);
     void fetchHotSpDescriptor(ReqId req_id, const QString &fingerprint, const QString &password);
@@ -196,9 +212,9 @@ private slots:
     void onInstanceRegistered(const QString &id);
     void onInstanceRemoved(const QString &id);
     void onDevicesChanged();
-    void onMnemonicGenerationFinished(ReqId req_id, MnemonicResult result);
-    void onHotKeySealed(ReqId req_id, SealedHotKey *sealed, QString alias);
-    void onMnemonicRevealFinished(ReqId req_id, MnemonicResult result);
+    void onMnemonicGenerationFinished(ReqId req_id, const MnemonicResult &result);
+    void onHotKeySealed(ReqId req_id, SealedHotKey *sealed, const QString &alias);
+    void onMnemonicRevealFinished(ReqId req_id, const MnemonicResult &result);
     void onHotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error,
                            bool wrong_password);
     void onHotSpDescriptorFinished(ReqId req_id, bool is_ok, QString descriptor, QString error,
@@ -210,6 +226,12 @@ protected:
     void teardownModule();
     void refreshLiveDevices();
     void bindHwiModule();
+    [[nodiscard]] static auto toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice;
+    // Adds a key with its routes and its xpubs, or nothing at all, without
+    // keysChanged(): the caller changes the new key further first.
+    [[nodiscard]] auto insertKey(const QString &fingerprint, const QString &alias,
+                                 const QList<KeyRouteKind> &routes, const QList<PathXpub> &xpubs)
+        -> KeyOpResult;
     // Opens `flow`, wired to answer through the bus, and returns once it has closed.
     void runFlow(flow::SigningFlow *flow);
     // buildKeyEntry() helpers: pick a live device signer for a Usb route, or build
