@@ -126,6 +126,7 @@ const int FIELD_NOTE_ICON_SIZE = 14;
 const int FOLD_CHEVRON_SIZE = 14;
 const int EMPTY_STATE_ICON_SIZE = 28;
 const int MODAL_STATUS_TEXT_MAX_WIDTH = 320;
+const int WORD_INDEX_WIDTH = 18;
 
 } // namespace metric
 

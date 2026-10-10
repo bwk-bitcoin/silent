@@ -14,6 +14,7 @@
 #include "catalog/display/CopyField.h"
 #include "catalog/display/Display.h"
 #include "catalog/display/Label.h"
+#include "catalog/display/WordGrid.h"
 #include "catalog/feedback/Notice.h"
 #include "catalog/feedback/ScanProgress.h"
 #include "catalog/feedback/Tooltip.h"
@@ -191,6 +192,7 @@ void Theme::apply() {
     qss += catalog::Notice::qss(p);
     qss += catalog::SectionHeader::qss(p);
     qss += catalog::CopyField::qss(p);
+    qss += catalog::WordGrid::qss(p);
     qss += catalog::BalanceHeader::qss(p);
     qss += catalog::LabelledInput::qss(p);
     qss += catalog::FoldSection::qss(p);

@@ -198,6 +198,8 @@ set(SILENT_APP_SOURCES
     src/catalog/display/RouteIcons.cpp
     src/catalog/display/ShortValue.h
     src/catalog/display/ShortValue.cpp
+    src/catalog/display/WordGrid.h
+    src/catalog/display/WordGrid.cpp
     src/catalog/form/ValidationMark.h
     src/catalog/form/ValidationMark.cpp
     src/catalog/form/ValidatedInput.h
@@ -216,6 +218,8 @@ set(SILENT_APP_SOURCES
     src/catalog/form/FieldGroup.cpp
     src/catalog/form/FieldNote.h
     src/catalog/form/FieldNote.cpp
+    src/catalog/form/WordInputGrid.h
+    src/catalog/form/WordInputGrid.cpp
     src/catalog/BalanceHeader.h
     src/catalog/BalanceHeader.cpp
     src/catalog/panels/receive/AddressRow.h
