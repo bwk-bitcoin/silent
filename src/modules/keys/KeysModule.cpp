@@ -699,6 +699,16 @@ auto KeysModule::removeKey(const QString &fingerprint, bool force) -> KeyOpResul
     return result;
 }
 
+auto KeysModule::addKey(const QString &fingerprint, const QString &alias,
+                        const QList<KeyRouteKind> &routes, const QList<PathXpub> &xpubs)
+    -> KeyOpResult {
+    auto result = insertKey(fingerprint, alias, routes, xpubs);
+    if (result.is_ok) {
+        emit keysChanged();
+    }
+    return result;
+}
+
 auto KeysModule::insertKey(const QString &fingerprint, const QString &alias,
                            const QList<KeyRouteKind> &routes, const QList<PathXpub> &xpubs)
     -> KeyOpResult {

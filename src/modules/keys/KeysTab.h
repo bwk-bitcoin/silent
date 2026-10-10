@@ -42,7 +42,6 @@ public slots:
     void onDeviceClicked();
     void onKeyClicked();
     void openAddKey();
-    void onKeyAdded(const QString &fingerprint);
     void onRegisterConfirmed(const QString &alias);
     void onRegisterXpub(ReqId req_id, const QString &xpub);
     void onRegisterError(std::optional<ReqId> req_id, const QString &message);

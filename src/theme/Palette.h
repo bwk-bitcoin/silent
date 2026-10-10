@@ -153,6 +153,7 @@ const int XPUB_PATH_COLUMN = 120;
 const int XPUB_PILL_COLUMN = 130;
 const int ACCOUNT_MODULE_COLUMN = 160;
 const int ACCOUNT_PILL_COLUMN = 140;
+const int DROP_ICON_SIZE = 48;
 
 } // namespace metric
 

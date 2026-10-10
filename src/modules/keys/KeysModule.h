@@ -113,6 +113,10 @@ public:
     [[nodiscard]] auto setRouteOrder(const QString &fingerprint, rust::Vec<KeyRouteKind> order)
         -> KeyOpResult;
     [[nodiscard]] auto removeKey(const QString &fingerprint, bool force) -> KeyOpResult;
+    // Registers a key with its routes and its xpubs, or nothing at all.
+    [[nodiscard]] auto addKey(const QString &fingerprint, const QString &alias,
+                              const QList<KeyRouteKind> &routes, const QList<PathXpub> &xpubs)
+        -> KeyOpResult;
     // Registers the key of a ready device: the key with `alias`, its USB route, the
     // xpub the device gave at `path` and the device itself, or none of them.
     [[nodiscard]] auto addDeviceKey(const plugin::SignerEntry &entry, const QString &alias,

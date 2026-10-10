@@ -1,518 +1,945 @@
 #include "AddKey.h"
 
-#include "HotKey.h"
+#include "modules/keys/KeysView.h"
+#include "modules/keys/QrRoute.h"
+#include "modules/keys/flow/CameraStep.h"
+#include "modules/keys/flow/QrDisplayStep.h"
 
-#include "modules/keys/KeysModule.h"
-
-#include "AppController.h"
 #include "catalog/Button.h"
 #include "catalog/SelectRow.h"
-#include "catalog/containers/Separator.h"
+#include "catalog/Table.h"
+#include "catalog/Variants.h"
+#include "catalog/containers/Card.h"
+#include "catalog/containers/ModalActions.h"
 #include "catalog/display/Label.h"
+#include "catalog/display/ShortValue.h"
+#include "catalog/display/WordGrid.h"
+#include "catalog/feedback/ModalStatus.h"
+#include "catalog/feedback/Notice.h"
 #include "catalog/form/Field.h"
+#include "catalog/form/FieldGroup.h"
+#include "catalog/form/FieldNote.h"
 #include "catalog/form/ValidatedInput.h"
 #include "catalog/form/ValidationMark.h"
+#include "catalog/form/WordInputGrid.h"
+#include "catalog/inputs/Checkbox.h"
+#include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
-#include "catalog/inputs/TextEdit.h"
 #include "i18n/Tr.h"
 #include "theme/Icon.h"
-#include "views/utils.h"
+#include "theme/Palette.h"
 
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QJsonParseError>
+#include <QLabel>
+#include <QMimeData>
 #include <QRegularExpression>
-#include <QStringList>
-
-#include <algorithm>
+#include <QUrl>
 
 #include <common.h>
 
-using catalog::Button;
-using catalog::ButtonRole;
-using catalog::Field;
-using catalog::Input;
-using catalog::InputRole;
+namespace keys::modal {
+
 using catalog::Label;
 using catalog::LabelRole;
-using catalog::TextEdit;
-using catalog::ValidatedInput;
-using catalog::ValidationMark;
-
-namespace keys::modal {
+using catalog::LabelTone;
 
 namespace {
 
-const char *const K_ADD_KEY_MODE = "addKeyMode";
+const char *const K_MODE = "addKeyMode";
+const char *const K_HOT_KIND = "hotKind";
 
-const QRegularExpression ORIGIN_RE(QStringLiteral(R"(^\[?([0-9a-fA-F]{8})((?:/\d+['h]?)*)\]?$)"));
+enum class Mode { Qr, File, Paste, Hot };
 
-auto isXpubValid(const QString &text) -> bool {
-    static const QStringList prefixes = {QStringLiteral("xpub"), QStringLiteral("tpub"),
-                                         QStringLiteral("vpub"), QStringLiteral("zpub"),
-                                         QStringLiteral("upub"), QStringLiteral("ypub")};
-    if (text.size() < 100) {
-        return false;
+constexpr int KEY_FILE_VERSION = 1;
+constexpr int MIN_PASSWORD_LENGTH = 8;
+constexpr int WORDS_SHORT = 12;
+constexpr int WORDS_MIDDLE = 15;
+constexpr int WORDS_LONG = 24;
+
+// [73c5da0a/84'/1'/0']tpubD...: the origin, then the key.
+const QRegularExpression PASTED_KEY_RE(QStringLiteral(R"(^(\[[^\]]*\])\s*(\S+)$)"));
+const QRegularExpression ORIGIN_RE(QStringLiteral(R"(^\[([0-9a-f]{8})((?:/\d+['h]?)+)\]$)"));
+const QRegularExpression XPUB_RE(QStringLiteral(R"(^[xt]pub[1-9A-HJ-NP-Za-km-z]{100,}$)"));
+const QRegularExpression FINGERPRINT_RE(QStringLiteral(R"(^[0-9a-f]{8}$)"));
+
+auto networkFromFile(const QString &name) -> std::optional<Network> {
+    if (name == QStringLiteral("bitcoin")) {
+        return Network::Bitcoin;
     }
-    return std::ranges::any_of(prefixes,
-                               [&text](const QString &prefix) { return text.startsWith(prefix); });
+    if (name == QStringLiteral("testnet")) {
+        return Network::Testnet;
+    }
+    if (name == QStringLiteral("signet")) {
+        return Network::Signet;
+    }
+    if (name == QStringLiteral("regtest")) {
+        return Network::Regtest;
+    }
+    return std::nullopt;
 }
 
-auto networkName(Network network) -> QString {
-    switch (network) {
-    case Network::Bitcoin:
-        return QStringLiteral("bitcoin");
-    case Network::Testnet:
-        return QStringLiteral("testnet");
-    case Network::Signet:
-        return QStringLiteral("signet");
-    case Network::Regtest:
-        return QStringLiteral("regtest");
-    default:
-        return QString();
-    }
-}
-
-auto routeFromString(const QString &text) -> KeyRouteKind {
-    if (text == QStringLiteral("hot")) {
+auto routeFromFile(const QString &name) -> std::optional<KeyRouteKind> {
+    if (name == QStringLiteral("hot")) {
         return KeyRouteKind::Hot;
     }
-    if (text == QStringLiteral("usb")) {
+    if (name == QStringLiteral("usb")) {
         return KeyRouteKind::Usb;
     }
-    if (text == QStringLiteral("qr")) {
+    if (name == QStringLiteral("qr")) {
         return KeyRouteKind::Qr;
     }
-    if (text == QStringLiteral("sdcard")) {
+    if (name == QStringLiteral("sdcard")) {
         return KeyRouteKind::SdCard;
     }
-    return KeyRouteKind::Unknown;
+    return std::nullopt;
+}
+
+auto modeRow(Mode mode, IconFn icon, const QString &title, const QString &sub)
+    -> catalog::SelectRow * {
+    auto *row = new catalog::SelectRow;
+    row->setIcon(icon);
+    row->setTitle(title);
+    row->setSub(sub);
+    row->setProperty(K_MODE, static_cast<int>(mode));
+    return row;
+}
+
+auto hotRow(int kind, IconFn icon, const QString &title, const QString &sub)
+    -> catalog::SelectRow * {
+    auto *row = new catalog::SelectRow;
+    row->setIcon(icon);
+    row->setTitle(title);
+    row->setSub(sub);
+    row->setProperty(K_HOT_KIND, kind);
+    return row;
+}
+
+auto aliasInput() -> catalog::Input * {
+    auto *input = new catalog::Input;
+    input->setPlaceholderText(TR("keys-alias-name"));
+    return input;
+}
+
+auto duplicateNotice() -> catalog::Notice * {
+    auto *notice = new catalog::Notice(catalog::Notice::Tone::Error);
+    notice->setTitle(TR("keys-duplicate-title"));
+    notice->setVisible(false);
+    return notice;
+}
+
+auto errorNotice() -> catalog::Notice * {
+    auto *notice = new catalog::Notice(catalog::Notice::Tone::Error);
+    notice->setVisible(false);
+    return notice;
 }
 
 } // namespace
 
-AddKey::AddKey(KeysModule *module, QWidget *parent) : m_module(module) {
-    Q_UNUSED(parent);
-    setWindowTitle(TR("keys-add-key-title"));
+AddKey::AddKey(KeysModule *module) : m_module(module) {
     init();
     doConnect();
     view();
-    applyMode();
+    showModes();
+}
+
+AddKey::~AddKey() {
+    clearSecrets();
 }
 
 void AddKey::init() {
-    auto *qrRow = new catalog::SelectRow;
-    qrRow->setIcon(icon::qr);
-    qrRow->setTitle(TR("keys-mode-qr"));
-    qrRow->setProperty(K_ADD_KEY_MODE, static_cast<int>(Mode::AirgapQr));
+    setAcceptDrops(true);
+    m_header_fingerprint = new Label(LabelRole::Mono);
+    m_header_fingerprint->setTone(LabelTone::Secondary);
+    m_header_fingerprint->setSize(catalog::LabelSize::Sm);
 
-    auto *sdRow = new catalog::SelectRow;
-    sdRow->setIcon(icon::sdCard);
-    sdRow->setTitle(TR("keys-mode-sd"));
-    sdRow->setProperty(K_ADD_KEY_MODE, static_cast<int>(Mode::AirgapSd));
+    m_mode_rows = {
+        modeRow(Mode::Qr, icon::qr, TR("keys-add-mode-qr"), TR("keys-add-mode-qr-sub")),
+        modeRow(Mode::File, icon::folder, TR("keys-add-mode-file"), TR("keys-add-mode-file-sub")),
+        modeRow(Mode::Paste, icon::pencil, TR("keys-add-mode-paste"),
+                TR("keys-add-mode-paste-sub")),
+        modeRow(Mode::Hot, icon::key, TR("keys-add-mode-hot"), TR("keys-add-mode-hot-sub")),
+    };
 
-    auto *xpubRow = new catalog::SelectRow;
-    xpubRow->setIcon(icon::key);
-    xpubRow->setTitle(TR("keys-mode-xpub"));
-    xpubRow->setProperty(K_ADD_KEY_MODE, static_cast<int>(Mode::ImportXpub));
+    m_qr = new flow::QrDisplayStep;
+    m_qr->setHint(TR("keys-add-qr-hint"));
+    m_qr->actions()->setBack(catalog::ModalActions::Back::Back);
+    m_camera = new flow::CameraStep(m_module);
+    m_camera->setHint(TR("keys-add-scan-hint"));
 
-    auto *fileRow = new catalog::SelectRow;
-    fileRow->setIcon(icon::folder);
-    fileRow->setTitle(TR("keys-mode-file"));
-    fileRow->setProperty(K_ADD_KEY_MODE, static_cast<int>(Mode::ImportFile));
+    m_drop = new catalog::Card(catalog::Card::Role::Inset);
+    m_drop->setPad(catalog::Card::Pad::M);
+    auto *folder = new QLabel;
+    folder->setPixmap(
+        icon::folder(IconColor::Muted).pixmap(metric::DROP_ICON_SIZE, metric::DROP_ICON_SIZE));
+    auto *dropCaption = new Label(TR("keys-file-drop"), LabelRole::Caption);
+    dropCaption->setTone(LabelTone::Muted);
+    m_drop->setContent((new qontrol::Column)
+                           ->margins(0, resolve(Spacing::L), 0, resolve(Spacing::L))
+                           ->spacing(resolve(Spacing::S))
+                           ->pushAligned(folder, Qt::AlignHCenter)
+                           ->pushAligned(dropCaption, Qt::AlignHCenter));
+    m_read_error = errorNotice();
+    m_read_error->setTitle(TR("keys-file-read-title"));
+    m_read_error->setText(TR("keys-file-read-body"));
+    m_file_error = errorNotice();
+    m_file_error->setTitle(TR("keys-file-error-title"));
+    m_review_table = new catalog::Table;
+    m_review_table->setHeaderVisible(false);
+    m_review_table->addColumn({.width = metric::XPUB_PATH_COLUMN});
+    m_review_table->addColumn({.grow = true});
+    m_review_duplicate = duplicateNotice();
+    m_review_alias = aliasInput();
+    m_review_alias_field = new catalog::Field(TR("keys-alias"), m_review_alias);
+    m_review_error = errorNotice();
+    m_open_file = catalog::btnOpenFile();
+    m_add_reviewed = catalog::btnAddKey();
+    m_review_actions = new catalog::ModalActions;
+    m_review_actions->setBack(catalog::ModalActions::Back::Back);
+    m_review_actions->addAction(m_open_file);
+    m_review_actions->addAction(m_add_reviewed);
 
-    auto *hotRow = new catalog::SelectRow;
-    hotRow->setIcon(icon::lock);
-    hotRow->setTitle(TR("keys-mode-hot"));
-    hotRow->setProperty(K_ADD_KEY_MODE, static_cast<int>(Mode::HotKey));
+    m_paste = new catalog::ValidatedInput(catalog::InputRole::Mono);
+    m_paste->input()->setPlaceholderText(TR("keys-paste-placeholder")
+                                             .arg(KeysModule::network() == Network::Bitcoin
+                                                      ? QStringLiteral("xpub")
+                                                      : QStringLiteral("tpub")));
+    m_paste_note =
+        new catalog::FieldNote(TR("keys-paste-invalid"), catalog::FieldNote::Tone::Error);
+    m_paste_note->setVisible(false);
+    m_paste_alias = aliasInput();
+    m_paste_duplicate = duplicateNotice();
+    m_paste_error = errorNotice();
+    m_add_pasted = catalog::btnAddKey();
+    m_paste_actions = new catalog::ModalActions;
+    m_paste_actions->setBack(catalog::ModalActions::Back::Back);
+    m_paste_actions->addAction(m_add_pasted);
 
-    m_mode_rows = {qrRow, sdRow, xpubRow, fileRow, hotRow};
+    m_generate12 = hotRow(static_cast<int>(HotKind::Generate12), icon::refresh,
+                          TR("keys-hot-generate-12"), TR("keys-hot-generate-12-sub"));
+    m_generate24 = hotRow(static_cast<int>(HotKind::Generate24), icon::refresh,
+                          TR("keys-hot-generate-24"), TR("keys-hot-generate-24-sub"));
+    m_import = hotRow(static_cast<int>(HotKind::Import), icon::pencil, TR("keys-hot-import-words"),
+                      TR("keys-hot-import-sub"));
+    m_word_count = new catalog::ComboBox;
+    for (int count : {WORDS_SHORT, WORDS_MIDDLE, WORDS_LONG}) {
+        m_word_count->addItem(TR("keys-words-count").arg(count), count);
+    }
+    m_word_count->setWidth(Size::S);
+    m_import->setTrailing(m_word_count);
+    m_words_input = new catalog::WordInputGrid;
+    m_words_input->setWordCount(WORDS_SHORT);
+    m_words_input->setWordCheck(
+        [](const QString &word) { return ::bip39_word_is_valid(word.toStdString()); });
+    m_choose_continue = catalog::btnContinue();
+    m_choose_actions = new catalog::ModalActions;
+    m_choose_actions->setBack(catalog::ModalActions::Back::Back);
+    m_choose_actions->addAction(m_choose_continue);
 
-    m_alias_input = new Input;
-    m_alias_input->setPlaceholderText(TR("keys-alias-placeholder"));
+    m_backup_words = new catalog::WordGrid;
+    m_backup_check = new catalog::Checkbox(TR("keys-backup-wrote"));
+    m_backup_continue = catalog::btnContinue();
+    m_backup_actions = new catalog::ModalActions;
+    m_backup_actions->setBack(catalog::ModalActions::Back::Back);
+    m_backup_actions->addAction(m_backup_continue);
 
-    m_origin_input = new ValidatedInput;
-    m_origin_input->setWidth(Size::L);
-    m_origin_input->input()->setPlaceholderText(QStringLiteral("[73c5da0a/84'/0'/0']"));
+    m_hot_alias = aliasInput();
+    m_password = new catalog::Input;
+    m_password->setEchoMode(QLineEdit::Password);
+    m_password_short =
+        new catalog::FieldNote(TR("keys-password-short"), catalog::FieldNote::Tone::Error);
+    m_confirm = new catalog::Input;
+    m_confirm->setEchoMode(QLineEdit::Password);
+    m_password_mismatch =
+        new catalog::FieldNote(TR("keys-password-no-match"), catalog::FieldNote::Tone::Error);
+    m_seal = catalog::btnSealKey();
+    m_password_actions = new catalog::ModalActions;
+    m_password_actions->setBack(catalog::ModalActions::Back::Back);
+    m_password_actions->addAction(m_seal);
 
-    m_xpub_input = new ValidatedInput(InputRole::Mono);
-    m_xpub_input->setWidth(Size::L);
-
-    m_qr_response = new TextEdit;
-    m_qr_response->setPlaceholderText(TR("keys-qr-paste"));
-    m_qr_response->setMaximumHeight(60);
-    m_qr_response->setMinimumWidth(260);
-    m_decode_qr_btn = new Button(TR("keys-qr-decode"));
-
-    m_browse_btn = new Button(TR("keys-pick-file"));
-    m_file_label = new Label(QString(), LabelRole::Caption);
-
-    m_hot_caption = new Label(TR("keys-mode-hot-hint"), LabelRole::Caption);
-    m_hot_caption->setWordWrap(true);
-    m_hot_caption->setVisible(false);
-
-    m_error_label = new Label(QString(), LabelRole::Caption);
-    m_error_label->setVisible(false);
-
-    m_register_btn = new Button(TR("keys-register-key"), ButtonRole::Primary);
-    m_register_btn->setEnabled(false);
-    m_cancel_btn = new Button(TR("common-cancel"));
-
-    m_qr_row = (new qontrol::Row)
-                   ->push(m_qr_response)
-                   ->pushSpacer(resolve(Spacing::XS))
-                   ->push(m_decode_qr_btn);
-    m_file_row = (new qontrol::Row)
-                     ->push(m_browse_btn)
-                     ->pushSpacer(resolve(Spacing::XS))
-                     ->push(m_file_label);
-
-    m_alias_row = new Field(TR("keys-alias"), m_alias_input, metric::FORM_LABEL_WIDTH);
-    m_origin_row = new Field(TR("keys-origin"), m_origin_input, metric::FORM_LABEL_WIDTH);
-    m_xpub_row = new Field(TR("keys-xpub"), m_xpub_input, metric::FORM_LABEL_WIDTH);
+    m_status = new catalog::ModalStatus;
+    m_status->setPadding(resolve(Spacing::M), resolve(Spacing::M));
+    m_done = catalog::btnDone();
+    m_try_again = catalog::btnTryAgain();
+    m_status_actions = new catalog::ModalActions;
+    m_status_actions->addAction(m_done);
+    m_status_actions->addAction(m_try_again);
 }
 
 void AddKey::doConnect() {
     for (auto *row : m_mode_rows) {
         connect(row, &catalog::SelectRow::clicked, this, &AddKey::onModeClicked, qontrol::UNIQUE);
     }
-    connect(m_origin_input, &ValidatedInput::textChanged, this, &AddKey::onOriginChanged,
+    connect(m_qr, &flow::QrDisplayStep::nextClicked, this, &AddKey::onQrNext, qontrol::UNIQUE);
+    connect(m_qr->actions(), &catalog::ModalActions::backClicked, this, &AddKey::showModes,
             qontrol::UNIQUE);
-    connect(m_xpub_input, &ValidatedInput::textChanged, this, &AddKey::onXpubChanged,
+    connect(m_camera, &flow::CameraStep::backClicked, this, &AddKey::onCameraBack, qontrol::UNIQUE);
+    auto *qrRoute = m_module->qrRoute();
+    connect(qrRoute, &QrRoute::xpubDecoded, this, &AddKey::onQrXpub, qontrol::UNIQUE);
+    connect(qrRoute, &QrRoute::scanFailed, this, &AddKey::onQrScanFailed, qontrol::UNIQUE);
+    connect(qrRoute, &QrRoute::failed, this, &AddKey::onQrFailed, qontrol::UNIQUE);
+
+    connect(m_review_alias, &QLineEdit::textEdited, this, &AddKey::updateReview, qontrol::UNIQUE);
+    connect(m_review_table, &catalog::Table::rebuilt, this, &AddKey::refit, qontrol::UNIQUE);
+    connect(m_open_file, &QPushButton::clicked, this, &AddKey::openFile, qontrol::UNIQUE);
+    connect(m_add_reviewed, &QPushButton::clicked, this, &AddKey::addReviewed, qontrol::UNIQUE);
+    connect(m_review_actions, &catalog::ModalActions::backClicked, this, &AddKey::onReviewBack,
             qontrol::UNIQUE);
-    connect(m_decode_qr_btn, &QPushButton::clicked, this, &AddKey::onDecodeQrClicked,
+
+    connect(m_paste, &catalog::ValidatedInput::textChanged, this, &AddKey::updatePaste,
             qontrol::UNIQUE);
-    connect(m_browse_btn, &QPushButton::clicked, this, &AddKey::onBrowseFileClicked,
+    connect(m_paste_alias, &QLineEdit::textEdited, this, &AddKey::updatePaste, qontrol::UNIQUE);
+    connect(m_add_pasted, &QPushButton::clicked, this, &AddKey::addPasted, qontrol::UNIQUE);
+    connect(m_paste_actions, &catalog::ModalActions::backClicked, this, &AddKey::showModes,
             qontrol::UNIQUE);
-    connect(m_register_btn, &QPushButton::clicked, this, &AddKey::onRegisterClicked,
+
+    for (auto *row : {m_generate12, m_generate24, m_import}) {
+        connect(row, &catalog::SelectRow::clicked, this, &AddKey::onHotKindClicked,
+                qontrol::UNIQUE);
+    }
+    connect(m_word_count, &QComboBox::activated, this, &AddKey::onWordCountPicked, qontrol::UNIQUE);
+    connect(m_words_input, &catalog::WordInputGrid::wordsChanged, this, &AddKey::updateHotChoose,
             qontrol::UNIQUE);
-    connect(m_cancel_btn, &QPushButton::clicked, this, &QDialog::reject, qontrol::UNIQUE);
+    connect(m_choose_continue, &QPushButton::clicked, this, &AddKey::continueHot, qontrol::UNIQUE);
+    connect(m_choose_actions, &catalog::ModalActions::backClicked, this, &AddKey::showModes,
+            qontrol::UNIQUE);
+    connect(m_module, &KeysModule::mnemonicGenerated, this, &AddKey::onMnemonicGenerated,
+            qontrol::UNIQUE);
+
+    connect(m_backup_check, &QCheckBox::toggled, this, &AddKey::updateBackup, qontrol::UNIQUE);
+    connect(m_backup_continue, &QPushButton::clicked, this, &AddKey::showHotPassword,
+            qontrol::UNIQUE);
+    connect(m_backup_actions, &catalog::ModalActions::backClicked, this, &AddKey::showHotChoose,
+            qontrol::UNIQUE);
+
+    for (auto *input : {m_hot_alias, m_password, m_confirm}) {
+        connect(input, &QLineEdit::textEdited, this, &AddKey::updateHotPassword, qontrol::UNIQUE);
+    }
+    connect(m_seal, &QPushButton::clicked, this, &AddKey::sealKey, qontrol::UNIQUE);
+    connect(m_password_actions, &catalog::ModalActions::backClicked, this,
+            &AddKey::onHotPasswordBack, qontrol::UNIQUE);
+    connect(m_module, &KeysModule::hotKeyImported, this, &AddKey::onHotKeyImported,
+            qontrol::UNIQUE);
+
+    connect(m_done, &QPushButton::clicked, this, &QDialog::accept, qontrol::UNIQUE);
+    connect(m_try_again, &QPushButton::clicked, this, &AddKey::onFailureRetry, qontrol::UNIQUE);
 }
 
 void AddKey::view() {
-    auto *col = (new qontrol::Column)
-                    ->push(new Label(TR("keys-add-key-title"), LabelRole::Heading))
-                    ->pushSpacer(resolve(Spacing::S));
+    setHeaderEnd(m_header_fingerprint);
+    m_mode_page = addStep(TR("keys-add-title"), ModalWidth::L, buildModes(), nullptr);
+    m_qr_page = addStep(TR("keys-add-qr-title"), ModalWidth::L, m_qr, m_qr->actions());
+    m_camera_page =
+        addStep(TR("keys-add-scan-title"), ModalWidth::XXL, m_camera, m_camera->actions());
+    m_review_page =
+        addStep(TR("keys-add-review-title"), ModalWidth::L, buildReview(), m_review_actions);
+    m_paste_page =
+        addStep(TR("keys-add-paste-title"), ModalWidth::L, buildPaste(), m_paste_actions);
+    m_choose_page =
+        addStep(TR("keys-add-hot-title"), ModalWidth::L, buildHotChoose(), m_choose_actions);
+    m_backup_page =
+        addStep(TR("keys-add-backup-title"), ModalWidth::L, buildBackup(), m_backup_actions);
+    m_password_page = addStep(TR("keys-add-password-title"), ModalWidth::L, buildHotPassword(),
+                              m_password_actions);
+    m_status_page = addStep(TR("keys-add-title"), ModalWidth::L, m_status, m_status_actions);
+}
 
+auto AddKey::buildModes() -> QWidget * {
+    auto *column = (new qontrol::Column)->spacing(resolve(Spacing::S));
     for (auto *row : m_mode_rows) {
-        col->push(row)->pushSpacer(resolve(Spacing::XS));
+        column->push(row);
     }
-
-    col->pushSpacer(resolve(Spacing::M))
-        ->push(new catalog::Separator)
-        ->pushSpacer(resolve(Spacing::M))
-        ->push(m_alias_row)
-        ->push(m_origin_row)
-        ->push(m_xpub_row)
-        ->push(m_qr_row)
-        ->push(m_file_row)
-        ->push(m_hot_caption)
-        ->push(m_error_label)
-        ->pushSpacer(resolve(Spacing::M));
-
-    auto *buttonRow = (new qontrol::Row)
-                          ->pushSpacer()
-                          ->push(m_cancel_btn)
-                          ->pushSpacer(resolve(Spacing::XS))
-                          ->push(m_register_btn);
-    col->push(buttonRow);
-
-    setMainWidget(margin(col));
+    return column;
 }
 
-void AddKey::applyMode() {
-    bool isQr = (m_mode == Mode::AirgapQr);
-    bool isFile = (m_mode == Mode::ImportFile);
-    bool isHot = (m_mode == Mode::HotKey);
-
-    m_qr_row->setVisible(isQr);
-    m_file_row->setVisible(isFile);
-    m_alias_row->setVisible(!isHot);
-    m_origin_row->setVisible(!isFile && !isHot);
-    m_xpub_row->setVisible(!isFile && !isHot);
-    m_hot_caption->setVisible(isHot);
-    m_origin_input->input()->setReadOnly(isQr);
-    m_xpub_input->input()->setReadOnly(isQr);
-
-    updateRegisterState();
+auto AddKey::buildReview() -> QWidget * {
+    m_file_area = (new qontrol::Column)
+                      ->spacing(resolve(Spacing::S))
+                      ->push(m_drop)
+                      ->push(m_read_error)
+                      ->push(m_file_error);
+    return (new qontrol::Column)
+        ->spacing(resolve(Spacing::M))
+        ->push(m_file_area)
+        ->push(m_review_table)
+        ->push(m_review_duplicate)
+        ->push(m_review_alias_field)
+        ->push(m_review_error);
 }
 
-void AddKey::updateRegisterState() {
-    showError(QString());
-
-    if (m_mode == Mode::HotKey) {
-        m_register_btn->setEnabled(true);
-        return;
-    }
-
-    if (m_mode == Mode::ImportFile) {
-        m_register_btn->setEnabled(!m_file_path.isEmpty());
-        return;
-    }
-
-    bool complete = originIsValid() && isXpubValid(m_xpub_input->input()->text().trimmed());
-    if (!complete) {
-        m_register_btn->setEnabled(false);
-        return;
-    }
-
-    if (m_module != nullptr && m_module->hasKey(fingerprintFromOrigin())) {
-        m_register_btn->setEnabled(false);
-        showError(TR("keys-already-registered"));
-        return;
-    }
-
-    m_register_btn->setEnabled(true);
+auto AddKey::buildPaste() -> QWidget * {
+    auto *fields = new catalog::FieldGroup;
+    fields->addField(TR("keys-xpub"), m_paste)
+        ->addNote(m_paste_note)
+        ->addField(TR("keys-alias"), m_paste_alias);
+    return (new qontrol::Column)
+        ->spacing(resolve(Spacing::S))
+        ->push(fields)
+        ->push(m_paste_duplicate)
+        ->push(m_paste_error);
 }
 
-void AddKey::showError(const QString &message) {
-    m_error_label->setText(message);
-    m_error_label->setVisible(!message.isEmpty());
+auto AddKey::buildHotChoose() -> QWidget * {
+    return (new qontrol::Column)
+        ->spacing(resolve(Spacing::M))
+        ->push((new qontrol::Column)
+                   ->spacing(resolve(Spacing::S))
+                   ->push(m_generate12)
+                   ->push(m_generate24)
+                   ->push(m_import))
+        ->push(m_words_input);
 }
 
-auto AddKey::originIsValid() const -> bool {
-    return ORIGIN_RE.match(m_origin_input->input()->text().trimmed()).hasMatch();
+auto AddKey::buildBackup() -> QWidget * {
+    auto *warning = new catalog::Notice(catalog::Notice::Tone::Warning);
+    warning->setTitle(TR("keys-backup-title"));
+    warning->setText(TR("keys-backup-body"));
+    return (new qontrol::Column)
+        ->spacing(resolve(Spacing::M))
+        ->push(warning)
+        ->push(m_backup_words)
+        ->push(m_backup_check);
 }
 
-auto AddKey::fingerprintFromOrigin() const -> QString {
-    auto match = ORIGIN_RE.match(m_origin_input->input()->text().trimmed());
-    if (!match.hasMatch()) {
-        return QString();
-    }
-    return match.captured(1).toLower();
+auto AddKey::buildHotPassword() -> QWidget * {
+    auto *lead = new Label(TR("keys-password-lead"), LabelRole::Body);
+    lead->setTone(LabelTone::Secondary);
+    lead->setWordWrap(true);
+    m_password_fields = new catalog::FieldGroup;
+    m_password_fields->addField(TR("keys-alias"), m_hot_alias)
+        ->addField(TR("keys-password-field"), m_password)
+        ->addNote(m_password_short)
+        ->addField(TR("keys-password-confirm-field"), m_confirm)
+        ->addNote(m_password_mismatch);
+    return (new qontrol::Column)->spacing(resolve(Spacing::S))->push(lead)->push(m_password_fields);
 }
 
-auto AddKey::pathFromOrigin() const -> QString {
-    auto match = ORIGIN_RE.match(m_origin_input->input()->text().trimmed());
-    if (!match.hasMatch()) {
-        return QStringLiteral("m");
-    }
-    return QStringLiteral("m") + match.captured(2);
+void AddKey::done(int result) {
+    stopQr();
+    clearSecrets();
+    StepModal::done(result);
+}
+
+void AddKey::refit() {
+    showStep(currentStep());
+}
+
+void AddKey::showModes() {
+    stopQr();
+    setHeaderEndVisible(false);
+    showStep(m_mode_page);
 }
 
 void AddKey::onModeClicked() {
-    auto *row = qobject_cast<QObject *>(sender());
-    if (row == nullptr) {
+    switch (static_cast<Mode>(sender()->property(K_MODE).toInt())) {
+    case Mode::Qr:
+        showQr();
+        return;
+    case Mode::File:
+        showFile();
+        return;
+    case Mode::Paste:
+        m_paste->input()->clear();
+        m_paste_alias->clear();
+        m_paste_error->setVisible(false);
+        updatePaste();
+        showStep(m_paste_page);
+        return;
+    case Mode::Hot:
+        showHotChoose();
         return;
     }
-    m_mode = static_cast<Mode>(row->property(K_ADD_KEY_MODE).toInt());
-    applyMode();
 }
 
-void AddKey::onOriginChanged() {
-    QString text = m_origin_input->input()->text().trimmed();
-    if (text.isEmpty()) {
-        m_origin_input->setState(ValidationMark::State::None);
-    } else {
-        m_origin_input->setState(originIsValid() ? ValidationMark::State::Valid
-                                                 : ValidationMark::State::Invalid);
-    }
-    updateRegisterState();
+void AddKey::showQr() {
+    setHeaderEndVisible(false);
+    showStep(m_qr_page);
+    m_module->qrRoute()->startXpub(m_qr, KeysModule::defaultXpubPath());
 }
 
-void AddKey::onXpubChanged() {
-    QString text = m_xpub_input->input()->text().trimmed();
-    if (text.isEmpty()) {
-        m_xpub_input->setState(ValidationMark::State::None);
-    } else {
-        m_xpub_input->setState(isXpubValid(text) ? ValidationMark::State::Valid
-                                                 : ValidationMark::State::Invalid);
-    }
-    updateRegisterState();
+void AddKey::onQrNext() {
+    m_qr->stop();
+    showStep(m_camera_page);
+    m_camera->start();
 }
 
-void AddKey::onDecodeQrClicked() {
-    if (m_module == nullptr || m_module->rust() == nullptr) {
-        return;
-    }
-
-    auto payload = m_qr_response->toPlainText().trimmed();
-    auto response = m_module->rust()->qr_decode_response(rust::String(payload.toStdString()));
-    if (!response->is_ok()) {
-        showError(TR("keys-qr-failed").arg(KeysModule::toQt(response->get_error())));
-        return;
-    }
-    if (response->kind() != QrResponseKind::Xpubs) {
-        showError(TR("keys-qr-wrong-kind"));
-        return;
-    }
-
-    // The bridge already parses the response into structured fields (a fingerprint
-    // plus one KeyXpub per path) rather than one packed string, so the inputs are
-    // filled straight from those fields instead of splitting a payload string.
-    auto xpubs = response->xpubs();
-    if (xpubs.empty()) {
-        showError(TR("keys-qr-wrong-kind"));
-        return;
-    }
-    const auto &entry = xpubs[0];
-    QString fingerprint = KeysModule::toQt(response->fingerprint());
-    QString path = KeysModule::toQt(entry.path);
-    QString suffix = path.startsWith(QStringLiteral("m")) ? path.mid(1) : path;
-
-    m_origin_input->input()->setText(QStringLiteral("[%1%2]").arg(fingerprint, suffix));
-    m_xpub_input->input()->setText(KeysModule::toQt(entry.xpub));
-
-    onOriginChanged();
-    onXpubChanged();
+void AddKey::onCameraBack() {
+    m_camera->stop();
+    showStep(m_qr_page);
+    m_qr->restart();
 }
 
-void AddKey::onBrowseFileClicked() {
+void AddKey::onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub) {
+    stopQr();
+    m_review_fingerprint = fingerprint;
+    m_review_xpubs = {{.path = path, .xpub = xpub}};
+    m_review_routes = {KeyRouteKind::Qr};
+    m_review_alias->clear();
+    showReview(Source::Qr);
+}
+
+void AddKey::onQrScanFailed(QrErrorKind kind, const QString &message) {
+    m_camera->showScanError(kind, message);
+    refit();
+}
+
+void AddKey::onQrFailed(const QString &message) {
+    stopQr();
+    showFailure(Failure::Qr, TR("keys-qr-failed-title"), message);
+}
+
+void AddKey::stopQr() {
+    m_module->qrRoute()->stop();
+    m_qr->stop();
+    m_camera->stop();
+}
+
+void AddKey::showFile() {
+    m_review_xpubs.clear();
+    m_review_fingerprint.clear();
+    m_read_error->setVisible(false);
+    m_file_error->setVisible(false);
+    m_review_alias->clear();
+    showReview(Source::File);
+}
+
+void AddKey::showReview(Source source) {
+    m_source = source;
+    setStepTitle(m_review_page,
+                 source == Source::Qr ? TR("keys-add-review-title") : TR("keys-add-file-title"));
+    m_review_table->clearRows();
+    for (const auto &entry : m_review_xpubs) {
+        auto *path = new Label(entry.path, LabelRole::Mono);
+        path->setTone(LabelTone::Secondary);
+        m_review_table->addWidgetRow(entry.path,
+                                     {path, new catalog::ShortValue(entry.xpub, false)});
+    }
+    m_review_error->setVisible(false);
+    updateReview();
+    showStep(m_review_page);
+}
+
+void AddKey::updateReview() {
+    bool loaded = !m_review_fingerprint.isEmpty();
+    m_file_area->setVisible(!loaded);
+    m_review_table->setVisible(loaded);
+    m_review_alias_field->setVisible(loaded);
+    m_open_file->setVisible(!loaded);
+    m_add_reviewed->setVisible(loaded);
+    refreshHeader(m_review_fingerprint);
+
+    QString duplicate = registeredAlias(m_review_fingerprint);
+    m_review_duplicate->setText(TR("keys-duplicate-body").arg(m_review_fingerprint, duplicate));
+    m_review_duplicate->setVisible(loaded && !duplicate.isEmpty());
+    QString reason;
+    if (loaded) {
+        reason = duplicate.isEmpty() ? aliasReason(m_review_alias->text().trimmed())
+                                     : TR("keys-duplicate-reason");
+    }
+    m_add_reviewed->setEnabled(loaded && reason.isEmpty());
+    m_review_actions->setReason(reason);
+    refit();
+}
+
+void AddKey::onReviewBack() {
+    m_review_fingerprint.clear();
+    if (m_source == Source::Qr) {
+        showQr();
+        return;
+    }
+    showModes();
+}
+
+void AddKey::addReviewed() {
+    addKey(m_review_fingerprint, m_review_alias->text().trimmed(), m_review_routes, m_review_xpubs,
+           m_review_error);
+}
+
+void AddKey::openFile() {
     QString path =
         QFileDialog::getOpenFileName(this, TR("keys-pick-file"), QString(), TR("keys-file-filter"));
-    if (path.isEmpty()) {
-        return;
+    if (!path.isEmpty()) {
+        loadFile(path);
     }
-    m_file_path = path;
-    m_file_label->setText(path);
-    updateRegisterState();
 }
 
-void AddKey::onRegisterClicked() {
-    if (m_module == nullptr || m_module->rust() == nullptr) {
-        return;
+void AddKey::dragEnterEvent(QDragEnterEvent *event) {
+    bool waitingForFile = currentStep() == m_review_page && m_source == Source::File &&
+                          m_review_fingerprint.isEmpty();
+    if (waitingForFile && event->mimeData()->hasUrls()) {
+        event->acceptProposedAction();
     }
-
-    if (m_mode == Mode::HotKey) {
-        auto *hotKey = new HotKey(m_module);
-        connect(hotKey, &HotKey::keyAdded, this, &AddKey::onHotKeyAdded, qontrol::UNIQUE);
-        AppController::execModal(hotKey);
-        return;
-    }
-
-    if (m_mode == Mode::ImportFile) {
-        registerFromFile();
-        return;
-    }
-
-    QString fingerprint = fingerprintFromOrigin();
-    if (fingerprint.isEmpty()) {
-        return;
-    }
-    if (m_module->hasKey(fingerprint)) {
-        showError(TR("keys-already-registered"));
-        return;
-    }
-    QString alias = m_alias_input->text().trimmed();
-    if (alias.isEmpty()) {
-        alias = fingerprint;
-    }
-    QString xpub = m_xpub_input->input()->text().trimmed();
-    QString path = pathFromOrigin();
-
-    auto addResult = m_module->rust()->add_key(rust::String(fingerprint.toStdString()),
-                                               rust::String(alias.toStdString()));
-    if (!addResult.is_ok) {
-        showError(TR("keys-add-failed").arg(KeysModule::toQt(addResult.error)));
-        return;
-    }
-
-    // A key with no cached xpub is still a key: a failure here is reported but does
-    // not undo the record just created.
-    auto cacheResult = m_module->rust()->cache_xpub(rust::String(fingerprint.toStdString()),
-                                                    rust::String(path.toStdString()),
-                                                    rust::String(xpub.toStdString()));
-    if (!cacheResult.is_ok) {
-        showError(TR("keys-add-failed").arg(KeysModule::toQt(cacheResult.error)));
-        return;
-    }
-
-    if (m_mode == Mode::AirgapQr || m_mode == Mode::AirgapSd) {
-        KeyRouteKind kind = (m_mode == Mode::AirgapQr) ? KeyRouteKind::Qr : KeyRouteKind::SdCard;
-        auto routeResult = m_module->addRoute(fingerprint, kind);
-        if (!routeResult.is_ok) {
-            showError(TR("keys-add-failed").arg(KeysModule::toQt(routeResult.error)));
-            return;
-        }
-    }
-    // ImportXpub adds no route: the key is held by a signer that is not connected
-    // here, and a route is added from the key modal once one exists.
-
-    emit keyAdded(fingerprint);
-    accept();
 }
 
-void AddKey::registerFromFile() {
-    QFile file(m_file_path);
+void AddKey::dropEvent(QDropEvent *event) {
+    QList<QUrl> urls = event->mimeData()->urls();
+    if (!urls.isEmpty() && urls.first().isLocalFile()) {
+        event->acceptProposedAction();
+        loadFile(urls.first().toLocalFile());
+    }
+}
+
+// A key file as Silent writes it: version, network, fingerprint, alias, xpubs as
+// path and xpub pairs, routes. Device exports in their own formats are not read.
+void AddKey::loadFile(const QString &path) {
+    m_read_error->setVisible(false);
+    m_file_error->setVisible(false);
+    QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
-        showError(TR("keys-file-open-failed"));
+        m_read_error->setVisible(true);
+        refit();
         return;
     }
-
-    QJsonParseError parseError{};
-    QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        showError(TR("keys-file-invalid"));
+    QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    if (!doc.isObject()) {
+        showFileError(TR("keys-file-invalid"));
         return;
     }
-
     QJsonObject obj = doc.object();
-    if (obj.value(QStringLiteral("version")).toInt() > 1) {
-        showError(TR("keys-file-version"));
+    if (obj.value(QStringLiteral("version")).toInt() > KEY_FILE_VERSION) {
+        showFileError(TR("keys-file-newer"));
         return;
     }
-    if (obj.value(QStringLiteral("network")).toString() != networkName(KeysModule::network())) {
-        showError(TR("keys-file-network"));
+    auto network = networkFromFile(obj.value(QStringLiteral("network")).toString());
+    if (!network.has_value()) {
+        showFileError(TR("keys-file-invalid"));
         return;
     }
-
+    if (network.value() != KeysModule::network()) {
+        showFileError(TR("keys-file-other-network")
+                          .arg(networkLabel(network.value()), networkLabel(KeysModule::network())));
+        return;
+    }
     QString fingerprint = obj.value(QStringLiteral("fingerprint")).toString().trimmed().toLower();
     if (fingerprint.isEmpty()) {
-        showError(TR("keys-file-missing-fingerprint"));
+        showFileError(TR("keys-file-no-fingerprint"));
         return;
     }
-    if (m_module->hasKey(fingerprint)) {
-        showError(TR("keys-already-registered"));
+    if (!FINGERPRINT_RE.match(fingerprint).hasMatch()) {
+        showFileError(TR("keys-file-invalid"));
         return;
     }
-
-    QString alias = obj.value(QStringLiteral("alias")).toString();
-    if (alias.isEmpty()) {
-        alias = fingerprint;
-    }
-
-    auto addResult = m_module->rust()->add_key(rust::String(fingerprint.toStdString()),
-                                               rust::String(alias.toStdString()));
-    if (!addResult.is_ok) {
-        showError(TR("keys-add-failed").arg(KeysModule::toQt(addResult.error)));
-        return;
-    }
-
-    for (const auto &xpubValue : obj.value(QStringLiteral("xpubs")).toArray()) {
-        QJsonObject xpubObj = xpubValue.toObject();
-        QString path = xpubObj.value(QStringLiteral("path")).toString();
-        QString xpub = xpubObj.value(QStringLiteral("xpub")).toString();
-        auto cacheResult = m_module->rust()->cache_xpub(rust::String(fingerprint.toStdString()),
-                                                        rust::String(path.toStdString()),
-                                                        rust::String(xpub.toStdString()));
-        if (!cacheResult.is_ok) {
-            showError(TR("keys-add-failed").arg(KeysModule::toQt(cacheResult.error)));
+    QList<KeyRouteKind> routes;
+    for (const auto &value : obj.value(QStringLiteral("routes")).toArray()) {
+        auto route = routeFromFile(value.toString());
+        if (!route.has_value()) {
+            showFileError(TR("keys-file-route").arg(value.toString()));
             return;
         }
+        routes.append(route.value());
+    }
+    QList<PathXpub> xpubs;
+    for (const auto &value : obj.value(QStringLiteral("xpubs")).toArray()) {
+        QJsonObject entry = value.toObject();
+        xpubs.append({.path = xpubPath(entry.value(QStringLiteral("path")).toString()),
+                      .xpub = entry.value(QStringLiteral("xpub")).toString()});
     }
 
-    for (const auto &routeValue : obj.value(QStringLiteral("routes")).toArray()) {
-        KeyRouteKind kind = routeFromString(routeValue.toString());
-        if (kind == KeyRouteKind::Unknown) {
-            showError(TR("keys-file-unknown-route"));
-            return;
-        }
-        auto routeResult = m_module->addRoute(fingerprint, kind);
-        if (!routeResult.is_ok) {
-            showError(TR("keys-add-failed").arg(KeysModule::toQt(routeResult.error)));
-            return;
-        }
-    }
-
-    emit keyAdded(fingerprint);
-    accept();
+    m_review_fingerprint = fingerprint;
+    m_review_xpubs = xpubs;
+    // A file names the routes the key had; an export without any came off an SD card.
+    m_review_routes = routes.isEmpty() ? QList<KeyRouteKind>{KeyRouteKind::SdCard} : routes;
+    m_review_alias->setText(obj.value(QStringLiteral("alias")).toString());
+    showReview(Source::File);
 }
 
-void AddKey::onHotKeyAdded(const QString &fingerprint) {
-    emit keyAdded(fingerprint);
+void AddKey::showFileError(const QString &error) {
+    m_file_error->setText(error);
+    m_file_error->setVisible(true);
+    refit();
+}
+
+auto AddKey::pastedKey() const -> std::optional<PastedKey> {
+    auto match = PASTED_KEY_RE.match(m_paste->input()->text().trimmed());
+    if (!match.hasMatch()) {
+        return std::nullopt;
+    }
+    auto origin = ORIGIN_RE.match(match.captured(1));
+    QString xpub = match.captured(2);
+    if (!origin.hasMatch() || !XPUB_RE.match(xpub).hasMatch()) {
+        return std::nullopt;
+    }
+    return PastedKey{.fingerprint = origin.captured(1),
+                     .xpub = {.path = QStringLiteral("m") + origin.captured(2), .xpub = xpub}};
+}
+
+void AddKey::updatePaste() {
+    QString text = m_paste->input()->text().trimmed();
+    auto key = pastedKey();
+    if (text.isEmpty()) {
+        m_paste->setState(catalog::ValidationMark::State::None);
+    } else {
+        m_paste->setState(key.has_value() ? catalog::ValidationMark::State::Valid
+                                          : catalog::ValidationMark::State::Invalid);
+    }
+    m_paste_note->setVisible(!text.isEmpty() && !key.has_value());
+    QString duplicate = key.has_value() ? registeredAlias(key->fingerprint) : QString();
+    m_paste_duplicate->setText(
+        TR("keys-duplicate-body").arg(key.has_value() ? key->fingerprint : QString(), duplicate));
+    m_paste_duplicate->setVisible(!duplicate.isEmpty());
+    QString reason;
+    if (key.has_value()) {
+        reason = duplicate.isEmpty() ? aliasReason(m_paste_alias->text().trimmed())
+                                     : TR("keys-duplicate-reason");
+    }
+    m_add_pasted->setEnabled(key.has_value() && reason.isEmpty());
+    m_paste_actions->setReason(reason);
+    refit();
+}
+
+void AddKey::addPasted() {
+    auto key = pastedKey();
+    if (!key.has_value()) {
+        return;
+    }
+    // The design names the route of a pasted key USB: the key of a device plugged in
+    // to sign.
+    addKey(key->fingerprint, m_paste_alias->text().trimmed(), {KeyRouteKind::Usb}, {key->xpub},
+           m_paste_error);
+}
+
+void AddKey::onHotKindClicked() {
+    m_hot_kind = static_cast<HotKind>(sender()->property(K_HOT_KIND).toInt());
+    showHotChoose();
+}
+
+void AddKey::showHotChoose() {
+    updateHotChoose();
+    showStep(m_choose_page);
+}
+
+void AddKey::onWordCountPicked() {
+    m_hot_kind = HotKind::Import;
+    m_words_input->setWordCount(m_word_count->currentData().toInt());
+    updateHotChoose();
+}
+
+auto AddKey::typedMnemonic() const -> QString {
+    return m_words_input->words().join(QLatin1Char(' ')).trimmed().toLower();
+}
+
+void AddKey::updateHotChoose() {
+    m_generate12->setSelected(m_hot_kind == HotKind::Generate12);
+    m_generate24->setSelected(m_hot_kind == HotKind::Generate24);
+    m_import->setSelected(m_hot_kind == HotKind::Import);
+    bool importing = m_hot_kind == HotKind::Import;
+    m_words_input->setVisible(importing);
+
+    QString reason;
+    if (importing) {
+        int missing = 0;
+        int unknown = 0;
+        for (const auto &word : m_words_input->words()) {
+            if (word.isEmpty()) {
+                ++missing;
+            } else if (!::bip39_word_is_valid(word.toStdString())) {
+                ++unknown;
+            }
+        }
+        if (unknown > 0) {
+            reason = unknown == 1 ? TR("keys-words-unknown-one")
+                                  : TR("keys-words-unknown-many").arg(unknown);
+        } else if (missing > 0) {
+            reason = missing == 1 ? TR("keys-words-missing-one")
+                                  : TR("keys-words-missing-many").arg(missing);
+        } else if (!::mnemonic_is_valid(typedMnemonic().toStdString())) {
+            reason = TR("keys-words-checksum");
+        }
+    }
+    m_choose_continue->setEnabled(reason.isEmpty() && m_generate_req == 0);
+    m_choose_actions->setReason(reason);
+    refit();
+}
+
+void AddKey::continueHot() {
+    switch (m_hot_kind) {
+    case HotKind::Import:
+        m_mnemonic = typedMnemonic();
+        showHotPassword();
+        return;
+    case HotKind::Generate12:
+    case HotKind::Generate24:
+        m_choose_continue->setEnabled(false);
+        m_generate_req = m_module->nextReqId();
+        m_module->generateMnemonic(m_generate_req,
+                                   m_hot_kind == HotKind::Generate12 ? WORDS_SHORT : WORDS_LONG);
+        return;
+    }
+}
+
+void AddKey::onMnemonicGenerated(ReqId req_id, const MnemonicResult &result) {
+    if (m_generate_req == 0 || req_id != m_generate_req) {
+        return;
+    }
+    m_generate_req = 0;
+    if (!result.is_ok) {
+        updateHotChoose();
+        showFailure(Failure::Seal, TR("keys-generate-failed-title"),
+                    KeysModule::toQt(result.error));
+        return;
+    }
+    m_mnemonic = KeysModule::toQt(result.mnemonic);
+    m_backup_words->setWords(m_mnemonic.split(QLatin1Char(' '), Qt::SkipEmptyParts));
+    m_backup_check->setChecked(false);
+    updateBackup();
+    showStep(m_backup_page);
+}
+
+void AddKey::updateBackup() {
+    bool wrote = m_backup_check->isChecked();
+    m_backup_continue->setEnabled(wrote);
+    m_backup_actions->setReason(wrote ? QString() : TR("keys-backup-reason"));
+}
+
+void AddKey::showHotPassword() {
+    updateHotPassword();
+    showStep(m_password_page);
+}
+
+void AddKey::onHotPasswordBack() {
+    if (m_hot_kind == HotKind::Import) {
+        showHotChoose();
+        return;
+    }
+    showStep(m_backup_page);
+}
+
+void AddKey::updateHotPassword() {
+    QString password = m_password->text();
+    bool tooShort = !password.isEmpty() && password.size() < MIN_PASSWORD_LENGTH;
+    bool mismatch = !m_confirm->text().isEmpty() && m_confirm->text() != password;
+    m_password_short->setVisible(tooShort);
+    m_password_mismatch->setVisible(mismatch);
+
+    QString reason = aliasReason(m_hot_alias->text().trimmed());
+    if (reason.isEmpty() && password.isEmpty()) {
+        reason = TR("keys-password-choose");
+    } else if (reason.isEmpty() && tooShort) {
+        reason = TR("keys-password-short");
+    } else if (reason.isEmpty() && m_confirm->text() != password) {
+        reason = TR("keys-password-must-match");
+    }
+    m_seal->setEnabled(reason.isEmpty());
+    m_password_actions->setReason(reason);
+    refit();
+}
+
+void AddKey::sealKey() {
+    m_status->setSpinner();
+    m_status->setTitle(TR("keys-sealing-title"));
+    m_status->setSubtitle(TR("keys-sealing-sub"));
+    m_status_actions->setVisible(false);
+    setStepTitle(m_status_page, TR("keys-add-sealing-title"));
+    showStep(m_status_page);
+    m_seal_req = m_module->nextReqId();
+    m_module->importHotKey(m_seal_req, m_mnemonic, m_hot_alias->text().trimmed(),
+                           m_password->text());
+}
+
+void AddKey::onHotKeyImported(ReqId req_id, const KeyInfoResult &result) {
+    if (m_seal_req == 0 || req_id != m_seal_req) {
+        return;
+    }
+    m_seal_req = 0;
+    if (!result.is_ok) {
+        showFailure(Failure::Seal, TR("keys-seal-failed-title"), KeysModule::toQt(result.error));
+        return;
+    }
+    clearSecrets();
+    m_status->setIcon(icon::circleCheck, IconColor::Success);
+    m_status->setTitle(TR("keys-added-title"));
+    m_status->setSubtitle(
+        TR("keys-added-sub")
+            .arg(KeysModule::toQt(result.key.alias), KeysModule::toQt(result.key.fingerprint)));
+    m_done->setVisible(true);
+    m_try_again->setVisible(false);
+    m_status_actions->setVisible(true);
+    setStepTitle(m_status_page, TR("keys-add-title"));
+    showStep(m_status_page);
+}
+
+void AddKey::showFailure(Failure failure, const QString &title, const QString &message) {
+    m_failure = failure;
+    m_status->setIcon(icon::circleX, IconColor::Error);
+    m_status->setTitle(title);
+    m_status->setSubtitle(message);
+    m_done->setVisible(false);
+    m_try_again->setVisible(true);
+    m_status_actions->setVisible(true);
+    setStepTitle(m_status_page, TR("keys-add-title"));
+    showStep(m_status_page);
+}
+
+void AddKey::onFailureRetry() {
+    switch (m_failure) {
+    case Failure::Qr:
+        showQr();
+        return;
+    case Failure::Seal:
+        if (m_mnemonic.isEmpty()) {
+            showHotChoose();
+            return;
+        }
+        sealKey();
+        return;
+    }
+}
+
+void AddKey::clearSecrets() {
+    // A QString cannot be zeroized: fill() and clear() are best effort. Rust owns the
+    // real wiping of the mnemonic and the password it was handed.
+    m_mnemonic.fill(QChar());
+    m_mnemonic.clear();
+    m_backup_words->setWords({});
+    m_password->clear();
+    m_confirm->clear();
+}
+
+auto AddKey::aliasReason(const QString &alias) const -> QString {
+    if (alias.isEmpty()) {
+        return TR("keys-alias-empty");
+    }
+    for (const auto &info : m_module->keys()) {
+        if (KeysModule::toQt(info.alias) == alias) {
+            return TR("keys-alias-taken-reason");
+        }
+    }
+    return QString();
+}
+
+auto AddKey::registeredAlias(const QString &fingerprint) const -> QString {
+    if (fingerprint.isEmpty()) {
+        return QString();
+    }
+    for (const auto &info : m_module->keys()) {
+        if (QString::compare(KeysModule::toQt(info.fingerprint), fingerprint,
+                             Qt::CaseInsensitive) == 0) {
+            return KeysModule::toQt(info.alias);
+        }
+    }
+    return QString();
+}
+
+void AddKey::refreshHeader(const QString &fingerprint) {
+    m_header_fingerprint->setText(fingerprint);
+    setHeaderEndVisible(!fingerprint.isEmpty());
+}
+
+void AddKey::addKey(const QString &fingerprint, const QString &alias,
+                    const QList<KeyRouteKind> &routes, const QList<PathXpub> &xpubs,
+                    catalog::Notice *error) {
+    auto result = m_module->addKey(fingerprint, alias, routes, xpubs);
+    if (!result.is_ok) {
+        error->setText(TR("keys-add-failed").arg(KeysModule::toQt(result.error)));
+        error->setVisible(true);
+        refit();
+        return;
+    }
     accept();
 }
 

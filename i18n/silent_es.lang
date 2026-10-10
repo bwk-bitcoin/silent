@@ -295,22 +295,54 @@ keys-account-index-tip => "Account index (0–99)" => "NONE"
 keys-accounts => "Registered Accounts" => "NONE"
 keys-accounts-empty => "No account uses this key." => "NONE"
 keys-accounts-module-sp => "SP Accounts" => "NONE"
+keys-add-backup-title => "Add a Key · Back Up the Words" => "NONE"
 keys-add-failed => "Could not register the key: %1" => "NONE"
-keys-add-key-title => "Add a key" => "NONE"
+keys-add-file-title => "Add a Key · Import a File" => "NONE"
+keys-add-hot-title => "Add a Key · Hot Key" => "NONE"
+keys-add-mode-file => "Import a File" => "NONE"
+keys-add-mode-file-sub
+=> "Open a key export from a device (e.g. on an SD card) or a .json key file from Silent."
+=> "NONE";;
+keys-add-mode-hot => "Hot Key" => "NONE"
+keys-add-mode-hot-sub
+=> "Generate or import a mnemonic, stored on this computer and sealed with a password."
+=> "NONE";;
+keys-add-mode-paste => "Paste Xpub" => "NONE"
+keys-add-mode-paste-sub
+=> "Paste the key with its origin, e.g. [73c5da0a/84'/1'/0']tpubD…"
+=> "NONE";;
+keys-add-mode-qr => "Airgap over QR Code" => "NONE"
+keys-add-mode-qr-sub
+=> "Show a request code to the device, then scan its answer with the camera."
+=> "NONE";;
+keys-add-password-title => "Add a Key · Choose a Password" => "NONE"
+keys-add-paste-title => "Add a Key · Paste Xpub" => "NONE"
+keys-add-qr-hint
+=> "Scan this request with the device. It answers with its key origin and xpub."
+=> "NONE";;
+keys-add-qr-title => "Add a Key · QR Code" => "NONE"
+keys-add-review-title => "Add a Key · Review" => "NONE"
+keys-add-scan-hint
+=> "Hold the answer code from the device in front of the camera."
+=> "NONE";;
+keys-add-scan-title => "Add a Key · Scan the Answer" => "NONE"
+keys-add-sealing-title => "Add a Key · Sealing" => "NONE"
+keys-add-title => "Add a Key" => "NONE"
+keys-added-sub => "“%1” (%2) is stored on this computer and ready to sign." => "NONE"
+keys-added-title => "Key Added" => "NONE"
 keys-alias => "Alias:" => "NONE"
 keys-alias-empty => "Enter an alias." => "NONE"
 keys-alias-failed => "Could not rename the key: %1" => "NONE"
-keys-alias-placeholder => "A name you will recognise" => "NONE"
+keys-alias-name => "Name the key" => "NONE"
 keys-alias-saved => "Saved" => "NONE"
 keys-alias-taken => "Another key is already named “%1”." => "NONE"
 keys-alias-taken-reason => "Another key already has this alias." => "NONE"
-keys-already-registered
-=> "A key with this fingerprint is already registered."
+keys-backup-body
+=> "Write them down in order and keep them offline. Anyone holding them holds the coins."
 => "NONE";;
-keys-backup-confirm => "I have written these words down" => "NONE"
-keys-backup-warning
-=> "These words are shown once. Anyone holding them holds the coins."
-=> "NONE";;
+keys-backup-reason => "Confirm that you wrote the words down." => "NONE"
+keys-backup-title => "These words are shown once" => "NONE"
+keys-backup-wrote => "I wrote the words down, in order." => "NONE"
 keys-cached-xpubs => "Cached Xpubs" => "NONE"
 keys-device-column => "Device" => "NONE"
 keys-device-not-registered => "Not registered as a key" => "NONE"
@@ -325,6 +357,9 @@ keys-devices-seen => "Devices Seen" => "NONE"
 keys-devices-seen-empty
 => "No device with this fingerprint has been connected yet."
 => "NONE";;
+keys-duplicate-body => "Key %1 is already registered as “%2”." => "NONE"
+keys-duplicate-reason => "This key is already registered." => "NONE"
+keys-duplicate-title => "Fingerprint already registered" => "NONE"
 keys-fetch-failed-title => "Could not fetch the xpub" => "NONE"
 keys-fetch-reason-account => "Enter an account index (0–99)." => "NONE"
 keys-fetch-reason-cached => "This xpub is already cached." => "NONE"
@@ -335,46 +370,56 @@ keys-fetch-xpub-connect => "Connect the device to fetch xpubs" => "NONE"
 keys-fetch-xpub-from => "Fetch xpubs from %1" => "NONE"
 keys-fetching-sub => "Confirm on %1 if it asks." => "NONE"
 keys-fetching-title => "Fetching the xpub…" => "NONE"
+keys-file-drop => "Open or drop a file here" => "NONE"
+keys-file-error-title => "Cannot import this file" => "NONE"
 keys-file-filter => "Key file (*.json)" => "NONE"
 keys-file-invalid => "This is not a valid key file." => "NONE"
-keys-file-missing-fingerprint => "This key file is missing a fingerprint." => "NONE"
-keys-file-network => "This key file is for another network." => "NONE"
-keys-file-open-failed => "Could not open the key file." => "NONE"
-keys-file-unknown-route => "This key file has an unknown route type." => "NONE"
-keys-file-version
-=> "This key file was written by a newer version of Silent."
+keys-file-newer
+=> "This key file was written by a newer version of Silent. Update Silent to import it."
 => "NONE";;
-keys-hot-failed => "Could not create the hot key: %1" => "NONE"
-keys-hot-generate => "Generate a mnemonic" => "NONE"
-keys-hot-import => "Import a mnemonic" => "NONE"
-keys-hot-title => "Hot key" => "NONE"
-keys-hot-working => "Sealing the key, this takes a moment..." => "NONE"
+keys-file-no-fingerprint
+=> "This key file has no fingerprint, so the key cannot be identified."
+=> "NONE";;
+keys-file-other-network
+=> "This key file is for %1, not %2. Switch the network in the Keys tab to import it."
+=> "NONE";;
+keys-file-read-body
+=> "The file is not a key export, or the SD card was removed. Pick the export file again."
+=> "NONE";;
+keys-file-read-title => "Could not read the file" => "NONE"
+keys-file-route
+=> "This key file has a route type Silent does not know (“%1”). Remove that route from the file, or update Silent."
+=> "NONE";;
+keys-generate-failed-title => "Could Not Generate the Words" => "NONE"
+keys-hot-generate-12 => "Generate 12 Words" => "NONE"
+keys-hot-generate-12-sub => "A new mnemonic. Enough for most uses." => "NONE"
+keys-hot-generate-24 => "Generate 24 Words" => "NONE"
+keys-hot-generate-24-sub => "A new, longer mnemonic." => "NONE"
+keys-hot-import-sub => "Type an existing mnemonic." => "NONE"
+keys-hot-import-words => "Import Words" => "NONE"
 keys-keys => "Keys" => "NONE"
 keys-keys-empty-sub
 => "Add a key to sign transactions, verify addresses and create accounts."
 => "NONE";;
 keys-keys-empty-title => "No Key on %1" => "NONE"
-keys-mnemonic-bad-length => "A mnemonic has 12 or 24 words." => "NONE"
-keys-mnemonic-placeholder => "Type the words, separated by spaces" => "NONE"
-keys-mode-file => "Import a key file" => "NONE"
-keys-mode-hot => "Generate or import a hot key" => "NONE"
-keys-mode-hot-hint
-=> "A hot key is a mnemonic kept on this computer, sealed with a password."
-=> "NONE";;
-keys-mode-qr => "Airgap over QR" => "NONE"
-keys-mode-sd => "Airgap over SD card" => "NONE"
-keys-mode-xpub => "Import an origin and an xpub" => "NONE"
 keys-module-column => "Module" => "NONE"
 keys-module-not-ready => "The keys module is not ready." => "NONE"
 keys-network => "Network:" => "NONE"
 keys-no-raw-requests => "This signer takes no raw requests." => "NONE"
 keys-no-usable-route => "This key has no usable signing route." => "NONE"
-keys-origin => "Origin:" => "NONE"
-keys-password => "Password" => "NONE"
-keys-password-confirm => "Confirm password" => "NONE"
-keys-password-create => "Choose a password for this key" => "NONE"
-keys-password-mismatch => "The two passwords do not match." => "NONE"
+keys-password-choose => "Choose a password." => "NONE"
+keys-password-confirm-field => "Confirm:" => "NONE"
+keys-password-field => "Password:" => "NONE"
+keys-password-lead
+=> "The password seals the mnemonic on this computer. Silent asks for it each time the key signs."
+=> "NONE";;
+keys-password-must-match => "The two passwords must match." => "NONE"
+keys-password-no-match => "The passwords do not match." => "NONE"
 keys-password-short => "Use at least 8 characters." => "NONE"
+keys-paste-invalid
+=> "Paste the key with its origin, e.g. [73c5da0a/84'/1'/0']tpubD…"
+=> "NONE";;
+keys-paste-placeholder => "[73c5da0a/84'/1'/0']%1…" => "NONE"
 keys-path => "Path:" => "NONE"
 keys-path-type => "Path Type:" => "NONE"
 keys-pick-file => "Pick a key file" => "NONE"
@@ -385,18 +430,15 @@ keys-purpose-86 => "BIP86 · Taproot (86')" => "NONE"
 keys-purpose-87 => "BIP87 · Multisig (87')" => "NONE"
 keys-purpose-custom => "Custom Path" => "NONE"
 keys-qr-contrast => "Contrast" => "NONE"
-keys-qr-decode => "Decode" => "NONE"
 keys-qr-density => "Density" => "NONE"
-keys-qr-failed => "Could not decode the response: %1" => "NONE"
+keys-qr-failed-title => "Could Not Build the Request" => "NONE"
 keys-qr-frame-failed => "Could not render this frame: %1" => "NONE"
 keys-qr-part => "Part %1 / %2" => "NONE"
-keys-qr-paste => "Paste the response from the device" => "NONE"
 keys-qr-wrong-kind => "That response does not carry an xpub." => "NONE"
 keys-register-alias => "Alias" => "NONE"
 keys-register-alias-placeholder => "Optional. Leave empty to name it “%1”." => "NONE"
 keys-register-disconnected => "The device was disconnected." => "NONE"
 keys-register-failed-title => "Could not register %1" => "NONE"
-keys-register-key => "Register" => "NONE"
 keys-register-title => "Register as Key" => "NONE"
 keys-remove-accounts-body => "%1 will no longer be able to sign." => "NONE"
 keys-remove-accounts-many => "%1 accounts use this key" => "NONE"
@@ -432,14 +474,25 @@ keys-script-p2wsh => "2' · P2WSH" => "NONE"
 keys-sd-filter => "Partially signed transaction (*.psbt)" => "NONE"
 keys-sd-load-title => "Load the signed transaction" => "NONE"
 keys-sd-save-title => "Save the unsigned transaction" => "NONE"
+keys-seal-failed-title => "Could Not Seal the Key" => "NONE"
+keys-sealing-sub
+=> "Encrypting the mnemonic with the password. This takes a few seconds."
+=> "NONE";;
+keys-sealing-title => "Sealing the key…" => "NONE"
 keys-sp-descriptor-no-origin
 => "That descriptor carries no key origin and cannot be used."
 => "NONE";;
 keys-sp-descriptor-unavailable
 => "This key cannot return a silent payment descriptor."
 => "NONE";;
-keys-words-12 => "12 words" => "NONE"
-keys-words-24 => "24 words" => "NONE"
+keys-words-checksum
+=> "These words are not a valid mnemonic. Check each word and their order."
+=> "NONE";;
+keys-words-count => "%1 Words" => "NONE"
+keys-words-missing-many => "%1 words missing." => "NONE"
+keys-words-missing-one => "1 word missing." => "NONE"
+keys-words-unknown-many => "%1 words are not in the word list." => "NONE"
+keys-words-unknown-one => "1 word is not in the word list." => "NONE"
 keys-xpub => "Xpub:" => "NONE"
 keys-xpub-not-cached => "No cached xpub for this derivation path." => "NONE"
 keys-xpubs-empty => "No xpub cached yet." => "NONE"

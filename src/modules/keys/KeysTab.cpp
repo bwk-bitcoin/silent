@@ -447,14 +447,7 @@ void KeysTab::onKeyClicked() {
 }
 
 void KeysTab::openAddKey() {
-    auto *addKeyModal = new modal::AddKey(m_module);
-    connect(addKeyModal, &modal::AddKey::keyAdded, this, &KeysTab::onKeyAdded, qontrol::UNIQUE);
-    AppController::execModal(addKeyModal);
-}
-
-void KeysTab::onKeyAdded([[maybe_unused]] const QString &fingerprint) {
-    rebuildKeys();
-    rebuildDevices();
+    AppController::execModal(new modal::AddKey(m_module));
 }
 
 } // namespace keys

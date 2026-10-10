@@ -1,6 +1,7 @@
 #include "QrRoute.h"
 
 #include "modules/keys/KeysModule.h"
+#include "modules/keys/KeysView.h"
 #include "modules/keys/flow/QrDisplayStep.h"
 
 #include "i18n/Tr.h"
@@ -51,6 +52,10 @@ void QrRoute::startSpDescriptor(flow::QrDisplayStep *display) {
     start(display, Exchange{.kind = Kind::SpDescriptor});
 }
 
+void QrRoute::startXpub(flow::QrDisplayStep *display, QString path) {
+    start(display, Exchange{.kind = Kind::Xpub, .path = std::move(path)});
+}
+
 void QrRoute::start(flow::QrDisplayStep *display, Exchange exchange) {
     stop();
     m_exchange = std::move(exchange);
@@ -91,6 +96,9 @@ void QrRoute::build() {
     case Kind::SpDescriptor:
         buildSpDescriptor();
         return;
+    case Kind::Xpub:
+        buildXpub();
+        return;
     }
 }
 
@@ -125,6 +133,12 @@ void QrRoute::buildVerify() {
 
 void QrRoute::buildSpDescriptor() {
     show(m_module->rust()->qr_request_get_sp_descriptor(partBytes()));
+}
+
+void QrRoute::buildXpub() {
+    rust::Vec<rust::String> paths;
+    paths.push_back(rust::String(m_exchange->path.toStdString()));
+    show(m_module->rust()->qr_request_get_xpubs(std::move(paths), partBytes()));
 }
 
 void QrRoute::onRequestBuilt(QrRequest *request) {
@@ -201,6 +215,9 @@ void QrRoute::onKeyEvent(const KeyEvent &event) {
         case Kind::SpDescriptor:
             emit descriptorDecoded(KeysModule::toQt(event.payload));
             return;
+        case Kind::Xpub:
+            decodeXpub(event);
+            return;
         }
         return;
     }
@@ -211,6 +228,18 @@ void QrRoute::onKeyEvent(const KeyEvent &event) {
         // came as its own Error.
         return;
     }
+}
+
+void QrRoute::decodeXpub(const KeyEvent &event) {
+    // The answer lists `path=xpub` pairs joined by `;`, the path without its m/.
+    QString first = KeysModule::toQt(event.payload).section(QLatin1Char(';'), 0, 0);
+    QString path = first.section(QLatin1Char('='), 0, 0);
+    QString xpub = first.section(QLatin1Char('='), 1);
+    if (path.isEmpty() || xpub.isEmpty()) {
+        emit failed(TR("keys-qr-wrong-kind"));
+        return;
+    }
+    emit xpubDecoded(KeysModule::toQt(event.fingerprint), xpubPath(path), xpub);
 }
 
 } // namespace keys

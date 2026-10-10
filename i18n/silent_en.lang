@@ -211,27 +211,7 @@ keys-route-failed => "Could not change the routes: %1"
 
 keys-remove-failed => "Could not remove the key: %1"
 
-keys-add-key-title => "Add a key"
-
-keys-mode-qr => "Airgap over QR"
-
-keys-mode-sd => "Airgap over SD card"
-
-keys-mode-xpub => "Import an origin and an xpub"
-
-keys-mode-file => "Import a key file"
-
-keys-alias-placeholder => "A name you will recognise"
-
-keys-origin => "Origin:"
-
 keys-xpub => "Xpub:"
-
-keys-qr-paste => "Paste the response from the device"
-
-keys-qr-decode => "Decode"
-
-keys-qr-failed => "Could not decode the response: %1"
 
 keys-qr-wrong-kind => "That response does not carry an xpub."
 
@@ -239,63 +219,13 @@ keys-pick-file => "Pick a key file"
 
 keys-file-filter => "Key file (*.json)"
 
-keys-file-version => "This key file was written by a newer version of Silent."
-
-keys-file-network => "This key file is for another network."
-
-keys-register-key => "Register"
-
 keys-add-failed => "Could not register the key: %1"
 
-keys-already-registered => "A key with this fingerprint is already registered."
-
-keys-file-open-failed => "Could not open the key file."
-
 keys-file-invalid => "This is not a valid key file."
-
-keys-file-missing-fingerprint => "This key file is missing a fingerprint."
-
-keys-file-unknown-route => "This key file has an unknown route type."
-
-keys-hot-title => "Hot key"
-
-keys-mode-hot => "Generate or import a hot key"
-
-keys-mode-hot-hint
-=> "A hot key is a mnemonic kept on this computer, sealed with a password.";;
-
-keys-hot-generate => "Generate a mnemonic"
-
-keys-hot-import => "Import a mnemonic"
-
-keys-words-12 => "12 words"
-
-keys-words-24 => "24 words"
-
-keys-mnemonic-placeholder => "Type the words, separated by spaces"
-
-keys-mnemonic-bad-length => "A mnemonic has 12 or 24 words."
-
-keys-backup-confirm => "I have written these words down"
-
-keys-backup-warning
-=> "These words are shown once. Anyone holding them holds the coins.";;
-
-keys-hot-failed => "Could not create the hot key: %1"
-
-keys-hot-working => "Sealing the key, this takes a moment..."
-
-keys-password-create => "Choose a password for this key"
-
-keys-password-mismatch => "The two passwords do not match."
 
 keys-password-short => "Use at least 8 characters."
 
 keys-reveal-failed => "Could not open the key: %1"
-
-keys-password => "Password"
-
-keys-password-confirm => "Confirm password"
 
 keys-xpub-not-cached => "No cached xpub for this derivation path."
 
@@ -839,3 +769,144 @@ keys-remove-accounts-body => "%1 will no longer be able to sign."
 
 keys-remove-hot
 => "The sealed mnemonic is deleted with the key. Without a backup of the words, it cannot be recovered.";;
+
+keys-add-title => "Add a Key"
+
+keys-add-mode-qr => "Airgap over QR Code"
+
+keys-add-mode-qr-sub
+=> "Show a request code to the device, then scan its answer with the camera.";;
+
+keys-add-mode-file => "Import a File"
+
+keys-add-mode-file-sub
+=> "Open a key export from a device (e.g. on an SD card) or a .json key file from Silent.";;
+
+keys-add-mode-paste => "Paste Xpub"
+
+keys-add-mode-paste-sub
+=> "Paste the key with its origin, e.g. [73c5da0a/84'/1'/0']tpubD…";;
+
+keys-add-mode-hot => "Hot Key"
+
+keys-add-mode-hot-sub
+=> "Generate or import a mnemonic, stored on this computer and sealed with a password.";;
+
+keys-add-qr-title => "Add a Key · QR Code"
+
+keys-add-qr-hint
+=> "Scan this request with the device. It answers with its key origin and xpub.";;
+
+keys-add-scan-title => "Add a Key · Scan the Answer"
+
+keys-add-scan-hint => "Hold the answer code from the device in front of the camera."
+
+keys-add-review-title => "Add a Key · Review"
+
+keys-add-file-title => "Add a Key · Import a File"
+
+keys-add-paste-title => "Add a Key · Paste Xpub"
+
+keys-add-hot-title => "Add a Key · Hot Key"
+
+keys-add-backup-title => "Add a Key · Back Up the Words"
+
+keys-add-password-title => "Add a Key · Choose a Password"
+
+keys-add-sealing-title => "Add a Key · Sealing"
+
+keys-alias-name => "Name the key"
+
+keys-duplicate-title => "Fingerprint already registered"
+
+keys-duplicate-body => "Key %1 is already registered as “%2”."
+
+keys-duplicate-reason => "This key is already registered."
+
+keys-file-drop => "Open or drop a file here"
+
+keys-file-read-title => "Could not read the file"
+
+keys-file-read-body
+=> "The file is not a key export, or the SD card was removed. Pick the export file again.";;
+
+keys-file-error-title => "Cannot import this file"
+
+keys-file-newer
+=> "This key file was written by a newer version of Silent. Update Silent to import it.";;
+
+keys-file-other-network
+=> "This key file is for %1, not %2. Switch the network in the Keys tab to import it.";;
+
+keys-file-no-fingerprint
+=> "This key file has no fingerprint, so the key cannot be identified.";;
+
+keys-file-route
+=> "This key file has a route type Silent does not know (“%1”). Remove that route from the file, or update Silent.";;
+
+keys-paste-placeholder => "[73c5da0a/84'/1'/0']%1…"
+
+keys-paste-invalid
+=> "Paste the key with its origin, e.g. [73c5da0a/84'/1'/0']tpubD…";;
+
+keys-qr-failed-title => "Could Not Build the Request"
+
+keys-hot-generate-12 => "Generate 12 Words"
+
+keys-hot-generate-12-sub => "A new mnemonic. Enough for most uses."
+
+keys-hot-generate-24 => "Generate 24 Words"
+
+keys-hot-generate-24-sub => "A new, longer mnemonic."
+
+keys-hot-import-words => "Import Words"
+
+keys-hot-import-sub => "Type an existing mnemonic."
+
+keys-words-count => "%1 Words"
+
+keys-words-missing-one => "1 word missing."
+
+keys-words-missing-many => "%1 words missing."
+
+keys-words-unknown-one => "1 word is not in the word list."
+
+keys-words-unknown-many => "%1 words are not in the word list."
+
+keys-words-checksum
+=> "These words are not a valid mnemonic. Check each word and their order.";;
+
+keys-generate-failed-title => "Could Not Generate the Words"
+
+keys-backup-title => "These words are shown once"
+
+keys-backup-body
+=> "Write them down in order and keep them offline. Anyone holding them holds the coins.";;
+
+keys-backup-wrote => "I wrote the words down, in order."
+
+keys-backup-reason => "Confirm that you wrote the words down."
+
+keys-password-lead
+=> "The password seals the mnemonic on this computer. Silent asks for it each time the key signs.";;
+
+keys-password-field => "Password:"
+
+keys-password-confirm-field => "Confirm:"
+
+keys-password-no-match => "The passwords do not match."
+
+keys-password-choose => "Choose a password."
+
+keys-password-must-match => "The two passwords must match."
+
+keys-sealing-title => "Sealing the key…"
+
+keys-sealing-sub
+=> "Encrypting the mnemonic with the password. This takes a few seconds.";;
+
+keys-seal-failed-title => "Could Not Seal the Key"
+
+keys-added-title => "Key Added"
+
+keys-added-sub => "“%1” (%2) is stored on this computer and ready to sign."
