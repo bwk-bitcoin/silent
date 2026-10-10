@@ -876,8 +876,12 @@ pub fn hot_reveal(material: &HotMaterial, password: &str) -> ffi::MnemonicResult
             is_ok: true,
             error: String::new(),
             mnemonic: mnemonic.to_string(),
+            wrong_password: false,
         },
-        Err(e) => failed_mnemonic(&format!("reveal {}: {e}", record.fingerprint)),
+        Err(e) => ffi::MnemonicResult {
+            wrong_password: matches!(e, Error::WrongPassword),
+            ..failed_mnemonic(&format!("reveal {}: {e}", record.fingerprint))
+        },
     }
 }
 
@@ -1573,6 +1577,7 @@ fn failed_mnemonic(error: &str) -> ffi::MnemonicResult {
         is_ok: false,
         error: error.to_string(),
         mnemonic: String::new(),
+        wrong_password: false,
     }
 }
 

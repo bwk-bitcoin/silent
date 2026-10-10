@@ -1650,6 +1650,8 @@ struct MnemonicResult final {
   ::rust::String error;
   // Empty on error. Never holds a partial or placeholder phrase.
   ::rust::String mnemonic;
+  // The password did not open the hot secret. Only `hot_reveal` sets it.
+  bool wrong_password CXX_DEFAULT_VALUE(false);
 
   using IsRelocatable = ::std::true_type;
 };
@@ -2492,6 +2494,13 @@ void hwi_set_config_network(::Network network) noexcept;
 // functions below it does not block on Argon2id and is safe to call from
 // the GUI thread.
 ::MnemonicResult generate_mnemonic(::std::uint32_t word_count) noexcept;
+
+// Whether `word` is in the English BIP39 word list.
+bool bip39_word_is_valid(::rust::Str word) noexcept;
+
+// Whether `mnemonic` is a BIP39 mnemonic: known words, a supported length
+// and a matching checksum. Any length BIP39 allows, so 15 words too.
+bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 
 // Derives the fingerprint and seals `mnemonic` under `password` for
 // `network`, touching no `KeysModule` state. Blocks on Argon2id: call from

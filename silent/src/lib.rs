@@ -505,6 +505,8 @@ mod ffi {
         pub error: String,
         /// Empty on error. Never holds a partial or placeholder phrase.
         pub mnemonic: String,
+        /// The password did not open the hot secret. Only `hot_reveal` sets it.
+        pub wrong_password: bool,
     }
 
     /// Result of a hot signing operation.
@@ -1076,6 +1078,11 @@ mod ffi {
         /// functions below it does not block on Argon2id and is safe to call from
         /// the GUI thread.
         fn generate_mnemonic(word_count: u32) -> MnemonicResult;
+        /// Whether `word` is in the English BIP39 word list.
+        fn bip39_word_is_valid(word: &str) -> bool;
+        /// Whether `mnemonic` is a BIP39 mnemonic: known words, a supported length
+        /// and a matching checksum. Any length BIP39 allows, so 15 words too.
+        fn mnemonic_is_valid(mnemonic: &str) -> bool;
 
         /// Copies out the record and the manager's network for the free hot-key
         /// worker functions below, so a `set_network` or route change afterward
@@ -1559,13 +1566,23 @@ pub fn generate_mnemonic(word_count: u32) -> ffi::MnemonicResult {
             is_ok: true,
             error: String::new(),
             mnemonic: mnemonic.to_string(),
+            wrong_password: false,
         },
         Err(e) => ffi::MnemonicResult {
             is_ok: false,
             error: e.to_string(),
             mnemonic: String::new(),
+            wrong_password: false,
         },
     }
+}
+
+pub fn bip39_word_is_valid(word: &str) -> bool {
+    keys::hot::is_bip39_word(word)
+}
+
+pub fn mnemonic_is_valid(mnemonic: &str) -> bool {
+    keys::hot::is_valid_mnemonic(mnemonic)
 }
 
 /// Validate a recipient address (SP address, legacy Bitcoin address, or hex data).

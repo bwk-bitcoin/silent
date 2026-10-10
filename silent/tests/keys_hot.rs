@@ -276,6 +276,10 @@ fn test_hot_reveal_and_sp_descriptor_with_right_and_wrong_password() {
 
     let right = silent::hot_reveal(&material, "password");
     assert!(right.is_ok, "expected ok, got error: {}", right.error);
+    assert!(
+        !right.wrong_password,
+        "expected no wrong password flag on success"
+    );
     assert_eq!(
         right.mnemonic, TEST_MNEMONIC,
         "expected the exact imported mnemonic, got {}",
@@ -284,6 +288,11 @@ fn test_hot_reveal_and_sp_descriptor_with_right_and_wrong_password() {
 
     let wrong = silent::hot_reveal(&material, "wrong password");
     assert!(!wrong.is_ok, "expected a wrong password to be refused");
+    assert!(
+        wrong.wrong_password,
+        "expected the wrong password flag, got error: {}",
+        wrong.error
+    );
     assert!(
         wrong.mnemonic.is_empty(),
         "expected an empty mnemonic on a refused reveal, got {}",

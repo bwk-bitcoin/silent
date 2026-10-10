@@ -56,6 +56,17 @@ pub fn generate_mnemonic(word_count: usize) -> Result<Zeroizing<String>, Error> 
     Ok(Zeroizing::new(mnemonic.to_string()))
 }
 
+/// Whether `word` is in the English BIP39 word list.
+pub fn is_bip39_word(word: &str) -> bool {
+    bip39::Language::English.find_word(word).is_some()
+}
+
+/// Whether `mnemonic` is a BIP39 mnemonic: known words, a supported length and a
+/// matching checksum.
+pub fn is_valid_mnemonic(mnemonic: &str) -> bool {
+    bip39::Mnemonic::parse(mnemonic).is_ok()
+}
+
 /// Derives on the manager's network, so the same seed on two networks is two separate
 /// records, each with its own alias, routes and cache.
 pub fn fingerprint_of(mnemonic: &str, network: Network) -> Result<Fingerprint, Error> {
@@ -246,6 +257,43 @@ mod tests {
             fingerprint.as_bytes(),
             &[0u8; 4],
             "expected a real fingerprint, got the zero value"
+        );
+    }
+
+    #[test]
+    fn bip39_words_are_checked_against_the_english_list() {
+        assert!(
+            is_bip39_word("abandon"),
+            "'abandon' is the first BIP39 word"
+        );
+        assert!(is_bip39_word("zoo"), "'zoo' is the last BIP39 word");
+        assert!(!is_bip39_word("cosmc"), "'cosmc' is not a BIP39 word");
+        assert!(!is_bip39_word(""), "an empty word is not a BIP39 word");
+    }
+
+    #[test]
+    fn mnemonics_are_checked_for_length_and_checksum() {
+        assert!(
+            is_valid_mnemonic(TEST_MNEMONIC),
+            "the 12-word test vector is valid"
+        );
+        let fifteen = "abandon abandon abandon abandon abandon abandon abandon abandon \
+            abandon abandon abandon abandon abandon abandon address";
+        assert!(
+            is_valid_mnemonic(fifteen),
+            "the 15-word test vector is valid"
+        );
+        let bad_checksum = "abandon abandon abandon abandon abandon abandon abandon \
+            abandon abandon abandon abandon abandon";
+        assert!(
+            !is_valid_mnemonic(bad_checksum),
+            "12 x 'abandon' fails its checksum"
+        );
+        let short = "abandon abandon abandon abandon abandon abandon abandon abandon \
+            abandon abandon about";
+        assert!(
+            !is_valid_mnemonic(short),
+            "11 words is not a mnemonic length"
         );
     }
 
