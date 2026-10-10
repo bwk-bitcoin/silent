@@ -42,7 +42,6 @@ void FetchXpub::init() {
 void FetchXpub::doConnect() {
     connect(m_fetch, &FetchXpubStep::fetchClicked, this, &FetchXpub::onFetchClicked,
             qontrol::UNIQUE);
-    connect(m_fetch, &FetchXpubStep::backClicked, this, &FetchXpub::reject, qontrol::UNIQUE);
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
             &FetchXpub::onInstanceRemoved, qontrol::UNIQUE);
 }

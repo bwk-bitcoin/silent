@@ -36,7 +36,6 @@ public:
 
 signals:
     void fetchClicked(QString path);
-    void backClicked();
 
 public slots:
     void onPurposeChanged();

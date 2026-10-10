@@ -81,8 +81,6 @@ void FetchXpubStep::init() {
 
     m_fetch = catalog::btnFetchThisXpub();
     m_actions = new catalog::ModalActions;
-    // The design leaves Back out; a step that can return to the key gets one.
-    m_actions->setBack(catalog::ModalActions::Back::Back);
     m_actions->addAction(m_fetch);
 }
 
@@ -95,8 +93,6 @@ void FetchXpubStep::doConnect() {
     connect(m_custom, &QLineEdit::textEdited, this, &FetchXpubStep::onInputChanged,
             qontrol::UNIQUE);
     connect(m_fetch, &QPushButton::clicked, this, &FetchXpubStep::onFetchClicked, qontrol::UNIQUE);
-    connect(m_actions, &catalog::ModalActions::backClicked, this, &FetchXpubStep::backClicked,
-            qontrol::UNIQUE);
 }
 
 void FetchXpubStep::view() {
