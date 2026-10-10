@@ -22,7 +22,6 @@ class FieldNote;
 class Input;
 class Label;
 class ModalActions;
-class ModalStatus;
 class Notice;
 class Section;
 class Table;
@@ -39,8 +38,6 @@ class PasswordStep;
 
 namespace keys::modal {
 
-class FetchXpubStep;
-
 // An account whose descriptor this key signs for.
 struct KeyAccount {
     QString name;
@@ -52,8 +49,9 @@ enum class Registration { Unknown, Checking, Registering, Registered, NotRegiste
 
 // One registered key: its alias, the devices it was seen on, its routes in priority
 // order, its cached xpubs and the accounts using it, with each account's descriptor
-// checked and registered on the key's connected device. Fetching an xpub, revealing
-// the mnemonic of a hot key and removing the key are steps of this same modal.
+// checked and registered on the key's connected device. Revealing the mnemonic of
+// a hot key and removing the key are steps of this same modal; fetching an xpub
+// opens its own modal over it.
 class KeyDetail final : public catalog::StepModal {
     Q_OBJECT
 
@@ -74,10 +72,6 @@ public slots:
     void cancelAddingRoute();
     void showDetail();
     void showFetch();
-    void onFetchClicked(const QString &path);
-    void onDeviceXpub(ReqId req_id, const QString &xpub);
-    void onDeviceError(std::optional<ReqId> req_id, const QString &message);
-    void onInstanceRemoved(const QString &id);
     void onRegisterClicked();
     void onDescriptorIsRegistered(ReqId req_id, bool registered);
     void onDescriptorRegistered(ReqId req_id, bool registered);
@@ -115,7 +109,6 @@ protected:
     void moveRoute(int from_index, int to_index);
     void showRouteResult(const KeyOpResult &result);
     [[nodiscard]] auto accounts() const -> QList<KeyAccount>;
-    void stopFetch();
 
 private:
     KeysModule *m_module = nullptr;
@@ -151,13 +144,6 @@ private:
     QString m_register_descriptor;
     ReqId m_register_req = 0;
 
-    FetchXpubStep *m_fetch = nullptr;
-    catalog::ModalStatus *m_fetching = nullptr;
-    QPointer<ISigner> m_fetch_signer;
-    QString m_fetch_instance;
-    QString m_fetch_path;
-    ReqId m_fetch_req = 0;
-
     flow::PasswordStep *m_password = nullptr;
     // The outstanding reveal request, so a stale answer is ignored.
     ReqId m_reveal_req = 0;
@@ -173,8 +159,6 @@ private:
     catalog::ModalActions *m_remove_actions = nullptr;
 
     int m_detail_page = 0;
-    int m_fetch_page = 0;
-    int m_fetching_page = 0;
     int m_password_page = 0;
     int m_reveal_page = 0;
     int m_remove_page = 0;

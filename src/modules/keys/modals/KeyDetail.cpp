@@ -1,12 +1,13 @@
 #include "KeyDetail.h"
 
-#include "FetchXpubStep.h"
+#include "FetchXpub.h"
 
 #include "modules/keys/DeviceName.h"
 #include "modules/keys/KeysModule.h"
 #include "modules/keys/KeysView.h"
 #include "modules/keys/flow/PasswordStep.h"
 
+#include "AppController.h"
 #include "catalog/Button.h"
 #include "catalog/Table.h"
 #include "catalog/Variants.h"
@@ -18,7 +19,6 @@
 #include "catalog/display/RouteIcons.h"
 #include "catalog/display/ShortValue.h"
 #include "catalog/display/WordGrid.h"
-#include "catalog/feedback/ModalStatus.h"
 #include "catalog/feedback/Notice.h"
 #include "catalog/feedback/Spinner.h"
 #include "catalog/form/Field.h"
@@ -155,12 +155,6 @@ void KeyDetail::init() {
     m_detail_actions = new catalog::ModalActions;
     m_detail_actions->addAction(m_reveal);
 
-    m_fetch = new FetchXpubStep;
-    m_fetching = new catalog::ModalStatus;
-    m_fetching->setSpinner();
-    m_fetching->setTitle(TR("keys-fetching-title"));
-    m_fetching->setPadding(resolve(Spacing::M), resolve(Spacing::M));
-
     m_password = new flow::PasswordStep(catalog::btnShowMnemonic());
     m_password->setBackVisible(true);
 
@@ -184,8 +178,6 @@ void KeyDetail::doConnect() {
     connect(m_module, &KeysModule::liveDevicesChanged, this, &KeyDetail::refresh, qontrol::UNIQUE);
     connect(m_module, &KeysModule::mnemonicRevealed, this, &KeyDetail::onMnemonicRevealed,
             qontrol::UNIQUE);
-    connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
-            &KeyDetail::onInstanceRemoved, qontrol::UNIQUE);
     connect(m_alias_input, &QLineEdit::textEdited, this, &KeyDetail::onAliasEdited,
             qontrol::UNIQUE);
     connect(m_alias_input, &QLineEdit::returnPressed, this, &KeyDetail::saveAlias, qontrol::UNIQUE);
@@ -194,9 +186,6 @@ void KeyDetail::doConnect() {
         connect(table, &catalog::Table::rebuilt, this, &KeyDetail::refit, qontrol::UNIQUE);
     }
     connect(m_reveal, &QPushButton::clicked, this, &KeyDetail::showPassword, qontrol::UNIQUE);
-    connect(m_fetch, &FetchXpubStep::fetchClicked, this, &KeyDetail::onFetchClicked,
-            qontrol::UNIQUE);
-    connect(m_fetch, &FetchXpubStep::backClicked, this, &KeyDetail::showDetail, qontrol::UNIQUE);
     connect(m_password, &flow::PasswordStep::passwordEntered, this, &KeyDetail::onPasswordEntered,
             qontrol::UNIQUE);
     connect(m_password, &flow::PasswordStep::backClicked, this, &KeyDetail::showDetail,
@@ -213,8 +202,6 @@ void KeyDetail::view() {
     m_detail_actions->addAction(removeKey);
     m_detail_page = addStep(m_alias, ModalWidth::L, buildDetail(), m_detail_actions);
 
-    m_fetch_page = addStep(TR("keys-fetch-title"), ModalWidth::L, m_fetch, m_fetch->actions());
-    m_fetching_page = addStep(TR("keys-fetch-title"), ModalWidth::L, m_fetching, nullptr);
     m_password_page =
         addStep(TR("keys-reveal-title"), ModalWidth::L, m_password, m_password->actions());
 
@@ -716,89 +703,12 @@ void KeyDetail::showRouteResult(const KeyOpResult &result) {
 }
 
 void KeyDetail::showDetail() {
-    stopFetch();
     showStep(m_detail_page);
 }
 
 void KeyDetail::showFetch() {
-    QStringList cached;
-    for (const auto &entry :
-         m_module->rust()->key_xpubs(rust::String(m_fingerprint.toStdString()))) {
-        cached.append(xpubPath(KeysModule::toQt(entry.path)));
-    }
-    m_fetch->reset(cached);
-    showStep(m_fetch_page);
-}
-
-void KeyDetail::onFetchClicked(const QString &path) {
-    auto device = readyDevice(m_fingerprint);
-    if (!device.has_value()) {
-        m_fetch->showError(TR("keys-fetch-xpub-connect"));
-        refit();
-        return;
-    }
-    m_fetch_signer = device->signer;
-    m_fetch_instance = device->instanceId;
-    m_fetch_path = path;
-    connect(device->signer, &ISigner::xpub, this, &KeyDetail::onDeviceXpub, qontrol::UNIQUE);
-    connect(device->signer, &ISigner::error, this, &KeyDetail::onDeviceError, qontrol::UNIQUE);
-    m_fetch_req = device->signer->getXpub(path);
-    m_fetching->setSubtitle(TR("keys-fetching-sub").arg(deviceName(*device->signer)));
-    showStep(m_fetching_page);
-}
-
-void KeyDetail::onDeviceXpub(ReqId req_id, const QString &xpub) {
-    if (m_fetch_req == 0 || req_id != m_fetch_req) {
-        return;
-    }
-    QString instance = m_fetch_instance;
-    QString path = m_fetch_path;
-    stopFetch();
-    auto result = m_module->cacheXpub(m_fingerprint, path, xpub);
-    if (!result.is_ok) {
-        showStep(m_fetch_page);
-        m_fetch->showError(KeysModule::toQt(result.error));
-        refit();
-        return;
-    }
-    for (const auto &entry : Host::get()->signers()) {
-        if (entry.signer != nullptr && entry.instanceId == instance) {
-            auto recorded = m_module->recordDevice(entry);
-            if (!recorded.is_ok) {
-                qWarning() << "keys:" << KeysModule::toQt(recorded.error);
-            }
-        }
-    }
-    showDetail();
-}
-
-void KeyDetail::onDeviceError(std::optional<ReqId> req_id, const QString &message) {
-    if (m_fetch_req == 0 || !req_id.has_value() || req_id.value() != m_fetch_req) {
-        return;
-    }
-    stopFetch();
-    showStep(m_fetch_page);
-    m_fetch->showError(message);
-    refit();
-}
-
-void KeyDetail::onInstanceRemoved(const QString &id) {
-    if (m_fetch_req == 0 || id != m_fetch_instance) {
-        return;
-    }
-    stopFetch();
-    showStep(m_fetch_page);
-    m_fetch->showError(TR("keys-register-disconnected"));
-    refit();
-}
-
-void KeyDetail::stopFetch() {
-    if (!m_fetch_signer.isNull()) {
-        disconnect(m_fetch_signer, &ISigner::xpub, this, &KeyDetail::onDeviceXpub);
-        disconnect(m_fetch_signer, &ISigner::error, this, &KeyDetail::onDeviceError);
-    }
-    m_fetch_signer = nullptr;
-    m_fetch_req = 0;
+    // Over this modal, which shows the new xpub once the key records it.
+    AppController::execModal(new FetchXpub(m_module, m_fingerprint));
 }
 
 void KeyDetail::showPassword() {
