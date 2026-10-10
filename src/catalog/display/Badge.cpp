@@ -2,13 +2,42 @@
 
 #include "theme/Theme.h"
 
+#include <QLabel>
+#include <QStyle>
+#include <Qontrol>
+
 namespace catalog {
 
-Badge::Badge(const QString &text, Role role, QWidget *parent) : QLabel(text, parent), m_role(role) {
-    applyRole();
+Badge::Badge(const QString &text, Role role, QWidget *parent) : Badge(role, parent) {
+    setText(text);
 }
 
-Badge::Badge(Role role, QWidget *parent) : QLabel(parent), m_role(role) {
+Badge::Badge(Role role, QWidget *parent) : QFrame(parent), m_role(role) {
+    setProperty("class", "badge");
+
+    m_icon = new QLabel(this);
+    m_icon->setVisible(false);
+    m_text = new QLabel(this);
+
+    const auto &font = Theme::get()->fontPalette().caption;
+    auto badgeFont = m_text->font();
+    badgeFont.setFamily(font.family);
+    badgeFont.setPointSize(font.size);
+    badgeFont.setWeight(QFont::DemiBold);
+    badgeFont.setLetterSpacing(QFont::PercentageSpacing, 102); // design 0.02em tracking
+    m_text->setFont(badgeFont);
+
+    (new qontrol::Row)
+        ->margins(metric::BADGE_PADDING_H, metric::BADGE_PADDING_V, metric::BADGE_PADDING_H,
+                  metric::BADGE_PADDING_V)
+        ->spacing(resolve(Padding::XS))
+        ->pushSpacer()
+        ->push(m_icon)
+        ->push(m_text)
+        ->pushSpacer()
+        ->into(this);
+
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     applyRole();
 }
 
@@ -18,16 +47,37 @@ void Badge::setRole(Role role) {
     }
     m_role = role;
     applyRole();
+    style()->unpolish(this);
+    style()->polish(this);
 }
 
 auto Badge::role() const -> Role {
     return m_role;
 }
 
-void Badge::applyRole() {
-    setProperty("class", "badge");
-    setAlignment(Qt::AlignCenter);
+void Badge::setText(const QString &text) {
+    m_text->setText(text);
+}
 
+auto Badge::text() const -> QString {
+    return m_text->text();
+}
+
+void Badge::setIcon(const QIcon &icon) {
+    m_icon->setPixmap(icon.pixmap(metric::BADGE_ICON_SIZE, metric::BADGE_ICON_SIZE));
+    m_icon->setVisible(!icon.isNull());
+}
+
+void Badge::setWidth(PillWidth width) {
+    if (width == PillWidth::Auto) {
+        setMinimumWidth(0);
+        setMaximumWidth(QWIDGETSIZE_MAX);
+        return;
+    }
+    setFixedWidth(resolve(width));
+}
+
+void Badge::applyRole() {
     switch (m_role) {
     case Role::Success:
         setProperty("role", "success");
@@ -45,33 +95,23 @@ void Badge::applyRole() {
         setProperty("role", "off");
         break;
     }
-
-    const auto &font = Theme::get()->fontPalette().caption;
-    auto badgeFont = this->font();
-    badgeFont.setFamily(font.family);
-    badgeFont.setPointSize(font.size);
-    badgeFont.setWeight(QFont::DemiBold);
-    badgeFont.setLetterSpacing(QFont::PercentageSpacing, 102); // design 0.02em tracking
-    setFont(badgeFont);
 }
 
 auto Badge::qss(const Palette &p) -> QString {
     return QString(
-               "QLabel[class=\"badge\"] { border: 1px solid transparent; "
-               "border-radius: %1px; padding: %2px %3px; }"
-               "QLabel[class=\"badge\"][role=\"success\"] { background: %4; border-color: %5; "
-               "color: %6; }"
-               "QLabel[class=\"badge\"][role=\"warning\"] { background: %7; border-color: %8; "
-               "color: %9; }"
-               "QLabel[class=\"badge\"][role=\"error\"] { background: %10; border-color: %11; "
-               "color: %12; }"
-               "QLabel[class=\"badge\"][role=\"neutral\"] { background: %13; border-color: %14; "
-               "color: %15; }"
-               "QLabel[class=\"badge\"][role=\"off\"] { background: %16; border-color: %17; "
-               "color: %18; }")
+               "QFrame[class=\"badge\"] { border: 1px solid transparent; "
+               "border-radius: %1px; }"
+               "QFrame[class=\"badge\"][role=\"success\"] { background: %2; border-color: %3; }"
+               "QFrame[class=\"badge\"][role=\"success\"] QLabel { color: %4; }"
+               "QFrame[class=\"badge\"][role=\"warning\"] { background: %5; border-color: %6; }"
+               "QFrame[class=\"badge\"][role=\"warning\"] QLabel { color: %7; }"
+               "QFrame[class=\"badge\"][role=\"error\"] { background: %8; border-color: %9; }"
+               "QFrame[class=\"badge\"][role=\"error\"] QLabel { color: %10; }"
+               "QFrame[class=\"badge\"][role=\"neutral\"] { background: %11; border-color: %12; }"
+               "QFrame[class=\"badge\"][role=\"neutral\"] QLabel { color: %13; }"
+               "QFrame[class=\"badge\"][role=\"off\"] { background: %14; border-color: %15; }"
+               "QFrame[class=\"badge\"][role=\"off\"] QLabel { color: %16; }")
         .arg(radius::BADGE)
-        .arg(resolve(Padding::XS) - 1)
-        .arg(resolve(Padding::S) + 1)
         .arg(qssColor(p.badgeSuccessBg))
         .arg(qssColor(p.badgeSuccessBorder))
         .arg(p.badgeSuccessText.name())

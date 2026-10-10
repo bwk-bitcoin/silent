@@ -1,7 +1,7 @@
 #include "catalog/inputs/Stepper.h"
 
 #include "catalog/Button.h"
-#include "theme/Icon.h"
+#include "catalog/Variants.h"
 #include "catalog/display/Label.h"
 #include "theme/Palette.h"
 
@@ -11,13 +11,11 @@
 namespace catalog {
 
 Stepper::Stepper(QWidget *parent) : QWidget(parent) {
-    m_minus = new Button(ButtonRole::InlineIcon, this);
-    m_minus->setIcon(icon::minus());
+    m_minus = btnStepperMinus();
     m_value = new Label("0", LabelRole::Mono, this);
     m_value->setAlignment(Qt::AlignCenter);
     m_value->setFixedWidth(resolve(Size::XXS));
-    m_plus = new Button(ButtonRole::InlineIcon, this);
-    m_plus->setIcon(icon::plus());
+    m_plus = btnStepperPlus();
 
     (new qontrol::Row)
         ->spacing(resolve(Spacing::XS))

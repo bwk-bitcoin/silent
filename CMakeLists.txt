@@ -72,6 +72,8 @@ set(SILENT_APP_SOURCES
     src/catalog/Button.cpp
     src/catalog/CopyButton.h
     src/catalog/CopyButton.cpp
+    src/catalog/Variants.h
+    src/catalog/Variants.cpp
     src/catalog/display/Label.h
     src/catalog/display/Label.cpp
     src/catalog/inputs/Input.h

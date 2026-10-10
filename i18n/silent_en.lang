@@ -470,3 +470,161 @@ receive-verify-mismatch => "The device did not confirm this address. Do not use 
 main-keys-tab => "Keys"
 
 keys-qr-busy => "Another QR exchange is already in progress."
+
+receive-show-qr => "Show QR code"
+
+btn-back => "Back"
+
+btn-previous => "Previous"
+
+btn-other-signer => "Other Signer"
+
+btn-all-settings => "All Settings"
+
+btn-less => "Less"
+
+btn-more => "More"
+
+btn-save-alias => "Save Alias"
+
+btn-add-route => "Add Route"
+
+btn-add-this-route => "Add This Route"
+
+btn-fetch-xpubs-from-the-device => "Fetch Xpubs From the Device"
+
+btn-register => "Register"
+
+btn-fetch-xpub => "Fetch Xpub"
+
+btn-camera-settings => "Camera Settings"
+
+btn-open-file => "Open File…"
+
+btn-scan-for-plugins => "Scan for Plugins"
+
+btn-scanning => "Scanning…"
+
+btn-disable-plugin => "Disable Plugin"
+
+btn-add-key => "Add Key"
+
+btn-check => "Check"
+
+btn-continue => "Continue"
+
+btn-create => "Create"
+
+btn-done => "Done"
+
+btn-get-descriptor => "Get Descriptor"
+
+btn-load-signed-psbt => "Load Signed PSBT…"
+
+btn-next-scan-the-answer => "Next: Scan the Answer"
+
+btn-pick-another-file => "Pick Another File…"
+
+btn-save-settings => "Save Settings"
+
+btn-save-unsigned-psbt => "Save Unsigned PSBT…"
+
+btn-seal-key => "Seal Key"
+
+btn-show-mnemonic => "Show Mnemonic"
+
+btn-sign => "Sign"
+
+btn-try-again => "Try Again"
+
+btn-unlocking => "Unlocking…"
+
+btn-add-a-key => "+ Add a Key"
+
+btn-add-payment => "+ Add Payment"
+
+btn-connect-blindbit => "Connect Blindbit"
+
+btn-connect-electrum => "Connect Electrum"
+
+btn-generate-new => "Generate New"
+
+btn-get-again => "Get Again"
+
+btn-open => "Open"
+
+btn-open-keys-tab => "Open Keys Tab"
+
+btn-reveal-mnemonic => "Reveal Mnemonic"
+
+btn-save => "Save"
+
+btn-scan-again => "Scan Again"
+
+btn-test-ok => "✓ Test"
+
+btn-remove-key => "Remove Key"
+
+btn-add-a-label => "Add a Label"
+
+btn-hide-words => "Hide Words"
+
+btn-show-words => "Show Words"
+
+btn-delete-wallet => "Delete wallet"
+
+btn-settings => "Settings"
+
+btn-dismiss => "Dismiss"
+
+btn-edit-label => "Edit label"
+
+btn-move-down => "Move Down"
+
+btn-move-up => "Move Up"
+
+btn-remove-payment => "Remove Payment"
+
+btn-create-new-wallet => "+ Create New Wallet"
+
+btn-copy-address => "Copy Address"
+
+pill-ready => "Ready"
+
+pill-locked => "Locked"
+
+pill-unsupported => "Unsupported"
+
+pill-connected => "Connected"
+
+pill-hot-key => "Hot Key"
+
+pill-offline => "Offline"
+
+pill-registered => "Registered"
+
+pill-signs-first => "Signs First"
+
+pill-signed => "Signed"
+
+pill-waiting => "Waiting"
+
+pill-not-connected => "Not Connected"
+
+pill-no-hot-secret => "No Hot Secret"
+
+pill-no-usable-route => "No Usable Route"
+
+pill-not-registered => "Not Registered"
+
+pill-done => "Done"
+
+pill-used => "Used"
+
+pill-not-used => "Not Used"
+
+pill-unloading => "Unloading…"
+
+btn-copied => "Copied"
+
+btn-awaiting-payment => "Addr. awaiting payment (%1)"

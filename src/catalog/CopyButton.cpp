@@ -1,5 +1,6 @@
 #include "catalog/CopyButton.h"
 
+#include "i18n/Tr.h"
 #include "theme/Icon.h"
 
 #include <QApplication>
@@ -10,7 +11,7 @@ namespace catalog {
 CopyButton::CopyButton(Size size, QWidget *parent)
     : Button(size == Size::Large ? ButtonRole::Icon : ButtonRole::InlineIcon, parent) {
     setIcon(icon::copy());
-    setFeedbackIcon(icon::check()); // flash a check on copy, then revert
+    setFeedbackIcon(icon::check(), TR("btn-copied")); // flash a check on copy, then revert
     connect(this, &QPushButton::clicked, this, &CopyButton::onCopyClicked);
 }
 

@@ -1,27 +1,26 @@
 #include "Theme.h"
-#include "catalog/Button.h"
-#include "catalog/display/Badge.h"
-#include "catalog/BalanceHeader.h"
-#include "catalog/containers/Card.h"
-#include "catalog/inputs/Checkbox.h"
-#include "catalog/inputs/ComboBox.h"
-#include "catalog/display/Display.h"
 #include "Icon.h"
-#include "catalog/inputs/Input.h"
-#include "catalog/display/Label.h"
+#include "catalog/BalanceHeader.h"
+#include "catalog/Button.h"
+#include "catalog/SelectRow.h"
+#include "catalog/Table.h"
+#include "catalog/containers/Card.h"
+#include "catalog/containers/FoldSection.h"
 #include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/Separator.h"
-#include "catalog/SelectRow.h"
 #include "catalog/containers/Tab.h"
-#include "catalog/Table.h"
-#include "catalog/inputs/TextEdit.h"
+#include "catalog/display/Badge.h"
+#include "catalog/display/Display.h"
+#include "catalog/display/Label.h"
 #include "catalog/feedback/Tooltip.h"
-#include "catalog/inputs/Toggle.h"
-#include "catalog/containers/FoldSection.h"
 #include "catalog/form/LabelledInput.h"
-#include "catalog/panels/receive/IndexPill.h"
 #include "catalog/form/ValidatedInput.h"
 #include "catalog/form/ValidationMark.h"
+#include "catalog/inputs/Checkbox.h"
+#include "catalog/inputs/ComboBox.h"
+#include "catalog/inputs/Input.h"
+#include "catalog/inputs/TextEdit.h"
+#include "catalog/inputs/Toggle.h"
 #include <QApplication>
 #include <QPainter>
 #include <QPalette>
@@ -187,7 +186,6 @@ void Theme::apply() {
     qss += catalog::BalanceHeader::qss(p);
     qss += catalog::LabelledInput::qss(p);
     qss += catalog::FoldSection::qss(p);
-    qss += catalog::IndexPill::qss(p);
 
     qApp->setStyleSheet(qss);
 }

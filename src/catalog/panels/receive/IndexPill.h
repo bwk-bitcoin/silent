@@ -1,37 +1,17 @@
 #pragma once
 
-#include <QWidget>
-
-struct Palette;
+#include "catalog/Button.h"
 
 namespace catalog {
 
-class Label;
-
-// A small clickable pill showing a QR icon + a derivation index in monospace
-// (design Widgets.jsx IndexPill). Toggling `active` swaps its background to
-// signal that its QR is expanded.
-class IndexPill : public QWidget {
+// The QR glyph + derivation index handle of an address row: an Index role button.
+// setActive() keeps it pressed while its QR is expanded.
+class IndexPill : public Button {
     Q_OBJECT
 
 public:
     explicit IndexPill(QWidget *parent = nullptr);
     void setIndex(int index);
-    void setActive(bool active);
-    static auto qss(const Palette &p) -> QString;
-
-signals:
-    void clicked();
-
-protected:
-    void mousePressEvent(QMouseEvent *event) override;
-    void mouseReleaseEvent(QMouseEvent *event) override;
-
-private:
-    void setStateProperty(const char *name, bool value);
-
-private:
-    Label *m_index = nullptr;
 };
 
 } // namespace catalog

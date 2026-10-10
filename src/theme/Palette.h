@@ -114,6 +114,9 @@ const int SELECT_ROW_PADDING_V = 12;
 const int MODAL_STATUS_ICON_SIZE = 40;
 const int TABLE_ROW_HEIGHT = 34;
 const int TABLE_CELL_PAD = 7;
+const int BADGE_PADDING_H = 11;
+const int BADGE_PADDING_V = 5;
+const int BADGE_ICON_SIZE = 14;
 
 } // namespace metric
 
@@ -355,6 +358,7 @@ struct ButtonPalette {
     ButtonStyle tabOpen;
     ButtonStyle tabCreate;
     ButtonStyle inlineBtn;
+    ButtonStyle index;
 
     static auto defaultButtonPalette() -> ButtonPalette;
     static auto dark() -> ButtonPalette;

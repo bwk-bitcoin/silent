@@ -4,7 +4,10 @@
 
 // Resolved against the live palette at paint time, so an icon both follows the
 // theme and can be tinted per use site (accent / secondary / muted).
-enum class IconColor { Default, Accent, Secondary, Muted, Success, Warning, Error };
+enum class IconColor { Default, Accent, Secondary, Muted, Success, Warning, Error, OnAccent };
+
+// An icon helper below, so a widget can pick the tint itself.
+using IconFn = QIcon (*)(IconColor);
 
 // Builds a QIcon that re-renders the SVG with the chosen palette color on every
 // paint, so icons follow theme (light/dark) changes without recreation.

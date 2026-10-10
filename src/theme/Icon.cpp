@@ -67,6 +67,8 @@ auto resolveColor(IconColor color) -> QColor {
         return p.warning;
     case IconColor::Error:
         return p.error;
+    case IconColor::OnAccent:
+        return p.onAccent;
     case IconColor::Default:
         return p.text;
     }

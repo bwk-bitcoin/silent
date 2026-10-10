@@ -4,6 +4,7 @@
 #include <QFont>
 #include <QStyle>
 #include <QTimer>
+#include <common.h>
 
 namespace catalog {
 
@@ -31,25 +32,50 @@ auto Button::role() const -> ButtonRole {
     return m_role;
 }
 
-void Button::setFeedbackIcon(const QIcon &icon, int duration_ms) {
+void Button::setWidth(BtnWidth width) {
+    if (width == BtnWidth::Auto) {
+        setMinimumWidth(0);
+        setMaximumWidth(QWIDGETSIZE_MAX);
+        return;
+    }
+    setFixedWidth(resolve(width));
+}
+
+void Button::setActive(bool active) {
+    setProperty("active", active);
+    style()->unpolish(this);
+    style()->polish(this);
+}
+
+void Button::setFeedbackIcon(const QIcon &icon, const QString &tooltip, int duration_ms) {
     m_feedback_icon = icon;
-    m_base_icon = this->icon(); // the icon to revert to after the feedback window
+    m_feedback_tooltip = tooltip;
+    // what to revert to after the feedback window
+    m_base_icon = this->icon();
+    m_base_tooltip = toolTip();
     if (m_feedback_timer == nullptr) {
         m_feedback_timer = new QTimer(this);
         m_feedback_timer->setSingleShot(true);
-        connect(m_feedback_timer, &QTimer::timeout, this, &Button::onFeedbackRestore);
-        connect(this, &QPushButton::clicked, this, &Button::onFeedbackClicked);
+        connect(m_feedback_timer, &QTimer::timeout, this, &Button::onFeedbackRestore,
+                qontrol::UNIQUE);
+        connect(this, &QPushButton::clicked, this, &Button::onFeedbackClicked, qontrol::UNIQUE);
     }
     m_feedback_timer->setInterval(duration_ms);
 }
 
 void Button::onFeedbackClicked() {
     setIcon(m_feedback_icon);
+    if (!m_feedback_tooltip.isEmpty()) {
+        setToolTip(m_feedback_tooltip);
+    }
     m_feedback_timer->start();
 }
 
 void Button::onFeedbackRestore() {
     setIcon(m_base_icon);
+    if (!m_feedback_tooltip.isEmpty()) {
+        setToolTip(m_base_tooltip);
+    }
 }
 
 static auto styleForRole(const ButtonPalette &bp, ButtonRole role) -> const ButtonStyle & {
@@ -70,6 +96,8 @@ static auto styleForRole(const ButtonPalette &bp, ButtonRole role) -> const Butt
         return bp.tabCreate;
     case ButtonRole::Inline:
         return bp.inlineBtn;
+    case ButtonRole::Index:
+        return bp.index;
     case ButtonRole::Default:
         return bp.defaultBtn;
     }
@@ -103,6 +131,9 @@ void Button::applyRole() {
         break;
     case ButtonRole::Inline:
         setProperty("role", "inline");
+        break;
+    case ButtonRole::Index:
+        setProperty("role", "index");
         break;
     case ButtonRole::Default:
         setProperty("role", "default");
@@ -240,6 +271,17 @@ auto Button::qss(const Palette &p) -> QString {
             .arg(icon.borderRadius)
             .arg(inlineIcon.borderRadius);
 
+    // --- Index (QR glyph + derivation index handle) ---
+    const auto &index = bp.index;
+    auto indexQss = QString("QPushButton[class=\"button\"][role=\"index\"] { padding: %1px %2px; "
+                            "border-radius: %3px; }"
+                            "QPushButton[class=\"button\"][role=\"index\"][active=\"true\"] { "
+                            "background: %4; }")
+                        .arg(index.paddingV)
+                        .arg(index.paddingH)
+                        .arg(index.borderRadius)
+                        .arg(p.bg.name());
+
     // Overlay icon button: fully transparent (no background or border in any
     // state); the icon color is changed by the call site on hover/press.
     auto overlayQss = QString(
@@ -247,7 +289,8 @@ auto Button::qss(const Palette &p) -> QString {
         "QPushButton[class=\"button\"][overlay=\"true\"]:hover { background: transparent; }"
         "QPushButton[class=\"button\"][overlay=\"true\"]:pressed { background: transparent; }");
 
-    return baseQss + primaryQss + destructiveQss + menuQss + inlineQss + iconQss + overlayQss;
+    return baseQss + primaryQss + destructiveQss + menuQss + inlineQss + iconQss + indexQss +
+           overlayQss;
 }
 
 } // namespace catalog
