@@ -10,23 +10,48 @@
 
 namespace catalog {
 
+namespace {
+
+const QChar FILLED_DOT(0x25CF);
+const QChar EMPTY_DOT(0x25CB);
+
+} // namespace
+
 Stepper::Stepper(QWidget *parent) : QWidget(parent) {
+    m_label = new Label(LabelRole::Body, this);
+    m_label->setTone(LabelTone::Secondary);
+    auto labelFont = m_label->font();
+    labelFont.setWeight(QFont::Medium); // design label is weight 500
+    m_label->setFont(labelFont);
+    m_label->setAlignment(Qt::AlignCenter);
+    m_label->setVisible(false);
     m_minus = btnStepperMinus();
-    m_value = new Label("0", LabelRole::Mono, this);
+    m_value = new Label(LabelRole::Mono, this);
+    m_value->setTone(LabelTone::Accent);
     m_value->setAlignment(Qt::AlignCenter);
-    m_value->setFixedWidth(resolve(Size::XXS));
+    m_value->setMinimumWidth(metric::STEPPER_DOTS_WIDTH);
     m_plus = btnStepperPlus();
 
-    (new qontrol::Row)
+    auto *controls = (new qontrol::Row)
+                         ->spacing(resolve(Spacing::S))
+                         ->push(m_minus)
+                         ->push(m_value)
+                         ->push(m_plus);
+    (new qontrol::Column)
         ->spacing(resolve(Spacing::XS))
-        ->push(m_minus)
-        ->push(m_value)
-        ->push(m_plus)
+        ->pushAligned(m_label, Qt::AlignHCenter)
+        ->pushAligned(controls, Qt::AlignHCenter)
         ->into(this);
+    setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
 
     connect(m_minus, &Button::clicked, this, &Stepper::onMinusClicked, qontrol::UNIQUE);
     connect(m_plus, &Button::clicked, this, &Stepper::onPlusClicked, qontrol::UNIQUE);
     updateState();
+}
+
+void Stepper::setLabel(const QString &label) {
+    m_label->setText(label);
+    m_label->setVisible(!label.isEmpty());
 }
 
 void Stepper::setRange(int minimum, int maximum) {
@@ -59,7 +84,9 @@ void Stepper::onPlusClicked() {
 }
 
 void Stepper::updateState() {
-    m_value->setText(QString::number(m_current));
+    int filled = m_current - m_minimum + 1;
+    int empty = m_maximum - m_current;
+    m_value->setText(QString(filled, FILLED_DOT) + QString(empty, EMPTY_DOT));
     m_minus->setEnabled(m_current > m_minimum);
     m_plus->setEnabled(m_current < m_maximum);
 }

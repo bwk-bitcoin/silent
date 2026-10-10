@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QString>
 #include <QWidget>
 
 namespace catalog {
@@ -7,11 +8,14 @@ namespace catalog {
 class Button;
 class Label;
 
+// − ●●●○○ + level control, under an optional label.
 class Stepper : public QWidget {
     Q_OBJECT
 
 public:
     explicit Stepper(QWidget *parent = nullptr);
+    // Empty hides it.
+    void setLabel(const QString &label);
     void setRange(int minimum, int maximum);
     void setValue(int value);
     [[nodiscard]] auto value() const -> int;
@@ -23,9 +27,11 @@ public slots:
     void onMinusClicked();
     void onPlusClicked();
 
-private:
+protected:
     void updateState();
 
+private:
+    Label *m_label = nullptr;
     Button *m_minus = nullptr;
     Button *m_plus = nullptr;
     Label *m_value = nullptr;

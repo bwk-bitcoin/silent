@@ -53,6 +53,9 @@ const QColor RED_DARK = QColor(200, 50, 50);
 const QColor YELLOW = QColor(220, 180, 50);
 const QColor YELLOW_DARK = QColor(200, 160, 30);
 
+// Camera viewport: the same dark surface in both themes
+const QColor CAMERA_BG = QColor(0x0c, 0x0e, 0x13);
+
 // Transaction flow
 const QColor TX_SELF = QColor(0x3d, 0x8b, 0xf0);
 const QColor TX_SELF_LABEL = QColor(0x1f, 0x5f, 0xb0);
@@ -89,6 +92,7 @@ const int ICON = 4;
 const int TAB = 4;
 const int CHECKBOX = 4;
 const int BADGE = 999;
+const int QR_CARD = 12;
 
 } // namespace radius
 
@@ -128,6 +132,9 @@ const int FOLD_CHEVRON_SIZE = 14;
 const int EMPTY_STATE_ICON_SIZE = 28;
 const int MODAL_STATUS_TEXT_MAX_WIDTH = 320;
 const int WORD_INDEX_WIDTH = 18;
+const int STEPPER_DOTS_WIDTH = 56;
+const int QR_DISPLAY_SIZE = 400;
+const int QR_DISPLAY_PADDING = 16;
 
 } // namespace metric
 
