@@ -20,6 +20,7 @@
 #include "catalog/display/WordGrid.h"
 #include "catalog/feedback/ModalStatus.h"
 #include "catalog/feedback/Notice.h"
+#include "catalog/feedback/Spinner.h"
 #include "catalog/form/Field.h"
 #include "catalog/form/FieldNote.h"
 #include "catalog/inputs/ComboBox.h"
@@ -34,6 +35,7 @@
 #include <QHash>
 #include <QLabel>
 
+#include <algorithm>
 #include <utility>
 
 #include <common.h>
@@ -47,6 +49,7 @@ using catalog::LabelTone;
 namespace {
 
 const char *const K_ROUTE_INDEX = "routeIndex";
+const char *const K_DESCRIPTOR = "descriptor";
 
 // The route kinds a key can be reached over, in the order the picker offers them.
 const QList<KeyRouteKind> ROUTE_KINDS = {KeyRouteKind::Hot, KeyRouteKind::Usb, KeyRouteKind::Qr,
@@ -76,6 +79,14 @@ auto denseSection(const QString &label, bool open) -> catalog::Section * {
 
 auto countText(int count) -> QString {
     return count > 0 ? QString::number(count) : QString();
+}
+
+// A hot key or an SD card export holds no wallet policy: only a device reached over
+// USB or QR registers one.
+auto registrationApplies(const KeyInfo &info) -> bool {
+    return std::ranges::any_of(info.routes, [](KeyRouteKind route) {
+        return route == KeyRouteKind::Usb || route == KeyRouteKind::Qr;
+    });
 }
 
 } // namespace
@@ -130,6 +141,8 @@ void KeyDetail::init() {
     m_accounts_table->addColumn(
         {.width = metric::ACCOUNT_PILL_COLUMN, .alignment = Qt::AlignRight});
     m_accounts_empty = emptyLine(TR("keys-accounts-empty"));
+    m_register_error = new catalog::Notice(catalog::Notice::Tone::Error);
+    m_register_error->setVisible(false);
 
     m_reveal = catalog::btnRevealMnemonic();
     m_detail_actions = new catalog::ModalActions;
@@ -229,8 +242,11 @@ auto KeyDetail::buildDetail() -> QWidget * {
     m_xpubs_section = denseSection(TR("keys-cached-xpubs"), true);
     m_xpubs_section->setContent(m_xpubs_table);
     m_accounts_section = denseSection(TR("keys-accounts"), true);
-    m_accounts_section->setContent(
-        (new qontrol::Column)->push(m_accounts_table)->push(m_accounts_empty));
+    m_accounts_section->setContent((new qontrol::Column)
+                                       ->spacing(resolve(Spacing::S))
+                                       ->push(m_accounts_table)
+                                       ->push(m_accounts_empty)
+                                       ->push(m_register_error));
     for (auto *section :
          {m_devices_section, m_routes_section, m_xpubs_section, m_accounts_section}) {
         connect(section->header(), &catalog::SectionHeader::toggled, this, &KeyDetail::refit,
@@ -291,7 +307,7 @@ void KeyDetail::refresh() {
     refreshDevices();
     refreshRoutes(current.value());
     refreshXpubs();
-    refreshAccounts();
+    refreshAccounts(current.value());
     m_reveal->setVisible(current->has_hot_secret);
 }
 
@@ -430,36 +446,171 @@ void KeyDetail::refreshXpubs() {
     m_xpubs_section->header()->setCount(countText(static_cast<int>(xpubs.size())));
 }
 
-void KeyDetail::refreshAccounts() {
-    QStringList names = accountNames();
+void KeyDetail::refreshAccounts(const KeyInfo &info) {
+    QList<KeyAccount> list = accounts();
+    bool applies = registrationApplies(info);
+    syncRegistrations(list, applies);
     m_accounts_table->clearRows();
-    for (const auto &name : names) {
+    for (const auto &account : list) {
         auto *module = new Label(TR("keys-accounts-module-sp"), LabelRole::Body);
         module->setTone(LabelTone::Muted);
         m_accounts_table->addWidgetRow(
-            name, {new Label(name, LabelRole::Body), module, catalog::pillAccountRegistered()});
+            account.descriptor,
+            {new Label(account.name, LabelRole::Body), module, registrationCell(account, applies)});
     }
-    m_accounts_table->setVisible(!names.isEmpty());
-    m_accounts_empty->setVisible(names.isEmpty());
-    m_accounts_section->header()->setCount(countText(static_cast<int>(names.size())));
+    m_accounts_table->setVisible(!list.isEmpty());
+    m_accounts_empty->setVisible(list.isEmpty());
+    m_accounts_section->header()->setCount(countText(static_cast<int>(list.size())));
 }
 
-auto KeyDetail::accountNames() const -> QStringList {
+auto KeyDetail::registrationCell(const KeyAccount &account, bool applies) -> QWidget * {
+    if (!applies) {
+        auto *label = new Label(TR("keys-account-registration-not-needed"), LabelRole::Body);
+        label->setTone(LabelTone::Muted);
+        return label;
+    }
+    switch (m_registrations.value(account.descriptor, Registration::Unknown)) {
+    case Registration::Registered:
+        return catalog::pillAccountRegistered();
+    case Registration::Checking:
+    case Registration::Registering:
+        return new catalog::Spinner(metric::ROW_SPINNER_SIZE);
+    case Registration::Unknown:
+    case Registration::NotRegistered:
+        break;
+    }
+    auto *registerAccount = catalog::btnRegisterAccount();
+    registerAccount->setProperty(K_DESCRIPTOR, account.descriptor);
+    registerAccount->setEnabled(!m_register_signer.isNull());
+    registerAccount->setToolTip(
+        m_register_signer.isNull()
+            ? TR("keys-register-account-connect")
+            : TR("keys-register-account-on").arg(deviceName(*m_register_signer)));
+    connect(registerAccount, &QPushButton::clicked, this, &KeyDetail::onRegisterClicked,
+            qontrol::UNIQUE);
+    return registerAccount;
+}
+
+void KeyDetail::syncRegistrations(const QList<KeyAccount> &accounts, bool applies) {
+    auto device = applies ? readyDevice(m_fingerprint) : std::nullopt;
+    QString instance = device.has_value() ? device->instanceId : QString();
+    if (instance != m_register_instance) {
+        stopRegistrations();
+        m_register_instance = instance;
+        if (device.has_value()) {
+            m_register_signer = device->signer;
+            connect(device->signer, &ISigner::descriptorIsRegistered, this,
+                    &KeyDetail::onDescriptorIsRegistered, qontrol::UNIQUE);
+            connect(device->signer, &ISigner::descriptorRegistered, this,
+                    &KeyDetail::onDescriptorRegistered, qontrol::UNIQUE);
+            connect(device->signer, &ISigner::error, this, &KeyDetail::onRegistrationError,
+                    qontrol::UNIQUE);
+        }
+    }
+    if (m_register_signer.isNull()) {
+        return;
+    }
+    for (const auto &account : accounts) {
+        if (!m_registrations.contains(account.descriptor)) {
+            m_registrations.insert(account.descriptor, Registration::Checking);
+            m_register_queue.append(account.descriptor);
+        }
+    }
+    sendNextRegistration();
+}
+
+void KeyDetail::sendNextRegistration() {
+    if (m_register_req != 0 || m_register_queue.isEmpty() || m_register_signer.isNull()) {
+        return;
+    }
+    m_register_descriptor = m_register_queue.takeFirst();
+    m_register_req = m_registrations.value(m_register_descriptor) == Registration::Registering
+                         ? m_register_signer->registerDescriptor(m_register_descriptor)
+                         : m_register_signer->isDescriptorRegistered(m_register_descriptor);
+}
+
+void KeyDetail::finishRegistrationRequest(Registration state) {
+    m_registrations.insert(m_register_descriptor, state);
+    m_register_descriptor.clear();
+    m_register_req = 0;
+    // Rebuilds the rows, which sends the next queued request.
+    refresh();
+}
+
+void KeyDetail::stopRegistrations() {
+    if (!m_register_signer.isNull()) {
+        disconnect(m_register_signer, &ISigner::descriptorIsRegistered, this,
+                   &KeyDetail::onDescriptorIsRegistered);
+        disconnect(m_register_signer, &ISigner::descriptorRegistered, this,
+                   &KeyDetail::onDescriptorRegistered);
+        disconnect(m_register_signer, &ISigner::error, this, &KeyDetail::onRegistrationError);
+    }
+    m_register_signer = nullptr;
+    m_register_instance.clear();
+    m_registrations.clear();
+    m_register_queue.clear();
+    m_register_descriptor.clear();
+    m_register_req = 0;
+    m_register_error->setVisible(false);
+}
+
+void KeyDetail::showRegistrationError(const QString &message) {
+    m_register_error->setText(message);
+    m_register_error->setVisible(true);
+}
+
+void KeyDetail::onRegisterClicked() {
+    QString descriptor = sender()->property(K_DESCRIPTOR).toString();
+    m_registrations.insert(descriptor, Registration::Registering);
+    m_register_queue.append(descriptor);
+    m_register_error->setVisible(false);
+    refresh();
+}
+
+void KeyDetail::onDescriptorIsRegistered(ReqId req_id, bool registered) {
+    if (m_register_req == 0 || req_id != m_register_req) {
+        return;
+    }
+    finishRegistrationRequest(registered ? Registration::Registered : Registration::NotRegistered);
+}
+
+void KeyDetail::onDescriptorRegistered(ReqId req_id, bool registered) {
+    if (m_register_req == 0 || req_id != m_register_req) {
+        return;
+    }
+    if (!registered) {
+        showRegistrationError(TR("keys-register-account-refused"));
+    }
+    finishRegistrationRequest(registered ? Registration::Registered : Registration::NotRegistered);
+}
+
+void KeyDetail::onRegistrationError(std::optional<ReqId> req_id, const QString &message) {
+    if (m_register_req == 0 || !req_id.has_value() || req_id.value() != m_register_req) {
+        return;
+    }
+    bool registering = m_registrations.value(m_register_descriptor) == Registration::Registering;
+    showRegistrationError(registering ? TR("keys-register-account-failed").arg(message)
+                                      : TR("keys-check-account-failed").arg(message));
+    finishRegistrationRequest(registering ? Registration::NotRegistered : Registration::Unknown);
+}
+
+auto KeyDetail::accounts() const -> QList<KeyAccount> {
     // Accounts are told apart by the descriptor they were created with.
-    QHash<QString, QString> accounts;
+    QHash<QString, QString> names;
     for (const auto &name : ::list_configs()) {
         auto config = ::config_from_file(name);
         if (config->is_ok()) {
-            accounts.insert(KeysModule::toQt(config->get_descriptor()), KeysModule::toQt(name));
+            names.insert(KeysModule::toQt(config->get_descriptor()), KeysModule::toQt(name));
         }
     }
-    QStringList names;
+    QList<KeyAccount> list;
     for (const auto &descriptor :
          m_module->rust()->key_descriptors(rust::String(m_fingerprint.toStdString()))) {
-        names.append(accounts.value(KeysModule::toQt(descriptor.descriptor),
-                                    KeysModule::toQt(descriptor.alias)));
+        QString value = KeysModule::toQt(descriptor.descriptor);
+        list.append(
+            {.name = names.value(value, KeysModule::toQt(descriptor.alias)), .descriptor = value});
     }
-    return names;
+    return list;
 }
 
 void KeyDetail::onAliasEdited() {
@@ -637,7 +788,8 @@ void KeyDetail::onInstanceRemoved(const QString &id) {
 
 void KeyDetail::stopFetch() {
     if (!m_fetch_signer.isNull()) {
-        disconnect(m_fetch_signer, nullptr, this, nullptr);
+        disconnect(m_fetch_signer, &ISigner::xpub, this, &KeyDetail::onDeviceXpub);
+        disconnect(m_fetch_signer, &ISigner::error, this, &KeyDetail::onDeviceError);
     }
     m_fetch_signer = nullptr;
     m_fetch_req = 0;
@@ -698,7 +850,10 @@ void KeyDetail::showRemove() {
         return;
     }
     m_remove_question->setText(TR("keys-remove-question").arg(m_alias, m_fingerprint));
-    QStringList names = accountNames();
+    QStringList names;
+    for (const auto &account : accounts()) {
+        names.append(account.name);
+    }
     m_remove_accounts->setTitle(names.size() == 1
                                     ? TR("keys-remove-accounts-one")
                                     : TR("keys-remove-accounts-many").arg(names.size()));

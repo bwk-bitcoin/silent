@@ -935,3 +935,16 @@ receive-index => "Index"
 btn-disconnect-blindbit => "Disconnect Blindbit"
 
 btn-disconnect-electrum => "Disconnect Electrum"
+
+keys-account-registration-not-needed => "Not needed"
+
+keys-register-account-connect
+=> "Connect the device to check or register this account.";;
+
+keys-register-account-on => "Register on %1"
+
+keys-register-account-refused => "The device did not register this account."
+
+keys-register-account-failed => "Could not register this account on the device: %1"
+
+keys-check-account-failed => "Could not check this account on the device: %1"

@@ -2,6 +2,8 @@
 
 #include <optional>
 
+#include <QHash>
+#include <QList>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
@@ -39,9 +41,19 @@ namespace keys::modal {
 
 class FetchXpubStep;
 
+// An account whose descriptor this key signs for.
+struct KeyAccount {
+    QString name;
+    QString descriptor;
+};
+
+// Where an account's descriptor stands on the key's connected device.
+enum class Registration { Unknown, Checking, Registering, Registered, NotRegistered };
+
 // One registered key: its alias, the devices it was seen on, its routes in priority
-// order, its cached xpubs and the accounts using it. Fetching an xpub, revealing the
-// mnemonic of a hot key and removing the key are steps of this same modal.
+// order, its cached xpubs and the accounts using it, with each account's descriptor
+// checked and registered on the key's connected device. Fetching an xpub, revealing
+// the mnemonic of a hot key and removing the key are steps of this same modal.
 class KeyDetail final : public catalog::StepModal {
     Q_OBJECT
 
@@ -66,6 +78,10 @@ public slots:
     void onDeviceXpub(ReqId req_id, const QString &xpub);
     void onDeviceError(std::optional<ReqId> req_id, const QString &message);
     void onInstanceRemoved(const QString &id);
+    void onRegisterClicked();
+    void onDescriptorIsRegistered(ReqId req_id, bool registered);
+    void onDescriptorRegistered(ReqId req_id, bool registered);
+    void onRegistrationError(std::optional<ReqId> req_id, const QString &message);
     void showPassword();
     void onPasswordEntered(QString password);
     void onMnemonicRevealed(ReqId req_id, const MnemonicResult &result);
@@ -86,11 +102,19 @@ protected:
     void refreshDevices();
     void refreshRoutes(const KeyInfo &info);
     void refreshXpubs();
-    void refreshAccounts();
+    void refreshAccounts(const KeyInfo &info);
+    [[nodiscard]] auto registrationCell(const KeyAccount &account, bool applies) -> QWidget *;
+    // Follows the key's ready device: a new one is asked about every account, and
+    // accounts added since are asked about on the same one.
+    void syncRegistrations(const QList<KeyAccount> &accounts, bool applies);
+    // Sends the next queued check or registration, one at a time on the device.
+    void sendNextRegistration();
+    void finishRegistrationRequest(Registration state);
+    void stopRegistrations();
+    void showRegistrationError(const QString &message);
     void moveRoute(int from_index, int to_index);
     void showRouteResult(const KeyOpResult &result);
-    // Every account whose descriptor this key signs for, by name.
-    [[nodiscard]] auto accountNames() const -> QStringList;
+    [[nodiscard]] auto accounts() const -> QList<KeyAccount>;
     void stopFetch();
 
 private:
@@ -114,8 +138,18 @@ private:
     catalog::Section *m_accounts_section = nullptr;
     catalog::Table *m_accounts_table = nullptr;
     catalog::Label *m_accounts_empty = nullptr;
+    catalog::Notice *m_register_error = nullptr;
     catalog::Button *m_reveal = nullptr;
     catalog::ModalActions *m_detail_actions = nullptr;
+
+    // Keyed by descriptor; cleared whenever the device changes.
+    QHash<QString, Registration> m_registrations;
+    QStringList m_register_queue;
+    // The device the states above were read from, empty when none is ready.
+    QString m_register_instance;
+    QPointer<ISigner> m_register_signer;
+    QString m_register_descriptor;
+    ReqId m_register_req = 0;
 
     FetchXpubStep *m_fetch = nullptr;
     catalog::ModalStatus *m_fetching = nullptr;

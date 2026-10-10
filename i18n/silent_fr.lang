@@ -299,6 +299,7 @@ hwi-network => "Network:" => "Network:"
 hwi-no-devices => "No device connected." => "No device connected."
 hwi-settings-title => "Hardware Wallets" => "Hardware Wallets"
 keys-account-index-tip => "Account index (0–99)" => "NONE"
+keys-account-registration-not-needed => "Not needed" => "NONE"
 keys-accounts => "Registered Accounts" => "NONE"
 keys-accounts-empty => "No account uses this key." => "NONE"
 keys-accounts-module-sp => "SP Accounts" => "NONE"
@@ -351,6 +352,9 @@ keys-backup-reason => "Confirm that you wrote the words down." => "NONE"
 keys-backup-title => "These words are shown once" => "NONE"
 keys-backup-wrote => "I wrote the words down, in order." => "NONE"
 keys-cached-xpubs => "Cached Xpubs" => "NONE"
+keys-check-account-failed
+=> "Could not check this account on the device: %1"
+=> "NONE";;
 keys-device-column => "Device" => "NONE"
 keys-device-not-registered => "Not registered as a key" => "NONE"
 keys-device-registered-as => "Registered as “%1”" => "NONE"
@@ -442,6 +446,16 @@ keys-qr-failed-title => "Could Not Build the Request" => "NONE"
 keys-qr-frame-failed => "Could not render this frame: %1" => "NONE"
 keys-qr-part => "Part %1 / %2" => "NONE"
 keys-qr-wrong-kind => "That response does not carry an xpub." => "NONE"
+keys-register-account-connect
+=> "Connect the device to check or register this account."
+=> "NONE";;
+keys-register-account-failed
+=> "Could not register this account on the device: %1"
+=> "NONE";;
+keys-register-account-on => "Register on %1" => "NONE"
+keys-register-account-refused
+=> "The device did not register this account."
+=> "NONE";;
 keys-register-alias => "Alias" => "NONE"
 keys-register-alias-placeholder => "Optional. Leave empty to name it “%1”." => "NONE"
 keys-register-disconnected => "The device was disconnected." => "NONE"
