@@ -46,9 +46,11 @@ void StepModal::setHeaderEndVisible(bool visible) {
 auto StepModal::addStep(const QString &title, ModalWidth width, QWidget *body,
                         ModalActions *actions) -> int {
     auto *scroll = new ScrollArea;
+    scroll->setFitContent(true);
     // The stretch keeps the body packed at the top of a step taller than it.
     scroll->setWidget((new qontrol::Column)->push(body)->pushStretch(1));
-    auto *page = (new qontrol::Column)->push(scroll, 1);
+    // The step's own gap before its actions bar (design Stack gap m).
+    auto *page = (new qontrol::Column)->spacing(resolve(Spacing::M))->push(scroll, 1);
     if (actions != nullptr) {
         page->push(actions);
     }
@@ -74,17 +76,32 @@ void StepModal::showStep(int step) {
     const auto &current = m_steps.at(step);
     setWindowTitle(current.title);
     setFixedWidth(resolve(current.width));
+    // Free of the height fixed last time, so the window hint is the chrome plus the
+    // area's own hint.
+    current.scroll->setMinimumHeight(0);
+    current.scroll->setMaximumHeight(QWIDGETSIZE_MAX);
     // Lays the step out at its width, so wrapped text reports the height it needs.
     layout()->activate();
 
     int maxHeight = static_cast<int>(screen()->availableGeometry().height() * MAX_SCREEN_SHARE);
-    int chromeHeight = sizeHint().height() - current.scroll->sizeHint().height();
+    int scrollHint =
+        current.scroll->sizeHint().expandedTo(current.scroll->minimumSizeHint()).height();
+    // The stack hints at its tallest step, whatever their size policies: take the
+    // shown step's own hint in its place.
+    int pageHint = m_stack->currentWidget()->sizeHint().height();
+    int chromeHeight = sizeHint().height() - m_stack->sizeHint().height() + pageHint - scrollHint;
     auto *body = current.scroll->widget();
     int bodyWidth = current.scroll->viewport()->width();
     int bodyHeight =
         body->hasHeightForWidth() ? body->heightForWidth(bodyWidth) : body->sizeHint().height();
-    current.scroll->setMinimumHeight(std::min(bodyHeight, maxHeight - chromeHeight));
-    adjustSize();
+    // The area's edge lines take their height too, or the last pixels scroll.
+    int scrollHeight =
+        std::min(bodyHeight + 2 * current.scroll->frameWidth(), maxHeight - chromeHeight);
+    current.scroll->setMinimumHeight(scrollHeight);
+    current.scroll->setMaximumHeight(maxHeight - chromeHeight);
+    // Not adjustSize(): it sizes wrapped text at the hint width, and the stack's
+    // height for width is the tallest step's.
+    resize(resolve(current.width), chromeHeight + scrollHeight);
 }
 
 auto StepModal::currentStep() const -> int {

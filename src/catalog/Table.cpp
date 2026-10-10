@@ -8,7 +8,6 @@
 #include "catalog/inputs/Input.h"
 #include "theme/Icon.h"
 
-#include <QScrollArea>
 #include <QStyle>
 #include <QVariant>
 #include <Qontrol>
@@ -26,7 +25,7 @@ Table::Table(QWidget *parent) : QWidget(parent) {
     // Without a fixed body height the table sizes to all its rows (no inner
     // scroll); the surrounding page scrolls instead. setBodyHeight() overrides
     // this with a fixed height when an inner scroll is wanted (e.g. coin select).
-    m_scroll->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
+    m_scroll->setFitContent(true);
     m_scroll->setWidget(m_body);
 
     auto *headerRule = new Separator(Separator::Role::Horizontal, this);

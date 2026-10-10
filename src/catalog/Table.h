@@ -7,13 +7,13 @@
 #include <QSet>
 #include <QWidget>
 
-class QScrollArea;
-
 namespace qontrol {
 class Column;
 }
 
 namespace catalog {
+
+class ScrollArea;
 
 struct TableColumn {
     QString title;
@@ -85,7 +85,7 @@ private:
     QWidget *m_header_rule = nullptr;
     qontrol::Column *m_body = nullptr;
     QWidget *m_footer = nullptr;
-    QScrollArea *m_scroll = nullptr;
+    ScrollArea *m_scroll = nullptr;
     qontrol::Column *m_root = nullptr;
     bool m_selection_enabled = false;
     bool m_header_visible = true;

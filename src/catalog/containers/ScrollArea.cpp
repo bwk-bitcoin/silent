@@ -2,6 +2,7 @@
 
 #include <QScrollBar>
 #include <QStyle>
+#include <algorithm>
 #include <common.h>
 
 namespace catalog {
@@ -12,6 +13,40 @@ ScrollArea::ScrollArea(QWidget *parent) : QScrollArea(parent) {
     setWidgetResizable(true);
     connect(verticalScrollBar(), &QScrollBar::rangeChanged, this, &ScrollArea::onRangeChanged,
             qontrol::UNIQUE);
+}
+
+void ScrollArea::setFitContent(bool fit) {
+    m_fit = fit;
+    setSizeAdjustPolicy(fit ? QAbstractScrollArea::AdjustToContents
+                            : QAbstractScrollArea::AdjustIgnored);
+    setSizePolicy(QSizePolicy::Expanding, fit ? QSizePolicy::Preferred : QSizePolicy::Expanding);
+    updateGeometry();
+}
+
+auto ScrollArea::sizeHint() const -> QSize {
+    // QScrollArea caches the first content size and caps it; the base class does not.
+    if (m_fit && widget() != nullptr) {
+        return QAbstractScrollArea::sizeHint();
+    }
+    return QScrollArea::sizeHint();
+}
+
+auto ScrollArea::minimumSizeHint() const -> QSize {
+    // Never asks for more than its content, so a short list keeps its own height.
+    QSize minimum = QScrollArea::minimumSizeHint();
+    if (m_fit && widget() != nullptr) {
+        minimum.setHeight(std::min(minimum.height(), sizeHint().height()));
+    }
+    return minimum;
+}
+
+auto ScrollArea::hasHeightForWidth() const -> bool {
+    return m_fit && widget() != nullptr && widget()->hasHeightForWidth();
+}
+
+auto ScrollArea::heightForWidth(int width) const -> int {
+    int frame = 2 * frameWidth();
+    return widget()->heightForWidth(width - frame) + frame;
 }
 
 void ScrollArea::onRangeChanged(int minimum, int maximum) {

@@ -10,6 +10,13 @@ class ScrollArea : public QScrollArea {
 
 public:
     explicit ScrollArea(QWidget *parent = nullptr);
+    // Fitting, the area asks for its whole content height, wrapped text included, so
+    // a list takes its height and scrolls only once its parent runs out of room.
+    void setFitContent(bool fit);
+    [[nodiscard]] auto sizeHint() const -> QSize override;
+    [[nodiscard]] auto minimumSizeHint() const -> QSize override;
+    [[nodiscard]] auto hasHeightForWidth() const -> bool override;
+    [[nodiscard]] auto heightForWidth(int width) const -> int override;
     static auto qss(const Palette &p) -> QString;
 
     // Visible width of the scrollbar track.
@@ -32,6 +39,9 @@ public:
 public slots:
     // Edge lines show only while the content overflows.
     void onRangeChanged(int minimum, int maximum);
+
+private:
+    bool m_fit = false;
 };
 
 } // namespace catalog
