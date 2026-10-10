@@ -29,7 +29,7 @@ SelectRow::SelectRow(QWidget *parent) : QFrame(parent) {
 
     m_title = new Label(LabelRole::Body, this);
     auto titleFont = m_title->font();
-    titleFont.setWeight(QFont::DemiBold);
+    titleFont.setWeight(font::DEMIBOLD);
     m_title->setFont(titleFont);
     m_sub = new Label(LabelRole::Caption, this);
     m_sub->setWordWrap(true);

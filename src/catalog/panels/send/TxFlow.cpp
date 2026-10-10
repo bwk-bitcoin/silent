@@ -218,7 +218,7 @@ public:
         m_title = new Label(LabelRole::Body);
         QFont titleFont = m_title->font();
         titleFont.setPixelSize(CARD_TITLE_PX);
-        titleFont.setWeight(QFont::DemiBold);
+        titleFont.setWeight(font::DEMIBOLD);
         m_title->setFont(titleFont);
 
         m_usd = new Label(LabelRole::Mono);
@@ -459,7 +459,7 @@ void TxFlow::paintEvent(QPaintEvent *event) {
 
     // (5) on-ribbon output labels in device space, right-anchored at scaled X.
     QFont labelFont(font::MONO, LABEL_FONT_PX);
-    labelFont.setWeight(QFont::DemiBold);
+    labelFont.setWeight(font::DEMIBOLD);
     labelFont.setLetterSpacing(QFont::PercentageSpacing, LABEL_SPACING);
     painter.setFont(labelFont);
     double anchorX = gx.offset + (X_FLOW_R - LABEL_INSET) * gx.scale;

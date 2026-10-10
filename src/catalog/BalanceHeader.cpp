@@ -13,7 +13,7 @@ BalanceHeader::BalanceHeader(QWidget *parent) : QWidget(parent) {
     m_title = new Label("BALANCE", LabelRole::Caption, this);
     auto eyebrowFont = m_title->font();
     eyebrowFont.setFamily(font::MONO);
-    eyebrowFont.setWeight(QFont::DemiBold);
+    eyebrowFont.setWeight(font::DEMIBOLD);
     eyebrowFont.setLetterSpacing(QFont::PercentageSpacing, 116); // design 0.16em eyebrow tracking
     m_title->setFont(eyebrowFont);
 
@@ -44,7 +44,7 @@ BalanceHeader::BalanceHeader(QWidget *parent) : QWidget(parent) {
     auto *ucap = new Label("UNCONFIRMED", LabelRole::Caption, ucRow);
     auto ucapFont = ucap->font();
     ucapFont.setFamily(font::MONO);
-    ucapFont.setWeight(QFont::DemiBold);
+    ucapFont.setWeight(font::DEMIBOLD);
     ucapFont.setLetterSpacing(QFont::PercentageSpacing, 110); // design 0.1em tracking
     ucap->setFont(ucapFont);
     m_unconfirmed = new Label(LabelRole::Mono, ucRow);

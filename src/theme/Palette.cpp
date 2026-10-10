@@ -183,7 +183,7 @@ auto ButtonPalette::defaultButtonPalette() -> ButtonPalette {
                     .height = 50},
         .tabCreate = {.font = {.family = font::DEFAULT,
                                .size = size::H3,
-                               .weight = QFont::DemiBold},
+                               .weight = font::DEMIBOLD},
                       .width = resolve(BtnWidth::LaunchAdd),
                       .height = 50},
         .inlineBtn = {.font = {.family = font::DEFAULT,
@@ -192,7 +192,7 @@ auto ButtonPalette::defaultButtonPalette() -> ButtonPalette {
                       .paddingH = 10,
                       .paddingV = 4,
                       .borderRadius = 6},
-        .index = {.font = {.family = font::MONO, .size = size::CAPTION, .weight = QFont::DemiBold},
+        .index = {.font = {.family = font::MONO, .size = size::CAPTION, .weight = font::DEMIBOLD},
                   .width = resolve(BtnWidth::Index),
                   .height = resolve(BtnWidth::Icon),
                   .paddingH = 8,
@@ -210,10 +210,10 @@ auto ButtonPalette::light() -> ButtonPalette {
 
 auto FontPalette::defaultFontPalette() -> FontPalette {
     return FontPalette{
-        .title = {.family = font::DEFAULT, .size = size::H1, .weight = QFont::DemiBold},
-        .heading = {.family = font::DEFAULT, .size = size::H2, .weight = QFont::DemiBold},
+        .title = {.family = font::DEFAULT, .size = size::H1, .weight = font::DEMIBOLD},
+        .heading = {.family = font::DEFAULT, .size = size::H2, .weight = font::DEMIBOLD},
         .subheading = {.family = font::DEFAULT, .size = size::H3, .weight = QFont::Normal},
-        .section = {.family = font::DEFAULT, .size = size::SECTION, .weight = QFont::DemiBold},
+        .section = {.family = font::DEFAULT, .size = size::SECTION, .weight = font::DEMIBOLD},
         .inputLabel = {.family = font::DEFAULT,
                        .size = size::BODY,
                        .weight = QFont::Normal,
@@ -231,7 +231,7 @@ auto FontPalette::defaultFontPalette() -> FontPalette {
         .caption = {.family = font::DEFAULT, .size = size::CAPTION, .weight = QFont::Normal},
         .mono = {.family = font::MONO, .size = size::BODY, .weight = QFont::Normal},
         .status = {.family = font::DEFAULT, .size = size::CAPTION, .weight = QFont::Normal},
-        .eyebrow = {.family = font::MONO, .size = size::CAPTION, .weight = QFont::DemiBold},
+        .eyebrow = {.family = font::MONO, .size = size::CAPTION, .weight = font::DEMIBOLD},
     };
 }
 

@@ -78,7 +78,7 @@ auto Badge::textFont() -> QFont {
     QFont badgeFont;
     badgeFont.setFamily(font.family);
     badgeFont.setPointSize(font.size);
-    badgeFont.setWeight(QFont::DemiBold);
+    badgeFont.setWeight(font::DEMIBOLD);
     badgeFont.setLetterSpacing(QFont::PercentageSpacing, 102); // design 0.02em tracking
     return badgeFont;
 }

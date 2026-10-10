@@ -17,7 +17,7 @@ FoldSection::FoldSection(const QString &title, QWidget *parent) : QWidget(parent
     auto headerFont = m_header->font();
     headerFont.setFamily(font::MONO);
     headerFont.setPointSize(size::CAPTION);
-    headerFont.setWeight(QFont::DemiBold);
+    headerFont.setWeight(font::DEMIBOLD);
     headerFont.setLetterSpacing(QFont::PercentageSpacing, 114); // design 0.14em eyebrow tracking
     m_header->setFont(headerFont);
 

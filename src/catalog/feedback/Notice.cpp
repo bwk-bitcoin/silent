@@ -24,7 +24,7 @@ Notice::Notice(Tone tone, QWidget *parent) : QFrame(parent), m_tone(tone) {
     m_icon = new QLabel(this);
     m_title = new Label(LabelRole::Body, this);
     auto titleFont = m_title->font();
-    titleFont.setWeight(QFont::DemiBold);
+    titleFont.setWeight(font::DEMIBOLD);
     m_title->setFont(titleFont);
     m_title->setWordWrap(true);
     m_title->setVisible(false);

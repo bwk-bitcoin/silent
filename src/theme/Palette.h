@@ -162,6 +162,10 @@ namespace font {
 const QString DEFAULT = "Noto Sans";
 const QString MONO = "Noto Sans Mono";
 
+// The design's demibold (600) is drawn with the Noto Sans Bold face: Noto ships no
+// static SemiBold there, so a system SemiBold would render lighter than the design.
+const QFont::Weight DEMIBOLD = QFont::Bold;
+
 } // namespace font
 
 // ===== Size (widget widths) =====

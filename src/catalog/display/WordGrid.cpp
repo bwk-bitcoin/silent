@@ -51,7 +51,7 @@ void WordGrid::rebuild() {
 
         auto *word = new Label(m_masked ? MASK : m_words.at(index), LabelRole::Mono);
         auto wordFont = word->font();
-        wordFont.setWeight(QFont::DemiBold);
+        wordFont.setWeight(font::DEMIBOLD);
         word->setFont(wordFont);
 
         auto *cell = new QFrame;

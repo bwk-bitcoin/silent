@@ -75,7 +75,7 @@ void QrDisplayStep::init() {
 
     auto *rebuildingText = new Label(TR("flow-qr-rebuilding"), LabelRole::Body);
     auto rebuildingFont = rebuildingText->font();
-    rebuildingFont.setWeight(QFont::DemiBold);
+    rebuildingFont.setWeight(font::DEMIBOLD);
     rebuildingText->setFont(rebuildingFont);
     m_rebuilding =
         (new qontrol::Column)
@@ -86,7 +86,7 @@ void QrDisplayStep::init() {
     m_part_label = new Label(LabelRole::Mono);
     m_part_label->setTone(LabelTone::Secondary);
     auto partFont = m_part_label->font();
-    partFont.setWeight(QFont::DemiBold);
+    partFont.setWeight(font::DEMIBOLD);
     m_part_label->setFont(partFont);
     m_part_label->setAlignment(Qt::AlignCenter);
 

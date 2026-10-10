@@ -65,7 +65,7 @@ auto emptyLine(const QString &text) -> Label * {
 // The account column leads the row, in demibold as the design sets it.
 auto accountName(const QString &name) -> Label * {
     auto *label = new Label(name, LabelRole::Body);
-    label->setWeight(QFont::DemiBold);
+    label->setWeight(font::DEMIBOLD);
     return label;
 }
 
