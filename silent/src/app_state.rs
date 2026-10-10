@@ -15,6 +15,9 @@ pub struct AppState {
     pub enabled_plugins: Vec<String>,
     #[serde(default = "default_active_theme")]
     pub active_theme: String,
+    /// The locale picked in Global Settings, empty until one is.
+    #[serde(default)]
+    pub language: String,
 }
 
 fn default_active_theme() -> String {
@@ -26,6 +29,7 @@ impl Default for AppState {
         Self {
             enabled_plugins: Vec::new(),
             active_theme: default_active_theme(),
+            language: String::new(),
         }
     }
 }
@@ -119,6 +123,16 @@ pub fn app_set_active_theme(name: String) {
     state.save();
 }
 
+pub fn app_language() -> String {
+    AppState::load().language
+}
+
+pub fn app_set_language(locale: String) {
+    let mut state = AppState::load();
+    state.language = locale;
+    state.save();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +176,11 @@ mod tests {
                 state.active_theme, "light",
                 "missing file should fall back to the default theme"
             );
+            assert!(
+                state.language.is_empty(),
+                "missing file should pick no language, got {:?}",
+                state.language
+            );
         });
     }
 
@@ -173,6 +192,7 @@ mod tests {
             app_set_plugin_enabled("plugin-b".to_string(), true);
             app_set_plugin_enabled("plugin-a".to_string(), false);
             app_set_active_theme("solarized".to_string());
+            app_set_language("fr".to_string());
 
             let state = AppState::load();
 
@@ -184,6 +204,10 @@ mod tests {
             assert_eq!(
                 state.active_theme, "solarized",
                 "active theme should persist across save/load"
+            );
+            assert_eq!(
+                state.language, "fr",
+                "language should persist across save/load"
             );
         });
     }

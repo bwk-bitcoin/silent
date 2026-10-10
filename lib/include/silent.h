@@ -2452,6 +2452,12 @@ void app_set_plugin_enabled(::rust::String id, bool enabled) noexcept;
 // Set the active app theme name.
 void app_set_active_theme(::rust::String name) noexcept;
 
+// Get the app language (a locale such as "fr"), empty until one is picked.
+::rust::String app_language() noexcept;
+
+// Set the app language.
+void app_set_language(::rust::String locale) noexcept;
+
 // Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
 ::PsbtFileResult sd_save_psbt(::rust::Str path, ::rust::Str psbt_hex) noexcept;
 

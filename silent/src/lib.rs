@@ -708,6 +708,12 @@ mod ffi {
         /// Set the active app theme name.
         fn app_set_active_theme(name: String);
 
+        /// Get the app language (a locale such as "fr"), empty until one is picked.
+        fn app_language() -> String;
+
+        /// Set the app language.
+        fn app_set_language(locale: String);
+
         /// Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
         fn sd_save_psbt(path: &str, psbt_hex: &str) -> PsbtFileResult;
         fn sd_load_psbt(path: &str) -> PsbtFileResult;
@@ -1683,7 +1689,8 @@ fn failed_psbt_file(error: String) -> ffi::PsbtFileResult {
 // Re-export main types
 pub use account::{new_account, Account, NotificationReceiver, Poll, PsbtResult};
 pub use app_state::{
-    app_active_theme, app_enabled_plugins, app_set_active_theme, app_set_plugin_enabled,
+    app_active_theme, app_enabled_plugins, app_language, app_set_active_theme, app_set_language,
+    app_set_plugin_enabled,
 };
 pub use config::{config_from_file, delete_config, list_configs, new_config, set_datadir, Config};
 pub use ffi::{

@@ -5,6 +5,7 @@
 #include <QLocale>
 #include <QLoggingCategory>
 #include <QTextStream>
+#include <silent.h>
 
 namespace i18n {
 
@@ -70,7 +71,8 @@ auto parseQuotedValues(const QString &line) -> QStringList {
 
 class CatalogTranslator final : public QTranslator {
 public:
-    auto loadLangResource(const QString &resource_path, const QString &id_prefix = QString()) -> bool {
+    auto loadLangResource(const QString &resource_path, const QString &id_prefix = QString())
+        -> bool {
         m_messages.clear();
 
         QFile file(resource_path);
@@ -194,12 +196,17 @@ void I18nManager::init(QApplication *app) {
     m_base_translator = new CatalogTranslator();
     m_translator = new CatalogTranslator();
 
-    QString startupLocale = QStringLiteral("en");
+    QString startupLocale = QString::fromStdString(std::string(app_language()));
+    if (startupLocale.isEmpty()) {
+        startupLocale = QStringLiteral("en");
+    }
     bool loaded = applyLocale(startupLocale, false);
     qInfo() << "i18n init locale=" << startupLocale << " loaded=" << loaded;
 }
 
-auto I18nManager::selectedLocale() const -> QString { return m_current_locale; }
+auto I18nManager::selectedLocale() const -> QString {
+    return m_current_locale;
+}
 
 auto I18nManager::applyLocale(const QString &locale, bool persist) -> bool {
     if (m_app == nullptr) {
@@ -277,7 +284,9 @@ auto I18nManager::applyLocale(const QString &locale, bool persist) -> bool {
         }
     }
 
-    (void)persist;  // for now we dont persist yet
+    if (persist) {
+        app_set_language(rust::String(locale.toStdString()));
+    }
 
     emit languageChanged(m_current_locale, success);
     qInfo() << "Applied locale request=" << locale << " active=" << m_current_locale
