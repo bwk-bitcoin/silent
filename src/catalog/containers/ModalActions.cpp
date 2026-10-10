@@ -14,8 +14,6 @@ namespace catalog {
 ModalActions::ModalActions(QWidget *parent) : QWidget(parent) {
     m_reason = new Label(LabelRole::Caption, this);
     m_reason->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_reason->setWordWrap(true);
-    m_reason->setMaximumWidth(metric::ACTIONS_REASON_MAX_WIDTH);
     m_reason->setVisible(false);
 
     m_row = (new qontrol::Row)
@@ -52,7 +50,7 @@ void ModalActions::setBack(Back back) {
 }
 
 void ModalActions::setReason(const QString &reason) {
-    m_reason->setText(reason);
+    m_reason->setTextWrapped(reason, metric::ACTIONS_REASON_MAX_WIDTH);
     m_reason->setVisible(!reason.isEmpty());
 }
 

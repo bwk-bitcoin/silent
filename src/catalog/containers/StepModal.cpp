@@ -25,7 +25,8 @@ StepModal::StepModal() {
 auto StepModal::addStep(const QString &title, ModalWidth width, QWidget *body,
                         ModalActions *actions) -> int {
     auto *scroll = new ScrollArea;
-    scroll->setWidget(body);
+    // The stretch keeps the body packed at the top of a step taller than it.
+    scroll->setWidget((new qontrol::Column)->push(body)->pushStretch(1));
     auto *page = (new qontrol::Column)->push(scroll, 1);
     if (actions != nullptr) {
         page->push(actions);
@@ -50,13 +51,18 @@ void StepModal::showStep(int step) {
     m_stack->setCurrentIndex(step);
 
     const auto &current = m_steps.at(step);
-    int maxHeight = static_cast<int>(screen()->availableGeometry().height() * MAX_SCREEN_SHARE);
-    int chromeHeight = sizeHint().height() - current.scroll->sizeHint().height();
-    int bodyHeight = current.scroll->widget()->sizeHint().height();
-    current.scroll->setMinimumHeight(std::min(bodyHeight, maxHeight - chromeHeight));
-
     setWindowTitle(current.title);
     setFixedWidth(resolve(current.width));
+    // Lays the step out at its width, so wrapped text reports the height it needs.
+    layout()->activate();
+
+    int maxHeight = static_cast<int>(screen()->availableGeometry().height() * MAX_SCREEN_SHARE);
+    int chromeHeight = sizeHint().height() - current.scroll->sizeHint().height();
+    auto *body = current.scroll->widget();
+    int bodyWidth = current.scroll->viewport()->width();
+    int bodyHeight =
+        body->hasHeightForWidth() ? body->heightForWidth(bodyWidth) : body->sizeHint().height();
+    current.scroll->setMinimumHeight(std::min(bodyHeight, maxHeight - chromeHeight));
     adjustSize();
 }
 

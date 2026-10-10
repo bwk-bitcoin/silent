@@ -20,11 +20,10 @@ EmptyState::EmptyState(IconFn icon, const QString &title, const QString &subtitl
     m_title->setFont(titleFont);
     m_title->setAlignment(Qt::AlignCenter);
 
-    m_subtitle = new Label(subtitle, LabelRole::Body);
+    m_subtitle = new Label(LabelRole::Body);
     m_subtitle->setTone(LabelTone::Muted);
-    m_subtitle->setWordWrap(true);
     m_subtitle->setAlignment(Qt::AlignCenter);
-    m_subtitle->setMaximumWidth(metric::MODAL_STATUS_TEXT_MAX_WIDTH);
+    m_subtitle->setTextWrapped(subtitle, metric::MODAL_STATUS_TEXT_MAX_WIDTH);
     m_subtitle->setVisible(!subtitle.isEmpty());
 
     m_column = (new qontrol::Column)
@@ -41,7 +40,7 @@ void EmptyState::setTitle(const QString &title) {
 }
 
 void EmptyState::setSubtitle(const QString &subtitle) {
-    m_subtitle->setText(subtitle);
+    m_subtitle->setTextWrapped(subtitle, metric::MODAL_STATUS_TEXT_MAX_WIDTH);
     m_subtitle->setVisible(!subtitle.isEmpty());
 }
 

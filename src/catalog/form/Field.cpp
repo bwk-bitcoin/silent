@@ -10,10 +10,16 @@ Field::Field(const QString &label, QWidget *control, int label_width, QWidget *p
     : QWidget(parent),
       m_control(control) {
     m_label = new Label(label, LabelRole::Body, this);
+    // The label never takes the free space: a fixed-width control stays right after it.
+    m_label->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
     if (label_width != width::NONE) {
         m_label->setFixedWidth(label_width);
     }
-    m_row = (new qontrol::Row)->spacing(resolve(Spacing::XS))->push(m_label)->push(m_control, 1);
+    m_row = (new qontrol::Row)
+                ->spacing(resolve(Spacing::XS))
+                ->push(m_label)
+                ->push(m_control, 1)
+                ->pushStretch(0);
     m_row->into(this);
 }
 

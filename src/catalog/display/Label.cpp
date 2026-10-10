@@ -99,6 +99,19 @@ void Label::setTextWrapAnywhere(const QString &text) {
     setText(breakable);
 }
 
+void Label::setTextWrapped(const QString &text, int max_width) {
+    setText(text);
+    bool wraps = fontMetrics().horizontalAdvance(text) > max_width;
+    setWordWrap(wraps);
+    if (wraps) {
+        setFixedWidth(max_width);
+        setMinimumHeight(heightForWidth(max_width));
+    } else {
+        setMinimumSize(0, 0);
+        setMaximumWidth(QWIDGETSIZE_MAX);
+    }
+}
+
 static auto sizeForStep(LabelSize step) -> int {
     switch (step) {
     case LabelSize::Sm:

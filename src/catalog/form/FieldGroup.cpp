@@ -14,6 +14,8 @@ FieldGroup::FieldGroup(QWidget *parent) : QWidget(parent) {
     m_grid->setHorizontalSpacing(resolve(Spacing::XS));
     m_grid->setVerticalSpacing(resolve(Spacing::XS));
     m_grid->setColumnStretch(1, 1);
+    // Takes what a fixed-width control leaves, so it stays right after its label.
+    m_grid->addItem(new QSpacerItem(0, 0, QSizePolicy::Expanding, QSizePolicy::Minimum), 0, 2);
 }
 
 auto FieldGroup::addField(const QString &label, QWidget *control, bool top) -> FieldGroup * {

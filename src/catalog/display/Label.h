@@ -57,6 +57,10 @@ public:
     void setSize(LabelSize size);
     // Wraps `text` at any character, not only at spaces (long mono values).
     void setTextWrapAnywhere(const QString &text);
+    // Wraps `text` at `max_width` only when it does not fit on one line, and then sizes
+    // the label to it: a wrapped label left to size itself picks a narrow width and,
+    // aligned in a layout, loses lines.
+    void setTextWrapped(const QString &text, int max_width);
     static auto qss(const Palette &p) -> QString;
 
 protected:
