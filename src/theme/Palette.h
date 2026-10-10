@@ -111,7 +111,6 @@ const int ICON_STROKE = 2;
 const int BUTTON_MIN_HEIGHT = 36;
 const int COMBO_DROPDOWN_WIDTH = 30;
 const int COMBO_ARROW_SIZE = 12;
-const int FORM_LABEL_WIDTH = 130;
 const int SELECT_ROW_ICON_SIZE = 18;
 const int SELECT_ROW_PADDING_H = 14;
 const int SELECT_ROW_PADDING_V = 12;

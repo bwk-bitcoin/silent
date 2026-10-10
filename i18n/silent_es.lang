@@ -22,6 +22,8 @@ btn-create => "Create" => "NONE"
 btn-create-new-wallet => "+ Create New Wallet" => "NONE"
 btn-delete-wallet => "Delete wallet" => "NONE"
 btn-disable-plugin => "Disable Plugin" => "NONE"
+btn-disconnect-blindbit => "Disconnect Blindbit" => "NONE"
+btn-disconnect-electrum => "Disconnect Electrum" => "NONE"
 btn-dismiss => "Dismiss" => "NONE"
 btn-done => "Done" => "NONE"
 btn-edit-label => "Edit label" => "NONE"
@@ -626,12 +628,8 @@ settings-capabilities => "Capabilities:" => "Capacidades:"
 settings-capabilities-template
 => "Tweaks Only: %1\nFull Basic: %2\nFull + Dust Filter: %3\nCut-Through + Dust Filter: %4"
 => "Solo Tweaks: %1\nBasico completo: %2\nCompleto + filtro de polvo: %3\nCut-through + filtro de polvo: %4";;
-settings-connect-blindbit => "Connect Blindbit" => "Conectar Blindbit"
-settings-connect-electrum => "Connect Electrum" => "Conectar Electrum"
 settings-connection => "Connection" => "Conexion"
 settings-connection-failed => "Connection Failed" => "Conexion fallida"
-settings-disconnect-blindbit => "Disconnect Blindbit" => "Desconectar Blindbit"
-settings-disconnect-electrum => "Disconnect Electrum" => "Desconectar Electrum"
 settings-electrum-empty
 => "Electrum address is empty"
 => "La direccion Electrum esta vacia";;
@@ -666,7 +664,6 @@ settings-plugin-manager => "Plugin Manager" => "Gestor de plugins"
 settings-registry-unavailable
 => "Plugin registry unavailable"
 => "Registro de plugins no disponible";;
-settings-save => "Save Settings" => "Guardar configuracion"
 settings-scan-plugins => "Scan for plugins" => "Buscar plugins"
 settings-section-fallback => "Section %1" => "Seccion %1"
 settings-section-open => "Open" => "Open"

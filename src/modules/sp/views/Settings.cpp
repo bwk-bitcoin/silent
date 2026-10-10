@@ -3,11 +3,11 @@
 #include "AppController.h"
 #include "Column.h"
 #include "catalog/Button.h"
+#include "catalog/Variants.h"
 #include "catalog/containers/FoldSection.h"
 #include "catalog/containers/Separator.h"
 #include "catalog/display/Label.h"
-#include "catalog/form/Field.h"
-#include "catalog/form/ValidationMark.h"
+#include "catalog/form/FieldGroup.h"
 #include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
 #include "i18n/I18nManager.h"
@@ -22,13 +22,11 @@
 namespace view {
 
 using catalog::Button;
-using catalog::ButtonRole;
 using catalog::ComboBox;
-using catalog::Field;
+using catalog::FieldGroup;
 using catalog::FoldSection;
 using catalog::Input;
 using catalog::Label;
-using catalog::ValidationMark;
 
 Settings::Settings(AccountController *ctrl) {
     m_controller = ctrl;
@@ -63,20 +61,26 @@ void Settings::init() {
 
     // Create widgets
     m_blindbit_url_input = new Input;
-    m_blindbit_url_input->setWidth(Size::XXL);
+    m_blindbit_url_input->setWidth(Size::XL);
     m_blindbit_url_input->setPlaceholderText(TR("settings-placeholder-blindbit"));
     m_blindbit_url_input->setText(m_current_url);
     m_blindbit_url_input->setEnabled(!m_controller->isScannerRunning());
 
-    m_test_btn = new Button(TR("common-test"));
+    m_test_btn = catalog::btnTest();
+    m_testing_btn = catalog::btnTesting();
+    m_testing_btn->setEnabled(false);
+    m_test_ok_btn = catalog::btnTestOk();
 
     m_electrum_url_input = new Input;
-    m_electrum_url_input->setWidth(Size::XXL);
+    m_electrum_url_input->setWidth(Size::XL);
     m_electrum_url_input->setPlaceholderText(TR("settings-placeholder-electrum"));
     m_electrum_url_input->setText(m_current_electrum_url);
     m_electrum_url_input->setEnabled(!m_controller->isScannerRunning());
 
-    m_test_electrum_btn = new Button(TR("common-test"));
+    m_test_electrum_btn = catalog::btnTest();
+    m_testing_electrum_btn = catalog::btnTesting();
+    m_testing_electrum_btn->setEnabled(false);
+    m_test_ok_electrum_btn = catalog::btnTestOk();
 
     m_network_selector = new ComboBox;
     m_network_selector->addItem("Regtest", static_cast<int>(Network::Regtest));
@@ -94,8 +98,6 @@ void Settings::init() {
     m_info_network_label = new Label("--");
     m_info_height_label = new Label("--");
     m_capabilities = new Label("--");
-    m_backend_status = new ValidationMark;
-    m_electrum_status = new ValidationMark;
 
     m_language_selector = new ComboBox;
     m_language_selector->addItem("English", "en");
@@ -117,22 +119,32 @@ void Settings::init() {
     m_apply_language_btn = new Button;
     m_language_status_label = new Label;
 
-    m_save_btn = new Button(TR("settings-save"), ButtonRole::Primary);
-    m_toggle_blindbit_btn =
-        new Button(m_controller->isScannerRunning() ? "Disconnect Blindbit" : "Connect Blindbit");
-    m_toggle_electrum_btn =
-        new Button(m_electrum_running ? "Disconnect Electrum" : "Connect Electrum");
+    m_save_btn = catalog::btnSaveSettings();
+    m_connect_blindbit_btn = catalog::btnConnectBlindbit();
+    m_disconnect_blindbit_btn = catalog::btnDisconnectBlindbit();
+    m_connect_electrum_btn = catalog::btnConnectElectrum();
+    m_disconnect_electrum_btn = catalog::btnDisconnectElectrum();
+    showTestState(m_test_btn, m_testing_btn, m_test_ok_btn, TestState::Untested);
+    showTestState(m_test_electrum_btn, m_testing_electrum_btn, m_test_ok_electrum_btn,
+                  TestState::Untested);
 
     retranslateUi();
+    updateButtons();
 }
 
 void Settings::doConnect() {
     connect(m_save_btn, &QPushButton::clicked, this, &Settings::onActionSave, qontrol::UNIQUE);
-    connect(m_toggle_blindbit_btn, &QPushButton::clicked, this, &Settings::onActionToggleBlindbit,
+    connect(m_connect_blindbit_btn, &QPushButton::clicked, this, &Settings::onActionToggleBlindbit,
             qontrol::UNIQUE);
-    connect(m_toggle_electrum_btn, &QPushButton::clicked, this, &Settings::onActionToggleElectrum,
+    connect(m_disconnect_blindbit_btn, &QPushButton::clicked, this,
+            &Settings::onActionToggleBlindbit, qontrol::UNIQUE);
+    connect(m_connect_electrum_btn, &QPushButton::clicked, this, &Settings::onActionToggleElectrum,
             qontrol::UNIQUE);
+    connect(m_disconnect_electrum_btn, &QPushButton::clicked, this,
+            &Settings::onActionToggleElectrum, qontrol::UNIQUE);
     connect(m_test_btn, &QPushButton::clicked, this, &Settings::onActionTestBackend,
+            qontrol::UNIQUE);
+    connect(m_test_ok_btn, &QPushButton::clicked, this, &Settings::onActionTestBackend,
             qontrol::UNIQUE);
     connect(m_controller, &AccountController::scannerStateChanged, this,
             &Settings::onUpdateBlindbitToggleButton, qontrol::UNIQUE);
@@ -145,6 +157,8 @@ void Settings::doConnect() {
     connect(m_blindbit_url_input, &QLineEdit::textChanged, this, &Settings::invalidateBackendTest,
             qontrol::UNIQUE);
     connect(m_test_electrum_btn, &QPushButton::clicked, this, &Settings::onActionTestElectrum,
+            qontrol::UNIQUE);
+    connect(m_test_ok_electrum_btn, &QPushButton::clicked, this, &Settings::onActionTestElectrum,
             qontrol::UNIQUE);
     connect(m_apply_language_btn, &QPushButton::clicked, this, &Settings::onActionApplyLanguage,
             qontrol::UNIQUE);
@@ -211,7 +225,7 @@ void Settings::onActionToggleBlindbit() {
     }
 
     if (m_controller->isScannerRunning()) {
-        m_toggle_blindbit_btn->setEnabled(false);
+        m_disconnect_blindbit_btn->setEnabled(false);
         accountOpt.value()->stop_scanner();
         clearBackendInfo();
     } else {
@@ -234,7 +248,7 @@ void Settings::onActionToggleElectrum() {
     }
 
     if (m_electrum_running) {
-        m_toggle_electrum_btn->setEnabled(false);
+        m_disconnect_electrum_btn->setEnabled(false);
         accountOpt.value()->stop_electrum();
     } else {
         if (!accountOpt.value()->start_electrum()) {
@@ -253,9 +267,7 @@ void Settings::onActionTestBackend() {
         return;
     }
 
-    m_test_btn->setEnabled(false);
-    m_test_btn->setText(TR("common-testing"));
-    m_backend_status->setState(ValidationMark::State::None);
+    showTestState(m_test_btn, m_testing_btn, m_test_ok_btn, TestState::Testing);
 
     auto *thread = QThread::create([this, url = url.toStdString()]() -> void {
         auto info = ::get_backend_info(rust::String(url));
@@ -263,6 +275,12 @@ void Settings::onActionTestBackend() {
     });
     connect(thread, &QThread::finished, thread, &QThread::deleteLater);
     thread->start();
+}
+
+void Settings::showTestState(Button *test, Button *testing, Button *test_ok, TestState state) {
+    test->setVisible(state == TestState::Untested);
+    testing->setVisible(state == TestState::Testing);
+    test_ok->setVisible(state == TestState::Ok);
 }
 
 void Settings::fetchBackendInfo() {
@@ -278,16 +296,13 @@ void Settings::fetchBackendInfo() {
     thread->start();
 }
 
-void Settings::onBackendInfoReady(BackendInfo info) {
-    m_test_btn->setEnabled(true);
-    m_test_btn->setText(TR("common-test"));
-
+void Settings::onBackendInfoReady(const BackendInfo &info) {
     if (!info.is_ok) {
         m_backend_verified = false;
-        m_backend_status->setState(ValidationMark::State::Invalid);
+        showTestState(m_test_btn, m_testing_btn, m_test_ok_btn, TestState::Untested);
         clearBackendInfo();
         updateButtons();
-        auto rawError = QString::fromStdString(std::string(info.error.c_str()));
+        auto rawError = QString::fromStdString(std::string(info.error));
         auto message =
             mapBackendErrorSummary(rawError) + "\n\n" + formatBackendErrorDetails(rawError);
         AppController::execModal(new qontrol::Modal(TR("settings-connection-failed"), message));
@@ -312,11 +327,11 @@ void Settings::onBackendInfoReady(BackendInfo info) {
 
     bool networkMatch = false;
     networkMatch = (info.network == m_current_network);
-    m_blindbit_url_input->setText(QString::fromStdString(std::string(info.url.c_str())));
+    m_blindbit_url_input->setText(QString::fromStdString(std::string(info.url)));
 
     m_backend_verified = networkMatch;
-    m_backend_status->setState(networkMatch ? ValidationMark::State::Valid
-                                            : ValidationMark::State::Invalid);
+    showTestState(m_test_btn, m_testing_btn, m_test_ok_btn,
+                  networkMatch ? TestState::Ok : TestState::Untested);
     updateButtons();
     m_info_network_label->setText(networkStr);
     m_current_height = info.height;
@@ -342,7 +357,7 @@ void Settings::onBackendInfoReady(BackendInfo info) {
 
 void Settings::invalidateBackendTest() {
     m_backend_verified = false;
-    m_backend_status->setState(ValidationMark::State::None);
+    showTestState(m_test_btn, m_testing_btn, m_test_ok_btn, TestState::Untested);
     clearBackendInfo();
     updateButtons();
 }
@@ -355,9 +370,8 @@ void Settings::onActionTestElectrum() {
         return;
     }
 
-    m_test_electrum_btn->setEnabled(false);
-    m_test_electrum_btn->setText(TR("common-testing"));
-    m_electrum_status->setState(ValidationMark::State::None);
+    showTestState(m_test_electrum_btn, m_testing_electrum_btn, m_test_ok_electrum_btn,
+                  TestState::Testing);
 
     auto *thread = QThread::create([this, addr = addr.toStdString()]() -> void {
         auto result = ::test_electrum(rust::String(addr));
@@ -367,15 +381,13 @@ void Settings::onActionTestElectrum() {
     thread->start();
 }
 
-void Settings::onElectrumTestReady(ConnectionResult result) {
-    m_test_electrum_btn->setEnabled(true);
-    m_test_electrum_btn->setText(TR("common-test"));
-
+void Settings::onElectrumTestReady(const ConnectionResult &result) {
     if (!result.is_ok) {
         m_electrum_verified = false;
-        m_electrum_status->setState(ValidationMark::State::Invalid);
+        showTestState(m_test_electrum_btn, m_testing_electrum_btn, m_test_ok_electrum_btn,
+                      TestState::Untested);
         updateButtons();
-        auto rawError = QString::fromStdString(std::string(result.error.c_str()));
+        auto rawError = QString::fromStdString(std::string(result.error));
         auto message =
             mapBackendErrorSummary(rawError) + "\n\n" + formatBackendErrorDetails(rawError);
         AppController::execModal(new qontrol::Modal(TR("settings-electrum-test-failed"), message));
@@ -383,16 +395,18 @@ void Settings::onElectrumTestReady(ConnectionResult result) {
     }
 
     // Before setting verified: setText fires textChanged -> invalidateElectrumTest.
-    m_electrum_url_input->setText(QString::fromStdString(std::string(result.url.c_str())));
+    m_electrum_url_input->setText(QString::fromStdString(std::string(result.url)));
 
     m_electrum_verified = true;
-    m_electrum_status->setState(ValidationMark::State::Valid);
+    showTestState(m_test_electrum_btn, m_testing_electrum_btn, m_test_ok_electrum_btn,
+                  TestState::Ok);
     updateButtons();
 }
 
 void Settings::invalidateElectrumTest() {
     m_electrum_verified = false;
-    m_electrum_status->setState(ValidationMark::State::None);
+    showTestState(m_test_electrum_btn, m_testing_electrum_btn, m_test_ok_electrum_btn,
+                  TestState::Untested);
     updateButtons();
 }
 
@@ -406,12 +420,20 @@ void Settings::clearBackendInfo() {
 void Settings::updateButtons() {
     bool blindbitRunning = m_controller->isScannerRunning();
     m_save_btn->setEnabled(m_backend_verified && m_electrum_verified);
-    m_toggle_blindbit_btn->setEnabled(m_backend_verified || blindbitRunning);
-    m_toggle_electrum_btn->setEnabled(m_electrum_verified || m_electrum_running);
+    m_connect_blindbit_btn->setVisible(!blindbitRunning);
+    m_disconnect_blindbit_btn->setVisible(blindbitRunning);
+    m_connect_blindbit_btn->setEnabled(m_backend_verified);
+    m_disconnect_blindbit_btn->setEnabled(true);
+    m_connect_electrum_btn->setVisible(!m_electrum_running);
+    m_disconnect_electrum_btn->setVisible(m_electrum_running);
+    m_connect_electrum_btn->setEnabled(m_electrum_verified);
+    m_disconnect_electrum_btn->setEnabled(true);
     m_blindbit_url_input->setEnabled(!blindbitRunning);
     m_test_btn->setEnabled(!blindbitRunning);
+    m_test_ok_btn->setEnabled(!blindbitRunning);
     m_electrum_url_input->setEnabled(!m_electrum_running);
     m_test_electrum_btn->setEnabled(!m_electrum_running);
+    m_test_ok_electrum_btn->setEnabled(!m_electrum_running);
 }
 
 void Settings::onScanProgress(uint32_t height, [[maybe_unused]] uint32_t tip) {
@@ -421,21 +443,13 @@ void Settings::onScanProgress(uint32_t height, [[maybe_unused]] uint32_t tip) {
     }
 }
 
-void Settings::onUpdateBlindbitToggleButton(bool running) {
-    if (m_toggle_blindbit_btn != nullptr) {
-        m_toggle_blindbit_btn->setText(running ? TR("settings-disconnect-blindbit")
-                                               : TR("settings-connect-blindbit"));
-    }
+void Settings::onUpdateBlindbitToggleButton([[maybe_unused]] bool running) {
     updateButtons();
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void Settings::onUpdateElectrumToggleButton() {
     m_electrum_running = !m_electrum_running;
-    if (m_toggle_electrum_btn != nullptr) {
-        m_toggle_electrum_btn->setText(m_electrum_running ? TR("settings-disconnect-electrum")
-                                                          : TR("settings-connect-electrum"));
-    }
     updateButtons();
 }
 
@@ -448,48 +462,41 @@ void Settings::onActionApplyLanguage() {
 
 void Settings::view() {
     auto *urlControl = (new qontrol::Row)
+                           ->spacing(resolve(Spacing::XS))
                            ->push(m_blindbit_url_input)
-                           ->pushSpacer(resolve(Spacing::XS))
                            ->push(m_test_btn)
-                           ->pushSpacer(resolve(Spacing::XS))
-                           ->push(m_backend_status);
+                           ->push(m_testing_btn)
+                           ->push(m_test_ok_btn);
     auto *electrumControl = (new qontrol::Row)
+                                ->spacing(resolve(Spacing::XS))
                                 ->push(m_electrum_url_input)
-                                ->pushSpacer(resolve(Spacing::XS))
                                 ->push(m_test_electrum_btn)
-                                ->pushSpacer(resolve(Spacing::XS))
-                                ->push(m_electrum_status);
+                                ->push(m_testing_electrum_btn)
+                                ->push(m_test_ok_electrum_btn);
 
-    auto *connectionContent =
-        (new qontrol::Column)
-            ->push(new Field(TR("settings-blindbit-url"), urlControl, metric::FORM_LABEL_WIDTH))
-            ->pushSpacer(resolve(Spacing::XS))
-            ->push(new Field(TR("settings-electrum-server"), electrumControl,
-                             metric::FORM_LABEL_WIDTH))
-            ->pushSpacer(resolve(Spacing::XS))
-            ->push(new Field(TR("settings-network"), m_network_selector, metric::FORM_LABEL_WIDTH));
+    auto *connectionContent = (new FieldGroup)
+                                  ->addField(TR("settings-blindbit-url"), urlControl)
+                                  ->addField(TR("settings-electrum-server"), electrumControl)
+                                  ->addField(TR("settings-network"), m_network_selector);
     auto *connectionSection = new FoldSection(TR("settings-connection"));
     connectionSection->setContent(connectionContent);
 
-    auto *infoContent = (new qontrol::Column)
-                            ->push(new Field(TR("settings-network"), m_info_network_label,
-                                             metric::FORM_LABEL_WIDTH))
-                            ->pushSpacer(resolve(Spacing::XS))
-                            ->push(new Field(TR("settings-block-height"), m_info_height_label,
-                                             metric::FORM_LABEL_WIDTH))
-                            ->pushSpacer(resolve(Spacing::XS))
-                            ->push(new Field(TR("settings-capabilities"), m_capabilities,
-                                             metric::FORM_LABEL_WIDTH));
+    auto *infoContent = (new FieldGroup)
+                            ->addField(TR("settings-network"), m_info_network_label)
+                            ->addField(TR("settings-block-height"), m_info_height_label)
+                            ->addField(TR("settings-capabilities"), m_capabilities, true);
     auto *infoSection = new FoldSection(TR("settings-backend-info"));
     infoSection->setExpanded(false);
     infoSection->setContent(infoContent);
 
     auto *buttonRow = (new qontrol::Row)
                           ->pushSpacer()
-                          ->push(m_toggle_blindbit_btn)
-                          ->pushSpacer(resolve(Spacing::XS))
-                          ->push(m_toggle_electrum_btn)
-                          ->pushSpacer(resolve(Spacing::XS))
+                          ->push(m_connect_blindbit_btn)
+                          ->push(m_disconnect_blindbit_btn)
+                          ->pushSpacer(resolve(Spacing::S))
+                          ->push(m_connect_electrum_btn)
+                          ->push(m_disconnect_electrum_btn)
+                          ->pushSpacer(resolve(Spacing::S))
                           ->push(m_save_btn)
                           ->pushSpacer();
 
@@ -520,16 +527,7 @@ void Settings::retranslateUi() {
     m_blindbit_url_input->setPlaceholderText(TR("settings-placeholder-blindbit"));
     m_electrum_url_input->setPlaceholderText(TR("settings-placeholder-electrum"));
 
-    m_test_btn->setText(TR("common-test"));
-    m_test_electrum_btn->setText(TR("common-test"));
-    m_save_btn->setText(TR("settings-save"));
     m_apply_language_btn->setText(TR("common-apply"));
-
-    m_toggle_blindbit_btn->setText(m_controller->isScannerRunning()
-                                       ? TR("settings-disconnect-blindbit")
-                                       : TR("settings-connect-blindbit"));
-    m_toggle_electrum_btn->setText(m_electrum_running ? TR("settings-disconnect-electrum")
-                                                      : TR("settings-connect-electrum"));
 
     m_network_selector->setItemText(0, TR("network-regtest"));
     m_network_selector->setItemText(1, TR("network-signet"));

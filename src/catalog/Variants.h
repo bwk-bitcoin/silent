@@ -54,6 +54,8 @@ auto btnAddPayment() -> Button *;
 auto btnClear() -> Button *;
 auto btnConnectBlindbit() -> Button *;
 auto btnConnectElectrum() -> Button *;
+auto btnDisconnectBlindbit() -> Button *;
+auto btnDisconnectElectrum() -> Button *;
 auto btnGenerate() -> Button *;
 auto btnGenerateNew() -> Button *;
 auto btnGetAgain() -> Button *;

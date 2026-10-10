@@ -1,20 +1,18 @@
 #include "catalog/form/Field.h"
 
 #include "catalog/display/Label.h"
+#include "theme/Palette.h"
 
 #include <Qontrol>
 
 namespace catalog {
 
-Field::Field(const QString &label, QWidget *control, int label_width, QWidget *parent)
+Field::Field(const QString &label, QWidget *control, QWidget *parent)
     : QWidget(parent),
       m_control(control) {
     m_label = new Label(label, LabelRole::Body, this);
     // The label never takes the free space: a fixed-width control stays right after it.
     m_label->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
-    if (label_width != width::NONE) {
-        m_label->setFixedWidth(label_width);
-    }
     m_row = (new qontrol::Row)
                 ->spacing(resolve(Spacing::XS))
                 ->push(m_label)

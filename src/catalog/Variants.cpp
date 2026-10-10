@@ -310,6 +310,18 @@ auto btnConnectElectrum() -> Button * {
         {.role = ButtonRole::Default, .label = TR("btn-connect-electrum"), .width = BtnWidth::L});
 }
 
+auto btnDisconnectBlindbit() -> Button * {
+    return make({.role = ButtonRole::Default,
+                 .label = TR("btn-disconnect-blindbit"),
+                 .width = BtnWidth::L});
+}
+
+auto btnDisconnectElectrum() -> Button * {
+    return make({.role = ButtonRole::Default,
+                 .label = TR("btn-disconnect-electrum"),
+                 .width = BtnWidth::L});
+}
+
 auto btnGenerate() -> Button * {
     return make(
         {.role = ButtonRole::Default, .label = TR("common-generate"), .width = BtnWidth::M});
