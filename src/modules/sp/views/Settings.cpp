@@ -7,6 +7,7 @@
 #include "catalog/containers/FoldSection.h"
 #include "catalog/containers/Separator.h"
 #include "catalog/display/Label.h"
+#include "catalog/feedback/MessageModal.h"
 #include "catalog/form/FieldGroup.h"
 #include "catalog/form/FieldNote.h"
 #include "catalog/inputs/ComboBox.h"
@@ -159,7 +160,8 @@ void Settings::onActionSave() {
 
     auto &accountOpt = m_controller->getAccount();
     if (m_controller == nullptr || !accountOpt.has_value()) {
-        auto *modal = new qontrol::Modal(TR("common-error"), TR("settings-no-account-loaded"));
+        auto *modal =
+            new catalog::MessageModal(TR("common-error"), TR("settings-no-account-loaded"));
         AppController::execModal(modal);
         return;
     }
@@ -174,7 +176,8 @@ void Settings::onActionSave() {
         qCritical() << "Settings: cannot save, config load failed for account"
                     << QString::fromStdString(std::string(accountName.c_str())) << ":"
                     << QString::fromStdString(std::string(config->get_error().c_str()));
-        auto *modal = new qontrol::Modal(TR("common-error"), TR("settings-no-account-loaded"));
+        auto *modal =
+            new catalog::MessageModal(TR("common-error"), TR("settings-no-account-loaded"));
         AppController::execModal(modal);
         return;
     }
@@ -203,7 +206,8 @@ void Settings::onActionSave() {
 void Settings::onActionToggleBlindbit() {
     auto &accountOpt = m_controller->getAccount();
     if (m_controller == nullptr || !accountOpt.has_value()) {
-        auto *modal = new qontrol::Modal(TR("common-error"), TR("settings-no-account-loaded"));
+        auto *modal =
+            new catalog::MessageModal(TR("common-error"), TR("settings-no-account-loaded"));
         AppController::execModal(modal);
         return;
     }
@@ -215,7 +219,7 @@ void Settings::onActionToggleBlindbit() {
     } else {
         if (!accountOpt.value()->start_scanner()) {
             auto *modal =
-                new qontrol::Modal(TR("common-error"), TR("settings-failed-start-scanner"));
+                new catalog::MessageModal(TR("common-error"), TR("settings-failed-start-scanner"));
             AppController::execModal(modal);
         } else {
             fetchBackendInfo();
@@ -226,7 +230,8 @@ void Settings::onActionToggleBlindbit() {
 void Settings::onActionToggleElectrum() {
     auto &accountOpt = m_controller->getAccount();
     if (m_controller == nullptr || !accountOpt.has_value()) {
-        auto *modal = new qontrol::Modal(TR("common-error"), TR("settings-no-account-loaded"));
+        auto *modal =
+            new catalog::MessageModal(TR("common-error"), TR("settings-no-account-loaded"));
         AppController::execModal(modal);
         return;
     }
@@ -237,7 +242,7 @@ void Settings::onActionToggleElectrum() {
     } else {
         if (!accountOpt.value()->start_electrum()) {
             auto *modal =
-                new qontrol::Modal(TR("common-error"), TR("settings-failed-start-electrum"));
+                new catalog::MessageModal(TR("common-error"), TR("settings-failed-start-electrum"));
             AppController::execModal(modal);
         }
     }

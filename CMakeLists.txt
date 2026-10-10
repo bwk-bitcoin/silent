@@ -252,6 +252,8 @@ set(SILENT_APP_SOURCES
     src/catalog/SelectRow.cpp
     src/catalog/inputs/Stepper.h
     src/catalog/inputs/Stepper.cpp
+    src/catalog/feedback/MessageModal.h
+    src/catalog/feedback/MessageModal.cpp
     src/catalog/feedback/ModalStatus.h
     src/catalog/feedback/ModalStatus.cpp
     src/catalog/feedback/EmptyState.h

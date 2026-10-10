@@ -3,10 +3,6 @@
 #include <Qontrol>
 #include <qevent.h>
 
-namespace catalog {
-class Button;
-}
-
 namespace modal {
 
 class CustomLaunchers : public qontrol::Modal {
@@ -24,9 +20,6 @@ protected:
     void view();
     void changeEvent(QEvent *event) override;
     void retranslateUi();
-
-private:
-    catalog::Button *m_close_btn = nullptr;
 };
 
 } // namespace modal

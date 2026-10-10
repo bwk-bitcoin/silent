@@ -1,10 +1,10 @@
 #include "CustomLaunchers.h"
 #include "../utils.h"
 #include "AppController.h"
+#include "catalog/Button.h"
 #include "host/PluginRegistry.h"
 #include "i18n/Tr.h"
 #include "interfaces/module.h"
-#include "catalog/Button.h"
 #include <QVariant>
 #include <Qontrol>
 #include <common.h>
@@ -23,11 +23,9 @@ CustomLaunchers::CustomLaunchers([[maybe_unused]] QWidget *parent) {
 }
 
 void CustomLaunchers::init() {
-    m_close_btn = new Button(TR("common-close"));
 }
 
 void CustomLaunchers::doConnect() {
-    connect(m_close_btn, &QPushButton::clicked, this, &QDialog::accept, qontrol::UNIQUE);
 }
 
 void CustomLaunchers::onCreatorClicked() {
@@ -71,8 +69,7 @@ void CustomLaunchers::view() {
         }
     }
 
-    auto *closeRow = (new qontrol::Row)->pushSpacer()->push(m_close_btn)->pushSpacer();
-    col->pushSpacer(resolve(Spacing::M))->push(closeRow)->pushSpacer();
+    col->pushSpacer();
 
     setMainWidget(margin(col));
 }
@@ -86,7 +83,6 @@ void CustomLaunchers::changeEvent(QEvent *event) {
 
 void CustomLaunchers::retranslateUi() {
     setWindowTitle(TR("menu-custom"));
-    m_close_btn->setText(TR("common-close"));
 }
 
 } // namespace modal

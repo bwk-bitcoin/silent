@@ -12,6 +12,7 @@
 #include "catalog/display/Badge.h"
 #include "catalog/display/Display.h"
 #include "catalog/display/Label.h"
+#include "catalog/feedback/MessageModal.h"
 #include "catalog/form/FieldGroup.h"
 #include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/Checkbox.h"
@@ -1406,14 +1407,14 @@ void Send::onSendTransaction() {
     auto txTemp = txTemplate();
     if (!txTemp.has_value()) {
         AppController::execModal(
-            new qontrol::Modal(TR("common-error"), TR("send-invalid-transaction-template")));
+            new catalog::MessageModal(TR("common-error"), TR("send-invalid-transaction-template")));
         return;
     }
 
     auto &account = m_controller->getAccount();
     if (!account.has_value()) {
         AppController::execModal(
-            new qontrol::Modal(TR("common-error"), TR("send-no-account-loaded")));
+            new catalog::MessageModal(TR("common-error"), TR("send-no-account-loaded")));
         return;
     }
 
@@ -1422,7 +1423,7 @@ void Send::onSendTransaction() {
     if (!psbt->is_ok()) {
         auto error = QString::fromStdString(std::string(psbt->get_psbt_error().c_str()));
         auto text = mapBackendErrorSummary(error) + "\n\n" + formatBackendErrorDetails(error);
-        AppController::execModal(new qontrol::Modal(TR("send-prepare-failed"), text));
+        AppController::execModal(new catalog::MessageModal(TR("send-prepare-failed"), text));
         return;
     }
 
@@ -1452,13 +1453,13 @@ void Send::onValidationResult(PsbtValidation result) {
         // Connection/protocol error: warn but don't block
         auto error = QString::fromStdString(std::string(result.error.c_str()));
         auto text = mapBackendErrorSummary(error) + "\n\n" + formatBackendErrorDetails(error);
-        AppController::execModal(new qontrol::Modal(TR("send-validation-error"), text));
+        AppController::execModal(new catalog::MessageModal(TR("send-validation-error"), text));
         // Fall through and let the user confirm the transaction anyway
     } else if (result.spent_input_count > 0) {
         // Spent inputs: block the transaction
         auto issues = QString::fromStdString(std::string(result.issues.c_str()));
-        AppController::execModal(
-            new qontrol::Modal(TR("common-error"), TR("send-inputs-already-spent").arg(issues)));
+        AppController::execModal(new catalog::MessageModal(
+            TR("common-error"), TR("send-inputs-already-spent").arg(issues)));
         m_psbt_result = std::nullopt;
         m_tx_template = std::nullopt;
         return;
@@ -1501,7 +1502,7 @@ auto Send::showReuseWarning(PsbtValidation result) -> bool {
 void Send::showSignerStep() {
     if (!m_psbt_result.has_value() || Host::get()->keys() == nullptr) {
         AppController::execModal(
-            new qontrol::Modal(TR("common-error"), TR("send-transaction-state-lost")));
+            new catalog::MessageModal(TR("common-error"), TR("send-transaction-state-lost")));
         return;
     }
 
@@ -1517,7 +1518,7 @@ void Send::onSendConfirmed() {
     auto &account = m_controller->getAccount();
     if (!account.has_value() || !m_psbt_result.has_value() || Host::get()->keys() == nullptr) {
         AppController::execModal(
-            new qontrol::Modal(TR("common-error"), TR("send-transaction-state-lost")));
+            new catalog::MessageModal(TR("common-error"), TR("send-transaction-state-lost")));
         return;
     }
 
@@ -1587,7 +1588,7 @@ void Send::onSignResult(TxResult result) {
         m_psbt_result = std::nullopt;
         m_tx_template = std::nullopt;
         m_sign_req_id = 0;
-        AppController::execModal(new qontrol::Modal(TR("send-signing-failed"), error));
+        AppController::execModal(new catalog::MessageModal(TR("send-signing-failed"), error));
         return;
     }
 
@@ -1630,12 +1631,13 @@ void Send::onBroadcastResult(TxResult result) {
 
     if (result.is_ok) {
         auto txid = QString::fromStdString(std::string(result.value.c_str()));
-        AppController::execModal(new qontrol::Modal(TR("confirm-transaction-title"),
-                                                    TR("confirm-send-success").arg(txid)));
+        AppController::execModal(new catalog::MessageModal(TR("confirm-transaction-title"),
+                                                           TR("confirm-send-success").arg(txid),
+                                                           catalog::MessageModal::Tone::Success));
     } else {
         auto error = QString::fromStdString(std::string(result.error.c_str()));
         AppController::execModal(
-            new qontrol::Modal(TR("common-error"), TR("confirm-send-failed").arg(error)));
+            new catalog::MessageModal(TR("common-error"), TR("confirm-send-failed").arg(error)));
     }
 
     // Refresh coin state
