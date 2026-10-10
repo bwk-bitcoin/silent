@@ -572,8 +572,6 @@ scan-progress-done => "All %1 parts received" => "NONE"
 scan-progress-parts => "%1 of %2 parts" => "NONE"
 scan-progress-waiting => "Waiting for the first part…" => "NONE"
 send-action-send => "Send" => "Enviar"
-send-action-sign => "Sign" => "Assinar"
-send-add-output => "+ Add Payment" => "+ Adicionar output"
 send-address => "Address:" => "Endereco:"
 send-address-reuse-warning
 => "Address Reuse Warning"

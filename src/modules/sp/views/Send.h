@@ -80,7 +80,7 @@ private:
     QWidget *m_widget = nullptr;
 };
 
-class OutputW : public QObject {
+class OutputW {
 public:
     OutputW(Send *screen, int id);
     auto widget() -> QWidget *;
@@ -99,12 +99,7 @@ public:
     void setMaxMode(bool max);
     void setMaxAmount(uint64_t sats);
 
-protected:
-    auto eventFilter(QObject *watched, QEvent *event) -> bool override;
-
 private:
-    void positionDeleteButton();
-
     catalog::Input *m_address_input = nullptr;
     catalog::Input *m_label_input = nullptr;
     catalog::Input *m_amount_input = nullptr;
@@ -151,7 +146,7 @@ public slots:
     void onSendConfirmed();
     void onBroadcastConfirmed();
     void onSignResult(TxResult result);
-    void onSignerSigned(ReqId req_id, QString psbt_v2_hex);
+    void onSignerSigned(ReqId req_id, const QString &psbt_v2_hex);
     void onSignerError(std::optional<ReqId> req_id, const QString &message);
     void onSignerCancelled(ReqId req_id);
     void onBroadcastResult(TxResult result);
@@ -180,6 +175,8 @@ protected:
     auto output() -> QWidget *;
     void updateCoinCheckboxes();
     void updateInputsTitle();
+    // Sign and Broadcast share one enabled state; only one shows at a time.
+    void setSendEnabled(bool enabled);
 
 private:
     static constexpr int SPLIT_WIDTH = 1569;
@@ -229,10 +226,15 @@ private:
     catalog::Label *m_inputs_min_value = nullptr;   // remaining to select
     catalog::Label *m_inputs_total_value = nullptr; // total selected
     catalog::Checkbox *m_auto_coin_selection = nullptr;
+    // The auto selection's total, in place of the coin table when stacked.
+    catalog::Card *m_auto_summary = nullptr;
+    catalog::Label *m_auto_amount = nullptr;
+    catalog::Label *m_auto_count = nullptr;
 
     catalog::Button *m_clear_outputs_btn = nullptr;
     catalog::Button *m_clear_inputs_btn = nullptr;
-    catalog::Button *m_send_btn = nullptr;
+    catalog::Button *m_sign_btn = nullptr;
+    catalog::Button *m_broadcast_btn = nullptr;
 
     catalog::Label *m_fee_estimate_label = nullptr;
     uint64_t m_estimated_fee = 0;

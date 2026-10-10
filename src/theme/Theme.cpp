@@ -18,7 +18,6 @@
 #include "catalog/feedback/Notice.h"
 #include "catalog/feedback/ScanProgress.h"
 #include "catalog/feedback/Tooltip.h"
-#include "catalog/form/LabelledInput.h"
 #include "catalog/form/ValidatedInput.h"
 #include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/Checkbox.h"
@@ -194,7 +193,6 @@ void Theme::apply() {
     qss += catalog::CopyField::qss(p);
     qss += catalog::WordGrid::qss(p);
     qss += catalog::BalanceHeader::qss(p);
-    qss += catalog::LabelledInput::qss(p);
     qss += catalog::FoldSection::qss(p);
 
     qApp->setStyleSheet(qss);

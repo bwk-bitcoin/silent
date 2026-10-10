@@ -218,8 +218,6 @@ set(SILENT_APP_SOURCES
     src/catalog/form/ValidationMark.cpp
     src/catalog/form/ValidatedInput.h
     src/catalog/form/ValidatedInput.cpp
-    src/catalog/form/LabelledInput.h
-    src/catalog/form/LabelledInput.cpp
     src/catalog/Table.h
     src/catalog/Table.cpp
     src/catalog/containers/FoldSection.h

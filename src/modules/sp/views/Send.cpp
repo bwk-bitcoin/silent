@@ -5,12 +5,14 @@
 #include "catalog/Table.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/Card.h"
+#include "catalog/containers/ModalActions.h"
 #include "catalog/containers/ScrollArea.h"
+#include "catalog/containers/SectionHeader.h"
 #include "catalog/containers/Separator.h"
 #include "catalog/display/Badge.h"
 #include "catalog/display/Display.h"
 #include "catalog/display/Label.h"
-#include "catalog/form/LabelledInput.h"
+#include "catalog/form/FieldGroup.h"
 #include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/Checkbox.h"
 #include "catalog/inputs/Input.h"
@@ -19,7 +21,6 @@
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
-#include "theme/Icon.h"
 #include "theme/Palette.h"
 #include "theme/Theme.h"
 #include "views/utils.h"
@@ -27,7 +28,6 @@
 #include <QBoxLayout>
 #include <QDebug>
 #include <QDoubleValidator>
-#include <QEvent>
 #include <QIntValidator>
 #include <QPainter>
 #include <QResizeEvent>
@@ -104,8 +104,6 @@ auto btcFromUsd(const QString &usd_text) -> QString {
 
 } // namespace
 
-using catalog::Button;
-using catalog::ButtonRole;
 using catalog::Checkbox;
 using catalog::DisplayRole;
 using catalog::Input;
@@ -162,9 +160,7 @@ OutputW::OutputW(Send *screen, int id) {
 
     m_address_indicator = new catalog::ValidationMark;
 
-    m_delete_btn = new Button(ButtonRole::InlineIcon);
-    m_delete_btn->setProperty("overlay", true); // transparent: no bg/border
-    m_delete_btn->setIcon(icon::close(IconColor::Muted));
+    m_delete_btn = catalog::btnRemovePayment();
 
     m_amount_input = new Input(InputRole::Mono);
     m_amount_input->setWidth(Size::S);
@@ -194,68 +190,48 @@ OutputW::OutputW(Send *screen, int id) {
     QObject::connect(m_label_input, &QLineEdit::textChanged, screen, &Send::onProcess,
                      qontrol::UNIQUE);
 
-    // Amount field: a label on top of a row of tight unit-paired groups. Each
-    // value is glued to its unit (input+BTC, fiat+USD, checkbox+MAX) with a tiny
-    // gap; the groups are separated by a normal gap. Units and MAX align to the
-    // bottom of the row, level with the inputs.
-    auto *btcCode = new Label("BTC", LabelRole::Subheading);
-    auto *fiatCode = new Label(FIAT_CODE, LabelRole::Subheading);
-
-    // Match LabelledInput's top label (small caption recolored to secondary).
-    auto *amountLabel = new Label(TR("send-amount"), LabelRole::Caption);
-    amountLabel->setProperty("labelKind", "labelled");
-
+    // Each value is glued to its unit (input+BTC, fiat+USD, checkbox+MAX) with a
+    // tiny gap; the groups are separated by a normal gap.
     auto *btcGroup = (new qontrol::Row)
                          ->spacing(resolve(Spacing::XS))
                          ->push(m_amount_input)
-                         ->push(btcCode, 0, Qt::AlignBottom)
-                         ->push(m_amount_indicator, 0, Qt::AlignBottom);
+                         ->push(new Label("BTC", LabelRole::Subheading))
+                         ->push(m_amount_indicator);
 
     auto *usdGroup = (new qontrol::Row)
                          ->spacing(resolve(Spacing::XS))
                          ->push(m_amount_usd_input)
-                         ->push(fiatCode, 0, Qt::AlignBottom);
+                         ->push(new Label(FIAT_CODE, LabelRole::Subheading));
 
-    auto *maxGroup = (new qontrol::Row)
-                         ->spacing(resolve(Spacing::XS))
-                         ->push(m_max, 0, Qt::AlignBottom)
-                         ->push(m_max_label, 0, Qt::AlignBottom);
+    auto *maxGroup =
+        (new qontrol::Row)->spacing(resolve(Spacing::XS))->push(m_max)->push(m_max_label);
 
     auto *amountRow = (new qontrol::Row)
+                          ->spacing(resolve(Spacing::S))
                           ->push(btcGroup)
-                          ->pushSpacer(resolve(Spacing::S))
                           ->push(usdGroup)
-                          ->pushSpacer(resolve(Spacing::S))
                           ->push(maxGroup)
                           ->pushSpacer();
 
-    auto *amountField =
-        (new qontrol::Column)->spacing(resolve(Spacing::XXS))->push(amountLabel)->push(amountRow);
+    auto *addressRow = (new qontrol::Row)
+                           ->spacing(resolve(Spacing::XS))
+                           ->push(m_address_input, 1)
+                           ->push(m_address_indicator);
+    // An empty mark keeps the description as wide as the address.
+    auto *labelRow = (new qontrol::Row)
+                         ->spacing(resolve(Spacing::XS))
+                         ->push(m_label_input, 1)
+                         ->push(new catalog::ValidationMark);
 
-    auto *content = (new qontrol::Column)
-                        ->push(new catalog::LabelledInput(TR("send-address"), m_address_input,
-                                                          m_address_indicator))
-                        ->pushSpacer(resolve(Spacing::XS))
-                        ->push(new catalog::LabelledInput(TR("send-label"), m_label_input))
-                        ->pushSpacer(resolve(Spacing::XS))
-                        ->push(amountField);
+    auto *fields = (new catalog::FieldGroup(catalog::FieldGroup::Labels::Payment))
+                       ->addField(TR("send-address"), addressRow)
+                       ->addField(TR("send-label"), labelRow)
+                       ->addField(TR("send-amount"), amountRow);
 
     auto *card = new catalog::Card;
-    card->setContent(content);
+    card->setContent(fields);
+    card->setCorner(m_delete_btn);
     m_widget = card;
-
-    // Recipient card keeps 20px horizontal padding (design --pad-l), with a
-    // tighter top/bottom padding than the shared Card default.
-    card->setContentMargins(resolve(Padding::L), resolve(Padding::S), resolve(Padding::L),
-                            resolve(Padding::S));
-
-    // Float the delete button over the card's top-right corner: a child of the
-    // card (over its padding), repositioned in eventFilter on resize, so it
-    // ignores the content padding and never affects the layout flow.
-    m_delete_btn->setParent(card);
-    m_delete_btn->raise();
-    card->installEventFilter(this);
-    m_delete_btn->installEventFilter(this);
 
     m_delete_btn->setProperty("outputId", id);
     QObject::connect(m_delete_btn, &QPushButton::clicked, screen, &Send::onOutputDeleteClicked,
@@ -269,30 +245,6 @@ OutputW::OutputW(Send *screen, int id) {
     QObject::connect(m_max, &QCheckBox::stateChanged, screen, &Send::onOutputMaxToggled,
                      qontrol::UNIQUE);
 #endif
-}
-
-void OutputW::positionDeleteButton() {
-    if (m_widget == nullptr) {
-        return;
-    }
-    int margin = resolve(Spacing::XS);
-    m_delete_btn->move(m_widget->width() - m_delete_btn->width() - margin, margin);
-    m_delete_btn->raise();
-}
-
-auto OutputW::eventFilter(QObject *watched, QEvent *event) -> bool {
-    if (watched == m_widget && event->type() == QEvent::Resize) {
-        positionDeleteButton();
-    } else if (watched == m_delete_btn) {
-        if (event->type() == QEvent::Enter) {
-            m_delete_btn->setIcon(icon::close(IconColor::Default));
-        } else if (event->type() == QEvent::Leave) {
-            m_delete_btn->setIcon(icon::close(IconColor::Muted));
-        } else if (event->type() == QEvent::MouseButtonPress) {
-            m_delete_btn->setIcon(icon::close(IconColor::Error));
-        }
-    }
-    return QObject::eventFilter(watched, event);
 }
 
 auto OutputW::widget() -> QWidget * {
@@ -365,9 +317,10 @@ void Send::init() {
     m_outputs_column = (new qontrol::Column);
     m_inputs_column = (new qontrol::Column);
 
-    m_add_output_btn = new Button(TR("send-add-output"));
-    m_send_btn = new Button(TR("send-action-sign"), ButtonRole::Primary);
-    m_clear_outputs_btn = new Button(TR("common-clear"));
+    m_add_output_btn = catalog::btnAddPayment();
+    m_sign_btn = catalog::btnSign();
+    m_broadcast_btn = catalog::btnBroadcast();
+    m_clear_outputs_btn = catalog::btnClear();
 
     m_fee_estimate_label = new Label();
     m_fee_estimate_label->setVisible(false);
@@ -433,7 +386,20 @@ void Send::init() {
     m_auto_coin_selection = new Checkbox(TR("send-auto-coin-selection"));
     m_auto_coin_selection->setChecked(true);
 
-    m_clear_inputs_btn = new Button(TR("common-clear"), ButtonRole::Inline);
+    m_clear_inputs_btn = catalog::btnClear();
+
+    m_auto_amount = new Label(QString(), LabelRole::Mono);
+    m_auto_amount->setSize(catalog::LabelSize::Lg);
+    m_auto_count = new Label(QString(), LabelRole::Caption);
+    auto *autoRow = (new qontrol::Row)
+                        ->spacing(resolve(Spacing::XS))
+                        ->push(m_auto_amount)
+                        ->push(new Label("BTC", LabelRole::Caption), 0, Qt::AlignBottom)
+                        ->push(m_auto_count, 0, Qt::AlignBottom)
+                        ->pushSpacer();
+    m_auto_summary = new catalog::Card(catalog::Card::Role::Inset);
+    m_auto_summary->setPad(catalog::Card::Pad::M);
+    m_auto_summary->setContent(autoRow);
 
     m_inputs_title_label = new Label(TR("send-select-inputs"), LabelRole::Heading);
     // Pin the title to the button's height so the row does not change height when
@@ -445,7 +411,9 @@ void Send::init() {
 void Send::doConnect() {
     qDebug() << "Send::doConnect()";
     connect(m_add_output_btn, &QPushButton::clicked, this, &Send::onAddOutput, qontrol::UNIQUE);
-    connect(m_send_btn, &QPushButton::clicked, this, &Send::onSendTransaction, qontrol::UNIQUE);
+    connect(m_sign_btn, &QPushButton::clicked, this, &Send::onSendTransaction, qontrol::UNIQUE);
+    connect(m_broadcast_btn, &QPushButton::clicked, this, &Send::onSendTransaction,
+            qontrol::UNIQUE);
     connect(m_clear_outputs_btn, &QPushButton::clicked, this, &Send::onClearOutputs,
             qontrol::UNIQUE);
     connect(m_clear_inputs_btn, &QPushButton::clicked, this, &Send::onClearInputs, qontrol::UNIQUE);
@@ -572,15 +540,7 @@ auto Send::outputsView() -> QWidget * {
     }
     outputsScroll->setFixedHeight(outputsHeight);
 
-    auto *title = new Label(TR("send-recipients"), LabelRole::Heading);
-
-    // "Add payment" sits on the title row, pushed to the right edge.
-    auto *titleRow = (new qontrol::Row)
-                         ->pushSpacer(resolve(Padding::M))
-                         ->push(title)
-                         ->pushSpacer()
-                         ->push(m_add_output_btn)
-                         ->pushSpacer(resolve(Padding::M));
+    auto *addRow = (new qontrol::Row)->pushSpacer()->push(m_add_output_btn);
 
     // Fixed top/bottom rules hugging the scroll area (same kind as the table
     // header rule), shown only when the list actually scrolls (more than the 2
@@ -596,11 +556,12 @@ auto Send::outputsView() -> QWidget * {
     // No trailing stretch here: the primary column owns the single trailing
     // stretch, so this frame stays at its content height.
     auto *col = (new qontrol::Column)
-                    ->push(titleRow)
-                    ->pushSpacer(resolve(Spacing::S))
+                    ->push(new catalog::SectionHeader(TR("send-recipients")))
                     ->push(topRule)
                     ->push(outputsScroll)
-                    ->push(bottomRule);
+                    ->push(bottomRule)
+                    ->pushSpacer(resolve(Spacing::S))
+                    ->push(addRow);
 
     return col;
 }
@@ -739,6 +700,7 @@ auto Send::transactionView() -> QWidget * {
     auto *flowColumn =
         (new qontrol::Column)->push(m_tx_flow)->pushSpacer(resolve(Spacing::XS))->push(flowFooter);
     m_flow_card = new catalog::Card(catalog::Card::Role::Inset);
+    m_flow_card->setPad(catalog::Card::Pad::S);
     m_flow_card->setContent(flowColumn);
 
     // Transaction summary as a grid so the BTC and fiat values line up in two
@@ -790,28 +752,28 @@ auto Send::transactionView() -> QWidget * {
     summary->push(m_total_fiat, sr, 3);
 
     auto *warningRow = (new qontrol::Row)->push(m_warning_label)->pushSpacer();
-    auto *actionRow =
-        (new qontrol::Row)
-            ->push(new Label(TR("send-fee-rate-label"), LabelRole::InfoLabel))
-            ->pushSpacer(resolve(Spacing::S))
-            ->push(m_fee_toggle)
-            ->pushSpacer(resolve(Spacing::S))
-            ->push(m_fee_value_input)
-            ->push(m_fee_indicator)
-            ->pushSpacer(resolve(Spacing::S))
-            ->push(m_fee_label)
-            ->pushSpacer(resolve(Spacing::S))
-            ->push(m_fee_estimate_label)
-            ->pushSpacer()
-            ->push(m_clear_outputs_btn)
-            ->pushSpacer(resolve(Spacing::S))
-            ->push(!m_signed_tx_hex.isEmpty() ? static_cast<QWidget *>(catalog::pillTxSigned())
-                                              : new QWidget)
-            ->pushSpacer(resolve(Spacing::S))
-            ->push(m_send_btn);
-
-    m_send_btn->setText(m_signed_tx_hex.isEmpty() ? TR("send-action-sign")
-                                                  : TR("common-broadcast"));
+    auto *actionRow = (new qontrol::Row)
+                          ->push(new Label(TR("send-fee-rate-label"), LabelRole::InfoLabel))
+                          ->pushSpacer(resolve(Spacing::S))
+                          ->push(m_fee_toggle)
+                          ->pushSpacer(resolve(Spacing::S))
+                          ->push(m_fee_value_input)
+                          ->push(m_fee_indicator)
+                          ->pushSpacer(resolve(Spacing::S))
+                          ->push(m_fee_label)
+                          ->pushSpacer(resolve(Spacing::S))
+                          ->push(m_fee_estimate_label)
+                          ->pushSpacer();
+    bool isSigned = !m_signed_tx_hex.isEmpty();
+    if (isSigned) {
+        actionRow->push(catalog::pillTxSigned())->pushSpacer(resolve(Spacing::S));
+    }
+    actionRow->push(m_clear_outputs_btn)
+        ->pushSpacer(resolve(Spacing::S))
+        ->push(m_sign_btn)
+        ->push(m_broadcast_btn);
+    m_sign_btn->setVisible(!isSigned);
+    m_broadcast_btn->setVisible(isSigned);
 
     auto *title = new Label(TR("send-transaction-title"), LabelRole::Heading);
     auto *col = new qontrol::Column;
@@ -828,12 +790,18 @@ auto Send::transactionView() -> QWidget * {
     return col;
 }
 
+void Send::setSendEnabled(bool enabled) {
+    m_sign_btn->setEnabled(enabled);
+    m_broadcast_btn->setEnabled(enabled);
+}
+
 auto Send::inputsView() -> QWidget * {
     qDebug() << "Send::inputsView()";
     auto availableCoins = m_controller->getCoins();
 
     // Unparent persistent rows
     m_inputs_amounts_row->setParent(nullptr);
+    m_auto_summary->setParent(nullptr);
 
     bool autoMode = m_auto_coin_selection->isChecked();
     m_coin_table = new catalog::Table;
@@ -897,10 +865,15 @@ auto Send::inputsView() -> QWidget * {
     // Update total and minimum displays
     onUpdateInputsTotal();
 
+    // Stacked, the auto selection folds to its total; otherwise the coin table shows,
+    // its rows not selectable in auto mode.
+    bool folded = autoMode && m_stacked;
+    m_auto_summary->setVisible(folded);
+    m_coin_table->setVisible(!folded);
+    m_inputs_amounts_row->setVisible(!folded);
+
     auto *col = new qontrol::Column;
-    // The coin table is always shown and scrollable, in both auto and manual
-    // selection modes (auto mode just makes the rows non-selectable).
-    col->push(titleRow)->pushSpacer(resolve(Spacing::XS))->push(m_coin_table);
+    col->push(titleRow)->pushSpacer(resolve(Spacing::XS))->push(m_auto_summary)->push(m_coin_table);
     col->pushSpacer(resolve(Spacing::XS))->push(m_inputs_amounts_row);
     // No trailing stretch here: in two-column mode it would inflate and push the
     // separator far below the table. The outputs frame carries the trailing stretch.
@@ -971,7 +944,7 @@ void Send::onOutputSetMax(int id) {
 void Send::onSetBroadcastable(bool broadcastable) {
     qDebug() << "Send::onSetBroadcastable()" << broadcastable;
     m_broadcastable = broadcastable;
-    m_send_btn->setEnabled(broadcastable);
+    setSendEnabled(broadcastable);
 }
 
 void Send::onClearOutputs() {
@@ -1146,8 +1119,9 @@ void Send::onUpdateInputsTotal() {
                                 " BTC");
     m_inputs_total_value->setText(
         QString::number(static_cast<double>(totalSelected) / SATS, 'f', 8) + " BTC");
-    // Always visible, including in auto-selection mode.
-    m_inputs_amounts_row->setVisible(true);
+    m_auto_amount->setText(QString::number(static_cast<double>(totalSelected) / SATS, 'f', 8));
+    m_auto_count->setText(
+        QString("(%1)").arg(coinsCount(static_cast<uint64_t>(m_auto_selected_outpoints.size()))));
 }
 
 void Send::updateCoinCheckboxes() {
@@ -1307,7 +1281,7 @@ auto Send::txTemplate() -> std::optional<TransactionTemplate> {
 
 void Send::onSetSpendable(bool spendable) {
     qDebug() << "Send::onSetSpendable()" << spendable;
-    m_send_btn->setEnabled(spendable);
+    setSendEnabled(spendable);
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
@@ -1463,7 +1437,7 @@ void Send::onSendTransaction() {
     m_tx_template = txTemp;
 
     // Run PSBT validation on background thread before showing confirm modal
-    m_send_btn->setEnabled(false);
+    setSendEnabled(false);
     auto *thread = QThread::create([this]() {
         auto result =
             m_controller->getAccount().value()->validate_before_sign(*m_psbt_result.value());
@@ -1478,7 +1452,7 @@ void Send::onValidationResult(PsbtValidation result) {
     qDebug() << "Send::onValidationResult() is_ok:" << result.is_ok
              << "is_valid:" << result.is_valid;
 
-    m_send_btn->setEnabled(true);
+    setSendEnabled(true);
 
     if (!result.is_ok) {
         // Connection/protocol error: warn but don't block
@@ -1514,22 +1488,12 @@ auto Send::showReuseWarning(PsbtValidation result) -> bool {
     modal->setWindowTitle(TR("send-address-reuse-warning"));
     auto *label = new Label(issues + "\n\n" + TR("send-proceed-anyway"));
     label->setWordWrap(true);
-    auto *proceedBtn = new Button(TR("common-proceed"));
-    auto *cancelBtn = new Button(TR("common-cancel"));
+    auto *proceedBtn = catalog::btnProceed();
     connect(proceedBtn, &QPushButton::clicked, modal, &QDialog::accept);
-    connect(cancelBtn, &QPushButton::clicked, modal, &QDialog::reject);
-    auto *btnRow = (new qontrol::Row)
-                       ->pushSpacer()
-                       ->push(cancelBtn)
-                       ->pushSpacer()
-                       ->push(proceedBtn)
-                       ->pushSpacer();
-    auto *col = (new qontrol::Column)
-                    ->push(label)
-                    ->pushSpacer(resolve(Spacing::M))
-                    ->push(btnRow)
-                    ->pushSpacer();
-    modal->setMainWidget(margin(col, resolve(Spacing::S)));
+    auto *actions = new catalog::ModalActions;
+    actions->addAction(proceedBtn);
+    auto *col = (new qontrol::Column)->spacing(resolve(Spacing::M))->push(label)->push(actions);
+    modal->setMainWidget(margin(col, resolve(Padding::L)));
     int dialogResult = modal->exec();
     delete modal;
     if (dialogResult != QDialog::Accepted) {
@@ -1571,7 +1535,7 @@ void Send::onSendConfirmed() {
     Host::get()->keys()->sign(m_sign_req_id, psbtV2Hex, QStringList{descriptor}, walletName);
 }
 
-void Send::onSignerSigned(ReqId req_id, QString psbt_v2_hex) {
+void Send::onSignerSigned(ReqId req_id, const QString &psbt_v2_hex) {
     if (req_id != m_sign_req_id) {
         return;
     }
@@ -1642,7 +1606,7 @@ void Send::onSignResult(TxResult result) {
 }
 
 void Send::onBroadcastConfirmed() {
-    m_send_btn->setEnabled(false);
+    setSendEnabled(false);
     m_warning_label->setText(TR("confirm-send-broadcasting"));
     m_warning_label->setVisible(true);
     auto signedHex = m_signed_tx_hex.toStdString();
@@ -1657,7 +1621,7 @@ void Send::onBroadcastConfirmed() {
 
 void Send::onBroadcastResult(TxResult result) {
     qDebug() << "Send::onBroadcastResult() ok:" << result.is_ok;
-    m_send_btn->setEnabled(true);
+    setSendEnabled(true);
 
     if (!result.is_ok && m_tx_template.has_value() && !m_signed_tx_hex.isEmpty()) {
         auto &account = m_controller->getAccount();
