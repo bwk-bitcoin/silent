@@ -685,3 +685,51 @@ flow-verify-mismatch-body
 flow-verify-error-title => "Could Not Verify"
 
 flow-verify-error-body => "%1 did not return an answer. The address was not checked."
+
+flow-qr-speed => "Speed"
+
+flow-qr-contrast-hint
+=> "Background brightness. Raise it if the device misreads the code.";;
+
+flow-qr-density-hint => "Data per frame. Lower it for older cameras; it adds parts."
+
+flow-qr-speed-hint => "Frames per second. Lower it if the device misses parts."
+
+flow-qr-rebuilding => "Rebuilding the code…"
+
+flow-qr-part-pending => "Part – / –"
+
+flow-qr-rebuild-reason => "Wait for the code to rebuild."
+
+flow-camera-starting => "Starting the camera…"
+
+flow-camera-none-title => "No camera found"
+
+flow-camera-none-body => "Connect a camera, then pick it in Camera Source."
+
+flow-camera-denied-title => "Camera unavailable"
+
+flow-camera-denied-body
+=> "Silent has no permission to use the camera, or another app is using it. Allow access in the system settings.";;
+
+flow-camera-failed-title => "The camera failed to open"
+
+flow-camera-failed-body => "Pick another source in Camera Source."
+
+flow-camera-settings-title => "Camera Settings"
+
+flow-camera-source => "Camera Source:"
+
+flow-camera-contrast => "Contrast:"
+
+flow-scan-wrong-request-title => "This code answers a different request"
+
+flow-scan-wrong-request-body
+=> "Scan the code the device showed for this request. If the device still shows an older one, start again on the device.";;
+
+flow-scan-bare-sigs-title => "The device returned signatures only"
+
+flow-scan-bare-sigs-body
+=> "Silent needs the whole signed transaction (PSBT). On the device, choose to export the signed PSBT, then scan again.";;
+
+flow-scan-other-title => "Could not use this code"

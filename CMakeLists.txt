@@ -113,6 +113,14 @@ set(SILENT_APP_SOURCES
     src/modules/keys/flow/SdStep.cpp
     src/modules/keys/flow/PasswordStep.h
     src/modules/keys/flow/PasswordStep.cpp
+    src/modules/keys/flow/QrDisplayStep.h
+    src/modules/keys/flow/QrDisplayStep.cpp
+    src/modules/keys/flow/CameraViewport.h
+    src/modules/keys/flow/CameraViewport.cpp
+    src/modules/keys/flow/CameraSettings.h
+    src/modules/keys/flow/CameraSettings.cpp
+    src/modules/keys/flow/CameraStep.h
+    src/modules/keys/flow/CameraStep.cpp
     src/modules/keys/flow/VerifyResultStep.h
     src/modules/keys/flow/VerifyResultStep.cpp
     src/modules/keys/signers/RouteSigner.h

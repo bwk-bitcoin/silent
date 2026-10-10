@@ -127,8 +127,42 @@ delete-wallet-confirmation
 => "Delete wallet '%1'? This cannot be undone."
 => "Wallet '%1' loeschen? Kann nicht rueckgaengig gemacht werden.";;
 delete-wallet-title => "Delete Wallet" => "Wallet loeschen"
+flow-camera-contrast => "Contrast:" => "NONE"
+flow-camera-denied-body
+=> "Silent has no permission to use the camera, or another app is using it. Allow access in the system settings."
+=> "NONE";;
+flow-camera-denied-title => "Camera unavailable" => "NONE"
+flow-camera-failed-body => "Pick another source in Camera Source." => "NONE"
+flow-camera-failed-title => "The camera failed to open" => "NONE"
+flow-camera-none-body => "Connect a camera, then pick it in Camera Source." => "NONE"
+flow-camera-none-title => "No camera found" => "NONE"
+flow-camera-settings-title => "Camera Settings" => "NONE"
+flow-camera-source => "Camera Source:" => "NONE"
+flow-camera-starting => "Starting the camera…" => "NONE"
 flow-password => "Password:" => "NONE"
 flow-password-reason => "Enter the password." => "NONE"
+flow-qr-contrast-hint
+=> "Background brightness. Raise it if the device misreads the code."
+=> "NONE";;
+flow-qr-density-hint
+=> "Data per frame. Lower it for older cameras; it adds parts."
+=> "NONE";;
+flow-qr-part-pending => "Part – / –" => "NONE"
+flow-qr-rebuild-reason => "Wait for the code to rebuild." => "NONE"
+flow-qr-rebuilding => "Rebuilding the code…" => "NONE"
+flow-qr-speed => "Speed" => "NONE"
+flow-qr-speed-hint
+=> "Frames per second. Lower it if the device misses parts."
+=> "NONE";;
+flow-scan-bare-sigs-body
+=> "Silent needs the whole signed transaction (PSBT). On the device, choose to export the signed PSBT, then scan again."
+=> "NONE";;
+flow-scan-bare-sigs-title => "The device returned signatures only" => "NONE"
+flow-scan-other-title => "Could not use this code" => "NONE"
+flow-scan-wrong-request-body
+=> "Scan the code the device showed for this request. If the device still shows an older one, start again on the device."
+=> "NONE";;
+flow-scan-wrong-request-title => "This code answers a different request" => "NONE"
 flow-sd-load-body
 => "Insert the card in the device, sign, then load %1 back."
 => "NONE";;
