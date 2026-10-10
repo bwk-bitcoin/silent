@@ -678,6 +678,9 @@ mod ffi {
         /// Render a GetSpDescriptor QR request.
         fn qr_get_sp_descriptor_request_image() -> QrImageResult;
 
+        /// Render `text` (an address) as a single QR code.
+        fn qr_text_image(text: &str) -> QrImageResult;
+
         /// Decode a base64 SpDescriptor QR response.
         fn qr_decode_sp_descriptor_response(payload: String) -> SpDescriptorResult;
 
@@ -1403,6 +1406,28 @@ pub fn qr_get_sp_descriptor_request_image() -> ffi::QrImageResult {
     }
 }
 
+/// Render `text` (an address) as a single QR code.
+pub fn qr_text_image(text: &str) -> ffi::QrImageResult {
+    let encoded = bwk_qr::encoder::Encoder::new(bwk_qr::config::Config::default())
+        .and_then(|encoder| encoder.encode_text(text));
+    match encoded {
+        Ok(image) => ffi::QrImageResult {
+            is_ok: true,
+            error: String::new(),
+            data: image.data,
+            width: image.width,
+            height: image.height,
+        },
+        Err(e) => ffi::QrImageResult {
+            is_ok: false,
+            error: format!("failed to render QR code: {e}"),
+            data: Vec::new(),
+            width: 0,
+            height: 0,
+        },
+    }
+}
+
 /// Decode a base64 SpDescriptor QR response.
 ///
 /// Builds a session and issues its own GetSpDescriptor request so the id it expects
@@ -1898,6 +1923,32 @@ mod tests {
         assert!(result.width > 0);
         assert!(result.height > 0);
         assert_eq!(result.data.len(), (result.width * result.height) as usize);
+    }
+
+    #[test]
+    fn qr_text_image_renders_an_address() {
+        let result = qr_text_image("bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
+
+        assert!(result.is_ok, "unexpected error: {}", result.error);
+        assert!(result.width > 0, "width should be positive");
+        assert_eq!(
+            result.width, result.height,
+            "a QR code is square, got {}x{}",
+            result.width, result.height
+        );
+        assert_eq!(
+            result.data.len(),
+            (result.width * result.height) as usize,
+            "one byte per pixel"
+        );
+    }
+
+    #[test]
+    fn qr_text_image_rejects_text_too_long_for_one_code() {
+        let result = qr_text_image(&"a".repeat(10_000));
+
+        assert!(!result.is_ok, "10000 bytes cannot fit a single QR code");
+        assert!(result.data.is_empty(), "no pixels on failure");
     }
 
     #[test]

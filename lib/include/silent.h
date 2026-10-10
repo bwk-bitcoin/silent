@@ -2422,6 +2422,9 @@ bool validate_sp_descriptor(::rust::String descriptor) noexcept;
 // Render a GetSpDescriptor QR request.
 ::QrImageResult qr_get_sp_descriptor_request_image() noexcept;
 
+// Render `text` (an address) as a single QR code.
+::QrImageResult qr_text_image(::rust::Str text) noexcept;
+
 // Decode a base64 SpDescriptor QR response.
 ::SpDescriptorResult qr_decode_sp_descriptor_response(::rust::String payload) noexcept;
 

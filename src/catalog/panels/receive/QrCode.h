@@ -11,6 +11,7 @@ class QrCode : public QWidget {
 
 public:
     explicit QrCode(QWidget *parent = nullptr);
+    // Draws `data` encoded as one QR code.
     void setData(const QString &data);
     void setImage(const QImage &image);
     [[nodiscard]] auto data() const -> QString;

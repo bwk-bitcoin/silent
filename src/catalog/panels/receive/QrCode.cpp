@@ -3,8 +3,11 @@
 #include "theme/Palette.h"
 #include "theme/Theme.h"
 
+#include <QDebug>
 #include <QImage>
 #include <QPainter>
+#include <silent.h>
+#include <string>
 
 namespace catalog {
 
@@ -24,6 +27,20 @@ QrCode::QrCode(QWidget *parent)
 
 void QrCode::setData(const QString &data) {
     m_data = data;
+    m_image = QImage();
+    if (!data.isEmpty()) {
+        auto text = data.toStdString();
+        auto result = ::qr_text_image(rust::Str(text));
+        if (result.is_ok) {
+            // The result owns the pixels: copy them before it goes away.
+            m_image = QImage(result.data.data(), static_cast<int>(result.width),
+                             static_cast<int>(result.height), static_cast<int>(result.width),
+                             QImage::Format_Grayscale8)
+                          .copy();
+        } else {
+            qWarning() << "QrCode:" << QString::fromStdString(std::string(result.error));
+        }
+    }
     update();
 }
 
