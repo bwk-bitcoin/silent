@@ -643,10 +643,10 @@ void KeyDetail::saveAlias() {
             error = TR("keys-alias-failed").arg(KeysModule::toQt(result.error));
         }
     }
-    m_alias_note->setTone(error.isEmpty() ? catalog::FieldNote::Tone::Success
-                                          : catalog::FieldNote::Tone::Error);
-    m_alias_note->setText(error.isEmpty() ? TR("keys-alias-saved") : error);
-    m_alias_note->setVisible(true);
+    // A saved alias needs no message: the save button going away says it.
+    m_alias_note->setTone(catalog::FieldNote::Tone::Error);
+    m_alias_note->setText(error);
+    m_alias_note->setVisible(!error.isEmpty());
     refit();
 }
 

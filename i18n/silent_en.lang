@@ -639,7 +639,6 @@ keys-alias-taken-reason => "Another key already has this alias."
 
 keys-register-disconnected => "The device was disconnected."
 
-keys-alias-saved => "Saved"
 
 keys-alias-empty => "Enter an alias."
 

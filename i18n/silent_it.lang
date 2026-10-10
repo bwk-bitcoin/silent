@@ -343,7 +343,6 @@ keys-alias => "Alias:" => "NONE"
 keys-alias-empty => "Enter an alias." => "NONE"
 keys-alias-failed => "Could not rename the key: %1" => "NONE"
 keys-alias-name => "Name the key" => "NONE"
-keys-alias-saved => "Saved" => "NONE"
 keys-alias-taken => "Another key is already named “%1”." => "NONE"
 keys-alias-taken-reason => "Another key already has this alias." => "NONE"
 keys-backup-body
