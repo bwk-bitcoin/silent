@@ -1,5 +1,6 @@
 #include "catalog/containers/ScrollArea.h"
 
+#include <QEvent>
 #include <QScrollBar>
 #include <QStyle>
 #include <algorithm>
@@ -47,6 +48,15 @@ auto ScrollArea::hasHeightForWidth() const -> bool {
 auto ScrollArea::heightForWidth(int width) const -> int {
     int frame = 2 * frameWidth();
     return widget()->heightForWidth(width - frame) + frame;
+}
+
+auto ScrollArea::viewportEvent(QEvent *event) -> bool {
+    // The content's size change stops at the viewport, which has no layout: pass it
+    // on, so a fitting area asks its parent for the new height.
+    if (m_fit && event->type() == QEvent::LayoutRequest) {
+        updateGeometry();
+    }
+    return QScrollArea::viewportEvent(event);
 }
 
 void ScrollArea::onRangeChanged(int minimum, int maximum) {

@@ -8,7 +8,7 @@
 #include <QString>
 #include <QStringList>
 
-#include "catalog/containers/StepModal.h"
+#include "catalog/containers/Modal.h"
 
 #include <interfaces/types.h>
 #include <silent.h>
@@ -23,6 +23,7 @@ class Input;
 class Label;
 class ModalActions;
 class Notice;
+class ScrollArea;
 class Section;
 class Table;
 class WordGrid;
@@ -52,7 +53,7 @@ enum class Registration { Unknown, Checking, Registering, Registered, NotRegiste
 // checked and registered on the key's connected device. Revealing the mnemonic of
 // a hot key and removing the key are steps of this same modal; fetching an xpub
 // opens its own modal over it.
-class KeyDetail final : public catalog::StepModal {
+class KeyDetail final : public catalog::Modal {
     Q_OBJECT
 
 public:
@@ -61,7 +62,6 @@ public:
 
 public slots:
     void refresh();
-    void refit();
     void onAliasEdited();
     void saveAlias();
     void onMoveUpClicked();
@@ -92,7 +92,8 @@ protected:
     [[nodiscard]] auto buildDetail() -> QWidget *;
     [[nodiscard]] auto buildReveal() -> QWidget *;
     [[nodiscard]] auto buildRemove() -> QWidget *;
-    void refreshHeader(const KeyInfo &info);
+    // The title on the left, the fingerprint and the key status on the right.
+    void showHeader(const QString &title);
     void refreshDevices();
     void refreshRoutes(const KeyInfo &info);
     void refreshXpubs();
@@ -134,6 +135,8 @@ private:
     catalog::Notice *m_register_error = nullptr;
     catalog::Button *m_reveal = nullptr;
     catalog::ModalActions *m_detail_actions = nullptr;
+    catalog::ScrollArea *m_detail = nullptr;
+    QWidget *m_header = nullptr;
 
     // Keyed by descriptor; cleared whenever the device changes.
     QHash<QString, Registration> m_registrations;
@@ -151,17 +154,14 @@ private:
     catalog::Button *m_hide_words = nullptr;
     catalog::Button *m_show_words = nullptr;
     catalog::ModalActions *m_reveal_actions = nullptr;
+    QWidget *m_reveal_body = nullptr;
 
     catalog::Label *m_remove_question = nullptr;
     catalog::Notice *m_remove_accounts = nullptr;
     catalog::Notice *m_remove_hot = nullptr;
     catalog::Notice *m_remove_error = nullptr;
     catalog::ModalActions *m_remove_actions = nullptr;
-
-    int m_detail_page = 0;
-    int m_password_page = 0;
-    int m_reveal_page = 0;
-    int m_remove_page = 0;
+    QWidget *m_remove_body = nullptr;
 };
 
 } // namespace keys::modal

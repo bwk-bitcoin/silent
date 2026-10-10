@@ -36,7 +36,9 @@ void ConfirmDelete::onDeleteClicked() {
 void ConfirmDelete::view() {
     auto *actions = new catalog::ModalActions;
     actions->addAction(m_delete_btn);
-    m_step = addStep(TR("delete-wallet-title"), ModalWidth::XXS, m_label, actions);
+    setBody(m_label);
+    setFooter(actions);
+    setWidth(ModalWidth::XXS);
     retranslateUi();
 }
 
@@ -44,14 +46,14 @@ void ConfirmDelete::changeEvent(QEvent *event) {
     if (event->type() == QEvent::LanguageChange) {
         retranslateUi();
     }
-    catalog::StepModal::changeEvent(event);
+    catalog::Modal::changeEvent(event);
 }
 
 void ConfirmDelete::retranslateUi() {
     m_label->setText(TR("delete-wallet-confirmation").arg(m_name));
     m_delete_btn->setText(TR("common-delete"));
-    setStepTitle(m_step, TR("delete-wallet-title"));
-    showStep(m_step);
+    setWindowTitle(TR("delete-wallet-title"));
+    adjustSize();
 }
 
 } // namespace modal

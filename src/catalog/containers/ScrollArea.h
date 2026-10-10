@@ -40,6 +40,9 @@ public slots:
     // Edge lines show only while the content overflows.
     void onRangeChanged(int minimum, int maximum);
 
+protected:
+    auto viewportEvent(QEvent *event) -> bool override;
+
 private:
     bool m_fit = false;
 };

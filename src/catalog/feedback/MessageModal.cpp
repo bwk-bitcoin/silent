@@ -13,7 +13,9 @@ MessageModal::MessageModal(const QString &title, const QString &message, Tone to
         status->setIcon(icon::alert, IconColor::Error);
     }
     status->setSubtitle(message);
-    showStep(addStep(title, ModalWidth::XS, status, nullptr));
+    setWindowTitle(title);
+    setBody(status);
+    setWidth(ModalWidth::XS);
 }
 
 } // namespace catalog

@@ -202,8 +202,8 @@ set(SILENT_APP_SOURCES
     src/catalog/containers/Section.cpp
     src/catalog/containers/SectionHeader.h
     src/catalog/containers/SectionHeader.cpp
-    src/catalog/containers/StepModal.h
-    src/catalog/containers/StepModal.cpp
+    src/catalog/containers/Modal.h
+    src/catalog/containers/Modal.cpp
     src/catalog/containers/Card.h
     src/catalog/containers/Card.cpp
     src/catalog/display/Badge.h

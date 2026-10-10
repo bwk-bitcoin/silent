@@ -77,7 +77,10 @@ void RegisterDevice::view() {
                       ->push(m_taken);
 
     auto *body = (new qontrol::Column)->spacing(resolve(Spacing::L))->push(card)->push(alias);
-    showStep(addStep(TR("keys-register-title"), ModalWidth::XS, body, m_actions));
+    setWindowTitle(TR("keys-register-title"));
+    setBody(body);
+    setFooter(m_actions);
+    setWidth(ModalWidth::XS);
     m_alias->setFocus();
 }
 
@@ -95,7 +98,7 @@ void RegisterDevice::onAliasEdited() {
     m_actions->setReason(taken ? TR("keys-alias-taken-reason") : QString());
     if (changed) {
         // The note adds a line: the window takes its height.
-        showStep(currentStep());
+        adjustSize();
     }
 }
 

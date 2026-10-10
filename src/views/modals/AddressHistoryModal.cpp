@@ -3,6 +3,7 @@
 #include "catalog/Button.h"
 #include "catalog/CopyButton.h"
 #include "catalog/Variants.h"
+#include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/Separator.h"
 #include "catalog/display/Label.h"
 #include "catalog/form/FieldNote.h"
@@ -14,6 +15,7 @@
 #include "theme/Icon.h"
 
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSizePolicy>
 #include <common.h>
 
@@ -137,7 +139,12 @@ void AddressHistoryModal::view() {
         list->push(row);
     }
 
-    showStep(addStep(m_title, ModalWidth::XL, list, nullptr));
+    m_scroll = new catalog::ScrollArea;
+    m_scroll->setFitContent(true);
+    m_scroll->setWidget(list);
+    setWindowTitle(m_title);
+    setBody(m_scroll);
+    setWidth(ModalWidth::XL);
 }
 
 void AddressHistoryModal::onPillClicked() {
@@ -159,9 +166,10 @@ void AddressHistoryModal::onPillClicked() {
         m_pills[m_open]->setActive(true);
     }
     // Fit the window to the list again, then bring the open row's QR into view.
-    showStep(currentStep());
+    adjustSize();
     if (m_open >= 0) {
-        scrollTo(m_rows[m_open]);
+        int top = m_rows[m_open]->mapTo(m_scroll->widget(), QPoint(0, 0)).y();
+        m_scroll->verticalScrollBar()->setValue(top);
     }
 }
 

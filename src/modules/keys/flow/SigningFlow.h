@@ -9,8 +9,9 @@
 
 #include "FlowCopy.h"
 #include "PickerStep.h"
+#include "UsbStep.h"
 #include "VerifyResultStep.h"
-#include "catalog/containers/StepModal.h"
+#include "catalog/containers/Modal.h"
 
 #include <interfaces/types.h>
 #include <silent.h>
@@ -31,13 +32,12 @@ class CameraStep;
 class PasswordStep;
 class QrDisplayStep;
 class SdStep;
-class UsbStep;
 
 // One modal per request: the signer picker, then the picked key's route step (USB,
 // SD card, QR code and camera, hot key password), then for an address its result.
 // Steps replace each other in the same window; closing it at any step cancels the
 // request quietly. Answers exactly once, through one of the signals below.
-class SigningFlow final : public catalog::StepModal {
+class SigningFlow final : public catalog::Modal {
     Q_OBJECT
 
 public:
@@ -115,6 +115,11 @@ protected:
     [[nodiscard]] auto hasPicker() const -> bool;
     void showPicker();
     void startRoute();
+    void showUsb();
+    void showUsbError(UsbStep::Error error);
+    void showPassword();
+    void showQrDisplay();
+    void showCamera();
     void startUsb();
     void startHot();
     void startSd();
@@ -125,8 +130,6 @@ protected:
     void showVerifyResult(VerifyResultStep::Result result);
     void deliverDescriptor(const QString &descriptor);
     void fail(const QString &message);
-    // Resizes the window to the current step after its content changed.
-    void refit();
 
 private:
     KeysModule *m_module = nullptr;
@@ -156,14 +159,6 @@ private:
     QrDisplayStep *m_qr = nullptr;
     CameraStep *m_camera = nullptr;
     VerifyResultStep *m_result = nullptr;
-    int m_picker_page = 0;
-    int m_usb_page = 0;
-    int m_sd_page = 0;
-    int m_password_page = 0;
-    int m_busy_page = 0;
-    int m_qr_page = 0;
-    int m_camera_page = 0;
-    int m_result_page = 0;
 };
 
 } // namespace keys::flow

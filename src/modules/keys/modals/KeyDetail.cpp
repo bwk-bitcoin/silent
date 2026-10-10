@@ -12,6 +12,7 @@
 #include "catalog/Table.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/ModalActions.h"
+#include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/Section.h"
 #include "catalog/containers/SectionHeader.h"
 #include "catalog/display/Badge.h"
@@ -183,7 +184,7 @@ void KeyDetail::doConnect() {
     connect(m_alias_input, &QLineEdit::returnPressed, this, &KeyDetail::saveAlias, qontrol::UNIQUE);
     connect(m_save_alias, &QPushButton::clicked, this, &KeyDetail::saveAlias, qontrol::UNIQUE);
     for (auto *table : {m_devices_table, m_routes_table, m_xpubs_table, m_accounts_table}) {
-        connect(table, &catalog::Table::rebuilt, this, &KeyDetail::refit, qontrol::UNIQUE);
+        connect(table, &catalog::Table::rebuilt, this, &KeyDetail::adjustSize, qontrol::UNIQUE);
     }
     connect(m_reveal, &QPushButton::clicked, this, &KeyDetail::showPassword, qontrol::UNIQUE);
     connect(m_password, &flow::PasswordStep::passwordEntered, this, &KeyDetail::onPasswordEntered,
@@ -200,22 +201,28 @@ void KeyDetail::view() {
     auto *removeKey = catalog::btnRemoveKey();
     connect(removeKey, &QPushButton::clicked, this, &KeyDetail::showRemove, qontrol::UNIQUE);
     m_detail_actions->addAction(removeKey);
-    m_detail_page = addStep(m_alias, ModalWidth::L, buildDetail(), m_detail_actions);
-
-    m_password_page =
-        addStep(TR("keys-reveal-title"), ModalWidth::L, m_password, m_password->actions());
+    m_detail = new catalog::ScrollArea;
+    m_detail->setFitContent(true);
+    m_detail->setWidget(buildDetail());
 
     auto *done = catalog::btnDone();
     connect(done, &QPushButton::clicked, this, &KeyDetail::closeWords, qontrol::UNIQUE);
     m_reveal_actions->addAction(done);
-    m_reveal_page =
-        addStep(TR("keys-reveal-title"), ModalWidth::L, buildReveal(), m_reveal_actions);
+    m_reveal_body = buildReveal();
 
     auto *confirmRemove = catalog::btnRemoveKey();
     connect(confirmRemove, &QPushButton::clicked, this, &KeyDetail::removeKey, qontrol::UNIQUE);
     m_remove_actions->addAction(confirmRemove);
-    m_remove_page =
-        addStep(TR("keys-remove-title"), ModalWidth::L, buildRemove(), m_remove_actions);
+    m_remove_body = buildRemove();
+
+    // Owned by the modal, hidden until their view shows them.
+    QList<QWidget *> views = {m_password,       m_password->actions(), m_reveal_body,
+                              m_reveal_actions, m_remove_body,         m_remove_actions};
+    for (auto *widget : views) {
+        widget->hide();
+        widget->setParent(this);
+    }
+    setWidth(ModalWidth::L);
 }
 
 auto KeyDetail::buildDetail() -> QWidget * {
@@ -243,7 +250,7 @@ auto KeyDetail::buildDetail() -> QWidget * {
                                        ->push(m_register_error));
     for (auto *section :
          {m_devices_section, m_routes_section, m_xpubs_section, m_accounts_section}) {
-        connect(section->header(), &catalog::SectionHeader::toggled, this, &KeyDetail::refit,
+        connect(section->header(), &catalog::SectionHeader::toggled, this, &KeyDetail::adjustSize,
                 qontrol::UNIQUE);
     }
 
@@ -295,9 +302,9 @@ void KeyDetail::refresh() {
         return;
     }
     m_alias = KeysModule::toQt(current->alias);
-    setStepTitle(m_detail_page, m_alias);
+    // The detail's title is the alias, which may have just changed.
+    showHeader(m_detail->isVisibleTo(this) ? m_alias : windowTitle());
     onAliasEdited();
-    refreshHeader(current.value());
     refreshDevices();
     refreshRoutes(current.value());
     refreshXpubs();
@@ -305,18 +312,23 @@ void KeyDetail::refresh() {
     m_reveal->setVisible(current->has_hot_secret);
 }
 
-void KeyDetail::refit() {
-    showStep(currentStep());
-}
-
-void KeyDetail::refreshHeader(const KeyInfo &info) {
+void KeyDetail::showHeader(const QString &title) {
+    auto current = info();
+    if (!current.has_value()) {
+        return;
+    }
+    setWindowTitle(title);
     auto *fingerprint = new Label(m_fingerprint, LabelRole::Mono);
     fingerprint->setTone(LabelTone::Secondary);
     fingerprint->setSize(catalog::LabelSize::Sm);
-    setHeaderEnd((new qontrol::Row)
-                     ->spacing(resolve(Spacing::S))
-                     ->push(fingerprint)
-                     ->push(keyStatusPill(info)));
+    auto *end = (new qontrol::Row)
+                    ->spacing(resolve(Spacing::S))
+                    ->push(fingerprint)
+                    ->push(keyStatusPill(current.value()));
+    auto *old = m_header;
+    m_header = catalog::modalHeader(title, end);
+    setHeader(m_header);
+    delete old;
 }
 
 void KeyDetail::refreshDevices() {
@@ -611,7 +623,7 @@ void KeyDetail::onAliasEdited() {
     m_save_alias->setVisible(changed);
     if (changed && m_alias_note->isVisible()) {
         m_alias_note->setVisible(false);
-        refit();
+        adjustSize();
     }
 }
 
@@ -640,7 +652,7 @@ void KeyDetail::saveAlias() {
     m_alias_note->setTone(catalog::FieldNote::Tone::Error);
     m_alias_note->setText(error);
     m_alias_note->setVisible(!error.isEmpty());
-    refit();
+    adjustSize();
 }
 
 void KeyDetail::onMoveUpClicked() {
@@ -703,7 +715,9 @@ void KeyDetail::showRouteResult(const KeyOpResult &result) {
 }
 
 void KeyDetail::showDetail() {
-    showStep(m_detail_page);
+    showHeader(m_alias);
+    setBody(m_detail);
+    setFooter(m_detail_actions);
 }
 
 void KeyDetail::showFetch() {
@@ -713,7 +727,9 @@ void KeyDetail::showFetch() {
 
 void KeyDetail::showPassword() {
     m_password->reset();
-    showStep(m_password_page);
+    showHeader(TR("keys-reveal-title"));
+    setBody(m_password);
+    setFooter(m_password->actions());
 }
 
 void KeyDetail::onPasswordEntered(QString password) {
@@ -735,7 +751,7 @@ void KeyDetail::onMnemonicRevealed(ReqId req_id, const MnemonicResult &result) {
         m_password->showError(result.wrong_password
                                   ? TR("flow-password-wrong")
                                   : TR("keys-reveal-failed").arg(KeysModule::toQt(result.error)));
-        refit();
+        adjustSize();
         return;
     }
     // A QString cannot be zeroized: Rust owns the real wiping of the phrase.
@@ -745,7 +761,9 @@ void KeyDetail::onMnemonicRevealed(ReqId req_id, const MnemonicResult &result) {
     m_words->setMasked(false);
     m_hide_words->setVisible(true);
     m_show_words->setVisible(false);
-    showStep(m_reveal_page);
+    showHeader(TR("keys-reveal-title"));
+    setBody(m_reveal_body);
+    setFooter(m_reveal_actions);
 }
 
 void KeyDetail::toggleWords() {
@@ -778,7 +796,9 @@ void KeyDetail::showRemove() {
     m_remove_accounts->setVisible(!names.isEmpty());
     m_remove_hot->setVisible(current->has_hot_secret);
     m_remove_error->setVisible(false);
-    showStep(m_remove_page);
+    showHeader(TR("keys-remove-title"));
+    setBody(m_remove_body);
+    setFooter(m_remove_actions);
 }
 
 void KeyDetail::removeKey() {
@@ -788,7 +808,7 @@ void KeyDetail::removeKey() {
     if (!result.is_ok) {
         m_remove_error->setText(TR("keys-remove-failed").arg(KeysModule::toQt(result.error)));
         m_remove_error->setVisible(true);
-        refit();
+        adjustSize();
         return;
     }
     accept();

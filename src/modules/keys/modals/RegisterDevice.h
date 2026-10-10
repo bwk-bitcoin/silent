@@ -3,7 +3,7 @@
 #include <QString>
 #include <QStringList>
 
-#include "catalog/containers/StepModal.h"
+#include "catalog/containers/Modal.h"
 
 namespace catalog {
 class Button;
@@ -16,7 +16,7 @@ namespace keys::modal {
 
 // Registers a connected device as a key: the device, the network, and an optional
 // alias that falls back to the device name.
-class RegisterDevice final : public catalog::StepModal {
+class RegisterDevice final : public catalog::Modal {
     Q_OBJECT
 
 public:

@@ -11,6 +11,7 @@
 #include "catalog/Variants.h"
 #include "catalog/containers/Card.h"
 #include "catalog/containers/ModalActions.h"
+#include "catalog/containers/ScrollArea.h"
 #include "catalog/display/Label.h"
 #include "catalog/display/ShortValue.h"
 #include "catalog/display/WordGrid.h"
@@ -154,9 +155,6 @@ AddKey::~AddKey() {
 
 void AddKey::init() {
     setAcceptDrops(true);
-    m_header_fingerprint = new Label(LabelRole::Mono);
-    m_header_fingerprint->setTone(LabelTone::Secondary);
-    m_header_fingerprint->setSize(catalog::LabelSize::Sm);
 
     m_mode_rows = {
         modeRow(Mode::Qr, icon::qr, TR("keys-add-mode-qr"), TR("keys-add-mode-qr-sub")),
@@ -285,7 +283,7 @@ void AddKey::doConnect() {
     connect(qrRoute, &QrRoute::failed, this, &AddKey::onQrFailed, qontrol::UNIQUE);
 
     connect(m_review_alias, &QLineEdit::textEdited, this, &AddKey::updateReview, qontrol::UNIQUE);
-    connect(m_review_table, &catalog::Table::rebuilt, this, &AddKey::refit, qontrol::UNIQUE);
+    connect(m_review_table, &catalog::Table::rebuilt, this, &AddKey::adjustSize, qontrol::UNIQUE);
     connect(m_open_file, &QPushButton::clicked, this, &AddKey::openFile, qontrol::UNIQUE);
     connect(m_add_reviewed, &QPushButton::clicked, this, &AddKey::addReviewed, qontrol::UNIQUE);
     connect(m_review_actions, &catalog::ModalActions::backClicked, this, &AddKey::onReviewBack,
@@ -331,22 +329,28 @@ void AddKey::doConnect() {
 }
 
 void AddKey::view() {
-    setHeaderEnd(m_header_fingerprint);
-    m_mode_page = addStep(TR("keys-add-title"), ModalWidth::L, buildModes(), nullptr);
-    m_qr_page = addStep(TR("keys-add-qr-title"), ModalWidth::L, m_qr, m_qr->actions());
-    m_camera_page =
-        addStep(TR("keys-add-scan-title"), ModalWidth::XXL, m_camera, m_camera->actions());
-    m_review_page =
-        addStep(TR("keys-add-review-title"), ModalWidth::L, buildReview(), m_review_actions);
-    m_paste_page =
-        addStep(TR("keys-add-paste-title"), ModalWidth::L, buildPaste(), m_paste_actions);
-    m_choose_page =
-        addStep(TR("keys-add-hot-title"), ModalWidth::L, buildHotChoose(), m_choose_actions);
-    m_backup_page =
-        addStep(TR("keys-add-backup-title"), ModalWidth::L, buildBackup(), m_backup_actions);
-    m_password_page = addStep(TR("keys-add-password-title"), ModalWidth::L, buildHotPassword(),
-                              m_password_actions);
-    m_status_page = addStep(TR("keys-add-title"), ModalWidth::L, m_status, m_status_actions);
+    m_modes_body = buildModes();
+    m_review_body = new catalog::ScrollArea;
+    m_review_body->setFitContent(true);
+    m_review_body->setWidget(buildReview());
+    m_paste_body = buildPaste();
+    m_choose_body = buildHotChoose();
+    m_backup_body = buildBackup();
+    m_password_body = buildHotPassword();
+    // Owned by the modal, hidden until their view shows them.
+    QList<QWidget *> views = {m_modes_body,        m_qr,
+                              m_qr->actions(),     m_camera,
+                              m_camera->actions(), m_review_body,
+                              m_review_actions,    m_paste_body,
+                              m_paste_actions,     m_choose_body,
+                              m_choose_actions,    m_backup_body,
+                              m_backup_actions,    m_password_body,
+                              m_password_actions,  m_status,
+                              m_status_actions};
+    for (auto *widget : views) {
+        widget->hide();
+        widget->setParent(this);
+    }
 }
 
 auto AddKey::buildModes() -> QWidget * {
@@ -422,17 +426,16 @@ auto AddKey::buildHotPassword() -> QWidget * {
 void AddKey::done(int result) {
     stopQr();
     clearSecrets();
-    StepModal::done(result);
-}
-
-void AddKey::refit() {
-    showStep(currentStep());
+    catalog::Modal::done(result);
 }
 
 void AddKey::showModes() {
     stopQr();
-    setHeaderEndVisible(false);
-    showStep(m_mode_page);
+    setWindowTitle(TR("keys-add-title"));
+    setHeader(nullptr);
+    setBody(m_modes_body);
+    setFooter(nullptr);
+    setWidth(ModalWidth::L);
 }
 
 void AddKey::onModeClicked() {
@@ -448,7 +451,7 @@ void AddKey::onModeClicked() {
         m_paste_alias->clear();
         m_paste_error->setVisible(false);
         updatePaste();
-        showStep(m_paste_page);
+        showPaste();
         return;
     case Mode::Hot:
         showHotChoose();
@@ -457,20 +460,35 @@ void AddKey::onModeClicked() {
 }
 
 void AddKey::showQr() {
-    setHeaderEndVisible(false);
-    showStep(m_qr_page);
+    showQrDisplay();
     m_module->qrRoute()->startXpub(m_qr, KeysModule::defaultXpubPath());
+}
+
+void AddKey::showQrDisplay() {
+    setWindowTitle(TR("keys-add-qr-title"));
+    setHeader(nullptr);
+    setBody(m_qr);
+    setFooter(m_qr->actions());
+    setWidth(ModalWidth::L);
+}
+
+void AddKey::showCamera() {
+    setWindowTitle(TR("keys-add-scan-title"));
+    setHeader(nullptr);
+    setBody(m_camera);
+    setFooter(m_camera->actions());
+    setWidth(ModalWidth::XXL);
 }
 
 void AddKey::onQrNext() {
     m_qr->stop();
-    showStep(m_camera_page);
+    showCamera();
     m_camera->start();
 }
 
 void AddKey::onCameraBack() {
     m_camera->stop();
-    showStep(m_qr_page);
+    showQrDisplay();
     m_qr->restart();
 }
 
@@ -485,7 +503,7 @@ void AddKey::onQrXpub(const QString &fingerprint, const QString &path, const QSt
 
 void AddKey::onQrScanFailed(QrErrorKind kind, const QString &message) {
     m_camera->showScanError(kind, message);
-    refit();
+    adjustSize();
 }
 
 void AddKey::onQrFailed(const QString &message) {
@@ -510,8 +528,6 @@ void AddKey::showFile() {
 
 void AddKey::showReview(Source source) {
     m_source = source;
-    setStepTitle(m_review_page,
-                 source == Source::Qr ? TR("keys-add-review-title") : TR("keys-add-file-title"));
     m_review_table->clearRows();
     for (const auto &entry : m_review_xpubs) {
         auto *path = new Label(entry.path, LabelRole::Mono);
@@ -521,7 +537,23 @@ void AddKey::showReview(Source source) {
     }
     m_review_error->setVisible(false);
     updateReview();
-    showStep(m_review_page);
+
+    QString title = source == Source::Qr ? TR("keys-add-review-title") : TR("keys-add-file-title");
+    setWindowTitle(title);
+    // The loaded key's fingerprint sits on the right of the title.
+    auto *old = m_header;
+    m_header = nullptr;
+    if (!m_review_fingerprint.isEmpty()) {
+        auto *fingerprint = new Label(m_review_fingerprint, LabelRole::Mono);
+        fingerprint->setTone(LabelTone::Secondary);
+        fingerprint->setSize(catalog::LabelSize::Sm);
+        m_header = catalog::modalHeader(title, fingerprint);
+    }
+    setHeader(m_header);
+    delete old;
+    setBody(m_review_body);
+    setFooter(m_review_actions);
+    setWidth(ModalWidth::L);
 }
 
 void AddKey::updateReview() {
@@ -531,7 +563,6 @@ void AddKey::updateReview() {
     m_review_alias_field->setVisible(loaded);
     m_open_file->setVisible(!loaded);
     m_add_reviewed->setVisible(loaded);
-    refreshHeader(m_review_fingerprint);
 
     QString duplicate = registeredAlias(m_review_fingerprint);
     m_review_duplicate->setText(TR("keys-duplicate-body").arg(m_review_fingerprint, duplicate));
@@ -543,7 +574,7 @@ void AddKey::updateReview() {
     }
     m_add_reviewed->setEnabled(loaded && reason.isEmpty());
     m_review_actions->setReason(reason);
-    refit();
+    adjustSize();
 }
 
 void AddKey::onReviewBack() {
@@ -569,7 +600,7 @@ void AddKey::openFile() {
 }
 
 void AddKey::dragEnterEvent(QDragEnterEvent *event) {
-    bool waitingForFile = currentStep() == m_review_page && m_source == Source::File &&
+    bool waitingForFile = m_review_body->isVisibleTo(this) && m_source == Source::File &&
                           m_review_fingerprint.isEmpty();
     if (waitingForFile && event->mimeData()->hasUrls()) {
         event->acceptProposedAction();
@@ -592,7 +623,7 @@ void AddKey::loadFile(const QString &path) {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         m_read_error->setVisible(true);
-        refit();
+        adjustSize();
         return;
     }
     QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
@@ -651,7 +682,7 @@ void AddKey::loadFile(const QString &path) {
 void AddKey::showFileError(const QString &error) {
     m_file_error->setText(error);
     m_file_error->setVisible(true);
-    refit();
+    adjustSize();
 }
 
 auto AddKey::pastedKey() const -> std::optional<PastedKey> {
@@ -689,7 +720,15 @@ void AddKey::updatePaste() {
     }
     m_add_pasted->setEnabled(key.has_value() && reason.isEmpty());
     m_paste_actions->setReason(reason);
-    refit();
+    adjustSize();
+}
+
+void AddKey::showPaste() {
+    setWindowTitle(TR("keys-add-paste-title"));
+    setHeader(nullptr);
+    setBody(m_paste_body);
+    setFooter(m_paste_actions);
+    setWidth(ModalWidth::L);
 }
 
 void AddKey::addPasted() {
@@ -709,7 +748,11 @@ void AddKey::onHotKindClicked() {
 
 void AddKey::showHotChoose() {
     updateHotChoose();
-    showStep(m_choose_page);
+    setWindowTitle(TR("keys-add-hot-title"));
+    setHeader(nullptr);
+    setBody(m_choose_body);
+    setFooter(m_choose_actions);
+    setWidth(ModalWidth::L);
 }
 
 void AddKey::onWordCountPicked() {
@@ -752,7 +795,7 @@ void AddKey::updateHotChoose() {
     }
     m_choose_continue->setEnabled(reason.isEmpty() && m_generate_req == 0);
     m_choose_actions->setReason(reason);
-    refit();
+    adjustSize();
 }
 
 void AddKey::continueHot() {
@@ -786,7 +829,15 @@ void AddKey::onMnemonicGenerated(ReqId req_id, const MnemonicResult &result) {
     m_backup_words->setWords(m_mnemonic.split(QLatin1Char(' '), Qt::SkipEmptyParts));
     m_backup_check->setChecked(false);
     updateBackup();
-    showStep(m_backup_page);
+    showBackup();
+}
+
+void AddKey::showBackup() {
+    setWindowTitle(TR("keys-add-backup-title"));
+    setHeader(nullptr);
+    setBody(m_backup_body);
+    setFooter(m_backup_actions);
+    setWidth(ModalWidth::L);
 }
 
 void AddKey::updateBackup() {
@@ -797,7 +848,11 @@ void AddKey::updateBackup() {
 
 void AddKey::showHotPassword() {
     updateHotPassword();
-    showStep(m_password_page);
+    setWindowTitle(TR("keys-add-password-title"));
+    setHeader(nullptr);
+    setBody(m_password_body);
+    setFooter(m_password_actions);
+    setWidth(ModalWidth::L);
 }
 
 void AddKey::onHotPasswordBack() {
@@ -805,7 +860,7 @@ void AddKey::onHotPasswordBack() {
         showHotChoose();
         return;
     }
-    showStep(m_backup_page);
+    showBackup();
 }
 
 void AddKey::updateHotPassword() {
@@ -825,16 +880,14 @@ void AddKey::updateHotPassword() {
     }
     m_seal->setEnabled(reason.isEmpty());
     m_password_actions->setReason(reason);
-    refit();
+    adjustSize();
 }
 
 void AddKey::sealKey() {
     m_status->setSpinner();
     m_status->setTitle(TR("keys-sealing-title"));
     m_status->setSubtitle(TR("keys-sealing-sub"));
-    m_status_actions->setVisible(false);
-    setStepTitle(m_status_page, TR("keys-add-sealing-title"));
-    showStep(m_status_page);
+    showSealing();
     m_seal_req = m_module->nextReqId();
     m_module->importHotKey(m_seal_req, m_mnemonic, m_hot_alias->text().trimmed(),
                            m_password->text());
@@ -857,9 +910,7 @@ void AddKey::onHotKeyImported(ReqId req_id, const KeyInfoResult &result) {
             .arg(KeysModule::toQt(result.key.alias), KeysModule::toQt(result.key.fingerprint)));
     m_done->setVisible(true);
     m_try_again->setVisible(false);
-    m_status_actions->setVisible(true);
-    setStepTitle(m_status_page, TR("keys-add-title"));
-    showStep(m_status_page);
+    showResult();
 }
 
 void AddKey::showFailure(Failure failure, const QString &title, const QString &message) {
@@ -869,9 +920,23 @@ void AddKey::showFailure(Failure failure, const QString &title, const QString &m
     m_status->setSubtitle(message);
     m_done->setVisible(false);
     m_try_again->setVisible(true);
-    m_status_actions->setVisible(true);
-    setStepTitle(m_status_page, TR("keys-add-title"));
-    showStep(m_status_page);
+    showResult();
+}
+
+void AddKey::showSealing() {
+    setWindowTitle(TR("keys-add-sealing-title"));
+    setHeader(nullptr);
+    setBody(m_status);
+    setFooter(nullptr);
+    setWidth(ModalWidth::L);
+}
+
+void AddKey::showResult() {
+    setWindowTitle(TR("keys-add-title"));
+    setHeader(nullptr);
+    setBody(m_status);
+    setFooter(m_status_actions);
+    setWidth(ModalWidth::L);
 }
 
 void AddKey::onFailureRetry() {
@@ -924,11 +989,6 @@ auto AddKey::registeredAlias(const QString &fingerprint) const -> QString {
     return QString();
 }
 
-void AddKey::refreshHeader(const QString &fingerprint) {
-    m_header_fingerprint->setText(fingerprint);
-    setHeaderEndVisible(!fingerprint.isEmpty());
-}
-
 void AddKey::addKey(const QString &fingerprint, const QString &alias,
                     const QList<KeyRouteKind> &routes, const QList<PathXpub> &xpubs,
                     catalog::Notice *error) {
@@ -936,7 +996,7 @@ void AddKey::addKey(const QString &fingerprint, const QString &alias,
     if (!result.is_ok) {
         error->setText(TR("keys-add-failed").arg(KeysModule::toQt(result.error)));
         error->setVisible(true);
-        refit();
+        adjustSize();
         return;
     }
     accept();

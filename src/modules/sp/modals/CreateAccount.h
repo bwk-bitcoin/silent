@@ -5,7 +5,7 @@
 #include <QList>
 #include <QString>
 
-#include "catalog/containers/StepModal.h"
+#include "catalog/containers/Modal.h"
 #include <interfaces/keys.h>
 #include <interfaces/types.h>
 #include <silent.h>
@@ -54,7 +54,7 @@ private:
     QWidget *m_control = nullptr;
 };
 
-class CreateAccount : public catalog::StepModal {
+class CreateAccount : public catalog::Modal {
     Q_OBJECT
 
 public:
@@ -97,8 +97,6 @@ protected:
     void applyNetworkDefaults();
     void showFetchError(const QString &message);
     void fetchDescriptor();
-    // Resizes the window to its content after a section grew or shrank.
-    void refit();
 
 private:
     catalog::Input *m_name_input = nullptr;
@@ -116,7 +114,6 @@ private:
     EndpointRow m_electrum;
     catalog::Button *m_create = nullptr;
     catalog::ModalActions *m_actions = nullptr;
-    int m_step = 0;
 
     QString m_key_fp;
     QString m_descriptor;

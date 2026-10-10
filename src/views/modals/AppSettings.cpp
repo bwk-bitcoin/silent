@@ -6,6 +6,7 @@
 #include "catalog/Variants.h"
 #include "catalog/containers/Card.h"
 #include "catalog/containers/ModalActions.h"
+#include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/Section.h"
 #include "catalog/containers/SectionHeader.h"
 #include "catalog/containers/Separator.h"
@@ -86,7 +87,7 @@ AppSettings::AppSettings() {
     refreshThemeProviders();
     requestThemeList();
     applyPersistedTheme();
-    showStep(m_main_step);
+    showMain();
 }
 
 AppSettings::~AppSettings() {
@@ -175,8 +176,8 @@ void AppSettings::doConnect() {
     connect(m_scan_btn, &QPushButton::clicked, this, &AppSettings::scanPlugins, qontrol::UNIQUE);
     connect(m_disable_btn, &QPushButton::clicked, this, &AppSettings::disablePlugin,
             qontrol::UNIQUE);
-    connect(m_disable_actions, &catalog::ModalActions::backClicked, this, &AppSettings::showMain,
-            qontrol::UNIQUE);
+    connect(m_disable_actions, &catalog::ModalActions::backClicked, this,
+            &AppSettings::onDisableBack, qontrol::UNIQUE);
     connect(m_done_btn, &QPushButton::clicked, this, &AppSettings::closeSection, qontrol::UNIQUE);
     connect(m_section_actions, &catalog::ModalActions::backClicked, this,
             &AppSettings::closeSection, qontrol::UNIQUE);
@@ -197,20 +198,30 @@ void AppSettings::doConnect() {
 void AppSettings::view() {
     m_extensions = foldable(QString());
     m_extensions->setContent(m_section_column);
-    auto *main = (new qontrol::Column)
-                     ->spacing(resolve(Spacing::S))
-                     ->push(buildGeneral())
-                     ->push(new catalog::Separator)
-                     ->push(buildPlugins())
-                     ->push(m_extensions_separator)
-                     ->push(m_extensions);
+    m_main = new catalog::ScrollArea;
+    m_main->setFitContent(true);
+    m_main->setWidget((new qontrol::Column)
+                          ->spacing(resolve(Spacing::S))
+                          ->push(buildGeneral())
+                          ->push(new catalog::Separator)
+                          ->push(buildPlugins())
+                          ->push(m_extensions_separator)
+                          ->push(m_extensions));
     for (auto *section : {m_general, m_plugins, m_extensions}) {
-        connect(section->header(), &catalog::SectionHeader::toggled, this, &AppSettings::refit,
+        connect(section->header(), &catalog::SectionHeader::toggled, this, &AppSettings::adjustSize,
                 qontrol::UNIQUE);
     }
-    m_main_step = addStep(QString(), ModalWidth::Wide, main, nullptr);
-    m_disable_step = addStep(QString(), ModalWidth::Wide, buildDisable(), m_disable_actions);
-    m_section_step = addStep(QString(), ModalWidth::Wide, buildSection(), m_section_actions);
+    m_disable = buildDisable();
+    m_section = new catalog::ScrollArea;
+    m_section->setFitContent(true);
+    m_section->setWidget(buildSection());
+    // Owned by the modal, hidden until their view shows them.
+    QList<QWidget *> views = {m_disable, m_disable_actions, m_section, m_section_actions};
+    for (auto *widget : views) {
+        widget->hide();
+        widget->setParent(this);
+    }
+    setWidth(ModalWidth::Wide);
     retranslateUi();
 }
 
@@ -258,14 +269,16 @@ auto AppSettings::buildSection() -> QWidget * {
     return (new qontrol::Column)->spacing(resolve(Spacing::S))->push(m_section_text)->push(card);
 }
 
-void AppSettings::refit() {
-    showStep(currentStep());
+void AppSettings::onDisableBack() {
+    // A Back from the disable view leaves the plugin enabled: its toggle shows it again.
+    rebuildPluginRows();
+    showMain();
 }
 
 void AppSettings::showMain() {
-    // A Back from the disable step leaves the plugin enabled: its toggle shows it again.
-    rebuildPluginRows();
-    showStep(m_main_step);
+    setWindowTitle(TR("settings-title"));
+    setBody(m_main);
+    setFooter(nullptr);
 }
 
 void AppSettings::rebuildPluginRows() {
@@ -302,7 +315,7 @@ void AppSettings::rebuildPluginRows() {
     m_plugins_column->setVisible(count > 0);
     m_plugins_empty->setVisible(available && count == 0 && !m_scanning_plugins);
     m_scanning->setVisible(m_scanning_plugins && count == 0);
-    refit();
+    adjustSize();
 }
 
 auto AppSettings::pluginRow(const QString &id, const QString &meta) -> catalog::SelectRow * {
@@ -386,7 +399,9 @@ void AppSettings::showDisable(const QString &id) {
     m_disable_themes->setText(TR("settings-disable-themes").arg(themes.join(QStringLiteral(", "))));
     m_disable_themes->setVisible(!themes.isEmpty());
 
-    showStep(m_disable_step);
+    setWindowTitle(TR("settings-disable-title"));
+    setBody(m_disable);
+    setFooter(m_disable_actions);
 }
 
 void AppSettings::disablePlugin() {
@@ -395,6 +410,7 @@ void AppSettings::disablePlugin() {
     bool themeGoes = !id.isEmpty() && m_theme_plugin.value(activeTheme) == id;
 
     m_unloading_id = id;
+    rebuildPluginRows();
     showMain();
     // Unloading runs on this thread: paint the Unloading row before it starts.
     repaint();
@@ -473,7 +489,7 @@ void AppSettings::rebuildSettingSectionRows() {
     m_extensions->header()->setCount(QString::number(count));
     m_extensions->setVisible(count > 0);
     m_extensions_separator->setVisible(count > 0);
-    refit();
+    adjustSize();
 }
 
 auto AppSettings::sectionModuleName(Host::SectionId section) const -> QString {
@@ -508,8 +524,9 @@ void AppSettings::onOpenSectionClicked() {
         m_open_section_id = entry.id;
         m_section_slot->push(entry.content);
         entry.content->show();
-        setStepTitle(m_section_step, title);
-        showStep(m_section_step);
+        setWindowTitle(title);
+        setBody(m_section);
+        setFooter(m_section_actions);
         return;
     }
 }
@@ -520,7 +537,7 @@ void AppSettings::closeSection() {
     }
     m_open_section = nullptr;
     m_open_section_id = 0;
-    showStep(m_main_step);
+    showMain();
 }
 
 void AppSettings::onHostSettingsSectionsChanged() {
@@ -655,7 +672,7 @@ void AppSettings::onThemeSelectionChanged(int index) {
         return;
     }
     updateThemeNote();
-    refit();
+    adjustSize();
 
     QString themeName = m_theme_picker->itemData(index).toString().trimmed();
     if (themeName.isEmpty()) {
@@ -693,7 +710,7 @@ void AppSettings::onLanguageSelectionChanged(int index) {
     static_cast<void>(i18n::I18nManager::get()->applyLocale(locale, true));
     m_language_note->setText(TR("settings-language-saved"));
     m_language_note->setVisible(true);
-    refit();
+    adjustSize();
 }
 
 void AppSettings::onThemeNames(ReqId req_id, const QStringList &themes) {
@@ -764,12 +781,16 @@ void AppSettings::changeEvent(QEvent *event) {
     if (event->type() == QEvent::LanguageChange) {
         retranslateUi();
     }
-    catalog::StepModal::changeEvent(event);
+    catalog::Modal::changeEvent(event);
 }
 
 void AppSettings::retranslateUi() {
-    setStepTitle(m_main_step, TR("settings-title"));
-    setStepTitle(m_disable_step, TR("settings-disable-title"));
+    // A module's section keeps the title it gave.
+    if (m_main->isVisibleTo(this)) {
+        setWindowTitle(TR("settings-title"));
+    } else if (m_disable->isVisibleTo(this)) {
+        setWindowTitle(TR("settings-disable-title"));
+    }
 
     m_general->header()->setLabel(TR("settings-general"));
     m_theme_field->setFieldLabel(m_theme_picker, TR("settings-theme"));

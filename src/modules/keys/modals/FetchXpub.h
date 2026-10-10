@@ -1,6 +1,6 @@
 #pragma once
 
-#include "catalog/containers/StepModal.h"
+#include "catalog/containers/Modal.h"
 #include "interfaces/signer.h"
 
 #include <QPointer>
@@ -21,7 +21,7 @@ class FetchXpubStep;
 
 // Fetches the xpub at a chosen path from the key's connected device and caches it,
 // opened over the key detail it returns to: picking the path, then the device wait.
-class FetchXpub final : public catalog::StepModal {
+class FetchXpub final : public catalog::Modal {
     Q_OBJECT
 
 public:
@@ -37,6 +37,8 @@ protected:
     void init();
     void doConnect();
     void view();
+    void showFetch();
+    void showFetching();
     void stopFetch();
     void showError(const QString &error);
 
@@ -49,8 +51,6 @@ private:
     QString m_instance;
     QString m_path;
     ReqId m_req = 0;
-    int m_fetch_page = 0;
-    int m_fetching_page = 0;
 };
 
 } // namespace keys::modal

@@ -5,6 +5,7 @@
 #include "catalog/SelectRow.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/ModalActions.h"
+#include "catalog/containers/ScrollArea.h"
 #include "catalog/display/CopyField.h"
 #include "catalog/display/Label.h"
 #include "catalog/display/RouteIcons.h"
@@ -134,7 +135,7 @@ CreateAccount::CreateAccount() {
     populateKeys();
     applyNetworkDefaults();
     updateActions();
-    refit();
+    adjustSize();
 }
 
 void CreateAccount::init() {
@@ -235,15 +236,20 @@ void CreateAccount::view() {
                      ->push(account)
                      ->push(key)
                      ->push(backends);
-    m_step = addStep(TR("create-account-title"), ModalWidth::XL, body, m_actions);
-    showStep(m_step);
+    auto *scroll = new catalog::ScrollArea;
+    scroll->setFitContent(true);
+    scroll->setWidget(body);
+    setWindowTitle(TR("create-account-title"));
+    setBody(scroll);
+    setFooter(m_actions);
+    setWidth(ModalWidth::XL);
 }
 
 auto CreateAccount::exec() -> int {
-    int result = catalog::StepModal::exec();
+    int result = catalog::Modal::exec();
     while (result == FETCH_RESULT) {
         fetchDescriptor();
-        result = catalog::StepModal::exec();
+        result = catalog::Modal::exec();
     }
     return result;
 }
@@ -386,7 +392,7 @@ void CreateAccount::onKeyClicked() {
     m_fetch_error->setVisible(false);
     refreshKeyRows();
     updateActions();
-    refit();
+    adjustSize();
 }
 
 void CreateAccount::onNetworkChanged() {
@@ -395,7 +401,7 @@ void CreateAccount::onNetworkChanged() {
     populateKeys();
     applyNetworkDefaults();
     updateActions();
-    refit();
+    adjustSize();
 }
 
 void CreateAccount::onOpenKeysTab() {
@@ -423,7 +429,7 @@ void CreateAccount::fetchDescriptor() {
     bus->spDescriptor(m_descriptor_req_id, m_key_fp);
     refreshKeyRows();
     updateActions();
-    refit();
+    adjustSize();
 }
 
 void CreateAccount::onSpDescriptorReady(ReqId req_id, const QString &descriptor,
@@ -458,7 +464,7 @@ void CreateAccount::onKeysError(std::optional<ReqId> req_id, const QString &mess
         m_register_req_id = 0;
         showFetchError(message);
         updateActions();
-        refit();
+        adjustSize();
     }
 }
 
@@ -537,13 +543,13 @@ void CreateAccount::applyNetworkDefaults() {
 void CreateAccount::onBlindbitEdited() {
     m_blindbit.setState(EndpointRow::State::Untested);
     updateActions();
-    refit();
+    adjustSize();
 }
 
 void CreateAccount::onElectrumEdited() {
     m_electrum.setState(EndpointRow::State::Untested);
     updateActions();
-    refit();
+    adjustSize();
 }
 
 void CreateAccount::onTestBlindbit() {
@@ -578,7 +584,7 @@ void CreateAccount::onBackendInfoReady(const BackendInfo &info) {
         m_blindbit.setState(EndpointRow::State::Ok);
     }
     updateActions();
-    refit();
+    adjustSize();
 }
 
 void CreateAccount::onTestElectrum() {
@@ -608,11 +614,7 @@ void CreateAccount::onElectrumTestReady(const ConnectionResult &result) {
         m_electrum.setState(EndpointRow::State::Ok);
     }
     updateActions();
-    refit();
-}
-
-void CreateAccount::refit() {
-    showStep(m_step);
+    adjustSize();
 }
 
 } // namespace modal

@@ -6,6 +6,7 @@
 #include "modules/keys/KeysModule.h"
 #include "modules/keys/KeysView.h"
 
+#include "catalog/containers/ModalActions.h"
 #include "catalog/feedback/ModalStatus.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
@@ -47,9 +48,19 @@ void FetchXpub::doConnect() {
 }
 
 void FetchXpub::view() {
-    m_fetch_page = addStep(TR("keys-fetch-title"), ModalWidth::L, m_fetch, m_fetch->actions());
-    m_fetching_page = addStep(TR("keys-fetch-title"), ModalWidth::L, m_fetching, nullptr);
-    showStep(m_fetch_page);
+    setWindowTitle(TR("keys-fetch-title"));
+    setWidth(ModalWidth::L);
+    showFetch();
+}
+
+void FetchXpub::showFetch() {
+    setBody(m_fetch);
+    setFooter(m_fetch->actions());
+}
+
+void FetchXpub::showFetching() {
+    setBody(m_fetching);
+    setFooter(nullptr);
 }
 
 void FetchXpub::onFetchClicked(const QString &path) {
@@ -65,7 +76,7 @@ void FetchXpub::onFetchClicked(const QString &path) {
     connect(device->signer, &ISigner::error, this, &FetchXpub::onDeviceError, qontrol::UNIQUE);
     m_req = device->signer->getXpub(path);
     m_fetching->setSubtitle(TR("keys-fetching-sub").arg(deviceName(*device->signer)));
-    showStep(m_fetching_page);
+    showFetching();
 }
 
 void FetchXpub::onDeviceXpub(ReqId req_id, const QString &xpub) {
@@ -119,8 +130,8 @@ void FetchXpub::stopFetch() {
 
 void FetchXpub::showError(const QString &error) {
     m_fetch->showError(error);
-    // Shown again so the step fits the error it now holds.
-    showStep(m_fetch_page);
+    // Shown again so the window fits the error it now holds.
+    showFetch();
 }
 
 } // namespace keys::modal

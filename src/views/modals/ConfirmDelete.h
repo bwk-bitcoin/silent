@@ -3,7 +3,7 @@
 #include <QString>
 #include <qevent.h>
 
-#include "catalog/containers/StepModal.h"
+#include "catalog/containers/Modal.h"
 
 namespace catalog {
 class Button;
@@ -12,7 +12,7 @@ class Label;
 
 namespace modal {
 
-class ConfirmDelete : public catalog::StepModal {
+class ConfirmDelete : public catalog::Modal {
     Q_OBJECT
 
 public:
@@ -35,7 +35,6 @@ private:
     QString m_name;
     catalog::Label *m_label = nullptr;
     catalog::Button *m_delete_btn = nullptr;
-    int m_step = 0;
 };
 
 } // namespace modal

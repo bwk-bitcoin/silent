@@ -1,6 +1,6 @@
 #pragma once
 
-#include "catalog/containers/StepModal.h"
+#include "catalog/containers/Modal.h"
 #include <QList>
 #include <QPair>
 #include <QString>
@@ -9,6 +9,7 @@ namespace catalog {
 class Button;
 class IndexPill;
 class LabelRow;
+class ScrollArea;
 } // namespace catalog
 
 namespace modal {
@@ -16,7 +17,7 @@ namespace modal {
 // The "addresses awaiting payment" modal (design ScreensBasic.jsx
 // PrevAddressesModal): a list of past addresses, each with an index pill that
 // expands a QR + label editor, plus verify and copy actions.
-class AddressHistoryModal : public catalog::StepModal {
+class AddressHistoryModal : public catalog::Modal {
     Q_OBJECT
 
 public:
@@ -50,6 +51,7 @@ private:
     QList<catalog::LabelRow *> m_label_rows;
     QList<QWidget *> m_rows;
     QList<QWidget *> m_expansions;
+    catalog::ScrollArea *m_scroll = nullptr;
     int m_open = -1;
 };
 

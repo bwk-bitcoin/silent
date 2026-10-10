@@ -5,7 +5,7 @@
 #include <QList>
 #include <QString>
 
-#include "catalog/containers/StepModal.h"
+#include "catalog/containers/Modal.h"
 #include "modules/keys/KeysModule.h"
 
 #include <interfaces/types.h>
@@ -26,6 +26,7 @@ class Label;
 class ModalActions;
 class ModalStatus;
 class Notice;
+class ScrollArea;
 class SelectRow;
 class Table;
 class ValidatedInput;
@@ -43,7 +44,7 @@ namespace keys::modal {
 // Adds a key no connected device registers: an airgap key over QR codes, a key file,
 // a pasted xpub with its origin, or a hot key generated or imported here and sealed
 // with a password. One modal: the mode list, then each mode's steps in its place.
-class AddKey final : public catalog::StepModal {
+class AddKey final : public catalog::Modal {
     Q_OBJECT
 
 public:
@@ -52,7 +53,6 @@ public:
 
 public slots:
     void done(int result) override;
-    void refit();
     void onModeClicked();
     void showModes();
     void onQrNext();
@@ -104,8 +104,14 @@ protected:
     [[nodiscard]] auto buildBackup() -> QWidget *;
     [[nodiscard]] auto buildHotPassword() -> QWidget *;
     void showQr();
+    void showQrDisplay();
+    void showCamera();
     void showFile();
     void showReview(Source source);
+    void showPaste();
+    void showBackup();
+    void showSealing();
+    void showResult();
     void loadFile(const QString &path);
     void showFileError(const QString &error);
     void showFailure(Failure failure, const QString &title, const QString &message);
@@ -117,15 +123,15 @@ protected:
     [[nodiscard]] auto registeredAlias(const QString &fingerprint) const -> QString;
     [[nodiscard]] auto pastedKey() const -> std::optional<PastedKey>;
     [[nodiscard]] auto typedMnemonic() const -> QString;
-    void refreshHeader(const QString &fingerprint);
     void addKey(const QString &fingerprint, const QString &alias, const QList<KeyRouteKind> &routes,
                 const QList<PathXpub> &xpubs, catalog::Notice *error);
 
 private:
     KeysModule *m_module = nullptr;
-    catalog::Label *m_header_fingerprint = nullptr;
+    QWidget *m_header = nullptr;
 
     QList<catalog::SelectRow *> m_mode_rows;
+    QWidget *m_modes_body = nullptr;
 
     flow::QrDisplayStep *m_qr = nullptr;
     flow::CameraStep *m_camera = nullptr;
@@ -146,6 +152,7 @@ private:
     catalog::Button *m_open_file = nullptr;
     catalog::Button *m_add_reviewed = nullptr;
     catalog::ModalActions *m_review_actions = nullptr;
+    catalog::ScrollArea *m_review_body = nullptr;
 
     catalog::ValidatedInput *m_paste = nullptr;
     catalog::FieldNote *m_paste_note = nullptr;
@@ -154,6 +161,7 @@ private:
     catalog::Notice *m_paste_error = nullptr;
     catalog::Button *m_add_pasted = nullptr;
     catalog::ModalActions *m_paste_actions = nullptr;
+    QWidget *m_paste_body = nullptr;
 
     HotKind m_hot_kind = HotKind::Generate12;
     catalog::SelectRow *m_generate12 = nullptr;
@@ -163,6 +171,7 @@ private:
     catalog::WordInputGrid *m_words_input = nullptr;
     catalog::Button *m_choose_continue = nullptr;
     catalog::ModalActions *m_choose_actions = nullptr;
+    QWidget *m_choose_body = nullptr;
     // The generated or typed mnemonic, until it is sealed or the window closes.
     QString m_mnemonic;
     ReqId m_generate_req = 0;
@@ -170,6 +179,7 @@ private:
     catalog::Checkbox *m_backup_check = nullptr;
     catalog::Button *m_backup_continue = nullptr;
     catalog::ModalActions *m_backup_actions = nullptr;
+    QWidget *m_backup_body = nullptr;
     catalog::FieldGroup *m_password_fields = nullptr;
     catalog::Input *m_hot_alias = nullptr;
     catalog::Input *m_password = nullptr;
@@ -178,6 +188,7 @@ private:
     catalog::FieldNote *m_password_mismatch = nullptr;
     catalog::Button *m_seal = nullptr;
     catalog::ModalActions *m_password_actions = nullptr;
+    QWidget *m_password_body = nullptr;
     ReqId m_seal_req = 0;
 
     catalog::ModalStatus *m_status = nullptr;
@@ -185,16 +196,6 @@ private:
     catalog::Button *m_try_again = nullptr;
     catalog::ModalActions *m_status_actions = nullptr;
     Failure m_failure = Failure::Seal;
-
-    int m_mode_page = 0;
-    int m_qr_page = 0;
-    int m_camera_page = 0;
-    int m_review_page = 0;
-    int m_paste_page = 0;
-    int m_choose_page = 0;
-    int m_backup_page = 0;
-    int m_password_page = 0;
-    int m_status_page = 0;
 };
 
 } // namespace keys::modal

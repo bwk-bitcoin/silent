@@ -1,6 +1,6 @@
 #pragma once
 
-#include "catalog/containers/StepModal.h"
+#include "catalog/containers/Modal.h"
 #include "interfaces/host.h"
 #include "interfaces/types.h"
 #include "theme/Palette.h"
@@ -23,6 +23,7 @@ class Label;
 class ModalActions;
 class ModalStatus;
 class Notice;
+class ScrollArea;
 class Section;
 class SelectRow;
 class Separator;
@@ -35,7 +36,7 @@ namespace modal {
 
 // The global Settings: General, Plugin Manager and Extension Settings on the main
 // step; disabling a plugin and a module's settings section replace it in place.
-class AppSettings : public catalog::StepModal {
+class AppSettings : public catalog::Modal {
     Q_OBJECT
 
 public:
@@ -48,6 +49,7 @@ public slots:
     void scanPlugins();
     void onPluginToggled(bool enabled);
     void disablePlugin();
+    void onDisableBack();
     void showMain();
     void onThemeNames(ReqId req_id, const QStringList &themes);
     void onThemePalette(ReqId req_id, theme::Palette palette);
@@ -56,7 +58,6 @@ public slots:
     void closeSection();
     void onHostInstanceChanged(const QString &id);
     void rebuildPluginRows();
-    void refit();
 
 protected:
     void init();
@@ -81,9 +82,9 @@ protected:
     void retranslateUi();
 
 private:
-    int m_main_step = 0;
-    int m_disable_step = 0;
-    int m_section_step = 0;
+    catalog::ScrollArea *m_main = nullptr;
+    QWidget *m_disable = nullptr;
+    catalog::ScrollArea *m_section = nullptr;
 
     catalog::Section *m_general = nullptr;
     catalog::FieldGroup *m_theme_field = nullptr;
