@@ -4,6 +4,7 @@
 #include "catalog/containers/ScrollArea.h"
 
 #include <QScreen>
+#include <QShowEvent>
 #include <QStackedWidget>
 #include <algorithm>
 
@@ -102,6 +103,13 @@ void StepModal::showStep(int step) {
     // Not adjustSize(): it sizes wrapped text at the hint width, and the stack's
     // height for width is the tallest step's.
     resize(resolve(current.width), chromeHeight + scrollHeight);
+}
+
+void StepModal::showEvent(QShowEvent *event) {
+    qontrol::Modal::showEvent(event);
+    if (!m_steps.isEmpty()) {
+        showStep(currentStep());
+    }
 }
 
 auto StepModal::currentStep() const -> int {

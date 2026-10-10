@@ -5,6 +5,7 @@
 #include <QString>
 #include <Qontrol>
 
+class QShowEvent;
 class QStackedWidget;
 
 namespace catalog {
@@ -22,6 +23,10 @@ public:
     StepModal();
 
 protected:
+    // A step shown before the window was polished measured itself unstyled: measure
+    // it again once the window shows.
+    void showEvent(QShowEvent *event) override;
+
     struct Step {
         QString title;
         ModalWidth width;
