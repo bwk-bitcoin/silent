@@ -8,10 +8,10 @@
 
 namespace catalog {
 
-FieldGroup::FieldGroup(QWidget *parent) : QWidget(parent) {
+FieldGroup::FieldGroup(Labels labels, QWidget *parent) : QWidget(parent), m_labels_style(labels) {
     m_grid = new QGridLayout(this);
     m_grid->setContentsMargins(0, 0, 0, 0);
-    m_grid->setHorizontalSpacing(resolve(Spacing::XS));
+    m_grid->setHorizontalSpacing(resolve(labels == Labels::Payment ? Spacing::M : Spacing::XS));
     m_grid->setVerticalSpacing(resolve(Spacing::XS));
     m_grid->setColumnStretch(1, 1);
     // Takes what a fixed-width control leaves, so it stays right after its label.
@@ -19,10 +19,14 @@ FieldGroup::FieldGroup(QWidget *parent) : QWidget(parent) {
 }
 
 auto FieldGroup::addField(const QString &label, QWidget *control, bool top) -> FieldGroup * {
-    auto *labelWidget = new Label(label, LabelRole::Body, this);
+    bool payment = m_labels_style == Labels::Payment;
+    auto *labelWidget = new Label(label, payment ? LabelRole::Section : LabelRole::Body, this);
+    if (payment) {
+        labelWidget->setSize(LabelSize::Md);
+    }
     int row = m_grid->rowCount();
     Qt::Alignment vertical = top ? Qt::AlignTop : Qt::AlignVCenter;
-    m_grid->addWidget(labelWidget, row, 0, Qt::AlignLeft | vertical);
+    m_grid->addWidget(labelWidget, row, 0, (payment ? Qt::AlignRight : Qt::AlignLeft) | vertical);
     m_grid->addWidget(control, row, 1, vertical);
     m_labels.insert(control, labelWidget);
     return this;

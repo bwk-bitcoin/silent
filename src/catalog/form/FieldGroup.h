@@ -17,7 +17,10 @@ class FieldGroup : public QWidget {
     Q_OBJECT
 
 public:
-    explicit FieldGroup(QWidget *parent = nullptr);
+    // Payment: demibold labels flush against their controls (design PaymentRow).
+    enum class Labels { Plain, Payment };
+
+    explicit FieldGroup(Labels labels = Labels::Plain, QWidget *parent = nullptr);
     // `top` sits the label at the top of a multi-line control.
     auto addField(const QString &label, QWidget *control, bool top = false) -> FieldGroup *;
     // A note in the control column, under the field added before it.
@@ -26,6 +29,7 @@ public:
     void setFieldVisible(QWidget *control, bool visible);
 
 private:
+    Labels m_labels_style = Labels::Plain;
     QGridLayout *m_grid = nullptr;
     QHash<QWidget *, Label *> m_labels;
 };
