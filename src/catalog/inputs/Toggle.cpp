@@ -5,6 +5,10 @@
 
 namespace catalog {
 
+namespace {
+constexpr qreal DISABLED_OPACITY = 0.45;
+} // namespace
+
 Toggle::Toggle(ToggleRole role, QWidget *parent)
     : qontrol::widgets::ToggleSwitch(parent),
       m_role(role) {
@@ -57,22 +61,22 @@ void Toggle::paintEvent([[maybe_unused]] QPaintEvent *e) {
     painter.setPen(Qt::NoPen);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    const auto &p = Theme::get()->palette();
     int travel = width() - height();
     int outerRadius = height() / 2;
     constexpr int c_margin = 3;
     int handleRadius = (height() - (2 * c_margin)) / 2;
 
-    // Track
-    if (isEnabled()) {
-        painter.setBrush(isChecked() ? m_color_on : m_color_off);
-    } else {
-        painter.setBrush(p.borderLight);
+    // A disabled switch keeps its colors, dimmed.
+    if (!isEnabled()) {
+        painter.setOpacity(DISABLED_OPACITY);
     }
+
+    // Track
+    painter.setBrush(isChecked() ? m_color_on : m_color_off);
     painter.drawRoundedRect(QRect(0, 0, width(), height()), outerRadius, outerRadius);
 
     // Handle
-    painter.setBrush(isEnabled() ? m_handle : QColor(p.textMuted));
+    painter.setBrush(m_handle);
     auto handleRect =
         QRect(c_margin, c_margin, height() - (2 * c_margin), height() - (2 * c_margin));
     if (isChecked()) {
