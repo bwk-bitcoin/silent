@@ -697,9 +697,8 @@ void AddKey::addPasted() {
     if (!key.has_value()) {
         return;
     }
-    // The design names the route of a pasted key USB: the key of a device plugged in
-    // to sign.
-    addKey(key->fingerprint, m_paste_alias->text().trimmed(), {KeyRouteKind::Usb}, {key->xpub},
+    // A pasted xpub comes from an airgapped device, which signs over its SD card.
+    addKey(key->fingerprint, m_paste_alias->text().trimmed(), {KeyRouteKind::SdCard}, {key->xpub},
            m_paste_error);
 }
 
