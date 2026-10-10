@@ -246,6 +246,8 @@ set(SILENT_APP_SOURCES
     src/catalog/feedback/Notice.cpp
     src/catalog/feedback/ScanProgress.h
     src/catalog/feedback/ScanProgress.cpp
+    src/catalog/feedback/Spinner.h
+    src/catalog/feedback/Spinner.cpp
     src/catalog/StatusBarItem.h
     src/catalog/StatusBarItem.cpp
     src/catalog/feedback/Tooltip.h

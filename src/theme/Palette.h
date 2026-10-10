@@ -112,6 +112,7 @@ const int SELECT_ROW_ICON_SIZE = 18;
 const int SELECT_ROW_PADDING_H = 14;
 const int SELECT_ROW_PADDING_V = 12;
 const int MODAL_STATUS_ICON_SIZE = 40;
+const int SPINNER_SIZE = 114;
 const int TABLE_ROW_HEIGHT = 34;
 const int TABLE_CELL_PAD = 7;
 const int BADGE_PADDING_H = 11;

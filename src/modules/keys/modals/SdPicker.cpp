@@ -3,6 +3,7 @@
 #include "catalog/Button.h"
 #include "catalog/feedback/ModalStatus.h"
 #include "i18n/Tr.h"
+#include "theme/Icon.h"
 #include "views/utils.h"
 
 #include <QDir>
@@ -55,12 +56,10 @@ void SdPicker::view() {
 void SdPicker::updateStep() {
     switch (m_step) {
     case Step::Save:
-        m_status->setState(ModalStatus::State::Review);
         m_status->setSubtitle(TR("confirm-send-sd-step"));
         m_choose_btn->setText(TR("keys-sd-save-title"));
         break;
     case Step::Load:
-        m_status->setState(ModalStatus::State::Review);
         m_status->setSubtitle(TR("keys-sd-load-step"));
         m_choose_btn->setText(TR("keys-sd-load-title"));
         break;
@@ -101,7 +100,7 @@ void SdPicker::onCancelClicked() {
 
 void SdPicker::onSaveDone(bool is_ok, const QString &error) {
     if (!is_ok) {
-        m_status->setState(ModalStatus::State::Error);
+        m_status->setIcon(icon::circleX, IconColor::Error);
         m_status->setSubtitle(TR("keys-sd-save-failed") + "\n\n" + error);
         return;
     }
@@ -111,7 +110,7 @@ void SdPicker::onSaveDone(bool is_ok, const QString &error) {
 
 void SdPicker::onLoadDone(bool is_ok, const QString &error) {
     if (!is_ok) {
-        m_status->setState(ModalStatus::State::Error);
+        m_status->setIcon(icon::circleX, IconColor::Error);
         m_status->setSubtitle(TR("keys-sd-load-failed") + "\n\n" + error);
         return;
     }

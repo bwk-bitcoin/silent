@@ -242,7 +242,7 @@ void HotKey::onContinueClicked() {
 void HotKey::onPasswordEntered(QString password) {
     m_step = Step::Working;
     applyStep();
-    m_status->setState(ModalStatus::State::Signing);
+    m_status->setSpinner();
     m_status->setSubtitle(TR("keys-hot-working"));
 
     QString alias = m_alias_input->text().trimmed();

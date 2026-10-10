@@ -14,6 +14,7 @@
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "modules/keys/KeysModule.h"
+#include "theme/Icon.h"
 #include "theme/Palette.h"
 #include "views/modals/AddressHistoryModal.h"
 #include "views/utils.h"
@@ -170,8 +171,8 @@ void Receive::onAddressVerified(ReqId req_id, bool verified) {
     m_verify_req_id = 0;
 
     auto *status = new catalog::ModalStatus;
-    status->setState(verified ? catalog::ModalStatus::State::Success
-                              : catalog::ModalStatus::State::Error);
+    status->setIcon(verified ? icon::circleCheck : icon::circleX,
+                    verified ? IconColor::Success : IconColor::Error);
     status->setSubtitle(verified ? TR("receive-verify-matched") : TR("receive-verify-mismatch"));
     auto *addressLabel = new catalog::Label(m_verify_address, catalog::LabelRole::Mono);
     addressLabel->setWordWrap(true);
@@ -221,7 +222,6 @@ void Receive::onTaprootSectionToggled(bool expanded) {
         m_segwit_section->setExpanded(false);
     }
 }
-
 
 void Receive::onVerifyHistoryAddress(const QString &address) {
     showVerifyModal(address);

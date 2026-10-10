@@ -3,6 +3,7 @@
 #include "catalog/Button.h"
 #include "catalog/feedback/ModalStatus.h"
 #include "i18n/Tr.h"
+#include "theme/Icon.h"
 #include "views/utils.h"
 
 #include <common.h>
@@ -24,7 +25,7 @@ UsbConfirm::UsbConfirm(const QString &device_name, const QString &subtitle, QWid
 
 void UsbConfirm::init() {
     m_status = new ModalStatus;
-    m_status->setState(ModalStatus::State::Signing);
+    m_status->setSpinner();
     m_status->setSubtitle(m_subtitle);
 
     m_cancel_btn = new Button(TR("common-cancel"));
@@ -55,7 +56,7 @@ void UsbConfirm::onSucceeded() {
 }
 
 void UsbConfirm::onFailed(const QString &message) {
-    m_status->setState(ModalStatus::State::Error);
+    m_status->setIcon(icon::circleX, IconColor::Error);
     m_status->setSubtitle(message);
 }
 
