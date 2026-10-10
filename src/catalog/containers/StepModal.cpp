@@ -3,6 +3,7 @@
 #include "catalog/containers/ModalActions.h"
 #include "catalog/containers/ScrollArea.h"
 
+#include <QLayout>
 #include <QScreen>
 #include <QShowEvent>
 #include <QStackedWidget>
@@ -81,6 +82,12 @@ void StepModal::showStep(int step) {
     // area's own hint.
     current.scroll->setMinimumHeight(0);
     current.scroll->setMaximumHeight(QWIDGETSIZE_MAX);
+    // A child shown or hidden since the last pass leaves the hints cached above it
+    // stale, and the window keeps the minimum height of the last pass: drop them all.
+    for (auto *child : findChildren<QWidget *>()) {
+        child->updateGeometry();
+    }
+    layout()->invalidate();
     // Lays the step out at its width, so wrapped text reports the height it needs.
     layout()->activate();
 
