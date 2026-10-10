@@ -1005,6 +1005,7 @@ struct SigningPlan;
 struct FingerprintsResult;
 struct MnemonicResult;
 struct SignResult;
+struct HotSpDescriptorResult;
 struct PsbtPayloadResult;
 struct KeyEvent;
 struct CameraListResult;
@@ -1161,12 +1162,13 @@ enum class KeyEventFlag : ::std::uint8_t {
 #ifndef CXXBRIDGE1_ENUM_QrErrorKind
 #define CXXBRIDGE1_ENUM_QrErrorKind
 // Discriminant for a `KeyEvent::Error`, distinguishing the two QR response
-// validation failures the GUI must not swallow untranslated from every other
-// camera-sourced error, which only ever surfaces `error` as free text.
+// validation failures and a camera that failed from every other camera-sourced
+// error, which only ever surfaces `error` as free text.
 enum class QrErrorKind : ::std::uint8_t {
   Other = 0,
   RequestIdMismatch = 1,
   SignaturesUnsupported = 2,
+  CameraFailed = 3,
 };
 #endif // CXXBRIDGE1_ENUM_QrErrorKind
 
@@ -1661,12 +1663,31 @@ struct SignResult final {
   bool is_ok CXX_DEFAULT_VALUE(false);
   // Error message (empty if is_ok is true).
   ::rust::String error;
+  // The password did not open the hot secret. Only `hot_sign` sets it.
+  bool wrong_password CXX_DEFAULT_VALUE(false);
   // The signed PSBT, serialized v2 and hex encoded. Empty on error.
   ::rust::String psbt_v2_hex;
 
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_SignResult
+
+#ifndef CXXBRIDGE1_STRUCT_HotSpDescriptorResult
+#define CXXBRIDGE1_STRUCT_HotSpDescriptorResult
+// Result of `hot_sp_descriptor`.
+struct HotSpDescriptorResult final {
+  // Whether the descriptor was derived.
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Error message (empty if is_ok is true).
+  ::rust::String error;
+  // The password did not open the hot secret.
+  bool wrong_password CXX_DEFAULT_VALUE(false);
+  // The sp() descriptor, origin included. Empty on error.
+  ::rust::String descriptor;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_HotSpDescriptorResult
 
 #ifndef CXXBRIDGE1_STRUCT_PsbtPayloadResult
 #define CXXBRIDGE1_STRUCT_PsbtPayloadResult
@@ -2489,7 +2510,7 @@ void hwi_set_config_network(::Network network) noexcept;
 // The BIP392 sp() descriptor of `material`'s hot key, origin included, for
 // account creation. Blocks on Argon2id while opening the envelope: call
 // from a QThread, never from the GUI thread.
-::SpDescriptorResult hot_sp_descriptor(::HotMaterial const &material, ::rust::Str password) noexcept;
+::HotSpDescriptorResult hot_sp_descriptor(::HotMaterial const &material, ::rust::Str password) noexcept;
 
 // Converts a v2 PSBT into its v0 base64 payload for a USB signing device.
 // Cheap; safe to call from the GUI thread. Refuses a PSBT with a pending SP

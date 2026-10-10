@@ -898,29 +898,36 @@ pub fn hot_sign(material: &HotMaterial, password: &str, psbt_v2_hex: &str) -> ff
         Ok(signed) => ffi::SignResult {
             is_ok: true,
             error: String::new(),
+            wrong_password: false,
             psbt_v2_hex: hex::encode(signed),
         },
-        Err(e) => failed_sign(&format!("sign_hot {}: {e}", record.fingerprint)),
+        Err(e) => ffi::SignResult {
+            wrong_password: matches!(e, Error::WrongPassword),
+            ..failed_sign(&format!("sign_hot {}: {e}", record.fingerprint))
+        },
     }
 }
 
 /// The BIP392 sp() descriptor of `material`'s hot key, origin included, for account
 /// creation. Blocks on Argon2id while opening the envelope: call from a QThread,
 /// never from the GUI thread.
-pub fn hot_sp_descriptor(material: &HotMaterial, password: &str) -> ffi::SpDescriptorResult {
+pub fn hot_sp_descriptor(material: &HotMaterial, password: &str) -> ffi::HotSpDescriptorResult {
     let password = Password::new(password.to_string());
     let (record, network) = match material.inner.as_ref() {
         Ok(pair) => pair,
-        Err(e) => return failed_sp_descriptor(e),
+        Err(e) => return failed_hot_sp_descriptor(e),
     };
     match sp_descriptor(record, *network, password) {
-        Ok(descriptor) => ffi::SpDescriptorResult {
+        Ok(descriptor) => ffi::HotSpDescriptorResult {
             is_ok: true,
             error: String::new(),
+            wrong_password: false,
             descriptor: descriptor.to_string(),
-            fingerprint: record.fingerprint.to_string(),
         },
-        Err(e) => failed_sp_descriptor(&format!("hot_sp_descriptor {}: {e}", record.fingerprint)),
+        Err(e) => ffi::HotSpDescriptorResult {
+            wrong_password: matches!(e, Error::WrongPassword),
+            ..failed_hot_sp_descriptor(&format!("hot_sp_descriptor {}: {e}", record.fingerprint))
+        },
     }
 }
 
@@ -967,6 +974,7 @@ pub fn usb_merge_signed(original_v2_hex: &str, signed_v0_base64: &str) -> ffi::S
         Ok(merged) => ffi::SignResult {
             is_ok: true,
             error: String::new(),
+            wrong_password: false,
             psbt_v2_hex: hex::encode(merged),
         },
         Err(e) => failed_sign(&e.to_string()),
@@ -1286,6 +1294,7 @@ fn to_event(
         CameraMessage::Failed(error) => Some(ffi::KeyEvent {
             flag: ffi::KeyEventFlag::Error,
             error,
+            error_kind: ffi::QrErrorKind::CameraFailed,
             ..ffi::KeyEvent::default()
         }),
         CameraMessage::Stopped => Some(ffi::KeyEvent {
@@ -1571,6 +1580,7 @@ fn failed_sign(error: &str) -> ffi::SignResult {
     ffi::SignResult {
         is_ok: false,
         error: error.to_string(),
+        wrong_password: false,
         psbt_v2_hex: String::new(),
     }
 }
@@ -1583,12 +1593,12 @@ fn failed_psbt_payload(error: &str) -> ffi::PsbtPayloadResult {
     }
 }
 
-fn failed_sp_descriptor(error: &str) -> ffi::SpDescriptorResult {
-    ffi::SpDescriptorResult {
+fn failed_hot_sp_descriptor(error: &str) -> ffi::HotSpDescriptorResult {
+    ffi::HotSpDescriptorResult {
         is_ok: false,
         error: error.to_string(),
+        wrong_password: false,
         descriptor: String::new(),
-        fingerprint: String::new(),
     }
 }
 
@@ -1668,8 +1678,8 @@ impl From<Option<crate::keys::manager::UnusableReason>> for ffi::KeyUnusableReas
 }
 
 /// The two QR response validation failures the GUI must show translated; every
-/// other `Error` variant (camera, session, protocol, ...) stays `Other` and
-/// surfaces only as the free-text `error` field.
+/// other `Error` variant (session, protocol, ...) stays `Other` and surfaces only as
+/// the free-text `error` field. A failed camera is tagged where it is reported.
 impl From<&Error> for ffi::QrErrorKind {
     fn from(error: &Error) -> Self {
         match error {
@@ -1677,5 +1687,30 @@ impl From<&Error> for ffi::QrErrorKind {
             Error::SignaturesUnsupported => ffi::QrErrorKind::SignaturesUnsupported,
             _ => ffi::QrErrorKind::Other,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ffi;
+    use crate::keys::{bridge::to_event, camera::CameraMessage};
+
+    #[test]
+    fn a_failed_camera_is_tagged_camera_failed() {
+        let event = to_event(CameraMessage::Failed("device busy".to_string()), None)
+            .expect("a failed camera must yield an event");
+        assert_eq!(
+            event.flag,
+            ffi::KeyEventFlag::Error,
+            "expected an error event, got {:?}",
+            event.flag
+        );
+        assert_eq!(
+            event.error_kind,
+            ffi::QrErrorKind::CameraFailed,
+            "expected CameraFailed, got {:?}",
+            event.error_kind
+        );
+        assert_eq!(event.error, "device busy", "expected the camera error text");
     }
 }

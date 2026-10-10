@@ -128,13 +128,14 @@ mod ffi {
     }
 
     /// Discriminant for a `KeyEvent::Error`, distinguishing the two QR response
-    /// validation failures the GUI must not swallow untranslated from every other
-    /// camera-sourced error, which only ever surfaces `error` as free text.
+    /// validation failures and a camera that failed from every other camera-sourced
+    /// error, which only ever surfaces `error` as free text.
     #[derive(Debug, Clone, Copy)]
     pub enum QrErrorKind {
         Other,
         RequestIdMismatch,
         SignaturesUnsupported,
+        CameraFailed,
     }
 
     // ===== Shared Structs =====
@@ -513,8 +514,23 @@ mod ffi {
         pub is_ok: bool,
         /// Error message (empty if is_ok is true).
         pub error: String,
+        /// The password did not open the hot secret. Only `hot_sign` sets it.
+        pub wrong_password: bool,
         /// The signed PSBT, serialized v2 and hex encoded. Empty on error.
         pub psbt_v2_hex: String,
+    }
+
+    /// Result of `hot_sp_descriptor`.
+    #[derive(Debug, Clone)]
+    pub struct HotSpDescriptorResult {
+        /// Whether the descriptor was derived.
+        pub is_ok: bool,
+        /// Error message (empty if is_ok is true).
+        pub error: String,
+        /// The password did not open the hot secret.
+        pub wrong_password: bool,
+        /// The sp() descriptor, origin included. Empty on error.
+        pub descriptor: String,
     }
 
     /// Result of converting a PSBT v2 into its v0 base64 payload for a USB signing
@@ -1099,7 +1115,7 @@ mod ffi {
         /// The BIP392 sp() descriptor of `material`'s hot key, origin included, for
         /// account creation. Blocks on Argon2id while opening the envelope: call
         /// from a QThread, never from the GUI thread.
-        fn hot_sp_descriptor(material: &HotMaterial, password: &str) -> SpDescriptorResult;
+        fn hot_sp_descriptor(material: &HotMaterial, password: &str) -> HotSpDescriptorResult;
 
         /// Converts a v2 PSBT into its v0 base64 payload for a USB signing device.
         /// Cheap; safe to call from the GUI thread. Refuses a PSBT with a pending SP

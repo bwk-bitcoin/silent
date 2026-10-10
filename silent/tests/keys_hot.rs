@@ -247,10 +247,10 @@ fn test_seal_then_commit_creates_the_record_with_hot_route_from_the_start() {
     );
 }
 
-// ===== Case 19: hot_material + hot_reveal succeeds with the right password, fails with the wrong one =====
+// ===== Case 19: hot_reveal and hot_sp_descriptor succeed with the right password, flag the wrong one =====
 
 #[test]
-fn test_hot_material_reveal_with_right_and_wrong_password() {
+fn test_hot_reveal_and_sp_descriptor_with_right_and_wrong_password() {
     let _ = datadir();
     let mut module = silent::new_keys_module(FfiNetwork::Testnet);
     assert!(
@@ -293,6 +293,30 @@ fn test_hot_material_reveal_with_right_and_wrong_password() {
         !wrong.error.to_lowercase().contains("abandon"),
         "expected no fragment of the phrase in the error, got {}",
         wrong.error
+    );
+
+    let descriptor = silent::hot_sp_descriptor(&material, "password");
+    assert!(
+        descriptor.is_ok,
+        "expected ok, got error: {}",
+        descriptor.error
+    );
+    assert!(
+        !descriptor.wrong_password,
+        "expected no wrong password flag on success"
+    );
+
+    let refused = silent::hot_sp_descriptor(&material, "wrong password");
+    assert!(!refused.is_ok, "expected a wrong password to be refused");
+    assert!(
+        refused.wrong_password,
+        "expected the wrong password flag, got error: {}",
+        refused.error
+    );
+    assert!(
+        refused.descriptor.is_empty(),
+        "expected no descriptor on a refused fetch, got {}",
+        refused.descriptor
     );
 }
 
@@ -344,8 +368,20 @@ fn test_hot_material_sign_is_independent_of_a_later_module_mutation() {
             .serialize()
             .expect("serialize psbt"),
     );
+    let wrong = silent::hot_sign(&material, "wrong password", &psbt_hex);
+    assert!(!wrong.is_ok, "expected a wrong password to be refused");
+    assert!(
+        wrong.wrong_password,
+        "expected the wrong password flag, got error: {}",
+        wrong.error
+    );
+
     let result = silent::hot_sign(&material, "password", &psbt_hex);
     assert!(result.is_ok, "expected ok, got error: {}", result.error);
+    assert!(
+        !result.wrong_password,
+        "expected no wrong password flag on success"
+    );
 
     let signed_bytes = hex::decode(&result.psbt_v2_hex).expect("valid hex");
     let signed = PsbtV2::deserialize(&signed_bytes).expect("signed hex parses as psbt v2");
@@ -395,6 +431,11 @@ fn test_hot_sign_with_no_matching_descriptor_returns_nothing_signed() {
     let result = silent::hot_sign(&material, "password", &psbt_hex);
 
     assert!(!result.is_ok, "expected the sign to fail");
+    assert!(
+        !result.wrong_password,
+        "expected a right password not to be flagged, got error: {}",
+        result.error
+    );
     assert!(
         result.error.to_lowercase().contains("signed"),
         "expected the error to say nothing was signed, got {}",
