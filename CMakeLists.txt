@@ -180,6 +180,10 @@ set(SILENT_APP_SOURCES
     src/catalog/containers/Separator.cpp
     src/catalog/containers/ScrollArea.h
     src/catalog/containers/ScrollArea.cpp
+    src/catalog/containers/ModalActions.h
+    src/catalog/containers/ModalActions.cpp
+    src/catalog/containers/StepModal.h
+    src/catalog/containers/StepModal.cpp
     src/catalog/containers/Card.h
     src/catalog/containers/Card.cpp
     src/catalog/display/Badge.h
@@ -220,6 +224,8 @@ set(SILENT_APP_SOURCES
     src/catalog/inputs/Stepper.cpp
     src/catalog/feedback/ModalStatus.h
     src/catalog/feedback/ModalStatus.cpp
+    src/catalog/feedback/Notice.h
+    src/catalog/feedback/Notice.cpp
     src/catalog/feedback/ScanProgress.h
     src/catalog/feedback/ScanProgress.cpp
     src/catalog/StatusBarItem.h

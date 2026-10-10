@@ -120,6 +120,8 @@ const int BADGE_ICON_SIZE = 14;
 const int ROUTE_ICON_SIZE = 16;
 const int SCAN_PROGRESS_HEIGHT = 6;
 const int CHEVRON_SIZE = 16;
+const int NOTICE_ICON_SIZE = 16;
+const int ACTIONS_REASON_MAX_WIDTH = 260;
 
 } // namespace metric
 
@@ -256,6 +258,30 @@ constexpr auto resolve(PillWidth w) -> int {
         return width::NONE;
     }
     return width::NONE;
+}
+
+// ===== Modal widths =====
+
+enum class ModalWidth { XS, S, M, L, XL, XXL, Wide };
+
+constexpr auto resolve(ModalWidth w) -> int {
+    switch (w) {
+    case ModalWidth::XS:
+        return 460;
+    case ModalWidth::S:
+        return 520;
+    case ModalWidth::M:
+        return 560;
+    case ModalWidth::L:
+        return 600;
+    case ModalWidth::XL:
+        return 620;
+    case ModalWidth::XXL:
+        return 640;
+    case ModalWidth::Wide:
+        return 1040;
+    }
+    return 520;
 }
 
 // ===== Color Palette =====
