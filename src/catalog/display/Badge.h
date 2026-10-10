@@ -31,10 +31,9 @@ public:
 
 protected:
     void applyRole();
+    [[nodiscard]] static auto textFont() -> QFont;
 
 private:
-    static auto textFont() -> QFont;
-
     Role m_role = Role::Neutral;
     QLabel *m_icon = nullptr;
     QLabel *m_text = nullptr;
