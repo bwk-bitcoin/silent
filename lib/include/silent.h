@@ -2416,17 +2416,8 @@ void init_logging(::LogLevel level) noexcept;
 // Validate a BIP392 Silent Payments descriptor.
 bool validate_sp_descriptor(::rust::String descriptor) noexcept;
 
-// Encode a GetSpDescriptor QR request as base64.
-::rust::String qr_get_sp_descriptor_request() noexcept;
-
-// Render a GetSpDescriptor QR request.
-::QrImageResult qr_get_sp_descriptor_request_image() noexcept;
-
 // Render `text` (an address) as a single QR code.
 ::QrImageResult qr_text_image(::rust::Str text) noexcept;
-
-// Decode a base64 SpDescriptor QR response.
-::SpDescriptorResult qr_decode_sp_descriptor_response(::rust::String payload) noexcept;
 
 // Parses an sp() descriptor and requires an origin. Returns the descriptor
 // unchanged plus its fingerprint, or an error saying the origin is missing.

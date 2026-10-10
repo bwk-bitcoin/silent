@@ -672,17 +672,8 @@ mod ffi {
         /// Validate a BIP392 Silent Payments descriptor.
         fn validate_sp_descriptor(descriptor: String) -> bool;
 
-        /// Encode a GetSpDescriptor QR request as base64.
-        fn qr_get_sp_descriptor_request() -> String;
-
-        /// Render a GetSpDescriptor QR request.
-        fn qr_get_sp_descriptor_request_image() -> QrImageResult;
-
         /// Render `text` (an address) as a single QR code.
         fn qr_text_image(text: &str) -> QrImageResult;
-
-        /// Decode a base64 SpDescriptor QR response.
-        fn qr_decode_sp_descriptor_response(payload: String) -> SpDescriptorResult;
 
         /// Parses an sp() descriptor and requires an origin. Returns the descriptor
         /// unchanged plus its fingerprint, or an error saying the origin is missing.
@@ -1337,75 +1328,6 @@ pub fn validate_sp_descriptor(descriptor: String) -> bool {
     bwk_sp::bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor::from_str(&descriptor).is_ok()
 }
 
-/// Encode a GetSpDescriptor QR request as base64.
-pub fn qr_get_sp_descriptor_request() -> String {
-    use base64::prelude::*;
-
-    let mut session = match keys::qr::QrSession::new() {
-        Ok(session) => session,
-        Err(e) => {
-            log::error!("failed to create QR session: {e}");
-            return String::new();
-        }
-    };
-    match session.get_sp_descriptor(0) {
-        Ok(request) => BASE64_STANDARD.encode(request.message()),
-        Err(e) => {
-            log::error!("failed to encode GetSpDescriptor request: {e}");
-            String::new()
-        }
-    }
-}
-
-/// Render a GetSpDescriptor QR request.
-///
-/// Interim single-frame path for CreateAccount's request preview; the keys module's
-/// QR modal replaces it with the multi-frame animated flow. Removing it now would
-/// break its only caller for the rest of the branch.
-pub fn qr_get_sp_descriptor_request_image() -> ffi::QrImageResult {
-    let mut session = match keys::qr::QrSession::new() {
-        Ok(session) => session,
-        Err(e) => {
-            return ffi::QrImageResult {
-                is_ok: false,
-                error: format!("failed to create QR session: {e}"),
-                data: Vec::new(),
-                width: 0,
-                height: 0,
-            }
-        }
-    };
-    let request = match session.get_sp_descriptor(0) {
-        Ok(request) => request,
-        Err(e) => {
-            return ffi::QrImageResult {
-                is_ok: false,
-                error: format!("failed to build GetSpDescriptor request: {e}"),
-                data: Vec::new(),
-                width: 0,
-                height: 0,
-            }
-        }
-    };
-    // GetSpDescriptor has an empty body, so the whole request fits the first frame.
-    match request.frame(0) {
-        Ok(image) => ffi::QrImageResult {
-            is_ok: true,
-            error: String::new(),
-            data: image.data.clone(),
-            width: image.width,
-            height: image.height,
-        },
-        Err(e) => ffi::QrImageResult {
-            is_ok: false,
-            error: format!("failed to render GetSpDescriptor request: {e}"),
-            data: Vec::new(),
-            width: 0,
-            height: 0,
-        },
-    }
-}
-
 /// Render `text` (an address) as a single QR code.
 pub fn qr_text_image(text: &str) -> ffi::QrImageResult {
     let encoded = bwk_qr::encoder::Encoder::new(bwk_qr::config::Config::default())
@@ -1424,66 +1346,6 @@ pub fn qr_text_image(text: &str) -> ffi::QrImageResult {
             data: Vec::new(),
             width: 0,
             height: 0,
-        },
-    }
-}
-
-/// Decode a base64 SpDescriptor QR response.
-///
-/// Builds a session and issues its own GetSpDescriptor request so the id it expects
-/// back matches what `qr_get_sp_descriptor_request` handed the signer. The stateful
-/// session that spans the request/response round trip lives in the keys module; this
-/// free function is the interim path for CreateAccount until it moves there.
-pub fn qr_decode_sp_descriptor_response(payload: String) -> ffi::SpDescriptorResult {
-    use base64::prelude::*;
-
-    let mut session = match keys::qr::QrSession::new() {
-        Ok(session) => session,
-        Err(e) => {
-            return ffi::SpDescriptorResult {
-                is_ok: false,
-                error: format!("failed to create QR session: {e}"),
-                descriptor: String::new(),
-                fingerprint: String::new(),
-            }
-        }
-    };
-    if let Err(e) = session.get_sp_descriptor(0) {
-        return ffi::SpDescriptorResult {
-            is_ok: false,
-            error: format!("failed to build GetSpDescriptor request: {e}"),
-            descriptor: String::new(),
-            fingerprint: String::new(),
-        };
-    }
-
-    let bytes = match BASE64_STANDARD.decode(payload.trim()) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            return ffi::SpDescriptorResult {
-                is_ok: false,
-                error: format!("invalid base64: {e}"),
-                descriptor: String::new(),
-                fingerprint: String::new(),
-            }
-        }
-    };
-
-    match session.decode_response(&bytes) {
-        Ok(keys::qr::QrResponse::SpDescriptor { descriptor, .. }) => {
-            validate_sp_descriptor_origin(descriptor)
-        }
-        Ok(_) => ffi::SpDescriptorResult {
-            is_ok: false,
-            error: "QR response does not contain an SP descriptor".to_string(),
-            descriptor: String::new(),
-            fingerprint: String::new(),
-        },
-        Err(e) => ffi::SpDescriptorResult {
-            is_ok: false,
-            error: e.to_string(),
-            descriptor: String::new(),
-            fingerprint: String::new(),
         },
     }
 }
@@ -1897,35 +1759,6 @@ mod tests {
     }
 
     #[test]
-    fn qr_get_sp_descriptor_request_is_decodable() {
-        use base64::prelude::*;
-        use bwk_qr_protocol::{request, Message};
-
-        let payload = qr_get_sp_descriptor_request();
-        let bytes = BASE64_STANDARD
-            .decode(payload)
-            .expect("request payload should be base64");
-        let message = bwk_qr_protocol::decode(&bytes).expect("request should decode");
-
-        match message {
-            Message::Request(request) => {
-                assert!(matches!(request.body, request::Body::GetSpDescriptor(_)));
-            }
-            Message::Response(_) => panic!("expected GetSpDescriptor request"),
-        }
-    }
-
-    #[test]
-    fn qr_get_sp_descriptor_request_image_is_valid() {
-        let result = qr_get_sp_descriptor_request_image();
-
-        assert!(result.is_ok, "unexpected error: {}", result.error);
-        assert!(result.width > 0);
-        assert!(result.height > 0);
-        assert_eq!(result.data.len(), (result.width * result.height) as usize);
-    }
-
-    #[test]
     fn qr_text_image_renders_an_address() {
         let result = qr_text_image("bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
 
@@ -1949,49 +1782,5 @@ mod tests {
 
         assert!(!result.is_ok, "10000 bytes cannot fit a single QR code");
         assert!(result.data.is_empty(), "no pixels on failure");
-    }
-
-    #[test]
-    fn qr_decode_sp_descriptor_response_extracts_descriptor() {
-        use base64::prelude::*;
-        use bitcoin::bip32::{DerivationPath, Xpriv};
-        use bitcoin::secp256k1::Secp256k1;
-        use bitcoin::{Network, PublicKey};
-        use bwk_qr_protocol::{response, RequestId, Response};
-        use std::str::FromStr;
-
-        let secp = Secp256k1::new();
-        let scan_xprv = Xpriv::new_master(Network::Bitcoin, &[0x11; 64]).expect("valid seed");
-        let spend_xprv = Xpriv::new_master(Network::Bitcoin, &[0x22; 64]).expect("valid seed");
-        let fp = scan_xprv.fingerprint(&secp);
-        let spend_child = spend_xprv
-            .derive_priv(
-                &secp,
-                &DerivationPath::from_str("m/0h").expect("valid path"),
-            )
-            .expect("derive spend child");
-        let spend_pubkey = PublicKey::from_private_key(&secp, &spend_child.to_priv());
-        let descriptor = format!("sp([{fp}/352h/0h/0h]{scan_xprv}/0h,{spend_pubkey})");
-
-        let response = Response {
-            id: RequestId([0, 1]),
-            body: response::Body::SpDescriptor(response::SpDescriptor {
-                descriptor: descriptor.to_string(),
-            }),
-        };
-        let bytes = bwk_qr_protocol::encode_response(&response).expect("response should encode");
-        let result = qr_decode_sp_descriptor_response(BASE64_STANDARD.encode(bytes));
-
-        assert!(result.is_ok, "unexpected error: {}", result.error);
-        assert_eq!(result.descriptor, descriptor);
-    }
-
-    #[test]
-    fn qr_decode_sp_descriptor_response_rejects_request() {
-        let result = qr_decode_sp_descriptor_response(qr_get_sp_descriptor_request());
-
-        assert!(!result.is_ok);
-        assert_eq!(result.error, "QR payload is a request, not a response");
-        assert!(result.descriptor.is_empty());
     }
 }
