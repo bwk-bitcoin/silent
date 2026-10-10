@@ -21,6 +21,7 @@ enum class LabelRole {
     Caption,       // Fine print, indicators
     Mono,          // Addresses, amounts, outpoints
     Status,        // Status bar messages
+    Eyebrow,       // Uppercase mono section labels
 };
 
 // Text color overriding the role's. Inverse tones sit on the fixed dark camera

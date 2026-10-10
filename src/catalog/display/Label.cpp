@@ -6,6 +6,11 @@
 
 namespace catalog {
 
+namespace {
+constexpr qreal EYEBROW_TRACKING = 114;
+constexpr qreal NO_TRACKING = 100;
+} // namespace
+
 Label::Label(const QString &text, LabelRole role, QWidget *parent)
     : QLabel(text, parent),
       m_role(role) {
@@ -132,6 +137,8 @@ static auto fontForRole(const FontPalette &fp, LabelRole role) -> const Font & {
         return fp.mono;
     case LabelRole::Status:
         return fp.status;
+    case LabelRole::Eyebrow:
+        return fp.eyebrow;
     }
     return fp.body;
 }
@@ -176,6 +183,9 @@ void Label::applyRole() {
     case LabelRole::Status:
         setProperty("role", "status");
         break;
+    case LabelRole::Eyebrow:
+        setProperty("role", "eyebrow");
+        break;
     }
 
     const auto &fp = Theme::get()->fontPalette();
@@ -186,6 +196,10 @@ void Label::applyRole() {
     f.setPointSize(static_cast<int>(baseSize * m_scale));
     f.setFamily(roleFont.family);
     f.setWeight(roleFont.weight);
+    bool eyebrow = m_role == LabelRole::Eyebrow;
+    f.setCapitalization(eyebrow ? QFont::AllUppercase : QFont::MixedCase);
+    // design 0.14em eyebrow tracking
+    f.setLetterSpacing(QFont::PercentageSpacing, eyebrow ? EYEBROW_TRACKING : NO_TRACKING);
 
     setFont(f);
 
@@ -200,6 +214,7 @@ void Label::applyRole() {
 auto Label::qss(const Palette &p) -> QString {
     auto roles = QString("QLabel[class=\"label\"][role=\"caption\"] { color: %1; }"
                          "QLabel[class=\"label\"][role=\"status\"] { color: %1; }"
+                         "QLabel[class=\"label\"][role=\"eyebrow\"] { color: %1; }"
                          "QLabel[class=\"label\"][role=\"info-label\"] { color: %2; }")
                      .arg(p.textMuted.name())      // %1
                      .arg(p.textSecondary.name()); // %2

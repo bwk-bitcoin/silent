@@ -45,6 +45,47 @@ void Card::setContentMargins(int left, int top, int right, int bottom) {
     m_column->margins(left, top, right, bottom);
 }
 
+void Card::setPad(Pad pad) {
+    int padding = 0;
+    switch (pad) {
+    case Pad::L:
+        padding = resolve(Padding::L);
+        break;
+    case Pad::M:
+        padding = resolve(Padding::M);
+        break;
+    case Pad::S:
+        padding = resolve(Padding::S);
+        break;
+    case Pad::None:
+        break;
+    }
+    m_column->margins(padding, padding, padding, padding);
+}
+
+void Card::setCorner(QWidget *corner) {
+    delete m_corner;
+    m_corner = corner;
+    if (m_corner != nullptr) {
+        m_corner->setParent(this);
+        m_corner->raise();
+        m_corner->show();
+        placeCorner();
+    }
+}
+
+void Card::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    placeCorner();
+}
+
+void Card::placeCorner() {
+    if (m_corner != nullptr) {
+        m_corner->adjustSize();
+        m_corner->move(resolve(Padding::XS), resolve(Padding::XS));
+    }
+}
+
 void Card::applyRole() {
     switch (m_role) {
     case Role::Default:
@@ -65,10 +106,9 @@ void Card::paintEvent(QPaintEvent *event) {
 }
 
 auto Card::qss(const Palette &p) -> QString {
-    return QString(
-               "QWidget[class=\"card\"] { background: %1; border: 1px solid %2; "
-               "border-radius: %3px; }"
-               "QWidget[class=\"card\"][role=\"inset\"] { background: %4; }")
+    return QString("QWidget[class=\"card\"] { background: %1; border: 1px solid %2; "
+                   "border-radius: %3px; }"
+                   "QWidget[class=\"card\"][role=\"inset\"] { background: %4; }")
         .arg(p.surface.name())
         .arg(p.borderLight.name())
         .arg(radius::BUTTON)

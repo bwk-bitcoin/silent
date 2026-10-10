@@ -231,6 +231,7 @@ auto FontPalette::defaultFontPalette() -> FontPalette {
         .caption = {.family = font::DEFAULT, .size = size::CAPTION, .weight = QFont::Normal},
         .mono = {.family = font::MONO, .size = size::BODY, .weight = QFont::Normal},
         .status = {.family = font::DEFAULT, .size = size::CAPTION, .weight = QFont::Normal},
+        .eyebrow = {.family = font::MONO, .size = size::CAPTION, .weight = QFont::DemiBold},
     };
 }
 

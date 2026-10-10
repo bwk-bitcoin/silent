@@ -7,6 +7,7 @@
 #include "catalog/containers/Card.h"
 #include "catalog/containers/FoldSection.h"
 #include "catalog/containers/ScrollArea.h"
+#include "catalog/containers/SectionHeader.h"
 #include "catalog/containers/Separator.h"
 #include "catalog/containers/Tab.h"
 #include "catalog/display/Badge.h"
@@ -187,6 +188,7 @@ void Theme::apply() {
     qss += catalog::Tooltip::qss(p);
     qss += catalog::ScanProgress::qss(p);
     qss += catalog::Notice::qss(p);
+    qss += catalog::SectionHeader::qss(p);
     qss += catalog::BalanceHeader::qss(p);
     qss += catalog::LabelledInput::qss(p);
     qss += catalog::FoldSection::qss(p);
