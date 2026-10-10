@@ -7,10 +7,10 @@
 #include "views/modals/ConfirmDelete.h"
 #include "views/modals/CustomLaunchers.h"
 #include "catalog/Button.h"
+#include "catalog/Variants.h"
 #include "theme/Icon.h"
 #include "catalog/display/Label.h"
 #include "theme/Palette.h"
-#include "theme/Theme.h"
 #include <QGraphicsOpacityEffect>
 #include <Qontrol>
 #include <common.h>
@@ -27,11 +27,11 @@ MenuTab::MenuTab(QWidget *parent) : QWidget(parent) {
 }
 
 void MenuTab::init() {
-    m_create_btn = new Button(TR("menu-create-wallet"), ButtonRole::TabCreate);
+    m_create_btn = catalog::btnCreateNewWallet();
     m_create_btn->setVisible(false);
     m_custom_btn = new Button(TR("menu-custom"), ButtonRole::TabOpen);
     // Match the create-account button width so the launcher buttons line up.
-    m_custom_btn->setFixedWidth(Theme::get()->buttonPalette().tabCreate.width);
+    m_custom_btn->setWidth(BtnWidth::LaunchAdd);
     m_custom_btn->setVisible(false);
 
     m_accounts_column = new qontrol::Column;
@@ -303,7 +303,7 @@ void MenuTab::rebuildRows() {
 
     m_entries = openEntries;
     for (const auto &entry : m_entries) {
-        auto *btn = new Button(entry.name, ButtonRole::TabOpen);
+        auto *btn = catalog::btnOpenWallet(entry.name);
         connect(btn, &QPushButton::clicked, this, &MenuTab::onItemClicked, qontrol::UNIQUE);
         QWidget *launcher = btn;
         launcher->setProperty("instanceId", entry.id);
@@ -311,9 +311,7 @@ void MenuTab::rebuildRows() {
 
         auto *row = (new qontrol::Row)->pushSpacer()->push(launcher);
         if (entry.canDelete) {
-            auto *trashBtn = new Button(ButtonRole::Icon);
-            trashBtn->setIcon(icon::trash());
-            trashBtn->setToolTip(TR("menu-delete-wallet-tooltip"));
+            auto *trashBtn = catalog::btnDeleteWallet();
             trashBtn->setProperty("accountName", entry.id);
             trashBtn->setProperty("external", entry.external);
             trashBtn->setProperty("modulePtr",

@@ -294,10 +294,12 @@ constexpr auto resolve(PillWidth w) -> int {
 
 // ===== Modal widths =====
 
-enum class ModalWidth { XS, S, M, L, XL, XXL, Wide };
+enum class ModalWidth { XXS, XS, S, M, L, XL, XXL, Wide };
 
 constexpr auto resolve(ModalWidth w) -> int {
     switch (w) {
+    case ModalWidth::XXS:
+        return 420;
     case ModalWidth::XS:
         return 460;
     case ModalWidth::S:

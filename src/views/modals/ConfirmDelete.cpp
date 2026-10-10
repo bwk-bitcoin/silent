@@ -1,38 +1,29 @@
 #include "ConfirmDelete.h"
-#include "i18n/Tr.h"
-#include "../utils.h"
+
 #include "catalog/Button.h"
+#include "catalog/Variants.h"
+#include "catalog/containers/ModalActions.h"
 #include "catalog/display/Label.h"
+#include "i18n/Tr.h"
+
 #include <Qontrol>
 #include <common.h>
 
 namespace modal {
 
-using catalog::Button;
-using catalog::ButtonRole;
-using catalog::Label;
-using catalog::LabelRole;
-
-ConfirmDelete::ConfirmDelete(const QString &name, [[maybe_unused]] QWidget *parent) : m_name(name) {
-    setWindowTitle(TR("delete-wallet-title"));
-    resize(420, 150);
+ConfirmDelete::ConfirmDelete(const QString &name) : m_name(name) {
     init();
     doConnect();
     view();
 }
 
 void ConfirmDelete::init() {
-    m_label =
-        new Label(TR("delete-wallet-confirmation").arg(m_name));
+    m_label = new catalog::Label;
     m_label->setWordWrap(true);
-    m_label->setAlignment(Qt::AlignLeft);
-
-    m_cancel_btn = new Button(TR("common-cancel"));
-    m_delete_btn = new Button(TR("common-delete"), ButtonRole::Destructive);
+    m_delete_btn = catalog::btnDelete();
 }
 
 void ConfirmDelete::doConnect() {
-    connect(m_cancel_btn, &QPushButton::clicked, this, &QDialog::reject, qontrol::UNIQUE);
     connect(m_delete_btn, &QPushButton::clicked, this, &ConfirmDelete::onDeleteClicked,
             qontrol::UNIQUE);
 }
@@ -43,35 +34,24 @@ void ConfirmDelete::onDeleteClicked() {
 }
 
 void ConfirmDelete::view() {
-    auto *buttonRow = (new qontrol::Row)
-                          ->pushSpacer()
-                          ->push(m_cancel_btn)
-                          ->pushSpacer(resolve(Spacing::XS))
-                          ->push(m_delete_btn)
-                          ->pushSpacer();
-
-    auto *col = (new qontrol::Column)
-                    ->pushSpacer(resolve(Spacing::M))
-                    ->push(m_label)
-                    ->pushSpacer(resolve(Spacing::M))
-                    ->push(buttonRow)
-                    ->pushSpacer();
-
-    setMainWidget(margin(col));
+    auto *actions = new catalog::ModalActions;
+    actions->addAction(m_delete_btn);
+    m_step = addStep(TR("delete-wallet-title"), ModalWidth::XXS, m_label, actions);
+    retranslateUi();
 }
 
 void ConfirmDelete::changeEvent(QEvent *event) {
     if (event->type() == QEvent::LanguageChange) {
         retranslateUi();
     }
-    qontrol::Modal::changeEvent(event);
+    catalog::StepModal::changeEvent(event);
 }
 
 void ConfirmDelete::retranslateUi() {
-    setWindowTitle(TR("delete-wallet-title"));
     m_label->setText(TR("delete-wallet-confirmation").arg(m_name));
-    m_cancel_btn->setText(TR("common-cancel"));
     m_delete_btn->setText(TR("common-delete"));
+    setStepTitle(m_step, TR("delete-wallet-title"));
+    showStep(m_step);
 }
 
 } // namespace modal

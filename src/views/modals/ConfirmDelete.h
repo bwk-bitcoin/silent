@@ -1,24 +1,22 @@
 #pragma once
 
 #include <QString>
-#include <Qontrol>
 #include <qevent.h>
+
+#include "catalog/containers/StepModal.h"
 
 namespace catalog {
 class Button;
-}
-
-namespace catalog {
 class Label;
-}
+} // namespace catalog
 
 namespace modal {
 
-class ConfirmDelete : public qontrol::Modal {
+class ConfirmDelete : public catalog::StepModal {
     Q_OBJECT
 
 public:
-    explicit ConfirmDelete(const QString &name, QWidget *parent = nullptr);
+    explicit ConfirmDelete(const QString &name);
 
 signals:
     void confirmed(const QString &name);
@@ -36,8 +34,8 @@ protected:
 private:
     QString m_name;
     catalog::Label *m_label = nullptr;
-    catalog::Button *m_cancel_btn = nullptr;
     catalog::Button *m_delete_btn = nullptr;
+    int m_step = 0;
 };
 
 } // namespace modal

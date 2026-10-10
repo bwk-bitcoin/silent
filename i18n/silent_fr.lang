@@ -125,7 +125,7 @@ create-account-reason-name => "Enter an account name." => "NONE"
 create-account-reason-spaces => "The account name cannot contain spaces." => "NONE"
 create-account-title => "Create Account" => "Creer un compte"
 delete-wallet-confirmation
-=> "Delete wallet '%1'? This cannot be undone."
+=> "Delete wallet “%1”? This cannot be undone."
 => "Supprimer le wallet '%1' ? Action irreversible.";;
 delete-wallet-title => "Delete Wallet" => "Supprimer le wallet"
 flow-camera-contrast => "Contrast:" => "NONE"
@@ -515,9 +515,7 @@ main-menu-tab => "+" => "+"
 main-window-title
 => "Silent - Silent Payments Wallet"
 => "Silent - Wallet Silent Payments";;
-menu-create-wallet => "+ Create New Wallet" => "+ Creer un nouveau wallet"
 menu-custom => "Custom" => "Personnalise"
-menu-delete-wallet-tooltip => "Delete wallet" => "Supprimer le wallet"
 network-bitcoin => "Bitcoin" => "Bitcoin"
 network-regtest => "Regtest" => "Regtest"
 network-signet => "Signet" => "Signet"
