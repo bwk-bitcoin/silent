@@ -1,16 +1,16 @@
 #include "MenuTab.h"
 #include "AppController.h"
-#include "i18n/Tr.h"
-#include "host/Host.h"
-#include "host/PluginRegistry.h"
-#include "interfaces/module.h"
-#include "views/modals/ConfirmDelete.h"
-#include "views/modals/CustomLaunchers.h"
 #include "catalog/Button.h"
 #include "catalog/Variants.h"
-#include "theme/Icon.h"
 #include "catalog/display/Label.h"
+#include "host/Host.h"
+#include "host/PluginRegistry.h"
+#include "i18n/Tr.h"
+#include "interfaces/module.h"
+#include "theme/Icon.h"
 #include "theme/Palette.h"
+#include "views/modals/ConfirmDelete.h"
+#include "views/modals/CustomLaunchers.h"
 #include <QGraphicsOpacityEffect>
 #include <Qontrol>
 #include <common.h>
@@ -46,14 +46,15 @@ void MenuTab::doConnect() {
     auto *controller = AppController::get();
     connect(m_create_btn, &QPushButton::clicked, this, &MenuTab::onCreateClicked, qontrol::UNIQUE);
     connect(m_custom_btn, &QPushButton::clicked, this, &MenuTab::onCustomClicked, qontrol::UNIQUE);
-    connect(controller, &AppController::accountList, this, &MenuTab::onAccountList, qontrol::UNIQUE);
+    connect(controller, &AppController::accountList, this, &MenuTab::onAccountList,
+            qontrol::UNIQUE);
     if (controller != nullptr && controller->pluginRegistry() != nullptr) {
         connect(controller->pluginRegistry(), &PluginRegistry::enabledPluginsChanged, this,
                 &MenuTab::onPluginRegistryChanged, qontrol::UNIQUE);
     }
     if (m_host_events != nullptr) {
-        connect(m_host_events, &HostEvents::instanceRegistered, this, &MenuTab::onHostInstanceChanged,
-                qontrol::UNIQUE);
+        connect(m_host_events, &HostEvents::instanceRegistered, this,
+                &MenuTab::onHostInstanceChanged, qontrol::UNIQUE);
         connect(m_host_events, &HostEvents::instanceRemoved, this, &MenuTab::onHostInstanceChanged,
                 qontrol::UNIQUE);
         connect(m_host_events, &HostEvents::settingSectionsChanged, this,
@@ -213,8 +214,8 @@ void MenuTab::onRefreshLauncherItems() {
             continue;
         }
         m_pending_list.insert(module, reqId);
-        if (m_sync_list_responses.contains(module)
-            && m_sync_list_responses.value(module).first == reqId) {
+        if (m_sync_list_responses.contains(module) &&
+            m_sync_list_responses.value(module).first == reqId) {
             auto response = m_sync_list_responses.take(module);
             applyModuleInstances(module, response.first, response.second);
         }
@@ -307,7 +308,8 @@ void MenuTab::rebuildRows() {
         connect(btn, &QPushButton::clicked, this, &MenuTab::onItemClicked, qontrol::UNIQUE);
         QWidget *launcher = btn;
         launcher->setProperty("instanceId", entry.id);
-        launcher->setProperty("modulePtr", QVariant::fromValue(reinterpret_cast<qulonglong>(entry.module)));
+        launcher->setProperty("modulePtr",
+                              QVariant::fromValue(reinterpret_cast<qulonglong>(entry.module)));
 
         auto *row = (new qontrol::Row)->pushSpacer()->push(launcher);
         if (entry.canDelete) {
@@ -316,7 +318,8 @@ void MenuTab::rebuildRows() {
             trashBtn->setProperty("external", entry.external);
             trashBtn->setProperty("modulePtr",
                                   QVariant::fromValue(reinterpret_cast<qulonglong>(entry.module)));
-            connect(trashBtn, &QPushButton::clicked, this, &MenuTab::onTrashClicked, qontrol::UNIQUE);
+            connect(trashBtn, &QPushButton::clicked, this, &MenuTab::onTrashClicked,
+                    qontrol::UNIQUE);
             row->pushSpacer(resolve(Spacing::XS))->push(trashBtn);
         }
         row->pushSpacer();
@@ -340,12 +343,12 @@ void MenuTab::rebuildRows() {
         m_create_btn->setVisible(createEntry.has_value());
         if (createEntry.has_value()) {
             m_create_btn->setProperty("instanceId", createEntry->id);
-            m_create_btn->setProperty("modulePtr",
-                                      QVariant::fromValue(reinterpret_cast<qulonglong>(createEntry->module)));
+            m_create_btn->setProperty("modulePtr", QVariant::fromValue(reinterpret_cast<qulonglong>(
+                                                       createEntry->module)));
         }
     }
     if (m_custom_btn != nullptr) {
-        m_custom_btn->setVisible(registry != nullptr
-                                 && !registry->externalCreatorLaunchers().isEmpty());
+        m_custom_btn->setVisible(registry != nullptr &&
+                                 !registry->externalCreatorLaunchers().isEmpty());
     }
 }

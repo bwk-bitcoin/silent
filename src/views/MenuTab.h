@@ -1,12 +1,12 @@
 #pragma once
 
+#include "interfaces/types.h"
 #include <QHash>
 #include <QList>
 #include <QPair>
 #include <QSet>
 #include <QString>
 #include <QWidget>
-#include "interfaces/types.h"
 
 namespace catalog {
 class Button;

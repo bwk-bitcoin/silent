@@ -3,7 +3,6 @@
 #include "i18n/Tr.h"
 #include "interfaces/instance.h"
 
-#include <algorithm>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -13,13 +12,15 @@
 #include <QLoggingCategory>
 #include <QSet>
 #include <QStringList>
+#include <algorithm>
 #include <common.h>
 #include <silent.h>
 
 namespace {
 class MetadataOnlyPlugin final : public IPlugin {
 public:
-    explicit MetadataOnlyPlugin(QMap<QString, QString> meta) : m_meta(std::move(meta)) {}
+    explicit MetadataOnlyPlugin(QMap<QString, QString> meta) : m_meta(std::move(meta)) {
+    }
 
     [[nodiscard]] QMap<QString, QString> meta() const override {
         return m_meta;
@@ -59,7 +60,8 @@ QMap<QString, QString> readSidecarMeta(const QString &path) {
             continue;
         }
         if (it.value().isBool()) {
-            meta.insert(it.key(), it.value().toBool() ? QStringLiteral("true") : QStringLiteral("false"));
+            meta.insert(it.key(),
+                        it.value().toBool() ? QStringLiteral("true") : QStringLiteral("false"));
             continue;
         }
         if (it.value().isArray()) {
@@ -179,7 +181,8 @@ auto PluginRegistry::rescanDiscoveredPlugins() -> int {
             continue;
         }
         if (!it->discovered && it->plugin != nullptr) {
-            qWarning() << "Plugin no longer discoverable on disk; keeping runtime state until explicit disable:"
+            qWarning() << "Plugin no longer discoverable on disk; keeping runtime state until "
+                          "explicit disable:"
                        << it.key();
         }
     }
@@ -296,8 +299,8 @@ QList<IModule *> PluginRegistry::enabledModulesForLauncher() const {
     return enabled;
 }
 
-QList<QPair<QString, QString>> PluginRegistry::launcherInstancesForModule(
-    const IModule *module) const {
+QList<QPair<QString, QString>>
+PluginRegistry::launcherInstancesForModule(const IModule *module) const {
     auto *nonConstModule = const_cast<IModule *>(module);
     return m_launcher_instances.value(nonConstModule);
 }
@@ -383,9 +386,8 @@ bool PluginRegistry::pluginHasBuiltinModules(const QString &plugin_id) const {
         return false;
     }
     auto modules = recordIt->modules;
-    return std::ranges::any_of(modules, [this](auto *module) {
-        return m_builtin_modules.contains(module);
-    });
+    return std::ranges::any_of(modules,
+                               [this](auto *module) { return m_builtin_modules.contains(module); });
 }
 
 auto PluginRegistry::setEnabled(const QString &plugin_id, bool enabled) -> bool {
@@ -564,7 +566,8 @@ void PluginRegistry::onModuleError(std::optional<ReqId> req_id, const QString &m
         return;
     }
 
-    if (auto listIt = m_pending_list_requests.find(module); listIt != m_pending_list_requests.end()) {
+    if (auto listIt = m_pending_list_requests.find(module);
+        listIt != m_pending_list_requests.end()) {
         listIt->remove(req_id.value());
         if (listIt->isEmpty()) {
             m_pending_list_requests.erase(listIt);
@@ -669,8 +672,9 @@ bool PluginRegistry::enablePlugin(const QString &plugin_id) {
         return true;
     }
     if (record.loader != nullptr) {
-        qWarning() << "Enable blocked: plugin still has active loader; disable/unload cleanup required"
-                   << plugin_id;
+        qWarning()
+            << "Enable blocked: plugin still has active loader; disable/unload cleanup required"
+            << plugin_id;
         return false;
     }
 
@@ -813,18 +817,16 @@ void PluginRegistry::activateModule(IModule *module, IPlugin *plugin) {
     if (m_signer_polling) {
         module->setSignerPolling(true);
     }
-    connect(module, &IModule::instances, this, &PluginRegistry::onModuleInstances,
-            qontrol::UNIQUE);
+    connect(module, &IModule::instances, this, &PluginRegistry::onModuleInstances, qontrol::UNIQUE);
     connect(module, QOverload<ReqId, QStringList>::of(&IModule::autoStart), this,
             &PluginRegistry::onModuleAutoStart, qontrol::UNIQUE);
-    connect(module, &IModule::error, this, &PluginRegistry::onModuleError,
-            qontrol::UNIQUE);
+    connect(module, &IModule::error, this, &PluginRegistry::onModuleError, qontrol::UNIQUE);
 
     ReqId autoReqId = module->autoStart();
     if (autoReqId != 0) {
         m_pending_auto_start_requests[module].insert(autoReqId);
-        if (m_sync_auto_start_responses.contains(module)
-            && m_sync_auto_start_responses.value(module).first == autoReqId) {
+        if (m_sync_auto_start_responses.contains(module) &&
+            m_sync_auto_start_responses.value(module).first == autoReqId) {
             auto response = m_sync_auto_start_responses.take(module);
             applyModuleAutoStart(module, response.first, response.second);
         }
@@ -833,8 +835,8 @@ void PluginRegistry::activateModule(IModule *module, IPlugin *plugin) {
     ReqId listReqId = module->list();
     if (listReqId != 0) {
         m_pending_list_requests[module].insert(listReqId);
-        if (m_sync_list_responses.contains(module)
-            && m_sync_list_responses.value(module).first == listReqId) {
+        if (m_sync_list_responses.contains(module) &&
+            m_sync_list_responses.value(module).first == listReqId) {
             auto response = m_sync_list_responses.take(module);
             applyModuleInstances(module, response.first, response.second);
         }
@@ -897,7 +899,8 @@ void PluginRegistry::stopPluginInstances(const QString &plugin_id) {
     }
 
     QSet<QString> ownedIds;
-    for (auto it = m_instance_owner_by_id.constBegin(); it != m_instance_owner_by_id.constEnd(); ++it) {
+    for (auto it = m_instance_owner_by_id.constBegin(); it != m_instance_owner_by_id.constEnd();
+         ++it) {
         if (it.value() == plugin_id) {
             ownedIds.insert(it.key());
         }
@@ -1025,11 +1028,14 @@ QString PluginRegistry::resolvePluginLibraryPath(const QString &plugin_dir,
     QString pluginId = meta.value(QStringLiteral("id")).trimmed();
     if (!pluginId.isEmpty()) {
 #ifdef Q_OS_MAC
-        QString candidate = QDir(plugin_dir).absoluteFilePath(QStringLiteral("lib%1.dylib").arg(pluginId));
+        QString candidate =
+            QDir(plugin_dir).absoluteFilePath(QStringLiteral("lib%1.dylib").arg(pluginId));
 #elif defined(Q_OS_WIN)
-        QString candidate = QDir(plugin_dir).absoluteFilePath(QStringLiteral("%1.dll").arg(pluginId));
+        QString candidate =
+            QDir(plugin_dir).absoluteFilePath(QStringLiteral("%1.dll").arg(pluginId));
 #else
-        QString candidate = QDir(plugin_dir).absoluteFilePath(QStringLiteral("lib%1.so").arg(pluginId));
+        QString candidate =
+            QDir(plugin_dir).absoluteFilePath(QStringLiteral("lib%1.so").arg(pluginId));
 #endif
         if (QFileInfo::exists(candidate) && QFileInfo(candidate).isFile()) {
             return candidate;

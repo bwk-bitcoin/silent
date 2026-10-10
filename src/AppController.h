@@ -1,5 +1,7 @@
 #pragma once
 
+#include "interfaces/types.h"
+#include "theme/Palette.h"
 #include <QHash>
 #include <QObject>
 #include <QSet>
@@ -8,10 +10,8 @@
 #include <Qontrol>
 #include <memory>
 #include <optional>
-#include <vector>
-#include "interfaces/types.h"
-#include "theme/Palette.h"
 #include <silent.h>
+#include <vector>
 
 class Host;
 class IModule;

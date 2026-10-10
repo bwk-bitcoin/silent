@@ -232,14 +232,15 @@ auto AppController::onPluginRegistryChanged() -> void {
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 auto AppController::createAccount(const QString &name, const QString &descriptor, Network network,
-                                  const QString &blindbit_url,
-                                  const QString &electrum_url) -> void {
+                                  const QString &blindbit_url, const QString &electrum_url)
+    -> void {
     Q_UNUSED(name);
     Q_UNUSED(descriptor);
     Q_UNUSED(network);
     Q_UNUSED(blindbit_url);
     Q_UNUSED(electrum_url);
-    qCritical() << "createAccount is deprecated in AppController and should be handled by module UI";
+    qCritical()
+        << "createAccount is deprecated in AppController and should be handled by module UI";
 }
 
 auto AppController::onAccountCreated(const QString &name) -> void {
@@ -308,10 +309,9 @@ auto AppController::isAccountOpen(const QString &name) const -> bool {
     return m_open_accounts.contains(name);
 }
 
-auto AppController::onRegtestDefaultsReady(const QString &blindbit,
-                                           const QString &electrum) -> void {
-    m_regtest_defaults = RegtestDefaultsInfo{.blindbit_url = blindbit,
-                                             .electrum_url = electrum};
+auto AppController::onRegtestDefaultsReady(const QString &blindbit, const QString &electrum)
+    -> void {
+    m_regtest_defaults = RegtestDefaultsInfo{.blindbit_url = blindbit, .electrum_url = electrum};
 }
 
 auto AppController::regtestDefaults() const -> std::optional<RegtestDefaultsInfo> {
@@ -381,8 +381,8 @@ auto AppController::requestPersistedThemePalette() -> void {
 }
 
 auto AppController::onStartupThemeNames(ReqId req_id, const QStringList &themes) -> void {
-    if (!m_startup_pending_theme_list.contains(req_id) || m_startup_custom_theme_applied
-        || m_startup_active_theme.isEmpty()) {
+    if (!m_startup_pending_theme_list.contains(req_id) || m_startup_custom_theme_applied ||
+        m_startup_active_theme.isEmpty()) {
         return;
     }
 

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "interfaces/host.h"
-#include <QObject>
 #include <QHash>
+#include <QObject>
 #include <QPointer>
 
 class IKeys;
@@ -27,8 +27,8 @@ public:
     void setTabTitle(TabId tab, const QString &title) override;
     void closeTab(TabId tab, bool delete_content = true) override;
 
-    SectionId addSettingSection(
-        QWidget *content, IInstance *owner, const QString &title = QString()) override;
+    SectionId addSettingSection(QWidget *content, IInstance *owner,
+                                const QString &title = QString()) override;
     void delSettingSection(SectionId section) override;
 
     WizardId openWizard(QWidget *content, IInstance *owner) override;
@@ -72,12 +72,14 @@ private:
         QPointer<QWidget> content;
         IInstance *owner = nullptr;
     };
+
     struct SectionEntry {
         SectionId id = 0;
         QPointer<QWidget> content;
         IInstance *owner = nullptr;
         QString title;
     };
+
     struct WizardEntry {
         WizardId id = 0;
         QPointer<QWidget> content;

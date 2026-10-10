@@ -260,21 +260,20 @@ void HostImpl::closeTab(TabId tab, bool delete_content) {
     }
 }
 
-Host::SectionId HostImpl::addSettingSection(
-    QWidget *content, IInstance *owner, const QString &title) {
+Host::SectionId HostImpl::addSettingSection(QWidget *content, IInstance *owner,
+                                            const QString &title) {
     assertGuiThread();
     if (content == nullptr || owner == nullptr) {
         return 0;
     }
 
     const SectionId section_id = ++m_next_section_id;
-    m_sections.insert(section_id,
-                      SectionEntry{
-                          .id = section_id,
-                          .content = content,
-                          .owner = owner,
-                          .title = title.trimmed(),
-                      });
+    m_sections.insert(section_id, SectionEntry{
+                                      .id = section_id,
+                                      .content = content,
+                                      .owner = owner,
+                                      .title = title.trimmed(),
+                                  });
     emit m_events.settingSectionsChanged();
     return section_id;
 }
@@ -299,10 +298,9 @@ Host::WizardId HostImpl::openWizard(QWidget *content, IInstance *owner) {
 
     const WizardId wizard_id = ++m_next_wizard_id;
     auto *modal = new HostedWizardModal(content);
-    m_wizards.insert(wizard_id, WizardEntry{.id = wizard_id,
-                                           .content = content,
-                                           .modal = modal,
-                                           .owner = owner});
+    m_wizards.insert(
+        wizard_id,
+        WizardEntry{.id = wizard_id, .content = content, .modal = modal, .owner = owner});
     m_wizard_by_modal.insert(modal, wizard_id);
     connect(modal, &QDialog::finished, this, &HostImpl::onWizardModalFinished, qontrol::UNIQUE);
     AppController::execModal(modal);

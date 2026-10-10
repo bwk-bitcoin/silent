@@ -44,7 +44,8 @@ public:
     [[nodiscard]] static bool isCreatorInstanceId(const QString &id);
     [[nodiscard]] QList<IPlugin *> plugins() const;
     [[nodiscard]] QList<IModule *> enabledModulesForLauncher() const;
-    [[nodiscard]] QList<QPair<QString, QString>> launcherInstancesForModule(const IModule *module) const;
+    [[nodiscard]] QList<QPair<QString, QString>>
+    launcherInstancesForModule(const IModule *module) const;
     [[nodiscard]] QString instanceOwnerPluginId(const QString &id) const;
     [[nodiscard]] QList<CreatorLauncher> externalCreatorLaunchers() const;
     bool startLauncherInstance(IModule *module, const QString &instance_id);
@@ -109,7 +110,8 @@ private:
     void stopPluginInstances(const QString &plugin_id);
     [[nodiscard]] bool hasLiveOwnedInstances(const QString &plugin_id) const;
     void rebuildPluginList();
-    [[nodiscard]] QString resolvePluginLibraryPath(const QString &plugin_dir, const QMap<QString, QString> &meta) const;
+    [[nodiscard]] QString resolvePluginLibraryPath(const QString &plugin_dir,
+                                                   const QMap<QString, QString> &meta) const;
 
     QList<QString> m_plugin_order;
     QHash<QString, PluginRecord> m_records;

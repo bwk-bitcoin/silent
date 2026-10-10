@@ -1,8 +1,8 @@
 #include "Coins.h"
 #include "AccountController.h"
-#include "i18n/Tr.h"
 #include "catalog/BalanceHeader.h"
 #include "catalog/Table.h"
+#include "i18n/Tr.h"
 #include "views/utils.h"
 #include <Qontrol>
 #include <common.h>
@@ -49,8 +49,10 @@ void Coins::view() {
     m_table = new catalog::Table;
     m_table->addColumn({.title = TR("coins-type"), .width = TYPE_W});
     m_table->addColumn({.title = TR("coins-height"), .width = HEIGHT_W});
-    m_table->addColumn({.title = TR("coins-outpoint"), .width = OUTPOINT_W, .role = DisplayRole::Outpoint});
-    m_table->addColumn({.title = TR("coins-label"), .width = LABEL_W, .grow = true, .editable = true});
+    m_table->addColumn(
+        {.title = TR("coins-outpoint"), .width = OUTPOINT_W, .role = DisplayRole::Outpoint});
+    m_table->addColumn(
+        {.title = TR("coins-label"), .width = LABEL_W, .grow = true, .editable = true});
     m_table->addColumn({.title = TR("coins-value"),
                         .width = VALUE_W,
                         .alignment = Qt::AlignRight,
@@ -71,12 +73,11 @@ void Coins::view() {
         QString outpoint = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
         QString label = QString::fromUtf8(coin.label.data(), coin.label.size());
 
-        m_table->addRow(outpoint, {typeStr, heightStr, shortenOutpoint(outpoint), label, toBitcoin(coin.value)});
+        m_table->addRow(outpoint, {typeStr, heightStr, shortenOutpoint(outpoint), label,
+                                   toBitcoin(coin.value)});
     }
 
-    auto *mainLayout = (new qontrol::Column(this))
-                           ->push(m_balance)
-                           ->push(m_table);
+    auto *mainLayout = (new qontrol::Column(this))->push(m_balance)->push(m_table);
 
     auto *boxed = dashboard(TR("coins-title"), mainLayout);
     setScreenContent(this, m_main_widget, boxed);
@@ -94,7 +95,8 @@ auto Coins::getCoins() -> std::optional<QList<RustCoin>> {
     return std::make_optional(coins);
 }
 
-void Coins::onCellEdited(const QString &outpoint, [[maybe_unused]] int column, const QString &text) {
+void Coins::onCellEdited(const QString &outpoint, [[maybe_unused]] int column,
+                         const QString &text) {
     if (outpoint.isEmpty()) {
         return;
     }
