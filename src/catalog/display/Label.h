@@ -2,6 +2,7 @@
 
 #include <QLabel>
 #include <QString>
+#include <optional>
 
 struct Palette;
 
@@ -22,6 +23,24 @@ enum class LabelRole {
     Status,        // Status bar messages
 };
 
+// Text color overriding the role's. Inverse tones sit on the fixed dark camera
+// surface, whatever the theme.
+enum class LabelTone {
+    Default,
+    Secondary,
+    Muted,
+    Accent,
+    Success,
+    Warning,
+    Error,
+    OnAccent,
+    Inverse,
+    InverseMuted
+};
+
+// Font size step overriding the role's: Sm caption, Md body, Lg section.
+enum class LabelSize { Sm, Md, Lg };
+
 class Label : public QLabel {
     Q_OBJECT
 
@@ -33,12 +52,19 @@ public:
     [[nodiscard]] auto role() const -> LabelRole;
     void setScale(qreal scale);
     [[nodiscard]] auto scale() const -> qreal;
+    void setTone(LabelTone tone);
+    void setSize(LabelSize size);
+    // Wraps `text` at any character, not only at spaces (long mono values).
+    void setTextWrapAnywhere(const QString &text);
     static auto qss(const Palette &p) -> QString;
+
+protected:
+    void applyRole();
 
 private:
     LabelRole m_role = LabelRole::Body;
     qreal m_scale = 1.0;
-    void applyRole();
+    std::optional<LabelSize> m_size;
 };
 
 } // namespace catalog

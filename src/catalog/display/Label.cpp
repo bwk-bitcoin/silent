@@ -40,6 +40,72 @@ auto Label::scale() const -> qreal {
     return m_scale;
 }
 
+void Label::setTone(LabelTone tone) {
+    switch (tone) {
+    case LabelTone::Default:
+        setProperty("tone", "default");
+        break;
+    case LabelTone::Secondary:
+        setProperty("tone", "secondary");
+        break;
+    case LabelTone::Muted:
+        setProperty("tone", "muted");
+        break;
+    case LabelTone::Accent:
+        setProperty("tone", "accent");
+        break;
+    case LabelTone::Success:
+        setProperty("tone", "success");
+        break;
+    case LabelTone::Warning:
+        setProperty("tone", "warning");
+        break;
+    case LabelTone::Error:
+        setProperty("tone", "error");
+        break;
+    case LabelTone::OnAccent:
+        setProperty("tone", "on-accent");
+        break;
+    case LabelTone::Inverse:
+        setProperty("tone", "inverse");
+        break;
+    case LabelTone::InverseMuted:
+        setProperty("tone", "inverse-muted");
+        break;
+    }
+    style()->unpolish(this);
+    style()->polish(this);
+}
+
+void Label::setSize(LabelSize size) {
+    m_size = size;
+    applyRole();
+}
+
+void Label::setTextWrapAnywhere(const QString &text) {
+    // A zero-width space after every character gives QLabel a break point anywhere.
+    QString breakable;
+    breakable.reserve(text.size() * 2);
+    for (const auto &ch : text) {
+        breakable += ch;
+        breakable += QChar(0x200B);
+    }
+    setWordWrap(true);
+    setText(breakable);
+}
+
+static auto sizeForStep(LabelSize step) -> int {
+    switch (step) {
+    case LabelSize::Sm:
+        return size::CAPTION;
+    case LabelSize::Md:
+        return size::BODY;
+    case LabelSize::Lg:
+        return size::SECTION;
+    }
+    return size::BODY;
+}
+
 static auto fontForRole(const FontPalette &fp, LabelRole role) -> const Font & {
     switch (role) {
     case LabelRole::Title:
@@ -116,8 +182,8 @@ void Label::applyRole() {
     const auto &roleFont = fontForRole(fp, m_role);
 
     auto f = font();
-    int size = static_cast<int>(roleFont.size * m_scale);
-    f.setPointSize(size);
+    int baseSize = m_size.has_value() ? sizeForStep(*m_size) : roleFont.size;
+    f.setPointSize(static_cast<int>(baseSize * m_scale));
     f.setFamily(roleFont.family);
     f.setWeight(roleFont.weight);
 
@@ -132,11 +198,35 @@ void Label::applyRole() {
 }
 
 auto Label::qss(const Palette &p) -> QString {
-    return QString("QLabel[class=\"label\"][role=\"caption\"] { color: %1; }"
-                   "QLabel[class=\"label\"][role=\"status\"] { color: %1; }"
-                   "QLabel[class=\"label\"][role=\"info-label\"] { color: %2; }")
-        .arg(p.textMuted.name())       // %1
-        .arg(p.textSecondary.name()); // %2
+    auto roles = QString("QLabel[class=\"label\"][role=\"caption\"] { color: %1; }"
+                         "QLabel[class=\"label\"][role=\"status\"] { color: %1; }"
+                         "QLabel[class=\"label\"][role=\"info-label\"] { color: %2; }")
+                     .arg(p.textMuted.name())      // %1
+                     .arg(p.textSecondary.name()); // %2
+
+    // After the role rules so a tone wins over its role's color.
+    auto tones = QString("QLabel[class=\"label\"][tone=\"default\"] { color: %1; }"
+                         "QLabel[class=\"label\"][tone=\"secondary\"] { color: %2; }"
+                         "QLabel[class=\"label\"][tone=\"muted\"] { color: %3; }"
+                         "QLabel[class=\"label\"][tone=\"accent\"] { color: %4; }"
+                         "QLabel[class=\"label\"][tone=\"success\"] { color: %5; }"
+                         "QLabel[class=\"label\"][tone=\"warning\"] { color: %6; }"
+                         "QLabel[class=\"label\"][tone=\"error\"] { color: %7; }"
+                         "QLabel[class=\"label\"][tone=\"on-accent\"] { color: %8; }"
+                         "QLabel[class=\"label\"][tone=\"inverse\"] { color: %9; }"
+                         "QLabel[class=\"label\"][tone=\"inverse-muted\"] { color: %10; }")
+                     .arg(p.text.name())
+                     .arg(p.textSecondary.name())
+                     .arg(p.textMuted.name())
+                     .arg(p.accent.name())
+                     .arg(p.success.name())
+                     .arg(p.warning.name())
+                     .arg(p.error.name())
+                     .arg(p.onAccent.name())
+                     .arg(color::GRAY_10.name())
+                     .arg(color::GRAY_40.name());
+
+    return roles + tones;
 }
 
 } // namespace catalog
