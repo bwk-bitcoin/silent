@@ -117,6 +117,10 @@ public:
     // xpub the device gave at `path` and the device itself, or none of them.
     [[nodiscard]] auto addDeviceKey(const plugin::SignerEntry &entry, const QString &alias,
                                     const QString &path, const QString &xpub) -> KeyOpResult;
+    [[nodiscard]] auto cacheXpub(const QString &fingerprint, const QString &path,
+                                 const QString &xpub) -> KeyOpResult;
+    // Remembers `entry`'s device for the key holding its fingerprint.
+    [[nodiscard]] auto recordDevice(const plugin::SignerEntry &entry) -> KeyOpResult;
     // The path a device exports an xpub at without asking: BIP84, account 0, the coin
     // type of the network.
     [[nodiscard]] static auto defaultXpubPath() -> QString;

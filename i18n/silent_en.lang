@@ -201,52 +201,15 @@ keys-route-qr => "QR Code"
 
 keys-route-sd => "SD Card"
 
-keys-key-title => "Key"
-
 keys-alias => "Alias:"
 
 keys-alias-failed => "Could not rename the key: %1"
 
 keys-routes => "Routes"
 
-keys-add-route => "Add route"
-
 keys-route-failed => "Could not change the routes: %1"
 
-keys-route-primary => "Primary"
-
-keys-route-up => "Move up"
-
-keys-route-down => "Move down"
-
-keys-route-remove => "Remove this route"
-
-keys-devices-recorded => "Devices seen"
-
-keys-no-devices-recorded => "This key has not been seen on a device yet."
-
-keys-xpubs => "Cached xpubs"
-
-keys-no-xpubs => "No xpub cached for this key."
-
-keys-descriptors => "Registered descriptors"
-
-keys-no-descriptors => "No descriptor registered with this key."
-
-keys-descriptor-registered => "Registered"
-
-keys-descriptor-unregistered => "Not registered"
-
-keys-remove-key => "Remove key"
-
-keys-remove-blocked => "%1 descriptor(s) are still registered with this key."
-
-keys-remove-warning
-=> "Removing this key drops its routes, its cached xpubs and its registered descriptors. Accounts using it will not be able to sign.";;
-
 keys-remove-failed => "Could not remove the key: %1"
-
-keys-key-load-failed => "Could not load key details."
 
 keys-add-key-title => "Add a key"
 
@@ -324,13 +287,9 @@ keys-hot-working => "Sealing the key, this takes a moment..."
 
 keys-password-create => "Choose a password for this key"
 
-keys-password-use => "Password for this key"
-
 keys-password-mismatch => "The two passwords do not match."
 
 keys-password-short => "Use at least 8 characters."
-
-keys-reveal => "Reveal the mnemonic"
 
 keys-reveal-failed => "Could not open the key: %1"
 
@@ -788,3 +747,95 @@ keys-alias-taken => "Another key is already named “%1”."
 keys-alias-taken-reason => "Another key already has this alias."
 
 keys-register-disconnected => "The device was disconnected."
+
+keys-alias-saved => "Saved"
+
+keys-alias-empty => "Enter an alias."
+
+keys-devices-seen => "Devices Seen"
+
+keys-device-column => "Device"
+
+keys-module-column => "Module"
+
+keys-devices-seen-empty => "No device with this fingerprint has been connected yet."
+
+keys-route-last => "A key needs at least one route"
+
+keys-remove-route => "Remove Route"
+
+keys-cached-xpubs => "Cached Xpubs"
+
+keys-xpubs-empty => "No xpub cached yet."
+
+keys-xpubs-empty-offline => "No xpub cached. Connect the device to fetch them."
+
+keys-fetch-xpub-from => "Fetch xpubs from %1"
+
+keys-fetch-xpub-connect => "Connect the device to fetch xpubs"
+
+keys-accounts => "Registered Accounts"
+
+keys-accounts-empty => "No account uses this key."
+
+keys-accounts-module-sp => "SP Accounts"
+
+keys-fetch-title => "Fetch Xpub"
+
+keys-path-type => "Path Type:"
+
+keys-path => "Path:"
+
+keys-purpose-84 => "BIP84 · Native SegWit (84')"
+
+keys-purpose-86 => "BIP86 · Taproot (86')"
+
+keys-purpose-49 => "BIP49 · Nested SegWit (49')"
+
+keys-purpose-48 => "BIP48 · Multisig (48')"
+
+keys-purpose-87 => "BIP87 · Multisig (87')"
+
+keys-purpose-custom => "Custom Path"
+
+keys-script-p2wsh => "2' · P2WSH"
+
+keys-script-p2sh-p2wsh => "1' · P2SH-P2WSH"
+
+keys-script-p2tr => "3' · P2TR"
+
+keys-account-index-tip => "Account index (0–99)"
+
+keys-fetch-reason-account => "Enter an account index (0–99)."
+
+keys-fetch-reason-path => "Enter a derivation path."
+
+keys-fetch-reason-format => "Write the path like m/84'/%1'/0'."
+
+keys-fetch-reason-cached => "This xpub is already cached."
+
+keys-fetching-title => "Fetching the xpub…"
+
+keys-fetching-sub => "Confirm on %1 if it asks."
+
+keys-fetch-failed-title => "Could not fetch the xpub"
+
+keys-reveal-title => "Reveal Mnemonic"
+
+keys-reveal-warning-title => "Anyone with these words holds the coins"
+
+keys-reveal-warning
+=> "Make sure no one can see the screen. Silent never asks for these words.";;
+
+keys-remove-title => "Remove Key"
+
+keys-remove-question => "Remove “%1” (%2) from this computer?"
+
+keys-remove-accounts-one => "1 account uses this key"
+
+keys-remove-accounts-many => "%1 accounts use this key"
+
+keys-remove-accounts-body => "%1 will no longer be able to sign."
+
+keys-remove-hot
+=> "The sealed mnemonic is deleted with the key. Without a backup of the words, it cannot be recovered.";;

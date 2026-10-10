@@ -43,4 +43,11 @@ auto networkLabel(Network network) -> QString {
     }
 }
 
+auto xpubPath(const QString &path) -> QString {
+    if (path.startsWith(QLatin1Char('m'))) {
+        return path;
+    }
+    return QStringLiteral("m/") + path;
+}
+
 } // namespace keys

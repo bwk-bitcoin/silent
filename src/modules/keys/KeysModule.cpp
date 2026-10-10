@@ -752,6 +752,31 @@ auto KeysModule::addDeviceKey(const plugin::SignerEntry &entry, const QString &a
     return result;
 }
 
+auto KeysModule::cacheXpub(const QString &fingerprint, const QString &path, const QString &xpub)
+    -> KeyOpResult {
+    if (!m_rust.has_value()) {
+        return failedOp(TR("keys-module-not-ready"));
+    }
+    auto result = m_rust.value()->cache_xpub(rust::String(fingerprint.toStdString()),
+                                             rust::String(path.toStdString()),
+                                             rust::String(xpub.toStdString()));
+    if (result.is_ok) {
+        emit keysChanged();
+    }
+    return result;
+}
+
+auto KeysModule::recordDevice(const plugin::SignerEntry &entry) -> KeyOpResult {
+    if (!m_rust.has_value()) {
+        return failedOp(TR("keys-module-not-ready"));
+    }
+    auto result = m_rust.value()->record_device(toLiveDevice(entry));
+    if (result.is_ok) {
+        emit keysChanged();
+    }
+    return result;
+}
+
 auto KeysModule::coinType() -> int {
     return KeysModule::network() == Network::Bitcoin ? 0 : 1;
 }

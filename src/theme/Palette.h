@@ -145,6 +145,14 @@ const int KEYS_TAB_WIDTH = 700;
 // A list row's pill, gap and glyph, so the Devices and Keys lists line up.
 const int LIST_STATUS_WIDTH = 146;
 const int ROW_SPINNER_SIZE = 14;
+const int ACCOUNT_INDEX_INPUT_WIDTH = 44;
+// Key detail table columns.
+const int ROUTE_ICON_COLUMN = 40;
+const int ROUTE_ACTIONS_COLUMN = 116;
+const int XPUB_PATH_COLUMN = 120;
+const int XPUB_PILL_COLUMN = 130;
+const int ACCOUNT_MODULE_COLUMN = 160;
+const int ACCOUNT_PILL_COLUMN = 140;
 
 } // namespace metric
 

@@ -24,4 +24,8 @@ auto keyStatusPill(const KeyInfo &info) -> catalog::Badge *;
 
 auto networkLabel(Network network) -> QString;
 
+// A derivation path written from its root (m/84'/1'/0'), the way the key records
+// list it without the m.
+auto xpubPath(const QString &path) -> QString;
+
 } // namespace keys

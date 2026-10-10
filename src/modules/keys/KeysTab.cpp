@@ -5,7 +5,7 @@
 #include "KeysView.h"
 
 #include "modals/AddKey.h"
-#include "modals/KeyModal.h"
+#include "modals/KeyDetail.h"
 #include "modals/RegisterDevice.h"
 #include "modules/hwi/HwiModule.h"
 
@@ -443,7 +443,7 @@ void KeysTab::onKeyClicked() {
     if (fingerprint.isEmpty() || m_module->rust() == nullptr) {
         return;
     }
-    AppController::execModal(new modal::KeyModal(m_module, fingerprint));
+    AppController::execModal(new modal::KeyDetail(m_module, fingerprint));
 }
 
 void KeysTab::openAddKey() {

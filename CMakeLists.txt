@@ -143,8 +143,10 @@ set(SILENT_APP_SOURCES
     src/modules/keys/modals/RegisterDevice.cpp
     src/modules/keys/modals/HotKey.h
     src/modules/keys/modals/HotKey.cpp
-    src/modules/keys/modals/KeyModal.h
-    src/modules/keys/modals/KeyModal.cpp
+    src/modules/keys/modals/KeyDetail.h
+    src/modules/keys/modals/KeyDetail.cpp
+    src/modules/keys/modals/FetchXpubStep.h
+    src/modules/keys/modals/FetchXpubStep.cpp
     src/modules/keys/modals/PasswordPrompt.h
     src/modules/keys/modals/PasswordPrompt.cpp
     src/modules/sp/SpPlugin.h
