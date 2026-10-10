@@ -35,7 +35,7 @@ void Receive::init() {
     m_sp_section = new catalog::FoldSection(TR("receive-silent-payment-address"));
     m_sp_row = new catalog::AddressRow;
     m_sp_row->setGenerateVisible(false);
-    m_sp_row->setVerifyVisible(true);
+    m_sp_row->setVerifyVisible(false);
     m_sp_row->setTwoLineAddress(true); // long SP address wraps to two lines
     m_sp_row->setAddress(QString(m_sp_address.c_str()));
     m_sp_section->setContent(m_sp_row);
@@ -61,8 +61,6 @@ void Receive::init() {
 }
 
 void Receive::doConnect() {
-    connect(m_sp_row, &catalog::AddressRow::verifyRequested, this, &Receive::onVerifyAddress,
-            qontrol::UNIQUE);
     connect(m_sp_section, &catalog::FoldSection::toggled, this, &Receive::onSpSectionToggled,
             qontrol::UNIQUE);
     if (m_has_sub_accounts) {
@@ -196,7 +194,7 @@ void Receive::onTaprootSectionToggled(bool expanded) {
 }
 
 void Receive::onVerifyHistoryAddress(const QString &address) {
-    showVerifyModal(address);
+    m_history_verify_address = address;
 }
 
 void Receive::onHistoryLabelEdited(const QString &address, const QString &label) {
@@ -224,25 +222,34 @@ void Receive::onHistoryLabelEdited(const QString &address, const QString &label)
 
 void Receive::showAddressHistory(const QString &title,
                                  const QList<QPair<QString, QString>> &addresses) {
-    // Prepend the current (newest) address so the modal lists it alongside the
-    // ones already awaiting payment.
-    QList<QPair<QString, QString>> fullList = addresses;
     m_active_history_section = title == TR("receive-awaiting-segwit") ? "segwit" : "taproot";
-    if (m_active_history_section == "segwit" && m_segwit_row != nullptr &&
-        !m_segwit_row->address().isEmpty()) {
-        fullList.prepend(qMakePair(m_segwit_row->address(), m_segwit_row->labelText()));
-    }
-    if (m_active_history_section == "taproot" && m_taproot_row != nullptr &&
-        !m_taproot_row->address().isEmpty()) {
-        fullList.prepend(qMakePair(m_taproot_row->address(), m_taproot_row->labelText()));
-    }
+    // The verify flow takes the list's place while it runs, then the list comes back.
+    while (true) {
+        // Prepend the current (newest) address so the modal lists it alongside the
+        // ones already awaiting payment.
+        QList<QPair<QString, QString>> fullList = addresses;
+        if (m_active_history_section == "segwit" && m_segwit_row != nullptr &&
+            !m_segwit_row->address().isEmpty()) {
+            fullList.prepend(qMakePair(m_segwit_row->address(), m_segwit_row->labelText()));
+        }
+        if (m_active_history_section == "taproot" && m_taproot_row != nullptr &&
+            !m_taproot_row->address().isEmpty()) {
+            fullList.prepend(qMakePair(m_taproot_row->address(), m_taproot_row->labelText()));
+        }
 
-    auto *historyModal = new modal::AddressHistoryModal(title, fullList);
-    connect(historyModal, &modal::AddressHistoryModal::verifyRequested, this,
-            &Receive::onVerifyHistoryAddress, qontrol::UNIQUE);
-    connect(historyModal, &modal::AddressHistoryModal::labelEdited, this,
-            &Receive::onHistoryLabelEdited, qontrol::UNIQUE);
-    AppController::execModal(historyModal);
+        m_history_verify_address.clear();
+        auto *historyModal = new modal::AddressHistoryModal(title, fullList);
+        connect(historyModal, &modal::AddressHistoryModal::verifyRequested, this,
+                &Receive::onVerifyHistoryAddress, qontrol::UNIQUE);
+        connect(historyModal, &modal::AddressHistoryModal::labelEdited, this,
+                &Receive::onHistoryLabelEdited, qontrol::UNIQUE);
+        AppController::execModal(historyModal);
+        if (m_history_verify_address.isEmpty()) {
+            return;
+        }
+        // Returns once the flow has closed.
+        showVerifyModal(m_history_verify_address);
+    }
 }
 
 void Receive::view() {
@@ -276,7 +283,7 @@ void Receive::changeEvent(QEvent *event) {
 void Receive::retranslateUi() {
     m_sp_section->setTitle(TR("receive-silent-payment-address"));
     m_sp_row->setCopyText(TR("common-copy"));
-    m_sp_row->setVerifyText(TR("receive-verify-title"));
+    m_sp_row->setVerifyNote(TR("receive-sp-verify-note"));
     if (m_segwit_section != nullptr) {
         m_segwit_section->setTitle(TR("receive-segwit-address"));
     }

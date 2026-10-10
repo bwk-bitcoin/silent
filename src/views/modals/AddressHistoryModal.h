@@ -8,7 +8,7 @@
 namespace catalog {
 class IndexPill;
 class ScrollArea;
-}
+} // namespace catalog
 
 namespace modal {
 
@@ -23,6 +23,8 @@ public:
                         QWidget *parent = nullptr);
 
 signals:
+    // Emitted as the modal closes: the verify flow takes its place, and the owner
+    // opens the list again once the flow is done.
     void verifyRequested(const QString &address);
     void labelEdited(const QString &address, const QString &label);
 

@@ -202,6 +202,7 @@ void AddressHistoryModal::onVerifyClicked() {
         return;
     }
     emit verifyRequested(btn->property("address").toString());
+    accept();
 }
 
 void AddressHistoryModal::onLabelChanged(const QString &label) {

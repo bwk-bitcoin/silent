@@ -59,6 +59,8 @@ private:
     QList<QPair<QString, QString>> m_segwit_history;
     QList<QPair<QString, QString>> m_taproot_history;
     QString m_active_history_section; // "segwit" / "taproot" for the open modal
+    // The address the history modal asked to verify, set as it closes for the flow.
+    QString m_history_verify_address;
     ReqId m_verify_req_id = 0;
 };
 

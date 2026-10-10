@@ -469,6 +469,9 @@ receive-show-qr => "Show QR code" => "NONE"
 receive-silent-payment-address
 => "Silent Payment Address:"
 => "Adresse Silent Payment:";;
+receive-sp-verify-note
+=> "Silent payment addresses can't be checked on a signing device yet. No device protocol supports it."
+=> "NONE";;
 receive-taproot-address => "Taproot Address:" => "Adresse Taproot:"
 receive-title => "Receive" => "Recevoir"
 receive-verify-title => "Verify" => "Verifier"
