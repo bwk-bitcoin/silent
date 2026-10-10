@@ -32,11 +32,17 @@ protected:
     auto addStep(const QString &title, ModalWidth width, QWidget *body, ModalActions *actions)
         -> int;
     void setStepTitle(int step, const QString &title);
+    // Pinned on the right above every step (the window title is the system's): a
+    // fingerprint, a status pill. Null clears it.
+    void setHeaderEnd(QWidget *widget);
+    void setHeaderEndVisible(bool visible);
     void showStep(int step);
     [[nodiscard]] auto currentStep() const -> int;
 
 private:
     QStackedWidget *m_stack = nullptr;
+    qontrol::Row *m_header = nullptr;
+    QWidget *m_header_end = nullptr;
     QList<Step> m_steps;
 };
 

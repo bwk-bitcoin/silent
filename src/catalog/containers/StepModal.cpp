@@ -18,8 +18,29 @@ constexpr qreal MAX_SCREEN_SHARE = 0.9;
 
 StepModal::StepModal() {
     m_stack = new QStackedWidget;
-    auto *main = (new qontrol::Column)->margins(resolve(Padding::L))->push(m_stack);
+    m_header = (new qontrol::Row)->pushSpacer();
+    m_header->setVisible(false);
+    auto *main = (new qontrol::Column)
+                     ->margins(resolve(Padding::L))
+                     ->spacing(resolve(Spacing::S))
+                     ->push(m_header)
+                     ->push(m_stack);
     setMainWidget(main);
+}
+
+void StepModal::setHeaderEnd(QWidget *widget) {
+    if (m_header_end != nullptr) {
+        m_header->remove(m_header_end);
+    }
+    m_header_end = widget;
+    if (m_header_end != nullptr) {
+        m_header->push(m_header_end);
+    }
+    m_header->setVisible(m_header_end != nullptr);
+}
+
+void StepModal::setHeaderEndVisible(bool visible) {
+    m_header->setVisible(visible && m_header_end != nullptr);
 }
 
 auto StepModal::addStep(const QString &title, ModalWidth width, QWidget *body,
