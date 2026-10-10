@@ -2,7 +2,7 @@
 
 #include "catalog/Button.h"
 #include "catalog/display/Label.h"
-#include "catalog/form/FormRow.h"
+#include "catalog/form/Field.h"
 #include "catalog/inputs/Input.h"
 #include "i18n/Tr.h"
 #include "views/utils.h"
@@ -14,7 +14,7 @@
 
 using catalog::Button;
 using catalog::ButtonRole;
-using catalog::FormRow;
+using catalog::Field;
 using catalog::Input;
 using catalog::Label;
 using catalog::LabelRole;
@@ -47,7 +47,8 @@ void PasswordPrompt::init() {
 
     m_confirm_input = new Input;
     m_confirm_input->setEchoMode(QLineEdit::Password);
-    m_confirm_row = new FormRow(TR("keys-password-confirm"), m_confirm_input);
+    m_confirm_row =
+        new Field(TR("keys-password-confirm"), m_confirm_input, metric::FORM_LABEL_WIDTH);
     m_confirm_row->setVisible(m_mode == Mode::Create);
 
     m_error_label = new Label(QString(), LabelRole::Caption);
@@ -75,14 +76,15 @@ void PasswordPrompt::view() {
                           ->pushSpacer(resolve(Spacing::XS))
                           ->push(m_confirm_btn);
 
-    auto *col = (new qontrol::Column)
-                    ->push(new Label(m_title, LabelRole::Heading))
-                    ->pushSpacer(resolve(Spacing::S))
-                    ->push(new FormRow(TR("keys-password"), m_password_input))
-                    ->push(m_confirm_row)
-                    ->push(m_error_label)
-                    ->pushSpacer(resolve(Spacing::M))
-                    ->push(buttonRow);
+    auto *col =
+        (new qontrol::Column)
+            ->push(new Label(m_title, LabelRole::Heading))
+            ->pushSpacer(resolve(Spacing::S))
+            ->push(new Field(TR("keys-password"), m_password_input, metric::FORM_LABEL_WIDTH))
+            ->push(m_confirm_row)
+            ->push(m_error_label)
+            ->pushSpacer(resolve(Spacing::M))
+            ->push(buttonRow);
 
     setMainWidget(margin(col));
 }

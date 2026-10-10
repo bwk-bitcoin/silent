@@ -2,16 +2,16 @@
 #include "AccountController.h"
 #include "AppController.h"
 #include "Column.h"
-#include "i18n/I18nManager.h"
-#include "i18n/Tr.h"
 #include "catalog/Button.h"
+#include "catalog/containers/FoldSection.h"
+#include "catalog/containers/Separator.h"
+#include "catalog/display/Label.h"
+#include "catalog/form/Field.h"
 #include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/ComboBox.h"
-#include "catalog/containers/FoldSection.h"
-#include "catalog/form/FormRow.h"
 #include "catalog/inputs/Input.h"
-#include "catalog/display/Label.h"
-#include "catalog/containers/Separator.h"
+#include "i18n/I18nManager.h"
+#include "i18n/Tr.h"
 #include "views/utils.h"
 #include <Qontrol>
 #include <common.h>
@@ -23,12 +23,12 @@ namespace view {
 
 using catalog::Button;
 using catalog::ButtonRole;
-using catalog::ValidationMark;
 using catalog::ComboBox;
+using catalog::Field;
 using catalog::FoldSection;
-using catalog::FormRow;
 using catalog::Input;
 using catalog::Label;
+using catalog::ValidationMark;
 
 Settings::Settings(AccountController *ctrl) {
     m_controller = ctrl;
@@ -132,7 +132,8 @@ void Settings::doConnect() {
             qontrol::UNIQUE);
     connect(m_toggle_electrum_btn, &QPushButton::clicked, this, &Settings::onActionToggleElectrum,
             qontrol::UNIQUE);
-    connect(m_test_btn, &QPushButton::clicked, this, &Settings::onActionTestBackend, qontrol::UNIQUE);
+    connect(m_test_btn, &QPushButton::clicked, this, &Settings::onActionTestBackend,
+            qontrol::UNIQUE);
     connect(m_controller, &AccountController::scannerStateChanged, this,
             &Settings::onUpdateBlindbitToggleButton, qontrol::UNIQUE);
     connect(m_controller, &AccountController::electrumConnected, this,
@@ -215,7 +216,8 @@ void Settings::onActionToggleBlindbit() {
         clearBackendInfo();
     } else {
         if (!accountOpt.value()->start_scanner()) {
-            auto *modal = new qontrol::Modal(TR("common-error"), TR("settings-failed-start-scanner"));
+            auto *modal =
+                new qontrol::Modal(TR("common-error"), TR("settings-failed-start-scanner"));
             AppController::execModal(modal);
         } else {
             fetchBackendInfo();
@@ -236,7 +238,8 @@ void Settings::onActionToggleElectrum() {
         accountOpt.value()->stop_electrum();
     } else {
         if (!accountOpt.value()->start_electrum()) {
-            auto *modal = new qontrol::Modal(TR("common-error"), TR("settings-failed-start-electrum"));
+            auto *modal =
+                new qontrol::Modal(TR("common-error"), TR("settings-failed-start-electrum"));
             AppController::execModal(modal);
         }
     }
@@ -285,7 +288,8 @@ void Settings::onBackendInfoReady(BackendInfo info) {
         clearBackendInfo();
         updateButtons();
         auto rawError = QString::fromStdString(std::string(info.error.c_str()));
-        auto message = mapBackendErrorSummary(rawError) + "\n\n" + formatBackendErrorDetails(rawError);
+        auto message =
+            mapBackendErrorSummary(rawError) + "\n\n" + formatBackendErrorDetails(rawError);
         AppController::execModal(new qontrol::Modal(TR("settings-connection-failed"), message));
         return;
     }
@@ -312,7 +316,7 @@ void Settings::onBackendInfoReady(BackendInfo info) {
 
     m_backend_verified = networkMatch;
     m_backend_status->setState(networkMatch ? ValidationMark::State::Valid
-                                             : ValidationMark::State::Invalid);
+                                            : ValidationMark::State::Invalid);
     updateButtons();
     m_info_network_label->setText(networkStr);
     m_current_height = info.height;
@@ -322,17 +326,17 @@ void Settings::onBackendInfoReady(BackendInfo info) {
     auto noText = TR("common-no");
     auto yn = [&yesText, &noText](bool value) -> QString { return value ? yesText : noText; };
     m_capabilities->setText(TR("settings-capabilities-template")
-                                 .arg(yn(info.tweaks_only))
-                                 .arg(yn(info.tweaks_full_basic))
-                                 .arg(yn(info.tweaks_full_with_dust_filter))
-                                 .arg(yn(info.tweaks_cut_through_with_dust_filter)));
+                                .arg(yn(info.tweaks_only))
+                                .arg(yn(info.tweaks_full_basic))
+                                .arg(yn(info.tweaks_full_with_dust_filter))
+                                .arg(yn(info.tweaks_cut_through_with_dust_filter)));
     m_capabilities->setAlignment(Qt::AlignTop);
 
     if (!networkMatch) {
-        AppController::execModal(new qontrol::Modal(
-            TR("settings-network-mismatch"), TR("settings-network-mismatch-message")
-                                    .arg(networkStr)
-                                    .arg(m_network_selector->currentText())));
+        AppController::execModal(new qontrol::Modal(TR("settings-network-mismatch"),
+                                                    TR("settings-network-mismatch-message")
+                                                        .arg(networkStr)
+                                                        .arg(m_network_selector->currentText())));
     }
 }
 
@@ -372,7 +376,8 @@ void Settings::onElectrumTestReady(ConnectionResult result) {
         m_electrum_status->setState(ValidationMark::State::Invalid);
         updateButtons();
         auto rawError = QString::fromStdString(std::string(result.error.c_str()));
-        auto message = mapBackendErrorSummary(rawError) + "\n\n" + formatBackendErrorDetails(rawError);
+        auto message =
+            mapBackendErrorSummary(rawError) + "\n\n" + formatBackendErrorDetails(rawError);
         AppController::execModal(new qontrol::Modal(TR("settings-electrum-test-failed"), message));
         return;
     }
@@ -449,27 +454,32 @@ void Settings::view() {
                            ->pushSpacer(resolve(Spacing::XS))
                            ->push(m_backend_status);
     auto *electrumControl = (new qontrol::Row)
-                                 ->push(m_electrum_url_input)
-                                 ->pushSpacer(resolve(Spacing::XS))
-                                 ->push(m_test_electrum_btn)
-                                 ->pushSpacer(resolve(Spacing::XS))
-                                 ->push(m_electrum_status);
+                                ->push(m_electrum_url_input)
+                                ->pushSpacer(resolve(Spacing::XS))
+                                ->push(m_test_electrum_btn)
+                                ->pushSpacer(resolve(Spacing::XS))
+                                ->push(m_electrum_status);
 
-    auto *connectionContent = (new qontrol::Column)
-                                  ->push(new FormRow(TR("settings-blindbit-url"), urlControl))
-                                  ->pushSpacer(resolve(Spacing::XS))
-                                  ->push(new FormRow(TR("settings-electrum-server"), electrumControl))
-                                  ->pushSpacer(resolve(Spacing::XS))
-                                  ->push(new FormRow(TR("settings-network"), m_network_selector));
+    auto *connectionContent =
+        (new qontrol::Column)
+            ->push(new Field(TR("settings-blindbit-url"), urlControl, metric::FORM_LABEL_WIDTH))
+            ->pushSpacer(resolve(Spacing::XS))
+            ->push(new Field(TR("settings-electrum-server"), electrumControl,
+                             metric::FORM_LABEL_WIDTH))
+            ->pushSpacer(resolve(Spacing::XS))
+            ->push(new Field(TR("settings-network"), m_network_selector, metric::FORM_LABEL_WIDTH));
     auto *connectionSection = new FoldSection(TR("settings-connection"));
     connectionSection->setContent(connectionContent);
 
     auto *infoContent = (new qontrol::Column)
-                            ->push(new FormRow(TR("settings-network"), m_info_network_label))
+                            ->push(new Field(TR("settings-network"), m_info_network_label,
+                                             metric::FORM_LABEL_WIDTH))
                             ->pushSpacer(resolve(Spacing::XS))
-                            ->push(new FormRow(TR("settings-block-height"), m_info_height_label))
+                            ->push(new Field(TR("settings-block-height"), m_info_height_label,
+                                             metric::FORM_LABEL_WIDTH))
                             ->pushSpacer(resolve(Spacing::XS))
-                            ->push(new FormRow(TR("settings-capabilities"), m_capabilities));
+                            ->push(new Field(TR("settings-capabilities"), m_capabilities,
+                                             metric::FORM_LABEL_WIDTH));
     auto *infoSection = new FoldSection(TR("settings-backend-info"));
     infoSection->setExpanded(false);
     infoSection->setContent(infoContent);
@@ -515,16 +525,16 @@ void Settings::retranslateUi() {
     m_save_btn->setText(TR("settings-save"));
     m_apply_language_btn->setText(TR("common-apply"));
 
-    m_toggle_blindbit_btn->setText(m_controller->isScannerRunning() ? TR("settings-disconnect-blindbit")
-                                                                     : TR("settings-connect-blindbit"));
+    m_toggle_blindbit_btn->setText(m_controller->isScannerRunning()
+                                       ? TR("settings-disconnect-blindbit")
+                                       : TR("settings-connect-blindbit"));
     m_toggle_electrum_btn->setText(m_electrum_running ? TR("settings-disconnect-electrum")
-                                                       : TR("settings-connect-electrum"));
+                                                      : TR("settings-connect-electrum"));
 
     m_network_selector->setItemText(0, TR("network-regtest"));
     m_network_selector->setItemText(1, TR("network-signet"));
     m_network_selector->setItemText(2, TR("network-testnet"));
     m_network_selector->setItemText(3, TR("network-bitcoin"));
-
 }
 
 } // namespace view

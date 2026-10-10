@@ -202,8 +202,12 @@ set(SILENT_APP_SOURCES
     src/catalog/containers/FoldSection.cpp
     src/catalog/containers/Tabs.h
     src/catalog/containers/Tabs.cpp
-    src/catalog/form/FormRow.h
-    src/catalog/form/FormRow.cpp
+    src/catalog/form/Field.h
+    src/catalog/form/Field.cpp
+    src/catalog/form/FieldGroup.h
+    src/catalog/form/FieldGroup.cpp
+    src/catalog/form/FieldNote.h
+    src/catalog/form/FieldNote.cpp
     src/catalog/BalanceHeader.h
     src/catalog/BalanceHeader.cpp
     src/catalog/panels/receive/AddressRow.h

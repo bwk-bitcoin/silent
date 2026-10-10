@@ -9,7 +9,7 @@
 #include "catalog/SelectRow.h"
 #include "catalog/display/Label.h"
 #include "catalog/feedback/ModalStatus.h"
-#include "catalog/form/FormRow.h"
+#include "catalog/form/Field.h"
 #include "catalog/inputs/Checkbox.h"
 #include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
@@ -24,7 +24,7 @@ using catalog::Button;
 using catalog::ButtonRole;
 using catalog::Checkbox;
 using catalog::ComboBox;
-using catalog::FormRow;
+using catalog::Field;
 using catalog::Input;
 using catalog::Label;
 using catalog::LabelRole;
@@ -145,7 +145,7 @@ void HotKey::view() {
                     ->pushSpacer(resolve(Spacing::S))
                     ->push(tabRow)
                     ->pushSpacer(resolve(Spacing::S))
-                    ->push(new FormRow(TR("keys-alias"), m_alias_input))
+                    ->push(new Field(TR("keys-alias"), m_alias_input, metric::FORM_LABEL_WIDTH))
                     ->pushSpacer(resolve(Spacing::XS))
                     ->push(m_generate_row)
                     ->push(m_import_row)

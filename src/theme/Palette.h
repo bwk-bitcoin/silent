@@ -122,6 +122,7 @@ const int SCAN_PROGRESS_HEIGHT = 6;
 const int CHEVRON_SIZE = 16;
 const int NOTICE_ICON_SIZE = 16;
 const int ACTIONS_REASON_MAX_WIDTH = 260;
+const int FIELD_NOTE_ICON_SIZE = 14;
 
 } // namespace metric
 

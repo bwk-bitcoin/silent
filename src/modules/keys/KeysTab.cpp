@@ -14,7 +14,7 @@
 #include "catalog/display/Badge.h"
 #include "catalog/display/Label.h"
 #include "catalog/display/RouteIcons.h"
-#include "catalog/form/FormRow.h"
+#include "catalog/form/Field.h"
 #include "catalog/inputs/ComboBox.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
@@ -31,7 +31,7 @@ using catalog::Badge;
 using catalog::Button;
 using catalog::ButtonRole;
 using catalog::ComboBox;
-using catalog::FormRow;
+using catalog::Field;
 using catalog::Label;
 using catalog::LabelRole;
 using catalog::RouteIcons;
@@ -95,26 +95,27 @@ void KeysTab::doConnect() {
 }
 
 void KeysTab::view() {
-    auto *col = (new qontrol::Column)
-                    ->push(new FormRow(TR("keys-network"), m_network_selector))
-                    ->pushSpacer(resolve(Spacing::M))
-                    ->push(new catalog::Separator)
-                    ->pushSpacer(resolve(Spacing::M))
-                    ->push(new Label(TR("keys-devices"), LabelRole::Heading))
-                    ->pushSpacer(resolve(Spacing::S))
-                    ->push(m_error_label)
-                    ->push(m_devices_empty)
-                    ->push(m_device_column)
-                    ->pushSpacer(resolve(Spacing::M))
-                    ->push(new catalog::Separator)
-                    ->pushSpacer(resolve(Spacing::M))
-                    ->push(new Label(TR("keys-keys"), LabelRole::Heading))
-                    ->pushSpacer(resolve(Spacing::S))
-                    ->push(m_keys_empty)
-                    ->push(m_key_column)
-                    ->pushSpacer(resolve(Spacing::S))
-                    ->push((new qontrol::Row)->push(m_add_key_btn)->pushSpacer())
-                    ->pushSpacer();
+    auto *col =
+        (new qontrol::Column)
+            ->push(new Field(TR("keys-network"), m_network_selector, metric::FORM_LABEL_WIDTH))
+            ->pushSpacer(resolve(Spacing::M))
+            ->push(new catalog::Separator)
+            ->pushSpacer(resolve(Spacing::M))
+            ->push(new Label(TR("keys-devices"), LabelRole::Heading))
+            ->pushSpacer(resolve(Spacing::S))
+            ->push(m_error_label)
+            ->push(m_devices_empty)
+            ->push(m_device_column)
+            ->pushSpacer(resolve(Spacing::M))
+            ->push(new catalog::Separator)
+            ->pushSpacer(resolve(Spacing::M))
+            ->push(new Label(TR("keys-keys"), LabelRole::Heading))
+            ->pushSpacer(resolve(Spacing::S))
+            ->push(m_keys_empty)
+            ->push(m_key_column)
+            ->pushSpacer(resolve(Spacing::S))
+            ->push((new qontrol::Row)->push(m_add_key_btn)->pushSpacer())
+            ->pushSpacer();
 
     setScreenContent(this, m_main_widget, col);
     rebuildDevices();

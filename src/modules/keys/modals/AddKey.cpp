@@ -9,7 +9,7 @@
 #include "catalog/SelectRow.h"
 #include "catalog/containers/Separator.h"
 #include "catalog/display/Label.h"
-#include "catalog/form/FormRow.h"
+#include "catalog/form/Field.h"
 #include "catalog/form/ValidatedInput.h"
 #include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/Input.h"
@@ -33,7 +33,7 @@
 
 using catalog::Button;
 using catalog::ButtonRole;
-using catalog::FormRow;
+using catalog::Field;
 using catalog::Input;
 using catalog::InputRole;
 using catalog::Label;
@@ -170,9 +170,9 @@ void AddKey::init() {
                      ->pushSpacer(resolve(Spacing::XS))
                      ->push(m_file_label);
 
-    m_alias_row = new FormRow(TR("keys-alias"), m_alias_input);
-    m_origin_row = new FormRow(TR("keys-origin"), m_origin_input);
-    m_xpub_row = new FormRow(TR("keys-xpub"), m_xpub_input);
+    m_alias_row = new Field(TR("keys-alias"), m_alias_input, metric::FORM_LABEL_WIDTH);
+    m_origin_row = new Field(TR("keys-origin"), m_origin_input, metric::FORM_LABEL_WIDTH);
+    m_xpub_row = new Field(TR("keys-xpub"), m_xpub_input, metric::FORM_LABEL_WIDTH);
 }
 
 void AddKey::doConnect() {

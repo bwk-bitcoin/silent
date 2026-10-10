@@ -12,7 +12,7 @@
 #include "catalog/display/Badge.h"
 #include "catalog/display/Label.h"
 #include "catalog/display/RouteIcons.h"
-#include "catalog/form/FormRow.h"
+#include "catalog/form/Field.h"
 #include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
 #include "i18n/Tr.h"
@@ -30,7 +30,7 @@ using catalog::Button;
 using catalog::ButtonRole;
 using catalog::ComboBox;
 using catalog::CopyButton;
-using catalog::FormRow;
+using catalog::Field;
 using catalog::Input;
 using catalog::Label;
 using catalog::LabelRole;
@@ -182,10 +182,11 @@ void KeyModal::doConnect() {
 }
 
 void KeyModal::view() {
-    auto *aliasRow = (new qontrol::Row)
-                         ->push(new FormRow(TR("keys-alias"), m_alias_input))
-                         ->pushSpacer(resolve(Spacing::XS))
-                         ->push(m_save_alias_btn);
+    auto *aliasRow =
+        (new qontrol::Row)
+            ->push(new Field(TR("keys-alias"), m_alias_input, metric::FORM_LABEL_WIDTH))
+            ->pushSpacer(resolve(Spacing::XS))
+            ->push(m_save_alias_btn);
 
     auto *routePickerRow = (new qontrol::Row)
                                ->push(m_route_picker)
