@@ -733,3 +733,29 @@ flow-scan-bare-sigs-body
 => "Silent needs the whole signed transaction (PSBT). On the device, choose to export the signed PSBT, then scan again.";;
 
 flow-scan-other-title => "Could not use this code"
+
+flow-signer-first-sub => "Silent payment key. It signs before the other keys."
+
+flow-signer-ready-sub => "Signs with %1."
+
+flow-signer-signed-sub => "Signature added."
+
+flow-signer-waiting-sub => "Signs after the silent payment key."
+
+flow-signer-disconnected-sub => "Connect and unlock %1."
+
+flow-signer-no-hot-sub => "The mnemonic of this key is not stored on this computer."
+
+flow-signer-no-route-sub
+=> "None of this key’s routes can sign. Add one in the Keys tab.";;
+
+flow-signer-unregistered-sub
+=> "This fingerprint is not a key on this computer. Add it in the Keys tab.";;
+
+flow-unknown-key => "Unknown Key"
+
+flow-the-device => "the device"
+
+flow-no-signer-title => "No Signer Available"
+
+flow-other-devices => "Other Connected Devices"

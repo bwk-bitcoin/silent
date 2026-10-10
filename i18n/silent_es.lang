@@ -141,6 +141,8 @@ flow-camera-none-title => "No camera found" => "NONE"
 flow-camera-settings-title => "Camera Settings" => "NONE"
 flow-camera-source => "Camera Source:" => "NONE"
 flow-camera-starting => "Starting the camera…" => "NONE"
+flow-no-signer-title => "No Signer Available" => "NONE"
+flow-other-devices => "Other Connected Devices" => "NONE"
 flow-password => "Password:" => "NONE"
 flow-password-reason => "Enter the password." => "NONE"
 flow-qr-contrast-hint
@@ -179,6 +181,24 @@ flow-sd-write-error-body
 => "The SD card is full or read-only. Check the card, then try again."
 => "NONE";;
 flow-sd-write-error-title => "Could not save the file" => "NONE"
+flow-signer-disconnected-sub => "Connect and unlock %1." => "NONE"
+flow-signer-first-sub
+=> "Silent payment key. It signs before the other keys."
+=> "NONE";;
+flow-signer-no-hot-sub
+=> "The mnemonic of this key is not stored on this computer."
+=> "NONE";;
+flow-signer-no-route-sub
+=> "None of this key’s routes can sign. Add one in the Keys tab."
+=> "NONE";;
+flow-signer-ready-sub => "Signs with %1." => "NONE"
+flow-signer-signed-sub => "Signature added." => "NONE"
+flow-signer-unregistered-sub
+=> "This fingerprint is not a key on this computer. Add it in the Keys tab."
+=> "NONE";;
+flow-signer-waiting-sub => "Signs after the silent payment key." => "NONE"
+flow-the-device => "the device" => "NONE"
+flow-unknown-key => "Unknown Key" => "NONE"
 flow-usb-disconnected-body
 => "%1 was disconnected. Reconnect and unlock it, then try again."
 => "NONE";;

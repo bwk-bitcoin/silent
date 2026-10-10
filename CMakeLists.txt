@@ -107,6 +107,10 @@ set(SILENT_APP_SOURCES
     src/modules/keys/KeysTab.cpp
     src/modules/keys/QrRoute.h
     src/modules/keys/QrRoute.cpp
+    src/modules/keys/DeviceName.h
+    src/modules/keys/DeviceName.cpp
+    src/modules/keys/flow/PickerStep.h
+    src/modules/keys/flow/PickerStep.cpp
     src/modules/keys/flow/UsbStep.h
     src/modules/keys/flow/UsbStep.cpp
     src/modules/keys/flow/SdStep.h
