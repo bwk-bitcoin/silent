@@ -4,18 +4,6 @@
 
 namespace catalog {
 
-namespace {
-
-auto qssColor(const QColor &color) -> QString {
-    return QString("rgba(%1, %2, %3, %4)")
-        .arg(color.red())
-        .arg(color.green())
-        .arg(color.blue())
-        .arg(color.alphaF(), 0, 'f', 3);
-}
-
-} // namespace
-
 Badge::Badge(const QString &text, Role role, QWidget *parent) : QLabel(text, parent), m_role(role) {
     applyRole();
 }
@@ -53,6 +41,9 @@ void Badge::applyRole() {
     case Role::Neutral:
         setProperty("role", "neutral");
         break;
+    case Role::Off:
+        setProperty("role", "off");
+        break;
     }
 
     const auto &font = Theme::get()->fontPalette().caption;
@@ -75,7 +66,9 @@ auto Badge::qss(const Palette &p) -> QString {
                "QLabel[class=\"badge\"][role=\"error\"] { background: %10; border-color: %11; "
                "color: %12; }"
                "QLabel[class=\"badge\"][role=\"neutral\"] { background: %13; border-color: %14; "
-               "color: %15; }")
+               "color: %15; }"
+               "QLabel[class=\"badge\"][role=\"off\"] { background: %16; border-color: %17; "
+               "color: %18; }")
         .arg(radius::BADGE)
         .arg(resolve(Padding::XS) - 1)
         .arg(resolve(Padding::S) + 1)
@@ -90,7 +83,10 @@ auto Badge::qss(const Palette &p) -> QString {
         .arg(p.badgeErrorText.name())
         .arg(p.badgeNeutralBg.name())
         .arg(p.badgeNeutralBorder.name())
-        .arg(p.badgeNeutralText.name());
+        .arg(p.badgeNeutralText.name())
+        .arg(qssColor(p.badgeOffBg))
+        .arg(p.badgeOffBorder.name())
+        .arg(p.badgeOffText.name());
 }
 
 } // namespace catalog

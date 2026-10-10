@@ -9,7 +9,7 @@ class Badge : public QLabel {
     Q_OBJECT
 
 public:
-    enum class Role { Success, Warning, Error, Neutral };
+    enum class Role { Success, Warning, Error, Neutral, Off };
 
     explicit Badge(const QString &text, Role role = Role::Neutral, QWidget *parent = nullptr);
     explicit Badge(Role role = Role::Neutral, QWidget *parent = nullptr);

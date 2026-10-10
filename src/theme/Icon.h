@@ -4,7 +4,7 @@
 
 // Resolved against the live palette at paint time, so an icon both follows the
 // theme and can be tinted per use site (accent / secondary / muted).
-enum class IconColor { Default, Accent, Secondary, Muted, Success, Error };
+enum class IconColor { Default, Accent, Secondary, Muted, Success, Warning, Error };
 
 // Builds a QIcon that re-renders the SVG with the chosen palette color on every
 // paint, so icons follow theme (light/dark) changes without recreation.
@@ -47,6 +47,13 @@ auto silentMark(IconColor color = IconColor::Default) -> QIcon;
 auto key(IconColor color = IconColor::Default) -> QIcon;
 auto lock(IconColor color = IconColor::Default) -> QIcon;
 auto sdCard(IconColor color = IconColor::Default) -> QIcon;
-auto memoryStick(IconColor color = IconColor::Default) -> QIcon;
+auto arrowUp(IconColor color = IconColor::Default) -> QIcon;
+auto arrowDown(IconColor color = IconColor::Default) -> QIcon;
+auto eye(IconColor color = IconColor::Default) -> QIcon;
+auto alert(IconColor color = IconColor::Default) -> QIcon;
+auto info(IconColor color = IconColor::Default) -> QIcon;
+auto circleCheck(IconColor color = IconColor::Default) -> QIcon;
+auto circleX(IconColor color = IconColor::Default) -> QIcon;
+auto puzzle(IconColor color = IconColor::Default) -> QIcon;
 
 } // namespace icon

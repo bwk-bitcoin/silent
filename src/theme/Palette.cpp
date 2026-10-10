@@ -1,5 +1,35 @@
 #include "Palette.h"
 
+// ===== Color helpers =====
+
+namespace {
+
+// Off badge text: muted text sunk 40% into the page background.
+constexpr qreal BADGE_OFF_BG_RATIO = 0.4;
+
+} // namespace
+
+auto mixColor(const QColor &from, const QColor &to, qreal ratio) -> QColor {
+    return QColor::fromRgbF(
+        static_cast<float>(from.redF() + ((to.redF() - from.redF()) * ratio)),
+        static_cast<float>(from.greenF() + ((to.greenF() - from.greenF()) * ratio)),
+        static_cast<float>(from.blueF() + ((to.blueF() - from.blueF()) * ratio)));
+}
+
+auto withAlpha(const QColor &color, qreal alpha) -> QColor {
+    auto result = color;
+    result.setAlphaF(static_cast<float>(alpha));
+    return result;
+}
+
+auto qssColor(const QColor &color) -> QString {
+    return QString("rgba(%1, %2, %3, %4)")
+        .arg(color.red())
+        .arg(color.green())
+        .arg(color.blue())
+        .arg(color.alphaF(), 0, 'f', 3);
+}
+
 // ===== Color Palette =====
 
 auto Palette::dark() -> Palette {
@@ -21,7 +51,7 @@ auto Palette::dark() -> Palette {
         .onAccent = color::WHITE,
 
         // Semantic
-        .success = color::GREEN,
+        .success = color::TEAL,
         .error = color::RED,
         .errorHover = QColor(255, 81, 81),
         .warning = color::YELLOW,
@@ -34,9 +64,9 @@ auto Palette::dark() -> Palette {
         .txWarning = color::TX_WARNING_DARK,
 
         // Badges
-        .badgeSuccessBg = QColor(80, 190, 80, 36),
-        .badgeSuccessBorder = QColor(80, 190, 80, 115),
-        .badgeSuccessText = color::GREEN,
+        .badgeSuccessBg = QColor(47, 194, 176, 36),
+        .badgeSuccessBorder = QColor(47, 194, 176, 115),
+        .badgeSuccessText = color::TEAL,
         .badgeWarningBg = QColor(220, 180, 50, 41),
         .badgeWarningBorder = QColor(220, 180, 50, 122),
         .badgeWarningText = color::YELLOW,
@@ -46,6 +76,9 @@ auto Palette::dark() -> Palette {
         .badgeNeutralBg = color::GRAY_90,
         .badgeNeutralBorder = color::GRAY_80,
         .badgeNeutralText = color::GRAY_35,
+        .badgeOffBg = QColor(Qt::transparent),
+        .badgeOffBorder = color::GRAY_80,
+        .badgeOffText = mixColor(color::GRAY_55, color::GRAY_95, BADGE_OFF_BG_RATIO),
 
         // Borders
         .border = color::GRAY_70,
@@ -77,7 +110,7 @@ auto Palette::light() -> Palette {
         .onAccent = color::WHITE,
 
         // Semantic
-        .success = color::GREEN_DARK,
+        .success = color::TEAL_DARK,
         .error = color::RED_DARK,
         .errorHover = QColor(240, 60, 60),
         .warning = color::YELLOW_DARK,
@@ -90,9 +123,9 @@ auto Palette::light() -> Palette {
         .txWarning = color::TX_WARNING_LIGHT,
 
         // Badges
-        .badgeSuccessBg = QColor(40, 160, 40, 36),
-        .badgeSuccessBorder = QColor(40, 160, 40, 115),
-        .badgeSuccessText = color::GREEN_DARK,
+        .badgeSuccessBg = QColor(18, 133, 122, 36),
+        .badgeSuccessBorder = QColor(18, 133, 122, 115),
+        .badgeSuccessText = color::TEAL_DARK,
         .badgeWarningBg = QColor(200, 160, 30, 41),
         .badgeWarningBorder = QColor(200, 160, 30, 122),
         .badgeWarningText = color::YELLOW_DARK,
@@ -102,6 +135,9 @@ auto Palette::light() -> Palette {
         .badgeNeutralBg = color::GRAY_8,
         .badgeNeutralBorder = color::GRAY_15,
         .badgeNeutralText = color::LIGHT_GRAY_65,
+        .badgeOffBg = QColor(Qt::transparent),
+        .badgeOffBorder = color::GRAY_15,
+        .badgeOffText = mixColor(color::GRAY_40, color::GRAY_4, BADGE_OFF_BG_RATIO),
 
         // Borders
         .border = color::GRAY_20,
@@ -134,7 +170,9 @@ auto ButtonPalette::defaultButtonPalette() -> ButtonPalette {
                  .height = 50,
                  .paddingH = 0,
                  .paddingV = 0},
-        .inlineIcon = {.font = {.family = font::DEFAULT, .size = size::BODY, .weight = QFont::Normal},
+        .inlineIcon = {.font = {.family = font::DEFAULT,
+                                .size = size::BODY,
+                                .weight = QFont::Normal},
                        .width = 30,
                        .height = 30,
                        .paddingH = 0,

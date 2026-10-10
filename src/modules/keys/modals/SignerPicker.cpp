@@ -22,7 +22,8 @@ using catalog::Label;
 using catalog::LabelRole;
 
 SignerPicker::SignerPicker(const QString &title, const SigningPlan &plan, QWidget *parent)
-    : m_title(title), m_sp_outputs_pending(plan.sp_outputs_pending) {
+    : m_title(title),
+      m_sp_outputs_pending(plan.sp_outputs_pending) {
     Q_UNUSED(parent);
     for (const auto &candidate : plan.candidates) {
         m_candidates.append(candidate);
@@ -63,7 +64,7 @@ auto SignerPicker::routeIcon(KeyRouteKind route) -> QIcon {
     case KeyRouteKind::Qr:
         return icon::qr(IconColor::Accent);
     case KeyRouteKind::SdCard:
-        return icon::memoryStick(IconColor::Accent);
+        return icon::sdCard(IconColor::Accent);
     case KeyRouteKind::Hot:
         return icon::key(IconColor::Accent);
     case KeyRouteKind::Unknown:

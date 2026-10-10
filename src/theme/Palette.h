@@ -41,6 +41,10 @@ const QColor BLUE_DARK_LIGHT = QColor(70, 140, 220);
 const QColor GREEN = QColor(80, 190, 80);
 const QColor GREEN_DARK = QColor(40, 160, 40);
 
+// Teal (success)
+const QColor TEAL = QColor(0x2f, 0xc2, 0xb0);
+const QColor TEAL_DARK = QColor(0x12, 0x85, 0x7a);
+
 // Red
 const QColor RED = QColor(220, 70, 70);
 const QColor RED_DARK = QColor(200, 50, 50);
@@ -202,6 +206,52 @@ namespace width {
 const int NONE = -1;
 } // namespace width
 
+// ===== Button widths (the only ones a button takes; Auto sizes to content) =====
+
+enum class BtnWidth { Icon, IconLg, Index, M, L, XL, XXL, LaunchEntry, LaunchAdd, Auto };
+
+constexpr auto resolve(BtnWidth w) -> int {
+    switch (w) {
+    case BtnWidth::Icon:
+        return 30;
+    case BtnWidth::IconLg:
+        return 50;
+    case BtnWidth::Index:
+        return 60;
+    case BtnWidth::M:
+        return 120;
+    case BtnWidth::L:
+        return 160;
+    case BtnWidth::XL:
+        return 200;
+    case BtnWidth::XXL:
+        return 260;
+    case BtnWidth::LaunchEntry:
+        return 300;
+    case BtnWidth::LaunchAdd:
+        return 354;
+    case BtnWidth::Auto:
+        return width::NONE;
+    }
+    return width::NONE;
+}
+
+// ===== Pill widths (Auto only for data labels) =====
+
+enum class PillWidth { M, L, Auto };
+
+constexpr auto resolve(PillWidth w) -> int {
+    switch (w) {
+    case PillWidth::M:
+        return 110;
+    case PillWidth::L:
+        return 140;
+    case PillWidth::Auto:
+        return width::NONE;
+    }
+    return width::NONE;
+}
+
 // ===== Color Palette =====
 
 struct Palette {
@@ -247,6 +297,9 @@ struct Palette {
     QColor badgeNeutralBg;
     QColor badgeNeutralBorder;
     QColor badgeNeutralText;
+    QColor badgeOffBg;
+    QColor badgeOffBorder;
+    QColor badgeOffText;
 
     // Borders
     QColor border;
@@ -264,6 +317,15 @@ struct Palette {
 namespace theme {
 using Palette = ::Palette;
 } // namespace theme
+
+// ===== Color helpers =====
+
+// `from` blended toward `to`: ratio 0 keeps `from`, 1 gives `to` (CSS color-mix).
+auto mixColor(const QColor &from, const QColor &to, qreal ratio) -> QColor;
+// `color` at the given opacity (0..1).
+auto withAlpha(const QColor &color, qreal alpha) -> QColor;
+// rgba() notation, so QSS keeps the alpha channel.
+auto qssColor(const QColor &color) -> QString;
 
 // ===== Typography =====
 
