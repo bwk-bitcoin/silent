@@ -3,6 +3,7 @@
 #include "AppController.h"
 #include "catalog/Button.h"
 #include "catalog/Table.h"
+#include "catalog/Variants.h"
 #include "catalog/containers/Card.h"
 #include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/Separator.h"
@@ -804,10 +805,8 @@ auto Send::transactionView() -> QWidget * {
             ->pushSpacer()
             ->push(m_clear_outputs_btn)
             ->pushSpacer(resolve(Spacing::S))
-            ->push(!m_signed_tx_hex.isEmpty()
-                       ? static_cast<QWidget *>(new catalog::Badge(TR("confirm-send-signed"),
-                                                                   catalog::Badge::Role::Success))
-                       : new QWidget)
+            ->push(!m_signed_tx_hex.isEmpty() ? static_cast<QWidget *>(catalog::pillTxSigned())
+                                              : new QWidget)
             ->pushSpacer(resolve(Spacing::S))
             ->push(m_send_btn);
 
@@ -1630,9 +1629,7 @@ void Send::onSignResult(TxResult result) {
         m_psbt_result = std::nullopt;
         m_tx_template = std::nullopt;
         m_sign_req_id = 0;
-        AppController::execModal(
-            new qontrol::Modal(TR("common-error"), TR("send-signing-failed") + "\n\n" +
-                                                       formatBackendErrorDetails(error)));
+        AppController::execModal(new qontrol::Modal(TR("send-signing-failed"), error));
         return;
     }
 
