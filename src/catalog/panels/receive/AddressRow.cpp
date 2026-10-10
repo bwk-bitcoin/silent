@@ -10,6 +10,7 @@
 #include "theme/Icon.h"
 #include "theme/Palette.h"
 
+#include <QLabel>
 #include <Qontrol>
 #include <common.h>
 
@@ -52,6 +53,19 @@ AddressRow::AddressRow(QWidget *parent) : QWidget(parent) {
                              ->push(m_history)
                              ->pushSpacer();
 
+    auto *noteIcon = new QLabel(this);
+    noteIcon->setPixmap(icon::info(IconColor::Muted)
+                            .pixmap(metric::FIELD_NOTE_ICON_SIZE, metric::FIELD_NOTE_ICON_SIZE));
+    m_verify_note_text = new Label(LabelRole::Caption, this);
+    m_verify_note_text->setAlignment(Qt::AlignCenter);
+    m_verify_note = (new qontrol::Row)
+                        ->spacing(resolve(Spacing::XS))
+                        ->pushSpacer()
+                        ->push(noteIcon)
+                        ->push(m_verify_note_text)
+                        ->pushSpacer();
+    m_verify_note->setVisible(false);
+
     // Outer column. Layout spacing (not fixed spacers) so the gap collapses when
     // a section is hidden by applyVisibility().
     (new qontrol::Column)
@@ -61,6 +75,7 @@ AddressRow::AddressRow(QWidget *parent) : QWidget(parent) {
         ->push(m_label, 0, Qt::AlignHCenter)
         ->push(m_address_row)
         ->push(extraActions)
+        ->push(m_verify_note)
         ->into(this);
 
     m_verify->setVisible(false); // shown via setVerifyVisible()
@@ -148,6 +163,11 @@ void AddressRow::setVerifyText(const QString &text) {
 
 void AddressRow::setVerifyVisible(bool visible) {
     m_verify->setVisible(visible);
+}
+
+void AddressRow::setVerifyNote(const QString &note) {
+    m_verify_note_text->setTextWrapped(note, metric::ADDRESS_NOTE_MAX_WIDTH);
+    m_verify_note->setVisible(!note.isEmpty());
 }
 
 void AddressRow::onCopyClicked() {

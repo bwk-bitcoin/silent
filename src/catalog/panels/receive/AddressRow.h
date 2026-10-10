@@ -32,6 +32,8 @@ public:
     void setHistoryVisible(bool visible);
     void setVerifyText(const QString &text);
     void setVerifyVisible(bool visible);
+    // A muted note under the address saying why it cannot be verified. Empty hides it.
+    void setVerifyNote(const QString &note);
 
 signals:
     void copyRequested(const QString &address);
@@ -45,11 +47,12 @@ public slots:
     void onHistoryClicked();
     void onVerifyClicked();
 
-private:
+protected:
     // Show/hide the QR, address row and empty state per the current address
     // (mirrors the design: no address -> only placeholder + Generate).
     void applyVisibility();
 
+private:
     QString m_address_text;
     bool m_label_enabled = false;
     bool m_history_enabled = false;
@@ -63,6 +66,8 @@ private:
     Button *m_generate = nullptr;
     Button *m_history = nullptr;
     Button *m_verify = nullptr;
+    QWidget *m_verify_note = nullptr;
+    Label *m_verify_note_text = nullptr;
 };
 
 } // namespace catalog
