@@ -1,7 +1,7 @@
 #pragma once
 
-#include "theme/Palette.h"
 #include "interfaces/types.h"
+#include "theme/Palette.h"
 #include <Qontrol>
 #include <cstdint>
 #include <optional>
@@ -152,7 +152,8 @@ public slots:
     void onBroadcastConfirmed();
     void onSignResult(TxResult result);
     void onSignerSigned(ReqId req_id, QString psbt_v2_hex);
-    void onSignerError(std::optional<ReqId> req_id, QString message);
+    void onSignerError(std::optional<ReqId> req_id, const QString &message);
+    void onSignerCancelled(ReqId req_id);
     void onBroadcastResult(TxResult result);
     void onCoinsUpdated(CoinState state);
 
@@ -174,6 +175,8 @@ protected:
     auto showReuseWarning(PsbtValidation result) -> bool;
     // Guards the keys module is reachable, then hands the PSBT over to it.
     void showSignerStep();
+    // Stops listening to the keys module once the signing request has its answer.
+    void disconnectSigner() const;
     auto output() -> QWidget *;
     void updateCoinCheckboxes();
     void updateInputsTitle();

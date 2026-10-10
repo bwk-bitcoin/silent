@@ -24,7 +24,9 @@ struct KeyEntry {
 };
 
 // The keys module, as accounts and plugins see it. An account never picks a signer:
-// it hands over a PSBT and the module owns the picker and every route modal.
+// it hands over a PSBT and the module owns the picker and every route step. Each of
+// sign(), verifyAddress() and spDescriptor() runs one modal flow and returns once its
+// window has closed; it answers exactly once, with its result, error() or cancelled().
 class IKeys : public QObject {
     Q_OBJECT
 
@@ -38,8 +40,9 @@ public:
     // store the id, then call the request: an answer may arrive during the call.
     virtual auto newRequest() -> ReqId = 0;
     // Signs the PSBT with every key the descriptors need, in the order the module
-    // decides. Answers once with signed_ or once with error.
-    virtual void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors) = 0;
+    // decides. `wallet_name` names the files of an SD card route.
+    virtual void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors,
+                      const QString &wallet_name) = 0;
     // Shows `address` on the device holding the key `descriptor` belongs to.
     virtual void verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
                                const QString &address) = 0;
@@ -59,7 +62,11 @@ signals:
     void verified(ReqId req_id, bool verified);
     void spDescriptorReady(ReqId req_id, QString descriptor, QString fingerprint);
     void descriptorRegistered(ReqId req_id, QString fingerprint);
+    // A failure the caller reports, once.
     void error(std::optional<ReqId> req_id, QString message);
+    // The user closed the flow, or it already showed why there is no answer: the
+    // caller shows nothing.
+    void cancelled(ReqId req_id);
 };
 
 Q_DECLARE_INTERFACE(IKeys, "dev.silent.IKeys/1.0")

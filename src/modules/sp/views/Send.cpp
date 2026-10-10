@@ -228,10 +228,8 @@ OutputW::OutputW(Send *screen, int id) {
                           ->push(maxGroup)
                           ->pushSpacer();
 
-    auto *amountField = (new qontrol::Column)
-                            ->spacing(resolve(Spacing::XXS))
-                            ->push(amountLabel)
-                            ->push(amountRow);
+    auto *amountField =
+        (new qontrol::Column)->spacing(resolve(Spacing::XXS))->push(amountLabel)->push(amountRow);
 
     auto *content = (new qontrol::Column)
                         ->push(new catalog::LabelledInput(TR("send-address"), m_address_input,
@@ -1552,6 +1550,8 @@ void Send::showSignerStep() {
 
     connect(Host::get()->keys(), &IKeys::signed_, this, &Send::onSignerSigned, qontrol::UNIQUE);
     connect(Host::get()->keys(), &IKeys::error, this, &Send::onSignerError, qontrol::UNIQUE);
+    connect(Host::get()->keys(), &IKeys::cancelled, this, &Send::onSignerCancelled,
+            qontrol::UNIQUE);
     onSendConfirmed();
 }
 
@@ -1567,8 +1567,9 @@ void Send::onSendConfirmed() {
     auto psbtV2Hex =
         QString::fromStdString(std::string(m_psbt_result.value()->bytes_v2_hex().c_str()));
     auto descriptor = QString::fromStdString(std::string(m_controller->getDescriptor().c_str()));
+    auto walletName = QString::fromStdString(std::string(account.value()->name()));
     m_sign_req_id = Host::get()->keys()->newRequest();
-    Host::get()->keys()->sign(m_sign_req_id, psbtV2Hex, QStringList{descriptor});
+    Host::get()->keys()->sign(m_sign_req_id, psbtV2Hex, QStringList{descriptor}, walletName);
 }
 
 void Send::onSignerSigned(ReqId req_id, QString psbt_v2_hex) {
@@ -1589,16 +1590,12 @@ void Send::onSignerSigned(ReqId req_id, QString psbt_v2_hex) {
     thread->start();
 }
 
-void Send::onSignerError(std::optional<ReqId> req_id, QString message) {
+void Send::onSignerError(std::optional<ReqId> req_id, const QString &message) {
     if (!req_id.has_value() || req_id.value() != m_sign_req_id) {
         return;
     }
 
-    if (Host::get()->keys() != nullptr) {
-        disconnect(Host::get()->keys(), &IKeys::signed_, this, &Send::onSignerSigned);
-        disconnect(Host::get()->keys(), &IKeys::error, this, &Send::onSignerError);
-    }
-
+    disconnectSigner();
     TxResult result;
     result.is_ok = false;
     result.error = rust::String(message.toStdString());
@@ -1606,12 +1603,27 @@ void Send::onSignerError(std::optional<ReqId> req_id, QString message) {
     onSignResult(result);
 }
 
-void Send::onSignResult(TxResult result) {
-    qDebug() << "Send::onSignResult() ok:" << result.is_ok;
+void Send::onSignerCancelled(ReqId req_id) {
+    if (req_id != m_sign_req_id) {
+        return;
+    }
+    disconnectSigner();
+    m_psbt_result = std::nullopt;
+    m_tx_template = std::nullopt;
+    m_sign_req_id = 0;
+}
+
+void Send::disconnectSigner() const {
     if (Host::get()->keys() != nullptr) {
         disconnect(Host::get()->keys(), &IKeys::signed_, this, &Send::onSignerSigned);
         disconnect(Host::get()->keys(), &IKeys::error, this, &Send::onSignerError);
+        disconnect(Host::get()->keys(), &IKeys::cancelled, this, &Send::onSignerCancelled);
     }
+}
+
+void Send::onSignResult(TxResult result) {
+    qDebug() << "Send::onSignResult() ok:" << result.is_ok;
+    disconnectSigner();
 
     if (!result.is_ok) {
         auto error = QString::fromStdString(std::string(result.error.c_str()));

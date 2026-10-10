@@ -7,25 +7,21 @@
 #include <QPointer>
 #include <QString>
 
-#include <interfaces/types.h>
 #include <silent.h>
 
 namespace keys {
 class KeysModule;
-class RouteSigner;
 } // namespace keys
 
-namespace keys::modal {
-class CameraScan;
-class QrDisplay;
-} // namespace keys::modal
+namespace keys::flow {
+class QrDisplayStep;
+} // namespace keys::flow
 
 namespace keys {
 
-// Owns the whole QR route: sign, verify and SP descriptor requests all funnel
-// through the single m_flow this class holds, so exactly one of them can be in
-// flight at a time and every ending, whatever triggers it, passes through
-// finishFlow().
+// Runs one QR exchange at a time (sign, verify an address, fetch the sp() descriptor):
+// builds the request into the display step it is given, rebuilds it when the density
+// changes, and turns the camera's decoded answer into the matching signal.
 class QrRoute final : public QObject {
     Q_OBJECT
 
@@ -33,83 +29,59 @@ public:
     explicit QrRoute(KeysModule *module);
     ~QrRoute() override = default;
 
-    // Starts a sign flow. Answers at once with keys-qr-busy through `signer` if a
-    // flow is already in progress.
-    void startSign(ReqId req_id, RouteSigner *signer, QString psbt_v2_hex, QString descriptor);
-    // Starts a verify_address flow. Same busy behaviour as startSign().
-    void startVerify(ReqId req_id, RouteSigner *signer, QString descriptor, QString path,
+    // Each start ends the exchange in progress, if any.
+    void startSign(flow::QrDisplayStep *display, QString psbt_v2_hex, QString descriptor);
+    void startVerify(flow::QrDisplayStep *display, QString descriptor, QString path,
                      QString address);
-    // Starts an sp() descriptor fetch. Answers through the module's bus (there is
-    // no RouteSigner for this flow), same busy behaviour as startSign().
-    void startSpDescriptor(ReqId req_id);
-    // Camera-sourced events for the flow currently in progress: a decoded/validated
-    // response, a scan error, or a scan progress update.
+    void startSpDescriptor(flow::QrDisplayStep *display);
+    // Ends the exchange: a request still building or a late answer is dropped.
+    void stop();
     void onKeyEvent(const KeyEvent &event);
 
 signals:
-    // Emitted with the freshly built (or rebuilt) QR request: synchronously for a
-    // verify/spDescriptor request, and from the background thread buildSignRequest()
-    // spawns for a sign request.
-    void qrRequestReady(QrRequest *request);
+    // Emitted from the worker thread that built a sign request.
+    void requestBuilt(QrRequest *request);
+    void psbtSigned(QString psbt_v2_hex);
+    void addressVerified(bool matched);
+    void descriptorDecoded(QString descriptor);
+    // The camera refused a code, or failed; the scan goes on.
+    void scanFailed(QrErrorKind kind, QString message);
+    // The request could not be built; the exchange is over.
+    void failed(QString message);
 
 public slots:
-    void onQrRequestReady(QrRequest *request);
+    void onRequestBuilt(QrRequest *request);
     void onDensityChanged(int density);
-    void onDisplayNext();
-    void onDisplayRejected();
-    void onCameraScanPrevious();
-    void onCameraScanCancelled();
 
 protected:
-    // The three possible endings that hand an answer back to the caller, besides
-    // the bool overload below for a verify match/mismatch.
-    enum class Outcome : std::uint8_t { Signed, Descriptor, Error };
+    enum class Kind : std::uint8_t { Sign, Verify, SpDescriptor };
 
-    // Reserves a QR request id on the GUI thread, then builds (or rebuilds, at a
-    // new density) the sign request's frames on a background thread, emitting
-    // qrRequestReady() with the raw pointer once built.
-    void buildSignRequest();
-    // Same as buildSignRequest(), synchronous, for the current verify flow.
-    void buildVerifyRequest();
-    // Same as buildSignRequest(), synchronous, for the current spDescriptor flow.
-    void buildSpDescriptorRequest();
-    // Shows `request` in m_display, opening it on the first call and swapping the
-    // request into the already-open modal on every rebuild after that.
-    void showRequest(rust::Box<QrRequest> request);
-    // The only place that ends a flow: answers m_flow's caller exactly once (a
-    // second call is a no-op, since m_flow is already reset by the first), then
-    // removes the pending request registration, closes the camera scan and the
-    // display if still open, and resets m_flow.
-    void finishFlow(Outcome outcome, const QString &text);
-    // Overload for a verify flow's match/mismatch answer.
-    void finishFlow(bool matched);
-    // Shared tail of both finishFlow() overloads.
-    void closeOutstanding(ReqId req_id);
-
-private:
-    // One QR flow in progress: which kind it is, the caller's request id, the
-    // RouteSigner waiting on the answer (null for SpDescriptor, answered through
-    // the module's bus instead), the sign flow's reserved-but-uncommitted request
-    // id (0 once committed or for a non-sign flow), and the request's own data,
-    // kept to rebuild at a new density.
-    struct QrFlow {
-        enum class Kind : std::uint8_t { Sign, Verify, SpDescriptor };
-
+    // The request's own data, kept to rebuild it at another density. `pending_id` is
+    // the sign request id reserved and not yet committed (0 otherwise).
+    struct Exchange {
         Kind kind{};
-        ReqId req_id = 0;
-        QPointer<RouteSigner> signer;
         std::uint64_t pending_id = 0;
         QString psbt_hex;
         QString descriptor;
-        QString verify_path;
-        QString verify_address;
+        QString path;
+        QString address;
     };
 
+    void start(flow::QrDisplayStep *display, Exchange exchange);
+    void build();
+    // Reserves the sign request id on the GUI thread, then builds the frames on a
+    // worker thread, answered through requestBuilt().
+    void buildSign();
+    void buildVerify();
+    void buildSpDescriptor();
+    void show(rust::Box<QrRequest> request);
+    void fail(const QString &message);
+    [[nodiscard]] auto partBytes() const -> std::uint32_t;
+
+private:
     KeysModule *m_module = nullptr;
-    std::optional<QrFlow> m_flow;
-    QPointer<modal::QrDisplay> m_display;
-    QPointer<modal::CameraScan> m_camera_scan;
-    int m_density;
+    std::optional<Exchange> m_exchange;
+    QPointer<flow::QrDisplayStep> m_display;
 };
 
 } // namespace keys

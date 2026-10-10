@@ -5,8 +5,6 @@
 #include "catalog/CopyButton.h"
 #include "catalog/containers/FoldSection.h"
 #include "catalog/containers/Separator.h"
-#include "catalog/display/Label.h"
-#include "catalog/feedback/ModalStatus.h"
 #include "catalog/inputs/Input.h"
 #include "catalog/panels/receive/AddressRow.h"
 #include "catalog/panels/receive/LabelRow.h"
@@ -14,7 +12,6 @@
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "modules/keys/KeysModule.h"
-#include "theme/Icon.h"
 #include "theme/Palette.h"
 #include "views/modals/AddressHistoryModal.h"
 #include "views/utils.h"
@@ -88,7 +85,6 @@ void Receive::doConnect() {
     }
     auto *keys = Host::get()->keys();
     if (keys != nullptr) {
-        connect(keys, &IKeys::verified, this, &Receive::onAddressVerified, qontrol::UNIQUE);
         connect(keys, &IKeys::error, this, &Receive::onKeysError, qontrol::UNIQUE);
     }
 }
@@ -159,32 +155,8 @@ void Receive::showVerifyModal(const QString &address) {
         return;
     }
 
-    m_verify_address = address;
     m_verify_req_id = keys->newRequest();
     keys->verifyAddress(m_verify_req_id, descriptor, path, address);
-}
-
-void Receive::onAddressVerified(ReqId req_id, bool verified) {
-    if (req_id != m_verify_req_id) {
-        return;
-    }
-    m_verify_req_id = 0;
-
-    auto *status = new catalog::ModalStatus;
-    status->setIcon(verified ? icon::circleCheck : icon::circleX,
-                    verified ? IconColor::Success : IconColor::Error);
-    status->setSubtitle(verified ? TR("receive-verify-matched") : TR("receive-verify-mismatch"));
-    auto *addressLabel = new catalog::Label(m_verify_address, catalog::LabelRole::Mono);
-    addressLabel->setWordWrap(true);
-    addressLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    auto *container = new qontrol::Modal;
-    container->setWindowTitle(TR("receive-verify-title"));
-    container->setMainWidget(margin((new qontrol::Column)
-                                        ->push(status)
-                                        ->pushSpacer(resolve(Spacing::M))
-                                        ->push(addressLabel)
-                                        ->pushSpacer(resolve(Spacing::M))));
-    AppController::execModal(container);
 }
 
 void Receive::onKeysError(std::optional<ReqId> req_id, QString message) {

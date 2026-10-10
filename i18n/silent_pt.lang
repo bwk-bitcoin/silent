@@ -87,13 +87,7 @@ common-test => "Test" => "Testar"
 common-testing => "Testing…" => "Testando..."
 common-yes => "Yes" => "Sim"
 confirm-send-broadcasting => "Broadcasting…" => "Transmitindo..."
-confirm-send-device-step
-=> "Confirm the transaction on %1."
-=> "Confirme a transacao em %1.";;
 confirm-send-failed => "Broadcast Failed\n\n%1" => "Falha na transmissao\n\n%1"
-confirm-send-sd-step
-=> "Select a file destination for the signed transaction."
-=> "Selecione um destino de arquivo para a transacao assinada.";;
 confirm-send-signed
 => "Signed. Ready to broadcast."
 => "Assinada. Pronta para transmitir.";;
@@ -139,10 +133,38 @@ flow-camera-none-title => "No camera found" => "NONE"
 flow-camera-settings-title => "Camera Settings" => "NONE"
 flow-camera-source => "Camera Source:" => "NONE"
 flow-camera-starting => "Starting the camera…" => "NONE"
+flow-fetch-hot-busy => "Getting the descriptor…" => "NONE"
+flow-fetch-hot-prompt
+=> "Enter the password of “%1” to get its silent payment descriptor."
+=> "NONE";;
+flow-fetch-qr-hint
+=> "Scan this code with the device to request its silent payment descriptor."
+=> "NONE";;
+flow-fetch-qr-title => "Show Descriptor Request" => "NONE"
+flow-fetch-scan-hint
+=> "Hold the descriptor code from the device in front of the camera."
+=> "NONE";;
+flow-fetch-scan-title => "Scan Descriptor" => "NONE"
+flow-fetch-sd-title => "Descriptor from SD Card" => "NONE"
+flow-fetch-title => "Get Descriptor" => "NONE"
+flow-fetch-usb-wait
+=> "Approve the silent payment descriptor export on %1."
+=> "NONE";;
+flow-hot-busy-with => "With “%1”." => "NONE"
+flow-no-signer-sign
+=> "No key of this account is registered on this computer. Add one in the Keys tab."
+=> "NONE";;
 flow-no-signer-title => "No Signer Available" => "NONE"
+flow-no-signer-verify
+=> "No key of this account can show addresses. Add a USB or QR route in the Keys tab."
+=> "NONE";;
+flow-other-device-other => "Not a key of this account." => "NONE"
+flow-other-device-sign => "Not needed for this transaction." => "NONE"
 flow-other-devices => "Other Connected Devices" => "NONE"
 flow-password => "Password:" => "NONE"
 flow-password-reason => "Enter the password." => "NONE"
+flow-password-wrong => "Wrong password. Try again." => "NONE"
+flow-plan-failed => "Silent could not read this transaction." => "NONE"
 flow-qr-contrast-hint
 => "Background brightness. Raise it if the device misreads the code."
 => "NONE";;
@@ -179,6 +201,20 @@ flow-sd-write-error-body
 => "The SD card is full or read-only. Check the card, then try again."
 => "NONE";;
 flow-sd-write-error-title => "Could not save the file" => "NONE"
+flow-sign-hot-busy => "Signing the transaction…" => "NONE"
+flow-sign-hot-prompt
+=> "Enter the password of “%1” to sign the transaction."
+=> "NONE";;
+flow-sign-picker-lead => "Each key below must sign this transaction." => "NONE"
+flow-sign-qr-hint => "Scan this code with the signing device." => "NONE"
+flow-sign-qr-title => "Show Transaction" => "NONE"
+flow-sign-scan-hint
+=> "Hold the signed transaction code from the device in front of the camera."
+=> "NONE";;
+flow-sign-scan-title => "Scan Signed Transaction" => "NONE"
+flow-sign-sd-title => "Sign with SD Card" => "NONE"
+flow-sign-title => "Sign Transaction" => "NONE"
+flow-sign-usb-wait => "Review the transaction on %1 and approve it." => "NONE"
 flow-signer-disconnected-sub => "Connect and unlock %1." => "NONE"
 flow-signer-first-sub
 => "Silent payment key. It signs before the other keys."
@@ -197,6 +233,7 @@ flow-signer-unregistered-sub
 flow-signer-waiting-sub => "Signs after the silent payment key." => "NONE"
 flow-the-device => "the device" => "NONE"
 flow-unknown-key => "Unknown Key" => "NONE"
+flow-usb-confirm-title => "Confirm on the Device" => "NONE"
 flow-usb-disconnected-body
 => "%1 was disconnected. Reconnect and unlock it, then try again."
 => "NONE";;
@@ -211,6 +248,10 @@ flow-verify-error-body
 => "%1 did not return an answer. The address was not checked."
 => "NONE";;
 flow-verify-error-title => "Could Not Verify" => "NONE"
+flow-verify-hot-busy => "Checking the address…" => "NONE"
+flow-verify-hot-prompt
+=> "Enter the password of “%1” to check this address."
+=> "NONE";;
 flow-verify-matched-body
 => "%1 derived the same address. It belongs to this wallet."
 => "NONE";;
@@ -219,6 +260,21 @@ flow-verify-mismatch-body
 => "%1 did not confirm this address. Do not use it to receive coins."
 => "NONE";;
 flow-verify-mismatch-title => "Address Does Not Match" => "NONE"
+flow-verify-picker-lead => "Pick the device to check this address on." => "NONE"
+flow-verify-qr-hint
+=> "Scan this code with the device. It derives the address and shows it."
+=> "NONE";;
+flow-verify-qr-title => "Show Address Request" => "NONE"
+flow-verify-scan-hint
+=> "Hold the answer code from the device in front of the camera."
+=> "NONE";;
+flow-verify-scan-title => "Scan the Device Answer" => "NONE"
+flow-verify-sd-title => "Verify with SD Card" => "NONE"
+flow-verify-title => "Verify Address" => "NONE"
+flow-verify-usb-title => "Check on the Device" => "NONE"
+flow-verify-usb-wait
+=> "Check that %1 shows the same address as below, then confirm on the device."
+=> "NONE";;
 history-amount => "Amount" => "Valor"
 history-confirmed => "Confirmed:" => "Confirmado:"
 history-direction => "Direction" => "Direcao"
@@ -259,15 +315,6 @@ keys-backup-confirm => "I have written these words down" => "NONE"
 keys-backup-warning
 => "These words are shown once. Anyone holding them holds the coins."
 => "NONE";;
-keys-camera-none => "No camera was found." => "NONE"
-keys-camera-previous => "Previous" => "NONE"
-keys-camera-progress => "%1 of %2 parts scanned" => "NONE"
-keys-camera-source => "Camera source" => "NONE"
-keys-camera-title => "Scan the signed transaction" => "NONE"
-keys-camera-unsupported
-=> "Camera capture is only available on Linux in this build."
-=> "NONE";;
-keys-camera-waiting => "Point the camera at the animated code." => "NONE"
 keys-connected => "Connected" => "NONE"
 keys-descriptor-registered => "Registered" => "NONE"
 keys-descriptor-unregistered => "Not registered" => "NONE"
@@ -287,7 +334,6 @@ keys-file-version
 keys-hot-failed => "Could not create the hot key: %1" => "NONE"
 keys-hot-generate => "Generate a mnemonic" => "NONE"
 keys-hot-import => "Import a mnemonic" => "NONE"
-keys-hot-no-display => "A hot key has no screen to verify an address on." => "NONE"
 keys-hot-title => "Hot key" => "NONE"
 keys-hot-working => "Sealing the key, this takes a moment..." => "NONE"
 keys-key-load-failed => "Could not load key details." => "NONE"
@@ -321,31 +367,13 @@ keys-password-mismatch => "The two passwords do not match." => "NONE"
 keys-password-short => "Use at least 8 characters." => "NONE"
 keys-password-use => "Password for this key" => "NONE"
 keys-pick-file => "Pick a key file" => "NONE"
-keys-picker-device-offline => "Device is not connected" => "NONE"
-keys-picker-must-sign-first => "Must sign first" => "NONE"
-keys-picker-no-route => "No usable signing route" => "NONE"
-keys-picker-not-registered => "Not registered as a key" => "NONE"
-keys-picker-other-devices => "Other connected devices" => "NONE"
-keys-picker-required => "Required to sign" => "NONE"
-keys-picker-unknown-reason => "Unusable" => "NONE"
-keys-picker-unrelated => "Not needed by this transaction" => "NONE"
-keys-picker-waiting-for-sp => "Waiting for the silent payment key to sign" => "NONE"
-keys-qr-busy => "Another QR exchange is already in progress." => "NONE"
 keys-qr-contrast => "Contrast" => "NONE"
 keys-qr-decode => "Decode" => "NONE"
 keys-qr-density => "Density" => "NONE"
 keys-qr-failed => "Could not decode the response: %1" => "NONE"
 keys-qr-frame-failed => "Could not render this frame: %1" => "NONE"
-keys-qr-next => "Next" => "NONE"
 keys-qr-part => "Part %1 / %2" => "NONE"
 keys-qr-paste => "Paste the response from the device" => "NONE"
-keys-qr-rebuilding => "Rebuilding the frames..." => "NONE"
-keys-qr-response-mismatch => "That code answers a different request." => "NONE"
-keys-qr-response-partial
-=> "That device returned signatures only; a full transaction is required."
-=> "NONE";;
-keys-qr-speed => "Animation speed" => "NONE"
-keys-qr-title => "Show the transaction" => "NONE"
 keys-qr-wrong-kind => "That response does not carry an xpub." => "NONE"
 keys-register => "Register a key for this device" => "NONE"
 keys-register-failed => "Could not register the key: %1" => "NONE"
@@ -375,16 +403,8 @@ keys-route-up => "Move up" => "NONE"
 keys-route-usb => "USB" => "NONE"
 keys-routes => "Routes" => "NONE"
 keys-sd-filter => "Partially signed transaction (*.psbt)" => "NONE"
-keys-sd-load-failed
-=> "Could not read the signed transaction from that path."
-=> "NONE";;
-keys-sd-load-step
-=> "Sign the file on the device, then load the signed transaction back."
-=> "NONE";;
 keys-sd-load-title => "Load the signed transaction" => "NONE"
-keys-sd-save-failed => "Could not write the transaction to that path." => "NONE"
 keys-sd-save-title => "Save the unsigned transaction" => "NONE"
-keys-signing-cancelled => "Signing was cancelled." => "NONE"
 keys-sp-descriptor-no-origin
 => "That descriptor carries no key origin and cannot be used."
 => "NONE";;
@@ -453,13 +473,6 @@ receive-silent-payment-address
 => "Silent Payment Address:";;
 receive-taproot-address => "Taproot Address:" => "Endereco Taproot:"
 receive-title => "Receive" => "Receber"
-receive-verify-matched => "The device confirmed this address." => "NONE"
-receive-verify-message
-=> "Confirm the address on %1."
-=> "Confirme o endereco em %1.";;
-receive-verify-mismatch
-=> "The device did not confirm this address. Do not use it."
-=> "NONE";;
 receive-verify-title => "Verify" => "Verificar"
 receive-verify-unavailable
 => "No signing device is available for address verification in this build."
@@ -495,7 +508,6 @@ send-label => "Description:" => "Rotulo:"
 send-max => "MAX" => "MAX"
 send-max-suffix => "(max)" => "(max)"
 send-no-account-loaded => "No account loaded." => "Nenhuma conta carregada."
-send-no-signers => "No ready signers found." => "Nenhum assinador pronto encontrado."
 send-placeholder-address => "Address" => "Endereco"
 send-placeholder-amount => "0.002" => "0.002"
 send-placeholder-label => "Label" => "Rotulo"
@@ -503,7 +515,6 @@ send-prepare-failed => "Prepare Failed" => "Preparacao falhou"
 send-proceed-anyway => "Proceed anyway?" => "Prosseguir assim mesmo?"
 send-recipients => "Payments" => "Destinatarios"
 send-select-inputs => "Coins Selection" => "Selecionar inputs"
-send-select-signer => "Select a Signer" => "Selecionar assinante"
 send-signing-failed => "Signing failed." => "Assinatura falhou."
 send-summary-change => "Change" => "Troco"
 send-summary-fee => "Network Fee" => "Taxa de rede"

@@ -109,6 +109,8 @@ set(SILENT_APP_SOURCES
     src/modules/keys/QrRoute.cpp
     src/modules/keys/DeviceName.h
     src/modules/keys/DeviceName.cpp
+    src/modules/keys/flow/FlowCopy.h
+    src/modules/keys/flow/FlowCopy.cpp
     src/modules/keys/flow/PickerStep.h
     src/modules/keys/flow/PickerStep.cpp
     src/modules/keys/flow/UsbStep.h
@@ -127,14 +129,14 @@ set(SILENT_APP_SOURCES
     src/modules/keys/flow/CameraStep.cpp
     src/modules/keys/flow/VerifyResultStep.h
     src/modules/keys/flow/VerifyResultStep.cpp
+    src/modules/keys/flow/SigningFlow.h
+    src/modules/keys/flow/SigningFlow.cpp
     src/modules/keys/signers/RouteSigner.h
     src/modules/keys/signers/RouteSigner.cpp
     src/modules/keys/signers/OfflineSigner.h
     src/modules/keys/signers/OfflineSigner.cpp
     src/modules/keys/modals/AddKey.h
     src/modules/keys/modals/AddKey.cpp
-    src/modules/keys/modals/CameraScan.h
-    src/modules/keys/modals/CameraScan.cpp
     src/modules/keys/modals/DeviceModal.h
     src/modules/keys/modals/DeviceModal.cpp
     src/modules/keys/modals/HotKey.h
@@ -143,14 +145,6 @@ set(SILENT_APP_SOURCES
     src/modules/keys/modals/KeyModal.cpp
     src/modules/keys/modals/PasswordPrompt.h
     src/modules/keys/modals/PasswordPrompt.cpp
-    src/modules/keys/modals/QrDisplay.h
-    src/modules/keys/modals/QrDisplay.cpp
-    src/modules/keys/modals/SdPicker.h
-    src/modules/keys/modals/SdPicker.cpp
-    src/modules/keys/modals/SignerPicker.h
-    src/modules/keys/modals/SignerPicker.cpp
-    src/modules/keys/modals/UsbConfirm.h
-    src/modules/keys/modals/UsbConfirm.cpp
     src/modules/sp/SpPlugin.h
     src/modules/sp/SpPlugin.cpp
     src/modules/sp/SpModule.h

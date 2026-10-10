@@ -21,10 +21,9 @@ class ISigner;
 class QThread;
 class QWidget;
 
-namespace keys::modal {
-class SdPicker;
-class UsbConfirm;
-} // namespace keys::modal
+namespace keys::flow {
+class SigningFlow;
+} // namespace keys::flow
 
 namespace keys {
 
@@ -35,7 +34,6 @@ using RustKeys = ::KeysModule;
 class KeysModule;
 class KeysTab;
 class QrRoute;
-class RouteSigner;
 
 // IModule and IKeys are both QObjects, so one class cannot be both. KeysModule owns
 // this bus, registers it with the host, and answers every call through it.
@@ -48,19 +46,21 @@ public:
 
     [[nodiscard]] QList<KeyEntry> keys(Network network) const override;
     auto newRequest() -> ReqId override;
-    void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors) override;
+    void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors,
+              const QString &wallet_name) override;
     void verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
                        const QString &address) override;
     void spDescriptor(ReqId req_id, const QString &fingerprint) override;
     void registerDescriptor(ReqId req_id, const QString &fingerprint,
                             const QString &descriptor) override;
 
-    // Called by the module, which owns every outstanding request.
+public slots:
+    // Called by the module and its signing flows, which own every outstanding request.
     void deliverSigned(ReqId req_id, const QString &psbt_v2_hex);
-    // `matched` is the device's own verify_address answer; false is a refusal, not
-    // a transport failure, and is delivered here rather than through deliverError().
+    // `matched` is the device's own answer; false is a refusal, not a failure.
     void deliverVerified(ReqId req_id, bool matched);
     void deliverError(std::optional<ReqId> req_id, const QString &message);
+    void deliverCancelled(ReqId req_id);
     void deliverSpDescriptor(ReqId req_id, const QString &descriptor, const QString &fingerprint);
     void deliverDescriptorRegistered(ReqId req_id, const QString &fingerprint);
 
@@ -96,6 +96,9 @@ public:
     // module-supplied route signer, or the offline stand-in) and wraps it as a
     // KeyEntry. Called by KeysBus for every KeyInfo it hands out.
     [[nodiscard]] auto buildKeyEntry(const KeyInfo &info) -> KeyEntry;
+    // The route a key hands its sp() descriptor over: its first QR or usable hot
+    // route, Unknown when it has none.
+    [[nodiscard]] static auto descriptorRoute(const KeyInfo &info) -> KeyRouteKind;
     // Key record mutators. Each forwards to the Rust handle and, on success, emits
     // keysChanged() so the tab rebuilds; modals call these instead of rust() directly.
     [[nodiscard]] auto setAlias(const QString &fingerprint, const QString &alias) -> KeyOpResult;
@@ -110,60 +113,39 @@ public:
     // The hwi module, once one has been seen on the bus. Null before that.
     [[nodiscard]] HwiModule *hwi() const;
     [[nodiscard]] KeysBus *bus() const;
+    [[nodiscard]] auto qrRoute() const -> QrRoute *;
     ReqId nextReqId();
-    // Registers/clears an in-flight request on a module-supplied signer, keyed by
-    // its own req_id, so routeSignerFor() defers rebuilding the signer until the
-    // request completes. Called by RouteSigner around its interactive/background
-    // flows (hot sign, QR, SD card).
-    void trackPendingRequest(ReqId req_id, ISigner *signer);
-    void untrackPendingRequest(ReqId req_id);
-    // Owns the hot-sign password prompt modal so no signer builds one itself. Answers
-    // through `requester->onPasswordResolved(req_id, password)`, with an empty password
-    // meaning the user cancelled the modal.
-    void promptPassword(RouteSigner *requester, ReqId req_id);
     // The Keys tab widget. Built on first call and reused afterwards; a QPointer
     // leaves this null again if the host that owns the widget deletes it.
     [[nodiscard]] auto tab() -> QWidget *;
-    // Signs `psbt_v2_hex` with the key the user picks for `descriptors`, over that
-    // key's best usable route, and answers `req_id` through the bus's signed_ or
-    // error signal.
-    void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors);
-    // Shows `address` on the device of the key the user picks among those
-    // `descriptor` is registered against, mirroring sign()'s picker-then-route
-    // sequence. Answers `req_id` through the bus's verified or error signal.
+    // Each request below opens one signing flow modal and returns once it has closed;
+    // the flow answers `req_id` through the bus exactly once.
+    // Signs `psbt_v2_hex` with every key it needs, one after the other.
+    void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors,
+              const QString &wallet_name);
+    // Shows `address` on a device of a key `descriptor` is registered against.
     void verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
                        const QString &address);
-    // Fetches the sp() descriptor of `fingerprint`'s key over its best usable route
-    // (hot or QR only; any other route answers on error) and answers `req_id`
-    // through the bus's spDescriptorReady or error signal.
+    // Fetches the sp() descriptor of `fingerprint`'s key over its QR or hot route.
     void spDescriptor(ReqId req_id, const QString &fingerprint);
-    // Requires an origin (see validate_sp_descriptor_origin in lib/include/silent.h)
-    // before answering the bus with spDescriptorReady; rejects, never repairs, a
-    // descriptor that comes back without one. Also cross-checks the validated origin
-    // fingerprint against `req_id`'s originally requested key (m_sp_descriptor_fingerprints)
-    // and rejects a mismatch instead of delivering an answer for the wrong key. Called
-    // by RouteSigner's hot spDescriptor path and by QrRoute::finishFlow.
-    void validateAndDeliverSpDescriptor(ReqId req_id, const QString &descriptor);
-    // Drops the fingerprint tracking for a spDescriptor() request and answers the
-    // bus with `message`, without validating a descriptor: the error counterpart
-    // to validateAndDeliverSpDescriptor(), called by QrRoute::finishFlow when a QR
-    // spDescriptor flow ends on error instead of a decoded answer.
-    void deliverSpDescriptorError(ReqId req_id, const QString &message);
     // Records `descriptor` as registered with `fingerprint`'s key and answers
     // `req_id` through the bus's descriptorRegistered or error signal.
     void registerDescriptor(ReqId req_id, const QString &fingerprint, const QString &descriptor);
 
-    // Worker jobs owned by this module, so a thread never outlives the modal or
-    // signer that asked for it. Each starts a QThread::create lambda that captures
-    // only copied data plus this module's `this`, and answers through the matching
-    // result signal below, matched by the caller-allocated `req_id`.
+    // Worker jobs owned by this module, so a thread never outlives the modal that asked
+    // for it. Each starts a QThread::create lambda that captures only copied data plus
+    // this module's `this`, and answers through the matching result signal below,
+    // matched by the caller-allocated `req_id`.
     void generateMnemonic(ReqId req_id, std::uint32_t word_count);
     // The GUI slot always calls commit_hot_key(), even if every caller (HotKey) has
     // already closed: a close during sealing still finishes the import.
     void importHotKey(ReqId req_id, QString mnemonic, QString alias, QString password);
     void revealMnemonic(ReqId req_id, QString fingerprint, QString password);
-    void signHot(ReqId req_id, QString fingerprint, QString password, QString psbt_v2_hex);
-    void fetchHotSpDescriptor(ReqId req_id, QString fingerprint, QString password);
+    void signHot(ReqId req_id, const QString &fingerprint, const QString &password,
+                 const QString &psbt_v2_hex);
+    void fetchHotSpDescriptor(ReqId req_id, const QString &fingerprint, const QString &password);
+    void saveSdPsbt(ReqId req_id, const QString &path, const QString &psbt_v2_hex);
+    void loadSdPsbt(ReqId req_id, const QString &path);
     // Stores `req_id` as the current camera request; onCameraOpenFinished() installs
     // the opened handle only if it is still current by the time the worker answers,
     // dropping (and thereby releasing) any other handle.
@@ -180,16 +162,6 @@ signals:
     void keysChanged();
     // The live device set changed and the Rust handle already has it.
     void liveDevicesChanged();
-    // Emitted from the background thread that ran sd_save_psbt/sd_load_psbt.
-    void sdSaveReady(bool is_ok, QString error);
-    void sdLoadReady(bool is_ok, QString psbt_hex, QString error);
-    // Mirrors sdSaveReady for the picker: tells SdPicker::onLoadDone whether to
-    // close (accept) or show the error and stay open, once the real load result
-    // (not the button click) is known.
-    void sdLoadDone(bool is_ok, QString error);
-    // Queued to itself, mirroring RouteSigner::routeSignRequested: spDescriptor()'s
-    // Qr branch must return reqId to its caller before any QrDisplay modal is built.
-    void qrSpDescriptorRequested(ReqId req_id);
 
     // Worker job results. Each pair below is: emitted from the background thread,
     // re-owned by the matching private slot, which re-emits the second (public)
@@ -203,50 +175,34 @@ signals:
     void hotKeyImported(ReqId req_id, KeyInfoResult result);
     void mnemonicRevealFinished(ReqId req_id, MnemonicResult result);
     void mnemonicRevealed(ReqId req_id, MnemonicResult result);
-    void hotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error);
-    void hotSigned(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error);
-    void hotSpDescriptorFinished(ReqId req_id, bool is_ok, QString descriptor, QString error);
-    void hotSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error);
+    void hotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error,
+                         bool wrong_password);
+    void hotSigned(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error,
+                   bool wrong_password);
+    void hotSpDescriptorFinished(ReqId req_id, bool is_ok, QString descriptor, QString error,
+                                 bool wrong_password);
+    void hotSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error,
+                                bool wrong_password);
+    // Emitted from the worker thread; queued to the GUI thread receivers.
+    void sdSaved(ReqId req_id, bool is_ok, QString error);
+    void sdLoaded(ReqId req_id, bool is_ok, QString psbt_hex, QString error);
     // The opened camera's raw pointer, re-owned by onCameraOpenFinished(), which
     // drops it instead of installing it if `req_id` is no longer current.
     void cameraOpenFinished(ReqId req_id, CameraHandle *handle);
     void cameraOpened(ReqId req_id, bool is_ok, QString error);
-
-public slots:
-    void onRouteSignRequested(ReqId req_id, const QString &fingerprint, const QString &psbt_v2_hex,
-                              const QString &descriptor);
-    void onRouteDisplayRequested(ReqId req_id, const QString &fingerprint,
-                                 const QString &descriptor, const QString &path,
-                                 const QString &address);
-    void onSignerPicked(QString fingerprint);
-    void onSdSaveRequested(QString path);
-    void onSdLoadRequested(QString path);
-    void onUsbConfirmCancelled();
-    void onUsbVerifyCancelled();
-    void onSdPickerCancelled();
 
 private slots:
     void onKeyEventReceived(const KeyEvent &event);
     void onInstanceRegistered(const QString &id);
     void onInstanceRemoved(const QString &id);
     void onDevicesChanged();
-    void onPasswordPromptEntered(QString password);
-    void onPasswordPromptRejected();
-    void onDeviceSignSigned(ReqId req_id, QString psbt_base64);
-    void onDeviceSignError(std::optional<ReqId> req_id, QString message);
-    void onDeviceVerifyDisplayed(ReqId req_id, QString address);
-    void onDeviceVerifyError(std::optional<ReqId> req_id, QString message);
-    void onRouteSignSigned(ReqId req_id, QString psbt_v2_hex);
-    void onRouteSignError(std::optional<ReqId> req_id, QString message);
-    void onRouteVerifyDisplayed(ReqId req_id, bool matched);
-    void onRouteSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error);
-    void onSdLoadReady(bool is_ok, QString psbt_hex, QString error);
-    void onQrSpDescriptorRequested(ReqId req_id);
     void onMnemonicGenerationFinished(ReqId req_id, MnemonicResult result);
     void onHotKeySealed(ReqId req_id, SealedHotKey *sealed, QString alias);
     void onMnemonicRevealFinished(ReqId req_id, MnemonicResult result);
-    void onHotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error);
-    void onHotSpDescriptorFinished(ReqId req_id, bool is_ok, QString descriptor, QString error);
+    void onHotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error,
+                           bool wrong_password);
+    void onHotSpDescriptorFinished(ReqId req_id, bool is_ok, QString descriptor, QString error,
+                                   bool wrong_password);
     void onCameraOpenFinished(ReqId req_id, CameraHandle *handle);
 
 protected:
@@ -254,6 +210,8 @@ protected:
     void teardownModule();
     void refreshLiveDevices();
     void bindHwiModule();
+    // Opens `flow`, wired to answer through the bus, and returns once it has closed.
+    void runFlow(flow::SigningFlow *flow);
     // buildKeyEntry() helpers: pick a live device signer for a Usb route, or build
     // and cache a module-supplied one for any other usable route.
     [[nodiscard]] static auto findLiveDeviceSigner(const QString &fingerprint) -> ISigner *;
@@ -261,57 +219,8 @@ protected:
                                       KeyRouteKind route) -> ISigner *;
     [[nodiscard]] auto offlineSignerFor(const QString &fingerprint, const KeyInfo &info)
         -> ISigner *;
-    // Whether `signer` has a request in flight through the module (the interactive
-    // route flows), so a rebuild never deletes an instance out from under a caller.
-    [[nodiscard]] auto hasPendingRequests(const ISigner *signer) const -> bool;
-    // Shows the PSBT-driven signer picker and answers with the fingerprint the user
-    // picked, or an empty string on cancel. Reads the answer back through
-    // onSignerPicked(), never off the modal after execModal() returns.
-    auto showSignerPicker(const QString &title, const SigningPlan &plan) -> QString;
-    // Builds the signer picker plan for `psbt_v2_hex`. Shows an error modal and
-    // still returns the (is_ok false) plan on failure, never a fabricated one.
-    [[nodiscard]] auto signingPlanFor(const QString &psbt_v2_hex) const -> SigningPlan;
-    // Builds one signer-picker candidate for a display (verifyAddress) request out of
-    // `info`: the route buildKeyEntry() resolves for it, or the reason it cannot be
-    // used when buildKeyEntry() reports it can't sign.
-    [[nodiscard]] auto buildVerifyCandidate(const KeyInfo &info) -> SigningCandidate;
-    // Mirrors the Rust side's unusable_reason() (silent/src/keys/manager.rs): why
-    // `info` cannot be used, once buildKeyEntry() already reports it can't sign.
-    [[nodiscard]] static auto verifyUnusableReason(const KeyInfo &info) -> KeyUnusableReason;
-    // Drives the connected-device (Usb) signing route: connects to the device's own
-    // signals, starts the request, and shows UsbConfirm around it. Maps the
-    // signer's own ReqId to `req_id` before opening the modal, so an answer that
-    // lands during it can still be translated back.
-    void signWithDevice(ISigner *signer, const QString &psbt_v2_hex, const QString &descriptor,
-                        ReqId req_id);
-    // Drives the connected-device (Usb) verify route, mirroring signWithDevice():
-    // connects to the device's own signals, starts the request, and shows
-    // UsbConfirm around it.
-    void verifyWithDevice(ISigner *signer, const QString &descriptor, const QString &path,
-                          const QString &address, ReqId req_id);
-    // Translates a RouteSigner/device signer's own ReqId back to the caller's
-    // request id via m_signer_to_request, removing the entry. Falls back to
-    // `signer_req_id` unchanged when no mapping was recorded: some requests
-    // (spDescriptor) never allocate a separate signer id.
-    [[nodiscard]] auto requestIdFor(ReqId signer_req_id) -> ReqId;
 
 private:
-    // A hot-sign password prompt in flight, keyed by the prompt instance rather than a
-    // scalar field: a second promptPassword() call may open a second prompt before the
-    // first resolves.
-    struct PasswordRequest {
-        RouteSigner *requester = nullptr;
-        ReqId req_id = 0;
-    };
-
-    // An SD card route's save/load flow in flight. One at a time: the picker is a
-    // single blocking modal, so a second sign() call cannot overlap this one.
-    struct SdRequest {
-        ReqId req_id = 0;
-        QPointer<RouteSigner> signer;
-        QString psbt_hex;
-    };
-
     // Box's constness gates the pointee's constness through operator->(), so this is
     // mutable to let the const rust() accessor hand callers a mutable handle.
     mutable std::optional<rust::Box<RustKeys>> m_rust;
@@ -328,41 +237,8 @@ private:
     // deleted with it. Reused while a fingerprint's chosen route stays the same;
     // replaced, never mutated, when it changes.
     QHash<QString, ISigner *> m_signers;
-    // Requests currently in flight on a module-supplied signer, through the
-    // interactive route flows this module drives.
-    QHash<ReqId, ISigner *> m_pending_requests;
-    // Maps a RouteSigner or device ISigner's own ReqId (returned by
-    // signWithDescriptor()/displayAddress()) back to the caller-allocated request
-    // id, so an answer arriving with the signer's id can be delivered under the
-    // id the caller stored. Populated by sign()/verifyAddress() and by
-    // signWithDevice()/verifyWithDevice(); consumed by requestIdFor().
-    QHash<ReqId, ReqId> m_signer_to_request;
-    // Password prompts currently open, keyed by the modal instance.
-    QHash<QObject *, PasswordRequest> m_password_requests;
-    // The fingerprint picked in the signer picker last shown, set by onSignerPicked()
-    // while showSignerPicker()'s execModal() call is still on the stack.
-    QString m_picked_fingerprint;
-    // The connected-device (Usb) sign request currently in flight, if any.
-    ReqId m_usb_sign_req_id = 0;
-    QPointer<ISigner> m_usb_signer;
-    QPointer<keys::modal::UsbConfirm> m_usb_confirm;
-    // The original v2 psbt hex of the outstanding Usb sign request, kept to merge the
-    // device's v0 answer back into it. Cleared on every answer and cancel path,
-    // alongside m_usb_sign_req_id.
-    QString m_usb_sign_psbt_v2_hex;
-    // The connected-device (Usb) verify request currently in flight, if any.
-    ReqId m_usb_verify_req_id = 0;
-    QPointer<ISigner> m_usb_verify_signer;
-    QPointer<keys::modal::UsbConfirm> m_usb_verify_confirm;
-    // The SD card route request currently in flight, if any.
-    SdRequest m_sd_request;
-    // Owns the whole QR route (sign, verify, spDescriptor): its display and camera
-    // scan modals, its one flow in progress, and the density setting.
+    // Builds and reads back every QR exchange the signing flows run.
     QrRoute *m_qr_route = nullptr;
-    // The fingerprint each in-flight spDescriptor() request was made for, keyed by
-    // req_id, so cancel/error paths can drop the pending entry once the request
-    // resolves.
-    QHash<ReqId, QString> m_sp_descriptor_fingerprints;
     // The req_id openCamera() started most recently; cancelCamera() clears it back
     // to 0. onCameraOpenFinished() installs its handle only while this still
     // matches, so a late answer after cancel/switch is dropped, not installed.

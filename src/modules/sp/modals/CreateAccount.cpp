@@ -112,6 +112,8 @@ void CreateAccount::doConnect() {
                 &CreateAccount::onDescriptorRegistered, qontrol::UNIQUE);
         connect(Host::get()->keys(), &IKeys::error, this, &CreateAccount::onKeysError,
                 qontrol::UNIQUE);
+        connect(Host::get()->keys(), &IKeys::cancelled, this, &CreateAccount::onKeysCancelled,
+                qontrol::UNIQUE);
     }
 }
 
@@ -307,11 +309,19 @@ void CreateAccount::onKeysError(std::optional<ReqId> req_id, QString message) {
     }
 }
 
+void CreateAccount::onKeysCancelled(ReqId req_id) {
+    if (req_id != m_descriptor_req_id) {
+        return;
+    }
+    m_descriptor_req_id = 0;
+    m_fetch_btn->setEnabled(true);
+}
+
 void CreateAccount::onTestBackend() {
     auto url = m_blindbit_input->text().trimmed();
     if (url.isEmpty()) {
-        AppController::execModal(
-            new qontrol::Modal(TR("create-account-invalid-input"), TR("create-account-blindbit-empty")));
+        AppController::execModal(new qontrol::Modal(TR("create-account-invalid-input"),
+                                                    TR("create-account-blindbit-empty")));
         return;
     }
 
@@ -336,7 +346,8 @@ void CreateAccount::onBackendInfoReady(BackendInfo info) {
         m_backend_status->setState(ValidationMark::State::Invalid);
         onUpdateCreateButton();
         auto rawError = QString::fromStdString(std::string(info.error.c_str()));
-        auto message = mapBackendErrorSummary(rawError) + "\n\n" + formatBackendErrorDetails(rawError);
+        auto message =
+            mapBackendErrorSummary(rawError) + "\n\n" + formatBackendErrorDetails(rawError);
         AppController::execModal(new qontrol::Modal(TR("settings-connection-failed"), message));
         return;
     }
@@ -396,8 +407,8 @@ void CreateAccount::invalidateBackendTest() {
 void CreateAccount::onTestElectrum() {
     auto addr = m_electrum_input->text().trimmed();
     if (addr.isEmpty()) {
-        AppController::execModal(
-            new qontrol::Modal(TR("create-account-invalid-input"), TR("create-account-electrum-empty")));
+        AppController::execModal(new qontrol::Modal(TR("create-account-invalid-input"),
+                                                    TR("create-account-electrum-empty")));
         return;
     }
 
@@ -422,7 +433,8 @@ void CreateAccount::onElectrumTestReady(ConnectionResult result) {
         m_electrum_status->setState(ValidationMark::State::Invalid);
         onUpdateCreateButton();
         auto rawError = QString::fromStdString(std::string(result.error.c_str()));
-        auto message = mapBackendErrorSummary(rawError) + "\n\n" + formatBackendErrorDetails(rawError);
+        auto message =
+            mapBackendErrorSummary(rawError) + "\n\n" + formatBackendErrorDetails(rawError);
         AppController::execModal(new qontrol::Modal(TR("settings-electrum-test-failed"), message));
         return;
     }

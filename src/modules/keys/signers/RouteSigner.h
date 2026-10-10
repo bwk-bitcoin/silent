@@ -1,8 +1,6 @@
 #pragma once
 
-#include <QHash>
 #include <QObject>
-#include <QSet>
 #include <QString>
 
 #include <interfaces/signer.h>
@@ -17,10 +15,12 @@ namespace keys {
 
 class KeysModule;
 
-// Serves the hot, QR or SD card route of a registered key, whichever the module
-// picked as the key's best usable route. All four immutable accessors are fixed at
-// construction; the module drops and rebuilds the instance rather than mutating it
-// when the key's chosen route changes.
+// Stands for the hot, QR or SD card route of a registered key, whichever the module
+// picked as the key's best usable route, in the key list accounts read. It answers
+// info and cached xpubs; signing and address checks go through IKeys, whose flow
+// drives the route itself. All four immutable accessors are fixed at construction;
+// the module drops and rebuilds the instance rather than mutating it when the key's
+// chosen route changes.
 class RouteSigner final : public ISigner {
     Q_OBJECT
 
@@ -53,19 +53,6 @@ public:
     // freshly picked route to decide whether to reuse or rebuild.
     [[nodiscard]] auto route() const -> KeyRouteKind;
 
-    // Called by the module once its modal flow for an interactive route ends.
-    void deliverSigned(ReqId req_id, const QString &psbt_hex);
-    // `displayed` is the device's own verify_address answer, not a transport
-    // outcome: false means the device explicitly refused the match, and is
-    // delivered through addressVerified(), never through ISigner::error.
-    void deliverDisplayed(ReqId req_id, bool displayed);
-    void deliverError(ReqId req_id, const QString &message);
-
-    // Fetches this key's silent payment descriptor over the hot route: prompts for
-    // the module's password, then runs hot_sp_descriptor() on a background thread.
-    // Not part of ISigner: the module calls this only when route() == Hot.
-    void fetchSpDescriptor(ReqId req_id);
-
 signals:
     // Queued to itself so a result never lands before the caller holds the ReqId.
     void deferredInfo(ReqId req_id);
@@ -76,16 +63,6 @@ signals:
     void deferredRegistered(ReqId req_id, bool registered);
     void deferredIsRegistered(ReqId req_id, bool registered);
     void deferredError(ReqId req_id, QString message);
-    // The module drives the QR and SD card flows, which need modals.
-    void routeSignRequested(ReqId req_id, QString fingerprint, QString psbt_v2_hex,
-                            QString descriptor);
-    void routeDisplayRequested(ReqId req_id, QString fingerprint, QString descriptor, QString path,
-                               QString address);
-    // The Qr route's verify_address answer, delivered by deliverDisplayed().
-    void addressVerified(ReqId req_id, bool matched);
-    // The module's connection point for a completed (or failed) fetch, once
-    // KeysModule::hotSpDescriptorFetched has landed and matched a pending id.
-    void spDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error);
 
 public slots:
     void onDeferredInfo(ReqId req_id);
@@ -94,32 +71,12 @@ public slots:
     void onDeferredRegistered(ReqId req_id, bool registered);
     void onDeferredIsRegistered(ReqId req_id, bool registered);
     void onDeferredError(ReqId req_id, QString message);
-    // Matched against the module's broadcast KeysModule::hotSigned/
-    // hotSpDescriptorFetched signals by req_id: every RouteSigner instance
-    // receives them, so only the id this instance is waiting on is acted on.
-    void onHotSigned(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error);
-    void onHotSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error);
-    // Called by the module once its password prompt for `req_id` resolves. An empty
-    // password means the user cancelled the modal.
-    void onPasswordResolved(ReqId req_id, QString password);
-
-protected:
-    void signHot(ReqId req_id, const QString &psbt_v2_hex, const QString &descriptor);
-    void resolveSpDescriptorPassword(ReqId req_id, QString password);
 
 private:
     KeysModule *m_module = nullptr;
     QString m_fingerprint;
     QString m_alias;
     KeyRouteKind m_route{};
-    // A hot-sign request's PSBT, kept from signHot() until the module answers
-    // through hotSigned(): membership doubles as "is this req_id mine" when that
-    // broadcast signal lands.
-    QHash<ReqId, QString> m_pending_signs;
-    // Hot-route spDescriptor() fetches in flight, from fetchSpDescriptor() until the
-    // module answers through hotSpDescriptorFetched(); membership doubles as "is
-    // this req_id mine" the same way m_pending_signs does.
-    QSet<ReqId> m_pending_sp_descriptors;
 };
 
 } // namespace keys

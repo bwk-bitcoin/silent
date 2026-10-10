@@ -9,7 +9,7 @@
 namespace catalog {
 class AddressRow;
 class FoldSection;
-}
+} // namespace catalog
 
 #include <qwidget.h>
 #include <silent.h>
@@ -34,7 +34,6 @@ public slots:
     void onSpSectionToggled(bool expanded);
     void onSegwitSectionToggled(bool expanded);
     void onTaprootSectionToggled(bool expanded);
-    void onAddressVerified(ReqId req_id, bool verified);
     void onKeysError(std::optional<ReqId> req_id, QString message);
 
 protected:
@@ -60,7 +59,6 @@ private:
     QList<QPair<QString, QString>> m_segwit_history;
     QList<QPair<QString, QString>> m_taproot_history;
     QString m_active_history_section; // "segwit" / "taproot" for the open modal
-    QString m_verify_address;
     ReqId m_verify_req_id = 0;
 };
 

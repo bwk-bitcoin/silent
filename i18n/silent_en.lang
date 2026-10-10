@@ -28,8 +28,6 @@ common-testing => "Testing…"
 common-yes => "Yes"
 confirm-send-broadcasting => "Broadcasting…"
 confirm-send-failed => "Broadcast Failed\n\n%1"
-confirm-send-device-step => "Confirm the transaction on %1."
-confirm-send-sd-step => "Select a file destination for the signed transaction."
 confirm-send-signed => "Signed. Ready to broadcast."
 confirm-send-success => "Transaction Sent\n\nTxid: %1"
 confirm-transaction-title => "Confirm Transaction"
@@ -93,7 +91,6 @@ receive-label-placeholder => "Address label"
 receive-no-previous-addresses => "No previous addresses."
 receive-title => "Receive"
 receive-verify-title => "Verify"
-receive-verify-message => "Confirm the address on %1."
 receive-verify-unavailable => "No signing device is available for address verification in this build."
 send-action-send => "Send"
 send-action-sign => "Sign"
@@ -116,7 +113,6 @@ send-max => "MAX"
 send-max-suffix => "(max)"
 send-label => "Description:"
 send-no-account-loaded => "No account loaded."
-send-no-signers => "No ready signers found."
 send-placeholder-address => "Address"
 send-placeholder-amount => "0.002"
 send-placeholder-label => "Label"
@@ -124,7 +120,6 @@ send-prepare-failed => "Prepare Failed"
 send-proceed-anyway => "Proceed anyway?"
 send-recipients => "Payments"
 send-select-inputs => "Coins Selection"
-send-select-signer => "Select a Signer"
 send-signing-failed => "Signing failed."
 send-summary-change => "Change"
 send-summary-fee => "Network Fee"
@@ -373,33 +368,11 @@ keys-no-usable-route => "This key has no usable signing route."
 
 keys-route-unsupported => "This signing route is not supported for this request."
 
-keys-hot-no-display => "A hot key has no screen to verify an address on."
-
 keys-no-raw-requests => "This signer takes no raw requests."
-
-keys-signing-cancelled => "Signing was cancelled."
 
 keys-route-unavailable => "This signing route is not available yet."
 
 keys-module-not-ready => "The keys module is not ready."
-
-keys-picker-must-sign-first => "Must sign first"
-
-keys-picker-waiting-for-sp => "Waiting for the silent payment key to sign"
-
-keys-picker-required => "Required to sign"
-
-keys-picker-other-devices => "Other connected devices"
-
-keys-picker-unrelated => "Not needed by this transaction"
-
-keys-picker-not-registered => "Not registered as a key"
-
-keys-picker-no-route => "No usable signing route"
-
-keys-picker-device-offline => "Device is not connected"
-
-keys-picker-unknown-reason => "Unusable"
 
 keys-sd-save-title => "Save the unsigned transaction"
 
@@ -407,47 +380,13 @@ keys-sd-load-title => "Load the signed transaction"
 
 keys-sd-filter => "Partially signed transaction (*.psbt)"
 
-keys-sd-load-step
-=> "Sign the file on the device, then load the signed transaction back.";;
-
-keys-sd-save-failed => "Could not write the transaction to that path."
-
-keys-sd-load-failed => "Could not read the signed transaction from that path."
-
-keys-qr-title => "Show the transaction"
-
 keys-qr-part => "Part %1 / %2"
 
 keys-qr-contrast => "Contrast"
 
 keys-qr-density => "Density"
 
-keys-qr-speed => "Animation speed"
-
-keys-qr-next => "Next"
-
-keys-qr-rebuilding => "Rebuilding the frames..."
-
 keys-qr-frame-failed => "Could not render this frame: %1"
-
-keys-camera-title => "Scan the signed transaction"
-
-keys-camera-source => "Camera source"
-
-keys-camera-progress => "%1 of %2 parts scanned"
-
-keys-camera-waiting => "Point the camera at the animated code."
-
-keys-camera-unsupported => "Camera capture is only available on Linux in this build."
-
-keys-camera-none => "No camera was found."
-
-keys-camera-previous => "Previous"
-
-keys-qr-response-mismatch => "That code answers a different request."
-
-keys-qr-response-partial
-=> "That device returned signatures only; a full transaction is required.";;
 
 create-account-key => "Key:"
 
@@ -463,13 +402,7 @@ keys-sp-descriptor-unavailable
 keys-sp-descriptor-no-origin
 => "That descriptor carries no key origin and cannot be used.";;
 
-receive-verify-matched => "The device confirmed this address."
-
-receive-verify-mismatch => "The device did not confirm this address. Do not use it."
-
 main-keys-tab => "Keys"
-
-keys-qr-busy => "Another QR exchange is already in progress."
 
 receive-show-qr => "Show QR code"
 
@@ -759,3 +692,88 @@ flow-the-device => "the device"
 flow-no-signer-title => "No Signer Available"
 
 flow-other-devices => "Other Connected Devices"
+
+flow-sign-title => "Sign Transaction"
+
+flow-verify-title => "Verify Address"
+
+flow-fetch-title => "Get Descriptor"
+
+flow-sign-picker-lead => "Each key below must sign this transaction."
+
+flow-verify-picker-lead => "Pick the device to check this address on."
+
+flow-usb-confirm-title => "Confirm on the Device"
+
+flow-verify-usb-title => "Check on the Device"
+
+flow-sign-usb-wait => "Review the transaction on %1 and approve it."
+
+flow-verify-usb-wait
+=> "Check that %1 shows the same address as below, then confirm on the device.";;
+
+flow-fetch-usb-wait => "Approve the silent payment descriptor export on %1."
+
+flow-sign-qr-title => "Show Transaction"
+
+flow-verify-qr-title => "Show Address Request"
+
+flow-fetch-qr-title => "Show Descriptor Request"
+
+flow-sign-qr-hint => "Scan this code with the signing device."
+
+flow-verify-qr-hint
+=> "Scan this code with the device. It derives the address and shows it.";;
+
+flow-fetch-qr-hint
+=> "Scan this code with the device to request its silent payment descriptor.";;
+
+flow-sign-scan-title => "Scan Signed Transaction"
+
+flow-verify-scan-title => "Scan the Device Answer"
+
+flow-fetch-scan-title => "Scan Descriptor"
+
+flow-sign-scan-hint
+=> "Hold the signed transaction code from the device in front of the camera.";;
+
+flow-verify-scan-hint
+=> "Hold the answer code from the device in front of the camera.";;
+
+flow-fetch-scan-hint
+=> "Hold the descriptor code from the device in front of the camera.";;
+
+flow-sign-sd-title => "Sign with SD Card"
+
+flow-verify-sd-title => "Verify with SD Card"
+
+flow-fetch-sd-title => "Descriptor from SD Card"
+
+flow-sign-hot-prompt => "Enter the password of “%1” to sign the transaction."
+
+flow-verify-hot-prompt => "Enter the password of “%1” to check this address."
+
+flow-fetch-hot-prompt
+=> "Enter the password of “%1” to get its silent payment descriptor.";;
+
+flow-sign-hot-busy => "Signing the transaction…"
+
+flow-verify-hot-busy => "Checking the address…"
+
+flow-fetch-hot-busy => "Getting the descriptor…"
+
+flow-hot-busy-with => "With “%1”."
+
+flow-no-signer-sign
+=> "No key of this account is registered on this computer. Add one in the Keys tab.";;
+
+flow-no-signer-verify
+=> "No key of this account can show addresses. Add a USB or QR route in the Keys tab.";;
+
+flow-other-device-sign => "Not needed for this transaction."
+
+flow-other-device-other => "Not a key of this account."
+
+flow-plan-failed => "Silent could not read this transaction."
+
+flow-password-wrong => "Wrong password. Try again."

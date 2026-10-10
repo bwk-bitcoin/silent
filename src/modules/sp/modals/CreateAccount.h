@@ -51,6 +51,7 @@ public slots:
     void onSpDescriptorReady(ReqId req_id, QString descriptor, QString fingerprint);
     void onDescriptorRegistered(ReqId req_id);
     void onKeysError(std::optional<ReqId> req_id, QString message);
+    void onKeysCancelled(ReqId req_id);
     void onBackendInfoReady(BackendInfo info);
     void onElectrumTestReady(ConnectionResult result);
 
