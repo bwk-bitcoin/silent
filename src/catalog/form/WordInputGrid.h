@@ -21,6 +21,7 @@ public:
     using WordCheck = std::function<bool(const QString &)>;
 
     explicit WordInputGrid(QWidget *parent = nullptr);
+    // Keeps the words typed in the cells that remain.
     void setWordCount(int count);
     void setWordCheck(WordCheck check);
     [[nodiscard]] auto words() const -> QStringList;

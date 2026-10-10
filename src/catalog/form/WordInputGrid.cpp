@@ -29,6 +29,8 @@ WordInputGrid::WordInputGrid(QWidget *parent) : QWidget(parent) {
 }
 
 void WordInputGrid::setWordCount(int count) {
+    // The words typed so far stay in their cells.
+    QStringList typed = words();
     while (auto *item = m_grid->takeAt(0)) {
         delete item->widget();
         delete item;
@@ -46,6 +48,10 @@ void WordInputGrid::setWordCount(int count) {
 
         auto *cell = new ValidatedInput(InputRole::Mono);
         cell->setProperty(K_WORD_INDEX, index);
+        if (index < typed.size()) {
+            cell->input()->setText(typed.at(index));
+            markCell(cell);
+        }
         connect(cell, &ValidatedInput::textChanged, this, &WordInputGrid::onCellEdited,
                 qontrol::UNIQUE);
         m_cells.append(cell);
