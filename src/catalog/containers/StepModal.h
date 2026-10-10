@@ -10,6 +10,7 @@ class QStackedWidget;
 
 namespace catalog {
 
+class Label;
 class ModalActions;
 class ScrollArea;
 
@@ -37,8 +38,8 @@ protected:
     auto addStep(const QString &title, ModalWidth width, QWidget *body, ModalActions *actions)
         -> int;
     void setStepTitle(int step, const QString &title);
-    // Pinned on the right above every step (the window title is the system's): a
-    // fingerprint, a status pill. Null clears it.
+    // Pinned on the right above every step, with the step title on the left as the
+    // design's modal header draws it: a fingerprint, a status pill. Null clears it.
     void setHeaderEnd(QWidget *widget);
     void setHeaderEndVisible(bool visible);
     void showStep(int step);
@@ -49,6 +50,7 @@ protected:
 private:
     QStackedWidget *m_stack = nullptr;
     qontrol::Row *m_header = nullptr;
+    Label *m_header_title = nullptr;
     QWidget *m_header_end = nullptr;
     QList<Step> m_steps;
 };

@@ -2,6 +2,7 @@
 
 #include "catalog/containers/ModalActions.h"
 #include "catalog/containers/ScrollArea.h"
+#include "catalog/display/Label.h"
 
 #include <QLayout>
 #include <QScreen>
@@ -21,7 +22,10 @@ constexpr qreal MAX_SCREEN_SHARE = 0.9;
 
 StepModal::StepModal() {
     m_stack = new QStackedWidget;
-    m_header = (new qontrol::Row)->pushSpacer();
+    m_header_title = new Label(LabelRole::Heading);
+    // Long titles give way to the header end, as the design truncates them.
+    m_header_title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_header = (new qontrol::Row)->push(m_header_title, 1);
     m_header->setVisible(false);
     auto *main = (new qontrol::Column)
                      ->margins(resolve(Padding::L))
@@ -65,6 +69,7 @@ void StepModal::setStepTitle(int step, const QString &title) {
     m_steps[step].title = title;
     if (step == m_stack->currentIndex()) {
         setWindowTitle(title);
+        m_header_title->setText(title);
     }
 }
 
@@ -78,6 +83,7 @@ void StepModal::showStep(int step) {
 
     const auto &current = m_steps.at(step);
     setWindowTitle(current.title);
+    m_header_title->setText(current.title);
     setFixedWidth(resolve(current.width));
     // Free of the height fixed last time, so the window hint is the chrome plus the
     // area's own hint.
