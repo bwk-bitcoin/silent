@@ -62,6 +62,13 @@ auto emptyLine(const QString &text) -> Label * {
     return label;
 }
 
+// The account column leads the row, in demibold as the design sets it.
+auto accountName(const QString &name) -> Label * {
+    auto *label = new Label(name, LabelRole::Body);
+    label->setWeight(QFont::DemiBold);
+    return label;
+}
+
 auto routeIconLabel(KeyRouteKind kind) -> QWidget * {
     auto *icon = new QLabel;
     icon->setPixmap(catalog::routeIcon(kind)(IconColor::Accent)
@@ -454,9 +461,8 @@ void KeyDetail::refreshAccounts(const KeyInfo &info) {
     for (const auto &account : list) {
         auto *module = new Label(TR("keys-accounts-module-sp"), LabelRole::Body);
         module->setTone(LabelTone::Muted);
-        m_accounts_table->addWidgetRow(
-            account.descriptor,
-            {new Label(account.name, LabelRole::Body), module, registrationCell(account, applies)});
+        m_accounts_table->addWidgetRow(account.descriptor, {accountName(account.name), module,
+                                                            registrationCell(account, applies)});
     }
     m_accounts_table->setVisible(!list.isEmpty());
     m_accounts_empty->setVisible(list.isEmpty());

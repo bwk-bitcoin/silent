@@ -55,6 +55,8 @@ public:
     [[nodiscard]] auto scale() const -> qreal;
     void setTone(LabelTone tone);
     void setSize(LabelSize size);
+    // Overrides the role's weight (a demibold body value in a table cell).
+    void setWeight(QFont::Weight weight);
     // Wraps `text` at any character, not only at spaces (long mono values).
     void setTextWrapAnywhere(const QString &text);
     // Wraps `text` at `max_width` only when it does not fit on one line, and then sizes
@@ -70,6 +72,7 @@ private:
     LabelRole m_role = LabelRole::Body;
     qreal m_scale = 1.0;
     std::optional<LabelSize> m_size;
+    std::optional<QFont::Weight> m_weight;
 };
 
 } // namespace catalog

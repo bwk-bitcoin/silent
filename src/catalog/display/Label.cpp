@@ -87,6 +87,11 @@ void Label::setSize(LabelSize size) {
     applyRole();
 }
 
+void Label::setWeight(QFont::Weight weight) {
+    m_weight = weight;
+    applyRole();
+}
+
 void Label::setTextWrapAnywhere(const QString &text) {
     // A zero-width space after every character gives QLabel a break point anywhere.
     QString breakable;
@@ -208,7 +213,7 @@ void Label::applyRole() {
     int baseSize = m_size.has_value() ? sizeForStep(*m_size) : roleFont.size;
     f.setPointSize(static_cast<int>(baseSize * m_scale));
     f.setFamily(roleFont.family);
-    f.setWeight(roleFont.weight);
+    f.setWeight(m_weight.value_or(roleFont.weight));
     bool eyebrow = m_role == LabelRole::Eyebrow;
     f.setCapitalization(eyebrow ? QFont::AllUppercase : QFont::MixedCase);
     // design 0.14em eyebrow tracking
