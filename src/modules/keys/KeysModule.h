@@ -259,10 +259,10 @@ private:
     HwiModule *m_hwi = nullptr;
     QPointer<KeysTab> m_tab;
     ReqId m_next_req_id = 0;
-    // The network the Rust manager was last synced to. Guards setNetwork() against its
-    // own state rather than ::hwi_config_network(), which HwiModule::setNetwork also
-    // writes and may already reflect the incoming value by the time this runs.
-    Network m_synced_network = KeysModule::network();
+    // The network the Rust manager holds. network() answers from it rather than from
+    // ::hwi_config_network(), which is read from disk and can drift from the manager
+    // (a failed config write, another process), so a sealed key always matches.
+    static Network s_network;
     // Module-supplied signers (hot, QR, SD card), parented to this module and
     // deleted with it. Reused while a fingerprint's chosen route stays the same;
     // replaced, never mutated, when it changes.

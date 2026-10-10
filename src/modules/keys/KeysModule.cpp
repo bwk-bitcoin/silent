@@ -34,6 +34,8 @@ auto failedOp(const QString &error) -> KeyOpResult {
 
 } // namespace
 
+Network KeysModule::s_network = Network::Bitcoin;
+
 KeysBus::KeysBus(KeysModule *module, QObject *parent) : IKeys(parent), m_module(module) {
 }
 
@@ -164,7 +166,8 @@ void KeysModule::startInstance(const QString &id) {
 }
 
 void KeysModule::createModule() {
-    m_rust = std::make_optional(::new_keys_module(KeysModule::network()));
+    s_network = ::hwi_config_network();
+    m_rust = std::make_optional(::new_keys_module(s_network));
     if (!m_rust.value()->is_ok()) {
         qWarning() << "keys:" << toQt(m_rust.value()->get_error());
     }
@@ -200,13 +203,11 @@ void KeysModule::teardownModule() {
 }
 
 Network KeysModule::network() {
-    // The device service network is the application network today, and the Keys tab
-    // drives both selectors from one combobox.
-    return ::hwi_config_network();
+    return s_network;
 }
 
 void KeysModule::setNetwork(Network network) {
-    if (m_synced_network == network) {
+    if (s_network == network) {
         return;
     }
     if (!m_rust.has_value()) {
@@ -219,7 +220,7 @@ void KeysModule::setNetwork(Network network) {
         qWarning() << "keys:" << toQt(result.error);
         return;
     }
-    m_synced_network = network;
+    s_network = network;
     emit keysChanged();
 }
 

@@ -114,6 +114,11 @@ void KeysTab::init() {
     if (index >= 0) {
         m_network_selector->setCurrentIndex(index);
     }
+    // The device service starts from its own config: align it with the network the
+    // key records are on, so a device key is fetched for the network shown here.
+    if (m_module->hwi() != nullptr) {
+        m_module->hwi()->setNetwork(KeysModule::network());
+    }
 
     m_error = new catalog::Notice(catalog::Notice::Tone::Error);
     auto *dismiss = catalog::btnDismissNotice();
