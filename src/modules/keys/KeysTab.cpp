@@ -229,12 +229,18 @@ void KeysTab::rebuildDevices() {
             continue;
         }
         ++count;
-        m_device_column->push(deviceRow(entry));
+        auto *row = deviceRow(entry);
+        m_device_column->push(row);
+        // A widget added to a shown layout is only shown on the next event loop pass,
+        // after the scroll area measured the column without it: show it now.
+        row->show();
     }
     if (count == 0) {
-        m_device_column->push(new catalog::EmptyState(
+        auto *empty = new catalog::EmptyState(
             icon::usb, TR("keys-devices-empty-title"),
-            TR("keys-devices-empty-sub").arg(networkLabel(KeysModule::network()))));
+            TR("keys-devices-empty-sub").arg(networkLabel(KeysModule::network())));
+        m_device_column->push(empty);
+        empty->show();
     }
     m_device_column->pushStretch(1);
     m_devices->header()->setCount(count > 0 ? QString::number(count) : QString());
@@ -299,7 +305,9 @@ void KeysTab::rebuildKeys() {
 
     QList<KeyInfo> keyList = m_module->keys();
     for (const auto &info : keyList) {
-        m_key_column->push(keyRow(info));
+        auto *row = keyRow(info);
+        m_key_column->push(row);
+        row->show();
     }
     if (keyList.isEmpty()) {
         auto *addKey = catalog::btnAddAKey();
@@ -309,6 +317,7 @@ void KeysTab::rebuildKeys() {
             TR("keys-keys-empty-sub"));
         empty->setAction(addKey);
         m_key_column->push(empty);
+        empty->show();
         m_keys->header()->setAction(nullptr);
     } else {
         auto *addKey = catalog::btnAddAKey();
