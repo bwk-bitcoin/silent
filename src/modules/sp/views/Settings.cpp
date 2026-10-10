@@ -8,6 +8,7 @@
 #include "catalog/containers/Separator.h"
 #include "catalog/display/Label.h"
 #include "catalog/form/FieldGroup.h"
+#include "catalog/form/FieldNote.h"
 #include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
 #include "i18n/Tr.h"
@@ -23,6 +24,7 @@ namespace view {
 using catalog::Button;
 using catalog::ComboBox;
 using catalog::FieldGroup;
+using catalog::FieldNote;
 using catalog::FoldSection;
 using catalog::Input;
 using catalog::Label;
@@ -80,6 +82,11 @@ void Settings::init() {
     m_testing_electrum_btn = catalog::btnTesting();
     m_testing_electrum_btn->setEnabled(false);
     m_test_ok_electrum_btn = catalog::btnTestOk();
+
+    m_blindbit_note = new FieldNote(QString(), FieldNote::Tone::Error);
+    m_blindbit_note->setVisible(false);
+    m_electrum_note = new FieldNote(QString(), FieldNote::Tone::Error);
+    m_electrum_note->setVisible(false);
 
     m_network_selector = new ComboBox;
     m_network_selector->addItem("Regtest", static_cast<int>(Network::Regtest));
@@ -239,11 +246,10 @@ void Settings::onActionToggleElectrum() {
 void Settings::onActionTestBackend() {
     auto url = m_blindbit_url_input->text().trimmed();
     if (url.isEmpty()) {
-        auto *modal = new qontrol::Modal(TR("common-error"), TR("settings-blindbit-empty"));
-        AppController::execModal(modal);
         return;
     }
 
+    showTestError(m_blindbit_note, QString());
     showTestState(m_test_btn, m_testing_btn, m_test_ok_btn, TestState::Testing);
 
     auto *thread = QThread::create([this, url = url.toStdString()]() -> void {
@@ -258,6 +264,11 @@ void Settings::showTestState(Button *test, Button *testing, Button *test_ok, Tes
     test->setVisible(state == TestState::Untested);
     testing->setVisible(state == TestState::Testing);
     test_ok->setVisible(state == TestState::Ok);
+}
+
+void Settings::showTestError(FieldNote *note, const QString &error) {
+    note->setText(error);
+    note->setVisible(!error.isEmpty());
 }
 
 void Settings::fetchBackendInfo() {
@@ -280,9 +291,7 @@ void Settings::onBackendInfoReady(const BackendInfo &info) {
         clearBackendInfo();
         updateButtons();
         auto rawError = QString::fromStdString(std::string(info.error));
-        auto message =
-            mapBackendErrorSummary(rawError) + "\n\n" + formatBackendErrorDetails(rawError);
-        AppController::execModal(new qontrol::Modal(TR("settings-connection-failed"), message));
+        showTestError(m_blindbit_note, mapBackendErrorSummary(rawError));
         return;
     }
 
@@ -324,16 +333,17 @@ void Settings::onBackendInfoReady(const BackendInfo &info) {
                                 .arg(yn(info.tweaks_cut_through_with_dust_filter)));
     m_capabilities->setAlignment(Qt::AlignTop);
 
+    QString mismatch;
     if (!networkMatch) {
-        AppController::execModal(new qontrol::Modal(TR("settings-network-mismatch"),
-                                                    TR("settings-network-mismatch-message")
-                                                        .arg(networkStr)
-                                                        .arg(m_network_selector->currentText())));
+        mismatch =
+            TR("create-account-backend-network").arg(networkStr, m_network_selector->currentText());
     }
+    showTestError(m_blindbit_note, mismatch);
 }
 
 void Settings::invalidateBackendTest() {
     m_backend_verified = false;
+    showTestError(m_blindbit_note, QString());
     showTestState(m_test_btn, m_testing_btn, m_test_ok_btn, TestState::Untested);
     clearBackendInfo();
     updateButtons();
@@ -342,11 +352,10 @@ void Settings::invalidateBackendTest() {
 void Settings::onActionTestElectrum() {
     auto addr = m_electrum_url_input->text().trimmed();
     if (addr.isEmpty()) {
-        auto *modal = new qontrol::Modal(TR("common-error"), TR("settings-electrum-empty"));
-        AppController::execModal(modal);
         return;
     }
 
+    showTestError(m_electrum_note, QString());
     showTestState(m_test_electrum_btn, m_testing_electrum_btn, m_test_ok_electrum_btn,
                   TestState::Testing);
 
@@ -365,9 +374,7 @@ void Settings::onElectrumTestReady(const ConnectionResult &result) {
                       TestState::Untested);
         updateButtons();
         auto rawError = QString::fromStdString(std::string(result.error));
-        auto message =
-            mapBackendErrorSummary(rawError) + "\n\n" + formatBackendErrorDetails(rawError);
-        AppController::execModal(new qontrol::Modal(TR("settings-electrum-test-failed"), message));
+        showTestError(m_electrum_note, mapBackendErrorSummary(rawError));
         return;
     }
 
@@ -382,6 +389,7 @@ void Settings::onElectrumTestReady(const ConnectionResult &result) {
 
 void Settings::invalidateElectrumTest() {
     m_electrum_verified = false;
+    showTestError(m_electrum_note, QString());
     showTestState(m_test_electrum_btn, m_testing_electrum_btn, m_test_ok_electrum_btn,
                   TestState::Untested);
     updateButtons();
@@ -406,10 +414,11 @@ void Settings::updateButtons() {
     m_connect_electrum_btn->setEnabled(m_electrum_verified);
     m_disconnect_electrum_btn->setEnabled(true);
     m_blindbit_url_input->setEnabled(!blindbitRunning);
-    m_test_btn->setEnabled(!blindbitRunning);
+    m_test_btn->setEnabled(!blindbitRunning && !m_blindbit_url_input->text().trimmed().isEmpty());
     m_test_ok_btn->setEnabled(!blindbitRunning);
     m_electrum_url_input->setEnabled(!m_electrum_running);
-    m_test_electrum_btn->setEnabled(!m_electrum_running);
+    m_test_electrum_btn->setEnabled(!m_electrum_running &&
+                                    !m_electrum_url_input->text().trimmed().isEmpty());
     m_test_ok_electrum_btn->setEnabled(!m_electrum_running);
 }
 
@@ -446,7 +455,9 @@ void Settings::view() {
 
     auto *connectionContent = (new FieldGroup)
                                   ->addField(TR("settings-blindbit-url"), urlControl)
+                                  ->addNote(m_blindbit_note)
                                   ->addField(TR("settings-electrum-server"), electrumControl)
+                                  ->addNote(m_electrum_note)
                                   ->addField(TR("settings-network"), m_network_selector);
     auto *connectionSection = new FoldSection(TR("settings-connection"));
     connectionSection->setContent(connectionContent);

@@ -17,6 +17,10 @@ class Input;
 }
 
 namespace catalog {
+class FieldNote;
+}
+
+namespace catalog {
 class Label;
 }
 
@@ -64,6 +68,8 @@ protected:
     // An endpoint's Test button cycles Test, Testing… and ✓ Test.
     static void showTestState(catalog::Button *test, catalog::Button *testing,
                               catalog::Button *test_ok, TestState state);
+    // The reason the last test of an endpoint failed, under its field.
+    static void showTestError(catalog::FieldNote *note, const QString &error);
     void fetchBackendInfo();
     void invalidateBackendTest();
     void clearBackendInfo();
@@ -89,6 +95,8 @@ private:
     catalog::Button *m_test_electrum_btn = nullptr;
     catalog::Button *m_testing_electrum_btn = nullptr;
     catalog::Button *m_test_ok_electrum_btn = nullptr;
+    catalog::FieldNote *m_blindbit_note = nullptr;
+    catalog::FieldNote *m_electrum_note = nullptr;
     catalog::Label *m_info_network_label = nullptr;
     catalog::Label *m_info_height_label = nullptr;
     catalog::Label *m_capabilities = nullptr;

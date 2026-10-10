@@ -632,7 +632,6 @@ send-transaction-state-lost
 send-transaction-title => "Transaction" => "Transazione"
 send-validation-error => "Validation Error" => "Errore di validazione"
 settings-backend-info => "Backend Info:" => "Info backend:"
-settings-blindbit-empty => "BlindBit URL is empty" => "URL BlindBit vuoto"
 settings-blindbit-url => "BlindBit URL:" => "URL BlindBit:"
 settings-block-height => "Block Height:" => "Altezza blocco:"
 settings-capabilities => "Capabilities:" => "Capacita:"
@@ -640,7 +639,6 @@ settings-capabilities-template
 => "Tweaks Only: %1\nFull Basic: %2\nFull + Dust Filter: %3\nCut-Through + Dust Filter: %4"
 => "Solo Tweaks: %1\nFull Basic: %2\nFull + filtro dust: %3\nCut-Through + filtro dust: %4";;
 settings-connection => "Connection" => "Connessione"
-settings-connection-failed => "Connection Failed" => "Connessione fallita"
 settings-disable-account-one => "1 open account closes" => "NONE"
 settings-disable-account-one-text
 => "%1 comes from this plugin and will close. Enable the plugin again to reopen it."
@@ -661,9 +659,7 @@ settings-disable-themes
 => "Its themes (%1) are removed. If one is in use, Silent switches to Light."
 => "NONE";;
 settings-disable-title => "Disable Plugin" => "NONE"
-settings-electrum-empty => "Electrum address is empty" => "Indirizzo Electrum vuoto"
 settings-electrum-server => "Electrum Server:" => "Server Electrum:"
-settings-electrum-test-failed => "Electrum Test Failed" => "Test Electrum fallito"
 settings-extension-settings => "Extension Settings" => "Impostazioni estensioni"
 settings-failed-start-electrum
 => "Failed to start electrum"
@@ -675,10 +671,6 @@ settings-language-saved
 => "Language saved. Restart Silent to apply it everywhere."
 => "NONE";;
 settings-network => "Network:" => "Rete:"
-settings-network-mismatch => "Network Mismatch" => "Rete non corrispondente"
-settings-network-mismatch-message
-=> "Backend network is %1 but account network is %2"
-=> "La rete backend e %1 ma la rete account e %2";;
 settings-no-account-loaded => "No account loaded" => "Nessun account caricato"
 settings-no-plugin => "No Plugin Found" => "NONE"
 settings-no-plugin-text
