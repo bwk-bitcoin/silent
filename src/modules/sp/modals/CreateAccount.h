@@ -4,6 +4,7 @@
 
 #include <QList>
 #include <QString>
+#include <QStringList>
 
 #include "catalog/containers/Modal.h"
 #include <interfaces/keys.h>
@@ -101,6 +102,10 @@ protected:
     void showFetchError(const QString &message);
     // Runs the fetch the last click asked for, once this window has closed.
     void runFetch();
+    // Registers the next of the account's descriptors with its key, then writes the
+    // account once all are.
+    void registerNext();
+    void finishCreate();
     // The xpub path of a sub-account, at account 0 of the picked network's coin type.
     [[nodiscard]] auto subAccountPath(int purpose) const -> QString;
 
@@ -133,6 +138,8 @@ private:
     ReqId m_descriptor_req_id = 0;
     ReqId m_xpub_req_id = 0;
     ReqId m_register_req_id = 0;
+    // The descriptors still to register before the account is written.
+    QStringList m_to_register;
     // What the window closed to fetch, run by exec() in its place.
     enum class Fetch : std::uint8_t { SilentPayment, Taproot, Segwit };
     std::optional<Fetch> m_pending_fetch;

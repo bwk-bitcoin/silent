@@ -334,10 +334,33 @@ fn resolve_sp_fingerprint(
     }
 
     if sp_outputs_pending {
-        return Err(Error::SpOutputsUnresolvable);
+        return resolve_by_input_owner(psbt, sp_descriptors);
     }
 
     Ok(None)
+}
+
+/// No silent payment input names the signer that must derive the pending outputs:
+/// the key that owns every input does (BIP375: the shares come from the inputs'
+/// keys), for instance an account spending its own sub-account coins to its silent
+/// payment change. It must hold a registered sp() descriptor to sign as one. Inputs
+/// of several keys need each to contribute its share, which is not supported.
+fn resolve_by_input_owner(
+    psbt: &PsbtV2,
+    sp_descriptors: &[SpDescriptor],
+) -> Result<Option<Fingerprint>, Error> {
+    let owners = scan(psbt)?.required;
+    let mut owners = owners.into_iter();
+    let (Some(owner), None) = (owners.next(), owners.next()) else {
+        return Err(Error::SpOutputsUnresolvable);
+    };
+    if !sp_descriptors
+        .iter()
+        .any(|descriptor| descriptor.fingerprint() == Some(owner))
+    {
+        return Err(Error::SpKeyUnknown(Some(owner)));
+    }
+    Ok(Some(owner))
 }
 
 pub fn inspect(
@@ -950,6 +973,51 @@ mod tests {
             matches!(result, Err(Error::SpOutputsUnresolvable)),
             "expected SpOutputsUnresolvable, got {result:?}"
         );
+    }
+
+    #[test]
+    fn a_pending_output_with_one_input_owner_resolves_to_that_key() {
+        let secp = secp();
+        let (descriptor, fp) = sp_descriptor_with_origin();
+        let mut input = blank_input();
+        input
+            .psbt
+            .bip32_derivation
+            .insert(public_key(&secp, 0xa1), key_source(fp));
+        let mut psbt = empty_psbt();
+        psbt.inputs.push(input);
+        psbt.outputs.push(blank_output(None));
+
+        let artifacts = inspect(&psbt, &[descriptor], &secp).expect("inspect succeeds");
+        assert_eq!(artifacts.sp_fingerprint, Some(fp));
+        // Without that key's sp() descriptor it cannot derive the outputs.
+        assert!(matches!(
+            inspect(&psbt, &[], &secp),
+            Err(Error::SpKeyUnknown(Some(unknown))) if unknown == fp
+        ));
+    }
+
+    #[test]
+    fn a_pending_output_with_two_input_owners_is_unresolvable() {
+        let secp = secp();
+        let (descriptor, fp) = sp_descriptor_with_origin();
+        let mut input = blank_input();
+        input
+            .psbt
+            .bip32_derivation
+            .insert(public_key(&secp, 0xa1), key_source(fp));
+        input
+            .psbt
+            .bip32_derivation
+            .insert(public_key(&secp, 0xa2), key_source(fingerprint(0x02)));
+        let mut psbt = empty_psbt();
+        psbt.inputs.push(input);
+        psbt.outputs.push(blank_output(None));
+
+        assert!(matches!(
+            inspect(&psbt, &[descriptor], &secp),
+            Err(Error::SpOutputsUnresolvable)
+        ));
     }
 
     #[test]

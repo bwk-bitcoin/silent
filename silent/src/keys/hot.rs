@@ -357,6 +357,100 @@ mod tests {
         record
     }
 
+    /// A hot key spending its own BIP86 coin (a taproot sub-account coin) to a
+    /// silent payment output: no SP input, so its seed's key makes the ECDH share
+    /// and signs the coin (pythcoiner/silent#51).
+    #[test]
+    fn a_sub_account_coin_pays_a_silent_payment_output() {
+        use crate::keys::record::DescriptorEntry;
+        use bitcoin::{
+            bip32::Xpriv,
+            hashes::Hash,
+            key::TapTweak,
+            secp256k1::{Secp256k1, SecretKey},
+            transaction, Amount, OutPoint, ScriptBuf, Sequence, TxOut, Txid,
+        };
+        use bwk_sp::{
+            account::bip375,
+            bwk_tx::bwk_psbt::{sp::set_sp_v0_output, Input, Output},
+        };
+
+        let secp = Secp256k1::new();
+        let password = || Password::new("password".to_string());
+        let mut record = test_record();
+        let sp = sp_descriptor(&record, Network::Regtest, password()).expect("sp descriptor");
+        let account = DerivationPath::from_str("m/86'/1'/0'").unwrap();
+        let account_xpub = xpub_at(&record, Network::Regtest, password(), &account).unwrap();
+        let taproot = crate::config::taproot_descriptor_for(
+            record.fingerprint.to_string(),
+            account_xpub.to_string(),
+            crate::ffi::Network::Regtest,
+        );
+        assert!(!taproot.is_empty());
+        for descriptor in [sp.to_string(), taproot] {
+            record.descriptors.push(DescriptorEntry {
+                alias: "acct".to_string(),
+                descriptor,
+            });
+        }
+
+        // The coin at m/86'/1'/0'/0/0, with its origin, as the account's PSBT has it.
+        let seed = bip39::Mnemonic::from_str(TEST_MNEMONIC)
+            .unwrap()
+            .to_seed("");
+        let master = Xpriv::new_master(Network::Regtest, &seed).unwrap();
+        let path = DerivationPath::from_str("m/86'/1'/0'/0/0").unwrap();
+        let internal = master.derive_priv(&secp, &path).unwrap().private_key;
+        let (internal_x, _) = internal.public_key(&secp).x_only_public_key();
+        let (output_key, _) = internal_x.tap_tweak(&secp, None);
+        let mut coin = bitcoin::psbt::Input {
+            witness_utxo: Some(TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: ScriptBuf::new_p2tr_tweaked(output_key),
+            }),
+            tap_internal_key: Some(internal_x),
+            ..Default::default()
+        };
+        coin.tap_key_origins
+            .insert(internal_x, (vec![], (record.fingerprint, path)));
+        let mut output = bitcoin::psbt::Output::default();
+        let scan = SecretKey::from_slice(&[11; 32]).unwrap().public_key(&secp);
+        let spend = SecretKey::from_slice(&[12; 32]).unwrap().public_key(&secp);
+        set_sp_v0_output(&mut output, scan, spend, None);
+        let psbt = PsbtV2 {
+            tx_version: transaction::Version::TWO,
+            fallback_lock_time: Some(bitcoin::absolute::LockTime::ZERO),
+            tx_modifiable: None,
+            xpub: Default::default(),
+            proprietary: Default::default(),
+            unknown: Default::default(),
+            inputs: vec![Input {
+                previous_output: OutPoint::new(Txid::from_byte_array([9; 32]), 0),
+                sequence: Sequence::MAX,
+                required_time_lock_time: None,
+                required_height_lock_time: None,
+                psbt: coin,
+            }],
+            outputs: vec![Output {
+                amount: Amount::from_sat(90_000),
+                script_pubkey: None,
+                psbt: output,
+            }],
+        };
+
+        let signed = sign_hot(
+            &record,
+            Network::Regtest,
+            password(),
+            &psbt.serialize().unwrap(),
+        )
+        .expect("the hot key signs");
+        let signed = PsbtV2::deserialize(&signed).unwrap();
+        assert!(signed.outputs[0].script_pubkey.is_some());
+        assert!(signed.inputs[0].psbt.tap_key_sig.is_some());
+        bip375::verify_signed(&signed).expect("the derived output verifies");
+    }
+
     #[test]
     fn xpub_at_is_the_signers_xpub_at_that_path() {
         let path = DerivationPath::from_str("m/86'/1'/0'").unwrap();

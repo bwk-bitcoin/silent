@@ -532,9 +532,30 @@ void CreateAccount::onCreate() {
         return;
     }
     m_fetch_error->setVisible(false);
+    // The sub-account descriptors too: the key signs their coins only for a
+    // descriptor it has registered.
+    m_to_register = {m_descriptor};
+    for (const auto &descriptor : {m_taproot_descriptor, m_segwit_descriptor}) {
+        if (!descriptor.isEmpty()) {
+            m_to_register.append(descriptor);
+        }
+    }
+    registerNext();
+}
+
+void CreateAccount::registerNext() {
+    auto *bus = Host::get()->keys();
+    if (bus == nullptr) {
+        return;
+    }
+    if (m_to_register.isEmpty()) {
+        finishCreate();
+        return;
+    }
     m_register_req_id = bus->newRequest();
     updateActions();
-    bus->registerDescriptor(m_register_req_id, network(), m_descriptor_fingerprint, m_descriptor);
+    bus->registerDescriptor(m_register_req_id, network(), m_descriptor_fingerprint,
+                            m_to_register.takeFirst());
 }
 
 void CreateAccount::onDescriptorRegistered(ReqId req_id) {
@@ -542,7 +563,10 @@ void CreateAccount::onDescriptorRegistered(ReqId req_id) {
         return;
     }
     m_register_req_id = 0;
+    registerNext();
+}
 
+void CreateAccount::finishCreate() {
     auto name = m_name_input->text().trimmed();
     auto blindbitUrl = m_blindbit.input()->text().trimmed();
     auto electrumUrl = m_electrum.input()->text().trimmed();
