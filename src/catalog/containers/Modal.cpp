@@ -73,6 +73,11 @@ void Modal::setVisible(bool visible) {
         refit();
     }
     qontrol::Modal::setVisible(visible);
+    if (visible) {
+        qCDebug(lcModal) << "opened" << this << "at" << geometry() << "over"
+                         << (parentWidget() != nullptr ? parentWidget()->window()->geometry()
+                                                       : QRect());
+    }
 }
 
 void Modal::setWidth(ModalWidth width) {
