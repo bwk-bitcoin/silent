@@ -12,6 +12,9 @@ namespace catalog {
 ScrollBar::ScrollBar(Qt::Orientation orientation, QWidget *parent)
     : QScrollBar(orientation, parent) {
     setMouseTracking(true);
+    // It paints its handle only: the background must be painted under it (QScrollBar
+    // claims to paint every pixel otherwise, and the rest shows the window buffer).
+    setAttribute(Qt::WA_OpaquePaintEvent, false);
 }
 
 void ScrollBar::paintEvent(QPaintEvent * /*event*/) {
