@@ -966,6 +966,7 @@ std::size_t align_of() {
 #endif
 
 enum class Network : ::std::uint8_t;
+enum class BackendServer : ::std::uint8_t;
 enum class LogLevel : ::std::uint8_t;
 enum class NotificationFlag : ::std::uint8_t;
 enum class HwiDeviceState : ::std::uint8_t;
@@ -1040,6 +1041,15 @@ enum class Network : ::std::uint8_t {
   Bitcoin = 3,
 };
 #endif // CXXBRIDGE1_ENUM_Network
+
+#ifndef CXXBRIDGE1_ENUM_BackendServer
+#define CXXBRIDGE1_ENUM_BackendServer
+// A backend server an account connects to.
+enum class BackendServer : ::std::uint8_t {
+  Blindbit = 0,
+  Electrum = 1,
+};
+#endif // CXXBRIDGE1_ENUM_BackendServer
 
 #ifndef CXXBRIDGE1_ENUM_LogLevel
 #define CXXBRIDGE1_ENUM_LogLevel
@@ -2487,6 +2497,13 @@ void app_set_qr_display_levels(::QrDisplayLevels levels) noexcept;
 
 // Remember the camera contrast level for every account.
 void app_set_qr_camera_contrast_level(::std::uint8_t level) noexcept;
+
+// The `server` address last used to create an account on `network`, empty
+// until one is.
+::rust::String app_last_endpoint(::BackendServer server, ::Network network) noexcept;
+
+// Remember the `server` address an account on `network` was created with.
+void app_set_last_endpoint(::BackendServer server, ::Network network, ::rust::String url) noexcept;
 
 // Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
 ::PsbtFileResult sd_save_psbt(::rust::Str path, ::rust::Str psbt_hex) noexcept;

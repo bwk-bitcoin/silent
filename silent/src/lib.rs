@@ -28,6 +28,13 @@ mod ffi {
         Bitcoin,
     }
 
+    /// A backend server an account connects to.
+    #[derive(Debug, Clone, Copy)]
+    pub enum BackendServer {
+        Blindbit,
+        Electrum,
+    }
+
     /// Logging levels.
     #[derive(Debug, Clone, Copy)]
     pub enum LogLevel {
@@ -748,6 +755,13 @@ mod ffi {
 
         /// Remember the camera contrast level for every account.
         fn app_set_qr_camera_contrast_level(level: u8);
+
+        /// The `server` address last used to create an account on `network`, empty
+        /// until one is.
+        fn app_last_endpoint(server: BackendServer, network: Network) -> String;
+
+        /// Remember the `server` address an account on `network` was created with.
+        fn app_set_last_endpoint(server: BackendServer, network: Network, url: String);
 
         /// Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
         fn sd_save_psbt(path: &str, psbt_hex: &str) -> PsbtFileResult;
@@ -1719,9 +1733,10 @@ fn failed_psbt_file(error: String) -> ffi::PsbtFileResult {
 // Re-export main types
 pub use account::{new_account, Account, NotificationReceiver, Poll, PsbtResult};
 pub use app_state::{
-    app_active_theme, app_enabled_plugins, app_language, app_qr_camera_contrast_level,
-    app_qr_display_levels, app_set_active_theme, app_set_language, app_set_plugin_enabled,
-    app_set_qr_camera_contrast_level, app_set_qr_display_levels,
+    app_active_theme, app_enabled_plugins, app_language, app_last_endpoint,
+    app_qr_camera_contrast_level, app_qr_display_levels, app_set_active_theme, app_set_language,
+    app_set_last_endpoint, app_set_plugin_enabled, app_set_qr_camera_contrast_level,
+    app_set_qr_display_levels,
 };
 pub use bbqr::{bbqr_frames, bbqr_scanner_new, BbqrFrames, BbqrScanner};
 pub use camera::{camera_list, camera_open, CameraHandle};

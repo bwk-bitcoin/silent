@@ -553,6 +553,11 @@ void CreateAccount::onDescriptorRegistered(ReqId req_id) {
     config->set_taproot_descriptor(rust::String(m_taproot_descriptor.toStdString()));
     config->set_segwit_descriptor(rust::String(m_segwit_descriptor.toStdString()));
     config->to_file();
+    // Prefilled for the next account of this network.
+    ::app_set_last_endpoint(BackendServer::Blindbit, network(),
+                            rust::String(blindbitUrl.toStdString()));
+    ::app_set_last_endpoint(BackendServer::Electrum, network(),
+                            rust::String(electrumUrl.toStdString()));
 
     AppController::get()->onAccountCreated(name);
     accept();
@@ -581,6 +586,18 @@ void CreateAccount::applyNetworkDefaults() {
         break;
     default:
         break;
+    }
+    // The servers the last account of this network was created with come first.
+    auto last = [this](BackendServer server) {
+        return QString::fromStdString(std::string(::app_last_endpoint(server, network())));
+    };
+    if (auto url = last(BackendServer::Blindbit); !url.isEmpty()) {
+        blindbit = url;
+        autoTest = true;
+    }
+    if (auto url = last(BackendServer::Electrum); !url.isEmpty()) {
+        electrum = url;
+        autoTest = true;
     }
 
     m_blindbit.input()->setText(blindbit);

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -6,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::datadir;
 #[cfg(test)]
 use crate::config::set_datadir;
-use crate::ffi::QrDisplayLevels;
+use crate::ffi::{BackendServer, Network, QrDisplayLevels};
 
 const DEFAULT_THEME: &str = "light";
 /// The QR display steppers' middle level, as the C++ side's `qr::DEFAULT_LEVEL`.
@@ -31,6 +32,10 @@ pub struct AppState {
     /// The camera contrast picked last in Camera Settings, as its stepper's level.
     #[serde(default = "default_qr_level")]
     pub qr_camera_contrast: u8,
+    /// The server addresses the last account of each network was created with, by
+    /// `"<server>:<network>"`, prefilled in Create Account.
+    #[serde(default)]
+    pub endpoints: BTreeMap<String, String>,
 }
 
 fn default_qr_level() -> u8 {
@@ -51,6 +56,7 @@ impl Default for AppState {
             qr_contrast: DEFAULT_QR_LEVEL,
             qr_speed: DEFAULT_QR_LEVEL,
             qr_camera_contrast: DEFAULT_QR_LEVEL,
+            endpoints: BTreeMap::new(),
         }
     }
 }
@@ -181,6 +187,41 @@ pub fn app_set_qr_camera_contrast_level(level: u8) {
     state.save();
 }
 
+fn endpoint_key(server: BackendServer, network: Network) -> String {
+    let server = match server {
+        BackendServer::Blindbit => "blindbit",
+        BackendServer::Electrum => "electrum",
+        _ => "unknown",
+    };
+    let network = match network {
+        Network::Bitcoin => "bitcoin",
+        Network::Signet => "signet",
+        Network::Testnet => "testnet",
+        Network::Regtest => "regtest",
+        _ => "unknown",
+    };
+    format!("{server}:{network}")
+}
+
+pub fn app_last_endpoint(server: BackendServer, network: Network) -> String {
+    AppState::load()
+        .endpoints
+        .get(&endpoint_key(server, network))
+        .cloned()
+        .unwrap_or_default()
+}
+
+pub fn app_set_last_endpoint(server: BackendServer, network: Network, url: String) {
+    let mut state = AppState::load();
+    let key = endpoint_key(server, network);
+    if url.is_empty() {
+        state.endpoints.remove(&key);
+    } else {
+        state.endpoints.insert(key, url);
+    }
+    state.save();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,6 +318,34 @@ mod tests {
                 AppState::load().language.is_empty(),
                 "saving the QR levels should leave the other settings alone"
             );
+        });
+    }
+
+    #[test]
+    fn last_endpoints_are_kept_per_server_and_network() {
+        with_isolated_datadir(|_base| {
+            assert!(app_last_endpoint(BackendServer::Blindbit, Network::Signet).is_empty());
+            app_set_last_endpoint(
+                BackendServer::Blindbit,
+                Network::Signet,
+                "https://signet.example".to_string(),
+            );
+            app_set_last_endpoint(
+                BackendServer::Electrum,
+                Network::Signet,
+                "ssl://electrum.example:50002".to_string(),
+            );
+            assert_eq!(
+                app_last_endpoint(BackendServer::Blindbit, Network::Signet),
+                "https://signet.example"
+            );
+            assert_eq!(
+                app_last_endpoint(BackendServer::Electrum, Network::Signet),
+                "ssl://electrum.example:50002"
+            );
+            assert!(app_last_endpoint(BackendServer::Blindbit, Network::Regtest).is_empty());
+            app_set_last_endpoint(BackendServer::Blindbit, Network::Signet, String::new());
+            assert!(app_last_endpoint(BackendServer::Blindbit, Network::Signet).is_empty());
         });
     }
 
