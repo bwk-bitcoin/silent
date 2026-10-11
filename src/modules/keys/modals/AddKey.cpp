@@ -6,6 +6,7 @@
 #include "modules/keys/modals/addkey/QrFlow.h"
 
 #include "catalog/SelectRow.h"
+#include "catalog/containers/ViewSlots.h"
 #include "i18n/Tr.h"
 #include "theme/Icon.h"
 #include "theme/Palette.h"
@@ -133,6 +134,17 @@ void AddKey::onFlowViewChanged(const QString &title, ModalWidth width) {
 void AddKey::onFlowBack() {
     showModes();
     closeFlow();
+}
+
+// ===== AddKeyFlow =====
+
+AddKeyFlow::AddKeyFlow(QWidget *parent) : QWidget(parent) {
+    m_slots = new catalog::ViewSlots;
+    (new qontrol::Column)->push(m_slots)->into(this);
+}
+
+auto AddKeyFlow::viewSlots() const -> catalog::ViewSlots * {
+    return m_slots;
 }
 
 } // namespace keys::modal

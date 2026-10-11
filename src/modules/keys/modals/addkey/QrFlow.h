@@ -3,7 +3,7 @@
 #include <QList>
 #include <QString>
 
-#include "AddKeyFlow.h"
+#include "modules/keys/modals/AddKey.h"
 #include "qr/QrTypes.h"
 
 namespace catalog {

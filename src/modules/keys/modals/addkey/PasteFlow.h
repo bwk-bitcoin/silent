@@ -4,7 +4,7 @@
 
 #include <QString>
 
-#include "AddKeyFlow.h"
+#include "modules/keys/modals/AddKey.h"
 #include "modules/keys/KeysModule.h"
 
 namespace catalog {

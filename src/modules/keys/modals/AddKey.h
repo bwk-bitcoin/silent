@@ -2,11 +2,14 @@
 
 #include <QList>
 #include <QString>
+#include <QWidget>
 
 #include "catalog/containers/Modal.h"
+#include "theme/Palette.h"
 
 namespace catalog {
 class SelectRow;
+class ViewSlots;
 } // namespace catalog
 
 namespace keys {
@@ -52,6 +55,31 @@ private:
     QWidget *m_modes_body = nullptr;
     // The flow of the mode picked, deleted once it goes back or the window closes.
     AddKeyFlow *m_flow = nullptr;
+};
+
+// One way to add a key, embedded in AddKey once its mode is picked: its views, their
+// button bars and the work behind them. Deleting it stops that work.
+class AddKeyFlow : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit AddKeyFlow(QWidget *parent = nullptr);
+    // Shows the first view, once AddKey listens to the signals.
+    virtual void start() = 0;
+
+signals:
+    // The window title and width of the view now shown.
+    void viewChanged(const QString &title, ModalWidth width);
+    // Back left the flow: AddKey shows its mode list again.
+    void back();
+    // The key is added: AddKey closes.
+    void added();
+
+protected:
+    [[nodiscard]] auto viewSlots() const -> catalog::ViewSlots *;
+
+private:
+    catalog::ViewSlots *m_slots = nullptr;
 };
 
 } // namespace keys::modal

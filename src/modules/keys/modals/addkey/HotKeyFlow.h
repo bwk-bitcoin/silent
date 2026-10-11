@@ -2,7 +2,7 @@
 
 #include <QString>
 
-#include "AddKeyFlow.h"
+#include "modules/keys/modals/AddKey.h"
 
 #include <interfaces/types.h>
 #include <silent.h>

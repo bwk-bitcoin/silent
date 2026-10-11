@@ -125,8 +125,6 @@ set(SILENT_APP_SOURCES
     src/modules/keys/signers/OfflineSigner.cpp
     src/modules/keys/modals/AddKey.h
     src/modules/keys/modals/AddKey.cpp
-    src/modules/keys/modals/addkey/AddKeyFlow.h
-    src/modules/keys/modals/addkey/AddKeyFlow.cpp
     src/modules/keys/modals/addkey/KeyChecks.h
     src/modules/keys/modals/addkey/KeyChecks.cpp
     src/modules/keys/modals/addkey/KeyFields.h
