@@ -30,6 +30,7 @@
 #include "theme/Icon.h"
 #include "views/utils.h"
 
+#include <QBoxLayout>
 #include <QLabel>
 #include <QStringList>
 #include <QVariant>
@@ -132,6 +133,8 @@ void KeysTab::init() {
     m_device_scroll->setWidget(m_device_column);
     // Outside the scroll area: the keys list below cannot squeeze it into a scroll.
     m_devices_empty = new catalog::EmptyState(icon::usb, TR("keys-devices-empty-title"));
+    // Grows into the room the keys list leaves, up to twice its own height.
+    m_devices_empty->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     m_devices = new catalog::Section(TR("keys-devices"));
     m_devices->header()->setFoldable(true);
     m_devices->setContent((new qontrol::Column)->push(m_device_scroll)->push(m_devices_empty));
@@ -240,6 +243,20 @@ void KeysTab::rebuildDevices() {
     m_device_column->pushStretch(1);
     m_device_scroll->setVisible(count > 0);
     m_devices_empty->setVisible(count == 0);
+    m_devices_empty->ensurePolished();
+    int cardMinimum = m_devices_empty->minimumSizeHint().height();
+    m_devices_empty->setMaximumHeight(2 * cardMinimum);
+    // The section grows only as far as the card does.
+    m_devices->setMaximumHeight(count == 0 ? m_devices->minimumSizeHint().height() + cardMinimum
+                                           : QWIDGETSIZE_MAX);
+    // Room left over goes to the empty card, never to a device list.
+    auto *sections =
+        m_sections != nullptr ? qobject_cast<QBoxLayout *>(m_sections->layout()) : nullptr;
+    if (sections != nullptr) {
+        // The card first, up to its cap; the trailing stretch takes the rest.
+        sections->setStretchFactor(m_devices, count == 0 ? 1 : 0);
+        sections->setStretch(sections->count() - 1, count == 0 ? 0 : 1);
+    }
     m_devices->header()->setCount(count > 0 ? QString::number(count) : QString());
     m_device_scroll->updateGeometry();
 }
