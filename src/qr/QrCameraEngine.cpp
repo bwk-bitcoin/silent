@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <utility>
 
 #include <common.h>
 
@@ -23,24 +22,23 @@ constexpr int RGB_CHANNELS = 3;
 
 } // namespace
 
-QrScanWorker::QrScanWorker(std::unique_ptr<QrScanner> scanner) : m_scanner(std::move(scanner)) {
+QrScanWorker::QrScanWorker(QrCameraEngine *engine) : m_engine(engine) {
 }
 
 void QrScanWorker::process(const QImage &image) {
-    emit scanned(m_scanner->scan(image));
+    emit scanned(m_engine->scan(image));
 }
 
 void QrScanWorker::reset() {
-    m_scanner->clear();
+    m_engine->clear();
 }
 
-QrCameraEngine::QrCameraEngine(std::unique_ptr<QrScanner> scanner, const QrCameraSettings &settings,
-                               QObject *parent)
+QrCameraEngine::QrCameraEngine(const QrCameraSettings &settings, QObject *parent)
     : QObject(parent),
       m_settings(settings) {
     rebuildContrastTable();
     m_thread = new QThread(this);
-    m_worker = new QrScanWorker(std::move(scanner));
+    m_worker = new QrScanWorker(this);
     m_worker->moveToThread(m_thread);
     connect(this, &QrCameraEngine::scanRequested, m_worker, &QrScanWorker::process,
             qontrol::UNIQUE);
@@ -50,10 +48,18 @@ QrCameraEngine::QrCameraEngine(std::unique_ptr<QrScanner> scanner, const QrCamer
 }
 
 QrCameraEngine::~QrCameraEngine() {
+    stopWorker();
+}
+
+void QrCameraEngine::stopWorker() {
+    if (m_worker == nullptr) {
+        return;
+    }
     m_thread->quit();
     m_thread->wait();
     // The thread is over: the worker is deleted here rather than on its own thread.
     delete m_worker;
+    m_worker = nullptr;
 }
 
 void QrCameraEngine::setSettings(const QrCameraSettings &settings) {

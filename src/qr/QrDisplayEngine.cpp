@@ -5,8 +5,6 @@
 #include <QThread>
 #include <QTimer>
 
-#include <utility>
-
 #include <common.h>
 
 namespace qr {
@@ -25,10 +23,8 @@ constexpr int MAX_COLOR_VALUE = 255;
 
 } // namespace
 
-QrDisplayEngine::QrDisplayEngine(std::shared_ptr<const QrFramer> framer,
-                                 const QrDisplaySettings &settings, QObject *parent)
+QrDisplayEngine::QrDisplayEngine(const QrDisplaySettings &settings, QObject *parent)
     : QObject(parent),
-      m_framer(std::move(framer)),
       m_settings(settings) {
     m_frame_timer = new QTimer(this);
     m_frame_timer->setInterval(frameInterval());
@@ -38,6 +34,10 @@ QrDisplayEngine::QrDisplayEngine(std::shared_ptr<const QrFramer> framer,
 }
 
 QrDisplayEngine::~QrDisplayEngine() {
+    stopWorker();
+}
+
+void QrDisplayEngine::stopWorker() {
     for (const auto &thread : m_render_threads) {
         if (!thread.isNull()) {
             thread->wait();
@@ -56,7 +56,7 @@ void QrDisplayEngine::setSettings(const QrDisplaySettings &settings) {
         m_frame_timer->setInterval(frameInterval());
     }
     if (settings.density != previous.density && !m_payload.isEmpty()) {
-        render();
+        startRender();
     }
 }
 
@@ -81,20 +81,20 @@ void QrDisplayEngine::restart() {
 void QrDisplayEngine::request(const QrRequest &request) {
     m_payload = request.payload;
     m_playing = true;
-    render();
+    startRender();
 }
 
-void QrDisplayEngine::render() {
+void QrDisplayEngine::startRender() {
     ++m_generation;
     m_frame_timer->stop();
     m_frames.clear();
     m_error.clear();
     m_index = 0;
     emitFrame();
-    auto *thread = QThread::create([this, framer = m_framer, payload = m_payload,
-                                    density = m_settings.density, generation = m_generation]() {
-        emit rendered(generation, framer->render(payload, density));
-    });
+    auto *thread = QThread::create(
+        [this, payload = m_payload, density = m_settings.density, generation = m_generation]() {
+            emit rendered(generation, render(payload, density));
+        });
     connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
     m_render_threads.removeAll(QPointer<QThread>());
     m_render_threads.append(thread);

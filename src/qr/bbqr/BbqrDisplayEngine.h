@@ -11,6 +11,10 @@ class BbqrDisplayEngine : public QrDisplayEngine {
 
 public:
     explicit BbqrDisplayEngine(const QrDisplaySettings &settings, QObject *parent = nullptr);
+    ~BbqrDisplayEngine() override;
+
+protected:
+    [[nodiscard]] auto render(const QByteArray &payload, int density) const -> QrRender override;
 };
 
 } // namespace qr

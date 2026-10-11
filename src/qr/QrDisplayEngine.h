@@ -8,25 +8,18 @@
 #include <QPointer>
 #include <QRgb>
 
-#include <memory>
-
 class QThread;
 class QTimer;
 
 namespace qr {
 
-// A transport's framing: renders a payload into its animated frames at a density
-// level. Called on worker threads, so it holds nothing an engine changes.
-class QrFramer {
-public:
-    virtual ~QrFramer() = default;
-    [[nodiscard]] virtual auto render(const QByteArray &payload, int density) const -> QrRender = 0;
-};
-
-// Plays a request as animated QR frames, protocol agnostic: the format's QrFramer
+// Plays a request as animated QR frames, protocol agnostic: the format's render()
 // turns the payload into images, and this engine maps them to the contrast and plays
 // them at the speed. A density change renders the frames again, off the GUI thread.
-// Each transport inherits it with its framer.
+// Each transport inherits it and implements render().
+//
+// render() runs on worker threads, so every subclass destructor calls stopWorker()
+// first: once the subclass is gone a worker would call a pure virtual.
 class QrDisplayEngine : public QObject {
     Q_OBJECT
 
@@ -34,8 +27,7 @@ public:
     static constexpr int BASE_INTERVAL_MS = 520;
     static constexpr int SPEED_STEP_MS = 80;
 
-    QrDisplayEngine(std::shared_ptr<const QrFramer> framer, const QrDisplaySettings &settings,
-                    QObject *parent = nullptr);
+    explicit QrDisplayEngine(const QrDisplaySettings &settings, QObject *parent = nullptr);
     ~QrDisplayEngine() override;
     void setSettings(const QrDisplaySettings &settings);
     [[nodiscard]] auto settings() const -> QrDisplaySettings;
@@ -54,7 +46,11 @@ public slots:
     void onFrameTick();
 
 protected:
-    void render();
+    // Renders a payload into its frames at a density level. Called on worker threads,
+    // so it reads nothing the engine changes.
+    [[nodiscard]] virtual auto render(const QByteArray &payload, int density) const -> QrRender = 0;
+    void stopWorker();
+    void startRender();
     void emitFrame();
     [[nodiscard]] auto frameInterval() const -> int;
     [[nodiscard]] auto background() const -> QColor;
@@ -62,7 +58,6 @@ protected:
     void rebuildColorTable();
 
 private:
-    std::shared_ptr<const QrFramer> m_framer;
     QrDisplaySettings m_settings;
     QByteArray m_payload;
     QList<QImage> m_frames;

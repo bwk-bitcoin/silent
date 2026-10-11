@@ -7,28 +7,19 @@
 #include <QObject>
 
 #include <cstdint>
-#include <memory>
 
 class QThread;
 
 namespace qr {
 
-// A transport's scan: joins the payloads it reads off successive camera frames. Runs on
-// its engine's worker thread, one call at a time.
-class QrScanner {
-public:
-    virtual ~QrScanner() = default;
-    virtual auto scan(const QImage &image) -> QrScan = 0;
-    // Drops the parts seen so far.
-    virtual void clear() = 0;
-};
+class QrCameraEngine;
 
-// Owns a QrScanner on the camera engine's worker thread.
+// Runs its camera engine's scan on the engine's worker thread.
 class QrScanWorker : public QObject {
     Q_OBJECT
 
 public:
-    explicit QrScanWorker(std::unique_ptr<QrScanner> scanner);
+    explicit QrScanWorker(QrCameraEngine *engine);
 
 signals:
     void scanned(const qr::QrScan &scan);
@@ -38,19 +29,22 @@ public slots:
     void reset();
 
 private:
-    std::unique_ptr<QrScanner> m_scanner;
+    QrCameraEngine *m_engine = nullptr;
 };
 
 // Reads payloads back off camera frames, protocol agnostic: applies the contrast to
-// each received frame, shows it (broadcast), and hands it to the format's QrScanner on
-// a single worker thread, dropping the frames that come while it is busy. Each
-// transport inherits it with its scanner.
+// each received frame, shows it (broadcast), and hands it to the format's scan() on a
+// single worker thread, dropping the frames that come while it is busy. Each transport
+// inherits it and implements scan() and clear().
+//
+// scan() and clear() run on the worker thread, so every subclass destructor calls
+// stopWorker() first: once the subclass is gone the worker would call a pure virtual.
 class QrCameraEngine : public QObject {
     Q_OBJECT
+    friend class QrScanWorker;
 
 public:
-    QrCameraEngine(std::unique_ptr<QrScanner> scanner, const QrCameraSettings &settings,
-                   QObject *parent = nullptr);
+    explicit QrCameraEngine(const QrCameraSettings &settings, QObject *parent = nullptr);
     ~QrCameraEngine() override;
     void setSettings(const QrCameraSettings &settings);
     [[nodiscard]] auto settings() const -> QrCameraSettings;
@@ -72,6 +66,12 @@ public slots:
     void onScanned(const qr::QrScan &scan);
 
 protected:
+    // Joins the payloads read off successive camera frames. On the worker thread, one
+    // call at a time.
+    virtual auto scan(const QImage &image) -> QrScan = 0;
+    // Drops the parts seen so far. On the worker thread.
+    virtual void clear() = 0;
+    void stopWorker();
     // Rebuilt only when the contrast changes, so the per-frame path never allocates it.
     void rebuildContrastTable();
     [[nodiscard]] auto applyContrast(const QImage &image) const -> QImage;
