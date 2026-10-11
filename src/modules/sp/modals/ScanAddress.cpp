@@ -41,7 +41,8 @@ void ScanAddress::doConnect() {
 }
 
 void ScanAddress::view() {
-    setBody(m_camera);
+    // The preview takes the body's width, as the design's camera view does.
+    setWideBody(m_camera);
     setFooter(m_camera->actions());
     setWidth(ModalWidth::L);
 }

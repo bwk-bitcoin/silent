@@ -23,6 +23,8 @@ public:
     // widget it replaces is hidden, not deleted.
     void setHeader(QWidget *header);
     void setBody(QWidget *body);
+    // Spanning the body's width, not centred at its own.
+    void setWideBody(QWidget *body);
     void setFooter(QWidget *footer);
     // Empties the header and the footer and puts `page` in the body, filling the width.
     void setPage(QWidget *page);

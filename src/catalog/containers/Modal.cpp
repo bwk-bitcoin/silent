@@ -49,6 +49,10 @@ void Modal::setBody(QWidget *body) {
     m_slots->setBody(body);
 }
 
+void Modal::setWideBody(QWidget *body) {
+    m_slots->setWideBody(body);
+}
+
 void Modal::setFooter(QWidget *footer) {
     m_slots->setFooter(footer);
 }
