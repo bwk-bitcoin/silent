@@ -593,13 +593,7 @@ keys-register-failed-title => "Could not register %1"
 
 keys-devices-empty-title => "No Device Connected"
 
-keys-devices-empty-sub
-=> "Connect a hardware wallet over USB and unlock it. It appears here while it runs on %1.";;
-
 keys-keys-empty-title => "No Key on %1"
-
-keys-keys-empty-sub
-=> "Add a key to sign transactions, verify addresses and create accounts.";;
 
 keys-device-registering => "Registering…"
 

@@ -345,9 +345,6 @@ keys-device-not-registered => "Not registered as a key" => "NONE"
 keys-device-registered-as => "Registered as “%1”" => "NONE"
 keys-device-registering => "Registering…" => "NONE"
 keys-devices => "Devices" => "NONE"
-keys-devices-empty-sub
-=> "Connect a hardware wallet over USB and unlock it. It appears here while it runs on %1."
-=> "NONE";;
 keys-devices-empty-title => "No Device Connected" => "NONE"
 keys-devices-seen => "Devices Seen" => "NONE"
 keys-devices-seen-empty
@@ -394,9 +391,6 @@ keys-hot-generate-24-sub => "A new, longer mnemonic." => "NONE"
 keys-hot-import-sub => "Type an existing mnemonic." => "NONE"
 keys-hot-import-words => "Import Words" => "NONE"
 keys-keys => "Keys" => "NONE"
-keys-keys-empty-sub
-=> "Add a key to sign transactions, verify addresses and create accounts."
-=> "NONE";;
 keys-keys-empty-title => "No Key on %1" => "NONE"
 keys-module-column => "Module" => "NONE"
 keys-module-not-ready => "The keys module is not ready." => "NONE"

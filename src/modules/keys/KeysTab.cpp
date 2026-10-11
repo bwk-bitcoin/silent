@@ -236,9 +236,7 @@ void KeysTab::rebuildDevices() {
         row->show();
     }
     if (count == 0) {
-        auto *empty = new catalog::EmptyState(
-            icon::usb, TR("keys-devices-empty-title"),
-            TR("keys-devices-empty-sub").arg(networkLabel(KeysModule::network())));
+        auto *empty = new catalog::EmptyState(icon::usb, TR("keys-devices-empty-title"));
         m_device_column->push(empty);
         empty->show();
     }
@@ -313,8 +311,7 @@ void KeysTab::rebuildKeys() {
         auto *addKey = catalog::btnAddAKey();
         connect(addKey, &QPushButton::clicked, this, &KeysTab::openAddKey, qontrol::UNIQUE);
         auto *empty = new catalog::EmptyState(
-            icon::key, TR("keys-keys-empty-title").arg(networkLabel(KeysModule::network())),
-            TR("keys-keys-empty-sub"));
+            icon::key, TR("keys-keys-empty-title").arg(networkLabel(KeysModule::network())));
         empty->setAction(addKey);
         m_key_column->push(empty);
         empty->show();
