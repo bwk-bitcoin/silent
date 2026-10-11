@@ -58,8 +58,12 @@ QrCameraDisplay::QrCameraDisplay(QWidget *parent) : QWidget(parent) {
     setState(QrCamera::State::Starting);
 }
 
-void QrCameraDisplay::setSize(int width) {
-    setFixedSize(width, width * ASPECT_HEIGHT / ASPECT_WIDTH);
+void QrCameraDisplay::setWidth(int width) {
+    setFixedWidth(width);
+}
+
+void QrCameraDisplay::setHeight(int height) {
+    setFixedHeight(height);
 }
 
 void QrCameraDisplay::setState(QrCamera::State state) {

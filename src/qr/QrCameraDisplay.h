@@ -24,9 +24,10 @@ class QrCameraDisplay : public QWidget {
 
 public:
     explicit QrCameraDisplay(QWidget *parent = nullptr);
-    // Fixes the picture's width; its height follows the 4:3 ratio. Until set, the
-    // picture takes the width its layout gives it.
-    void setSize(int width);
+    // Each fixes one side of the picture, which is cropped to fill the box. A side
+    // left unset takes what the layout gives it, the height following the width at 4:3.
+    void setWidth(int width);
+    void setHeight(int height);
     [[nodiscard]] auto hasHeightForWidth() const -> bool override;
     [[nodiscard]] auto heightForWidth(int width) const -> int override;
 
