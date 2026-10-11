@@ -673,6 +673,8 @@ keys-fetch-xpub-from => "Fetch xpubs from %1"
 
 keys-fetch-xpub-connect => "Connect the device to fetch xpubs"
 
+keys-fetch-xpub-hot => "Derive xpubs from the hot key, with its password"
+
 keys-accounts => "Registered Accounts"
 
 keys-accounts-empty => "No account uses this key."

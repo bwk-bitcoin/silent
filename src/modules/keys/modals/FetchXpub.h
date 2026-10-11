@@ -29,8 +29,9 @@ class KeysModule;
 
 namespace keys::modal {
 
-// Fetches the xpub at a chosen path from the key's connected device and caches it,
-// opened over the key detail it returns to: picking the path, then the device wait.
+// Fetches the xpub at a chosen path from the key's connected device, or derives it
+// from a hot key with its password, and caches it, opened over the key detail it
+// returns to: picking the path, then the device or password wait.
 // The path is a standard purpose with its account index (and its script type for
 // BIP48), or a custom path; the default account is the first one not cached yet.
 class FetchXpub final : public catalog::Modal {
@@ -47,6 +48,9 @@ public slots:
     void onDeviceXpub(ReqId req_id, const QString &xpub);
     void onDeviceError(std::optional<ReqId> req_id, const QString &message);
     void onInstanceRemoved(const QString &id);
+    void onHotXpub(ReqId req_id, const QString &xpub);
+    void onHotError(std::optional<ReqId> req_id, const QString &message);
+    void onHotCancelled(ReqId req_id);
 
 protected:
     // The view on display: the primary action acts on it.
@@ -69,6 +73,7 @@ protected:
     void refresh();
     void showError(const QString &error);
     void fetch();
+    void fetchHot();
 
     // Fetching view
     void initFetching();
@@ -104,6 +109,8 @@ private:
     QString m_instance;
     QString m_path;
     ReqId m_req = 0;
+    // The hot key's request through the keys bus, its password asked over this modal.
+    ReqId m_hot_req = 0;
 };
 
 } // namespace keys::modal

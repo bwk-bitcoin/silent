@@ -3,6 +3,7 @@
 #include "modules/keys/DeviceName.h"
 #include "modules/keys/KeysModule.h"
 #include "modules/keys/KeysView.h"
+#include "modules/keys/modals/keydetail/KeyRecord.h"
 
 #include "catalog/Button.h"
 #include "catalog/Variants.h"
@@ -15,6 +16,7 @@
 #include "catalog/inputs/Input.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
+#include "interfaces/keys.h"
 #include "theme/Palette.h"
 
 #include <QDebug>
@@ -61,6 +63,11 @@ void FetchXpub::init() {
 void FetchXpub::doConnect() {
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
             &FetchXpub::onInstanceRemoved, qontrol::UNIQUE);
+    if (auto *bus = Host::get()->keys(); bus != nullptr) {
+        connect(bus, &IKeys::xpubReady, this, &FetchXpub::onHotXpub, qontrol::UNIQUE);
+        connect(bus, &IKeys::error, this, &FetchXpub::onHotError, qontrol::UNIQUE);
+        connect(bus, &IKeys::cancelled, this, &FetchXpub::onHotCancelled, qontrol::UNIQUE);
+    }
     connectFetch();
 }
 
@@ -220,6 +227,11 @@ void FetchXpub::fetch() {
     }
     auto device = readyDevice(m_fingerprint);
     if (!device.has_value()) {
+        auto info = keyInfo(m_module, m_fingerprint);
+        if (info.has_value() && info->has_hot_secret) {
+            fetchHot();
+            return;
+        }
         showError(TR("keys-fetch-xpub-connect"));
         return;
     }
@@ -232,6 +244,22 @@ void FetchXpub::fetch() {
     m_req = device->signer->getXpub(m_path);
     m_fetching_step->setSubtitle(TR("keys-fetching-sub").arg(deviceName(*device->signer)));
     showFetching();
+}
+
+// No device: the keys module asks the hot key's password over this modal, derives the
+// xpub and caches it.
+void FetchXpub::fetchHot() {
+    auto *bus = Host::get()->keys();
+    if (bus == nullptr) {
+        showError(TR("keys-module-not-ready"));
+        return;
+    }
+    m_error->setVisible(false);
+    m_path = path();
+    m_hot_req = bus->newRequest();
+    m_fetching_step->setSubtitle(QString());
+    showFetching();
+    m_module->fetchXpub(m_hot_req, m_fingerprint, m_path);
 }
 
 // ===== Fetching view =====
@@ -324,6 +352,33 @@ void FetchXpub::onDeviceError(std::optional<ReqId> req_id, const QString &messag
     }
     stopFetch();
     showError(message);
+}
+
+void FetchXpub::onHotXpub(ReqId req_id, const QString &xpub) {
+    Q_UNUSED(xpub);
+    if (m_hot_req == 0 || req_id != m_hot_req) {
+        return;
+    }
+    // The keys module cached it before answering.
+    m_hot_req = 0;
+    accept();
+}
+
+void FetchXpub::onHotError(std::optional<ReqId> req_id, const QString &message) {
+    if (m_hot_req == 0 || !req_id.has_value() || req_id.value() != m_hot_req) {
+        return;
+    }
+    m_hot_req = 0;
+    showError(message);
+}
+
+void FetchXpub::onHotCancelled(ReqId req_id) {
+    if (m_hot_req == 0 || req_id != m_hot_req) {
+        return;
+    }
+    m_hot_req = 0;
+    m_error->setVisible(false);
+    showFetch();
 }
 
 void FetchXpub::onInstanceRemoved(const QString &id) {

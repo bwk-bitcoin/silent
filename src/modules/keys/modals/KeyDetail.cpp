@@ -379,16 +379,23 @@ void KeyDetail::refreshXpubs() {
     }
 
     auto device = readyDevice(m_fingerprint);
+    // A hot key derives its xpubs itself, with its password: no device needed.
+    auto info = keyInfo(m_module, m_fingerprint);
+    bool hot = info.has_value() && info->has_hot_secret;
+    bool fetchable = device.has_value() || hot;
     Label *empty = nullptr;
     if (xpubs.empty()) {
-        empty =
-            emptyLine(device.has_value() ? TR("keys-xpubs-empty") : TR("keys-xpubs-empty-offline"));
+        empty = emptyLine(fetchable ? TR("keys-xpubs-empty") : TR("keys-xpubs-empty-offline"));
     }
     auto *fetch = catalog::btnFetchXpub();
-    fetch->setEnabled(device.has_value());
-    fetch->setToolTip(device.has_value()
-                          ? TR("keys-fetch-xpub-from").arg(deviceName(*device->signer))
-                          : TR("keys-fetch-xpub-connect"));
+    fetch->setEnabled(fetchable);
+    if (device.has_value()) {
+        fetch->setToolTip(TR("keys-fetch-xpub-from").arg(deviceName(*device->signer)));
+    } else if (hot) {
+        fetch->setToolTip(TR("keys-fetch-xpub-hot"));
+    } else {
+        fetch->setToolTip(TR("keys-fetch-xpub-connect"));
+    }
     connect(fetch, &QPushButton::clicked, this, &KeyDetail::onFetchXpubClicked, qontrol::UNIQUE);
     m_xpubs_table->addWidgetRow(QStringLiteral("add"), {nullptr, empty, fetch, nullptr}, true);
     m_xpubs_section->header()->setCount(countText(static_cast<int>(xpubs.size())));
