@@ -5,6 +5,10 @@
 
 namespace catalog {
 
+// A scrolling region, as the design's ScrollArea: the content sits inset by a
+// scrollbar-wide gutter on both sides plus a small padding, and thin lines mark the
+// top and bottom edges only while the content overflows. The gutters are kept
+// whether the scrollbar shows or not, so nothing shifts when it comes or goes.
 class ScrollArea : public QScrollArea {
     Q_OBJECT
 
@@ -19,7 +23,9 @@ public:
     [[nodiscard]] auto heightForWidth(int width) const -> int override;
     static auto qss(const Palette &p) -> QString;
 
-    // Visible width of the scrollbar track.
+    static constexpr int EDGE_LINE = 1;
+
+    // Width of the scrollbar, its gap included: the width of each gutter.
     static constexpr auto scrollBarWidth() -> int {
         return resolve(Spacing::S);
     }
@@ -30,10 +36,16 @@ public:
         return resolve(Spacing::XS);
     }
 
-    // Total space the scrollbar reserves (bar + gap). Useful for laying out
-    // content next to a scroll area so it aligns with the inset viewport.
-    static constexpr auto scrollBarThickness() -> int {
-        return scrollBarWidth() + scrollBarGap();
+    // Space between the area's edge and its content: a scrollbar-wide gutter and a
+    // padding on each side (the right gutter is the bar itself while it shows), the
+    // edge line and the padding above and below. Content laid out next to an area
+    // aligns with its content by these.
+    static constexpr auto insetH() -> int {
+        return scrollBarWidth() + resolve(Spacing::XS);
+    }
+
+    static constexpr auto insetV() -> int {
+        return EDGE_LINE + resolve(Spacing::XS);
     }
 
 public slots:
@@ -41,10 +53,19 @@ public slots:
     void onRangeChanged(int minimum, int maximum);
 
 protected:
+    auto event(QEvent *event) -> bool override;
     auto viewportEvent(QEvent *event) -> bool override;
+    auto eventFilter(QObject *watched, QEvent *event) -> bool override;
 
 private:
+    // The right gutter is the scrollbar's, or a margin when the bar is turned off.
+    void applyMargins();
+    [[nodiscard]] auto barShown() const -> bool;
+    // The content's size, held to the width set on it.
+    [[nodiscard]] auto contentSize() const -> QSize;
+
     bool m_fit = false;
+    bool m_overflow = false;
 };
 
 } // namespace catalog

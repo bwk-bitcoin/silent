@@ -820,14 +820,10 @@ auto Send::inputsView() -> QWidget * {
         c_coin_count < c_max_visible_coins ? c_coin_count : c_max_visible_coins;
     m_coin_table->setBodyHeight(c_visible_rows * metric::TABLE_ROW_HEIGHT);
 
-    // When the body scrolls, its scrollbar insets the row values on the right.
-    // Add the same gutter to the amounts row so the total selected value stays
-    // aligned with the value column.
-    const bool c_has_scrollbar = c_coin_count > c_max_visible_coins;
-    const int c_amounts_right_pad =
-        resolve(Padding::S) + (c_has_scrollbar ? catalog::ScrollArea::scrollBarThickness() : 0);
-    m_inputs_amounts_row->layout()->setContentsMargins(resolve(Padding::S), 0, c_amounts_right_pad,
-                                                       0);
+    // The table's rows sit inset by its scroll area's gutters: inset the amounts row
+    // the same, so the total selected value stays aligned with the value column.
+    const int c_amounts_pad = resolve(Padding::S) + catalog::ScrollArea::insetH();
+    m_inputs_amounts_row->layout()->setContentsMargins(c_amounts_pad, 0, c_amounts_pad, 0);
 
     m_coin_table->addColumn({.title = TR("coins-type"), .width = resolve(Size::XXS)});
     m_coin_table->addColumn(

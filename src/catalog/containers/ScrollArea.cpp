@@ -1,6 +1,9 @@
 #include "catalog/containers/ScrollArea.h"
 
+#include "theme/Theme.h"
+
 #include <QEvent>
+#include <QPainter>
 #include <QScrollBar>
 #include <QStyle>
 #include <algorithm>
@@ -14,6 +17,11 @@ ScrollArea::ScrollArea(QWidget *parent) : QScrollArea(parent) {
     setWidgetResizable(true);
     connect(verticalScrollBar(), &QScrollBar::rangeChanged, this, &ScrollArea::onRangeChanged,
             qontrol::UNIQUE);
+    // Always there, so the right gutter is the bar's whether the content overflows or
+    // not; with nothing to scroll it is disabled and draws nothing.
+    setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+    verticalScrollBar()->setEnabled(false);
+    applyMargins();
 }
 
 void ScrollArea::setFitContent(bool fit) {
@@ -25,9 +33,13 @@ void ScrollArea::setFitContent(bool fit) {
 }
 
 auto ScrollArea::sizeHint() const -> QSize {
-    // QScrollArea caches the first content size and caps it; the base class does not.
     if (m_fit && widget() != nullptr) {
-        return QAbstractScrollArea::sizeHint();
+        // The gutters are reserved whether the scrollbar shows or not, so the hint
+        // does not change with it.
+        int frame = 2 * frameWidth();
+        QSize content = contentSize();
+        return {content.width() + (2 * insetH()) + frame,
+                content.height() + (2 * insetV()) + frame};
     }
     return QScrollArea::sizeHint();
 }
@@ -37,6 +49,9 @@ auto ScrollArea::minimumSizeHint() const -> QSize {
     QSize minimum = QScrollArea::minimumSizeHint();
     if (m_fit && widget() != nullptr) {
         minimum.setHeight(std::min(minimum.height(), sizeHint().height()));
+        // A width set on the content holds.
+        minimum.setWidth(std::max(minimum.width(),
+                                  widget()->minimumWidth() + (2 * insetH()) + (2 * frameWidth())));
     }
     return minimum;
 }
@@ -47,7 +62,24 @@ auto ScrollArea::hasHeightForWidth() const -> bool {
 
 auto ScrollArea::heightForWidth(int width) const -> int {
     int frame = 2 * frameWidth();
-    return widget()->heightForWidth(width - frame) + frame;
+    return widget()->heightForWidth(width - frame - (2 * insetH())) + frame + (2 * insetV());
+}
+
+auto ScrollArea::event(QEvent *event) -> bool {
+    bool handled = QScrollArea::event(event);
+    // The lines are drawn across the whole area, gutters included, so they reach past
+    // the content on both sides and read as the scroll edges.
+    if (event->type() == QEvent::Paint && m_overflow) {
+        QPainter painter(this);
+        QColor line = Theme::get()->palette().borderLight;
+        painter.fillRect(QRect(0, 0, width(), EDGE_LINE), line);
+        painter.fillRect(QRect(0, height() - EDGE_LINE, width(), EDGE_LINE), line);
+    }
+    // A turned off bar leaves its gutter to the margin.
+    if (event->type() == QEvent::LayoutRequest) {
+        applyMargins();
+    }
+    return handled;
 }
 
 auto ScrollArea::viewportEvent(QEvent *event) -> bool {
@@ -59,34 +91,55 @@ auto ScrollArea::viewportEvent(QEvent *event) -> bool {
     return QScrollArea::viewportEvent(event);
 }
 
-void ScrollArea::onRangeChanged(int minimum, int maximum) {
-    bool overflow = maximum > minimum;
-    if (property("overflow").toBool() == overflow) {
-        return;
-    }
-    setProperty("overflow", overflow);
-    style()->unpolish(this);
-    style()->polish(this);
-    // The scrollbar comes and goes with the overflow, and with it the width a fitting
-    // area asks for.
-    if (m_fit) {
+auto ScrollArea::eventFilter(QObject *watched, QEvent *event) -> bool {
+    // The content relaying itself out (rows added, shown, polished) changes the
+    // height a fitting area asks for, but nothing tells the layout holding the area,
+    // which keeps the old hint: drop it.
+    if (m_fit && watched == widget() && event->type() == QEvent::LayoutRequest) {
         updateGeometry();
     }
+    return QScrollArea::eventFilter(watched, event);
+}
+
+void ScrollArea::applyMargins() {
+    int right = barShown() ? resolve(Spacing::XS) : insetH();
+    QMargins margins(insetH(), insetV(), right, insetV());
+    if (viewportMargins() != margins) {
+        setViewportMargins(margins);
+    }
+}
+
+auto ScrollArea::barShown() const -> bool {
+    return verticalScrollBarPolicy() == Qt::ScrollBarAlwaysOn;
+}
+
+auto ScrollArea::contentSize() const -> QSize {
+    QSize size = widget()->sizeHint();
+    size.setWidth(std::clamp(size.width(), widget()->minimumWidth(), widget()->maximumWidth()));
+    return size;
+}
+
+void ScrollArea::onRangeChanged(int minimum, int maximum) {
+    bool overflow = maximum > minimum;
+    if (overflow == m_overflow) {
+        return;
+    }
+    m_overflow = overflow;
+    verticalScrollBar()->setEnabled(overflow);
+    update();
 }
 
 auto ScrollArea::qss(const Palette &p) -> QString {
     // A left margin on the vertical bar (top margin on the horizontal bar) keeps
     // a small gap between the scrolled content and the scrollbar.
     return QString(
-               "QScrollArea[class=\"scroll-area\"] { border: none; border-top: 1px solid "
-               "transparent; border-bottom: 1px solid transparent; background: transparent; }"
-               "QScrollArea[class=\"scroll-area\"][overflow=\"true\"] { border-top-color: %2; "
-               "border-bottom-color: %2; }"
+               "QScrollArea[class=\"scroll-area\"] { border: none; background: transparent; }"
                "QScrollArea[class=\"scroll-area\"] > QWidget > QWidget { background: transparent; }"
                "QScrollBar:vertical { background: transparent; width: %1px; margin: 0 0 0 %6px; }"
                "QScrollBar::handle:vertical { background: %2; border-radius: %3px; min-height: "
                "%4px; }"
                "QScrollBar::handle:vertical:hover { background: %5; }"
+               "QScrollBar::handle:vertical:disabled { background: transparent; }"
                "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
                "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
                "QScrollBar:horizontal { background: transparent; height: %1px; margin: %6px 0 0 0; "

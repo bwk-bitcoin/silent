@@ -237,7 +237,8 @@ void Table::rebuild() {
         // Bounded: a fixed-height window with an inner scrollbar. No trailing
         // stretch here: with widgetResizable it would let the body shrink to the
         // viewport and clip the overflow rows instead of scrolling them.
-        m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        // Always on, as every scroll area: its gutter does not come and go.
+        m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
         m_scroll->setFixedHeight(m_body_height);
     }
 
@@ -250,8 +251,9 @@ void Table::rebuild() {
 auto Table::buildHeader() -> QWidget * {
     auto *header = new qontrol::Row;
     header->setProperty("class", "table-header");
-    header->margins(resolve(Padding::S), 0, resolve(Padding::S), metric::TABLE_CELL_PAD)
-        ->spacing(resolve(Spacing::S));
+    // Inset as the body's rows are by the scroll area's gutters, so the columns line up.
+    int inset = resolve(Padding::S) + ScrollArea::insetH();
+    header->margins(inset, 0, inset, metric::TABLE_CELL_PAD)->spacing(resolve(Spacing::S));
 
     if (m_selection_enabled) {
         auto *spacer = new QWidget(header);
