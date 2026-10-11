@@ -28,6 +28,10 @@ protected:
     [[nodiscard]] auto sizeHint() const -> QSize override;
 
 private:
+    // The code without the quiet zone its image carries, for a tuned card whose padding
+    // is the whole quiet zone.
+    [[nodiscard]] auto codeRect() const -> QRect;
+
     QImage m_image;
     QString m_data;
     QColor m_background;

@@ -14,6 +14,9 @@ namespace catalog {
 namespace {
 
 constexpr qreal DIMMED_OPACITY = 0.25;
+// Below it a pixel is a code module: modules are black, and the darkest quiet zone (the
+// lowest display contrast) is a grey near 100.
+constexpr int DARK_LEVEL = 50;
 
 } // namespace
 
@@ -98,8 +101,23 @@ void QrCode::paintEvent([[maybe_unused]] QPaintEvent *event) {
     }
 
     if (!m_image.isNull()) {
-        painter.drawImage(square, m_image);
+        // Tuned, the card is the quiet zone, as in the design: draw the code alone.
+        painter.drawImage(square, m_image, tuned ? codeRect() : m_image.rect());
     }
+}
+
+auto QrCode::codeRect() const -> QRect {
+    // The quiet zone is as wide on every side: it ends at the first dark pixel of the
+    // finder pattern on the top row of modules, at the code's top left corner.
+    for (int y = 0; y < m_image.height() / 2; ++y) {
+        for (int x = 0; x < m_image.width() / 2; ++x) {
+            if (qGray(m_image.pixel(x, y)) < DARK_LEVEL) {
+                int margin = qMin(x, y);
+                return m_image.rect().adjusted(margin, margin, -margin, -margin);
+            }
+        }
+    }
+    return m_image.rect();
 }
 
 auto QrCode::sizeHint() const -> QSize {
