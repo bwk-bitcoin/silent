@@ -125,12 +125,22 @@ set(SILENT_APP_SOURCES
     src/modules/keys/signers/OfflineSigner.cpp
     src/modules/keys/modals/AddKey.h
     src/modules/keys/modals/AddKey.cpp
+    src/modules/keys/modals/addkey/AddKeyFlow.h
+    src/modules/keys/modals/addkey/AddKeyFlow.cpp
     src/modules/keys/modals/addkey/KeyChecks.h
     src/modules/keys/modals/addkey/KeyChecks.cpp
     src/modules/keys/modals/addkey/KeyFields.h
     src/modules/keys/modals/addkey/KeyFields.cpp
     src/modules/keys/modals/addkey/KeyReview.h
     src/modules/keys/modals/addkey/KeyReview.cpp
+    src/modules/keys/modals/addkey/QrFlow.h
+    src/modules/keys/modals/addkey/QrFlow.cpp
+    src/modules/keys/modals/addkey/FileFlow.h
+    src/modules/keys/modals/addkey/FileFlow.cpp
+    src/modules/keys/modals/addkey/PasteFlow.h
+    src/modules/keys/modals/addkey/PasteFlow.cpp
+    src/modules/keys/modals/addkey/HotKeyFlow.h
+    src/modules/keys/modals/addkey/HotKeyFlow.cpp
     src/modules/keys/modals/RegisterDevice.h
     src/modules/keys/modals/RegisterDevice.cpp
     src/modules/keys/modals/KeyDetail.h
