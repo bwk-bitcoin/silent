@@ -119,6 +119,18 @@ set(SILENT_APP_SOURCES
     src/modules/keys/flow/CameraStep.cpp
     src/modules/keys/flow/SigningFlow.h
     src/modules/keys/flow/SigningFlow.cpp
+    src/modules/keys/flow/signingflow/LiveDevice.h
+    src/modules/keys/flow/signingflow/LiveDevice.cpp
+    src/modules/keys/flow/signingflow/VerifyResultView.h
+    src/modules/keys/flow/signingflow/VerifyResultView.cpp
+    src/modules/keys/flow/signingflow/UsbRouteFlow.h
+    src/modules/keys/flow/signingflow/UsbRouteFlow.cpp
+    src/modules/keys/flow/signingflow/HotRouteFlow.h
+    src/modules/keys/flow/signingflow/HotRouteFlow.cpp
+    src/modules/keys/flow/signingflow/SdRouteFlow.h
+    src/modules/keys/flow/signingflow/SdRouteFlow.cpp
+    src/modules/keys/flow/signingflow/QrRouteFlow.h
+    src/modules/keys/flow/signingflow/QrRouteFlow.cpp
     src/modules/keys/signers/RouteSigner.h
     src/modules/keys/signers/RouteSigner.cpp
     src/modules/keys/signers/OfflineSigner.h
