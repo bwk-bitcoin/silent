@@ -149,7 +149,7 @@ void HotKeyFlow::showHotChoose() {
     viewSlots()->setHeader(nullptr);
     viewSlots()->setBody(m_choose_body);
     viewSlots()->setFooter(m_choose_actions);
-    emit viewChanged(TR("keys-add-hot-title"), ModalWidth::L);
+    emit viewChanged(TR("keys-add-hot-title"));
 }
 
 auto HotKeyFlow::typedMnemonic() const -> QString {
@@ -208,7 +208,7 @@ void HotKeyFlow::showBackup() {
     viewSlots()->setHeader(nullptr);
     viewSlots()->setBody(m_backup_body);
     viewSlots()->setFooter(m_backup_actions);
-    emit viewChanged(TR("keys-add-backup-title"), ModalWidth::L);
+    emit viewChanged(TR("keys-add-backup-title"));
 }
 
 void HotKeyFlow::hideBackup() {
@@ -265,7 +265,7 @@ void HotKeyFlow::showHotPassword() {
     viewSlots()->setHeader(nullptr);
     viewSlots()->setBody(m_password_body);
     viewSlots()->setFooter(m_password_actions);
-    emit viewChanged(TR("keys-add-password-title"), ModalWidth::L);
+    emit viewChanged(TR("keys-add-password-title"));
 }
 
 void HotKeyFlow::hideHotPassword() {
@@ -305,7 +305,7 @@ void HotKeyFlow::showSealing() {
     viewSlots()->setHeader(nullptr);
     viewSlots()->setBody(m_status);
     viewSlots()->setFooter(nullptr);
-    emit viewChanged(TR("keys-add-sealing-title"), ModalWidth::L);
+    emit viewChanged(TR("keys-add-sealing-title"));
 }
 
 void HotKeyFlow::showResult() {
@@ -313,7 +313,7 @@ void HotKeyFlow::showResult() {
     viewSlots()->setHeader(nullptr);
     viewSlots()->setBody(m_status);
     viewSlots()->setFooter(m_status_actions);
-    emit viewChanged(TR("keys-add-title"), ModalWidth::L);
+    emit viewChanged(TR("keys-add-title"));
 }
 
 void HotKeyFlow::hideStatus() {

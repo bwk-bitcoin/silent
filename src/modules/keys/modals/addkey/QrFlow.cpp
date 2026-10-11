@@ -101,7 +101,7 @@ void QrFlow::showDisplay() {
     viewSlots()->setHeader(nullptr);
     viewSlots()->setBody(m_qr_step);
     viewSlots()->setFooter(m_qr_actions);
-    emit viewChanged(TR("keys-add-qr-title"), ModalWidth::L);
+    emit viewChanged(TR("keys-add-qr-title"));
 }
 
 // ===== Camera view =====
@@ -125,7 +125,7 @@ void QrFlow::showCamera() {
     viewSlots()->setHeader(nullptr);
     viewSlots()->setBody(m_camera);
     viewSlots()->setFooter(m_camera->actions());
-    emit viewChanged(TR("keys-add-scan-title"), ModalWidth::XXL);
+    emit viewChanged(TR("keys-add-scan-title"));
 }
 
 void QrFlow::hideCamera() {
@@ -149,7 +149,7 @@ void QrFlow::showReview() {
     viewSlots()->setHeader(m_review->header());
     viewSlots()->setBody(m_review);
     viewSlots()->setFooter(m_review->actions());
-    emit viewChanged(TR("keys-add-review-title"), ModalWidth::L);
+    emit viewChanged(TR("keys-add-review-title"));
 }
 
 void QrFlow::hideReview() {
@@ -180,7 +180,7 @@ void QrFlow::showFailure(const QString &message) {
     viewSlots()->setHeader(nullptr);
     viewSlots()->setBody(m_status);
     viewSlots()->setFooter(m_status_actions);
-    emit viewChanged(TR("keys-add-title"), ModalWidth::L);
+    emit viewChanged(TR("keys-add-title"));
 }
 
 void QrFlow::hideFailure() {

@@ -87,7 +87,7 @@ void PasteFlow::showPaste() {
     viewSlots()->setHeader(nullptr);
     viewSlots()->setBody(m_paste_body);
     viewSlots()->setFooter(m_paste_actions);
-    emit viewChanged(TR("keys-add-paste-title"), ModalWidth::L);
+    emit viewChanged(TR("keys-add-paste-title"));
 }
 
 auto PasteFlow::pastedKey() const -> std::optional<PastedKey> {

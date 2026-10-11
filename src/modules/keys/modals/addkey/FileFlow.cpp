@@ -154,7 +154,7 @@ void FileFlow::showDrop() {
     viewSlots()->setHeader(nullptr);
     viewSlots()->setBody(m_drop_body);
     viewSlots()->setFooter(m_drop_actions);
-    emit viewChanged(TR("keys-add-file-title"), ModalWidth::L);
+    emit viewChanged(TR("keys-add-file-title"));
 }
 
 void FileFlow::dragEnterEvent(QDragEnterEvent *event) {
@@ -255,7 +255,7 @@ void FileFlow::showReview() {
     viewSlots()->setHeader(m_review->header());
     viewSlots()->setBody(m_review);
     viewSlots()->setFooter(m_review->actions());
-    emit viewChanged(TR("keys-add-file-title"), ModalWidth::L);
+    emit viewChanged(TR("keys-add-file-title"));
 }
 
 void FileFlow::hideReview() {

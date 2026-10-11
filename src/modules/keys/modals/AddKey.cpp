@@ -54,6 +54,9 @@ void AddKey::doConnect() {
 }
 
 void AddKey::view() {
+    // One width for every view, the mode list and each flow's, so the window never
+    // resizes sideways while going through a flow.
+    setWidth(ModalWidth::L);
     m_modes_body = viewModes();
 }
 
@@ -87,7 +90,6 @@ void AddKey::showModes() {
     setWindowTitle(TR("keys-add-title"));
     // The rows span the modal, as in the design, rather than centred at their width.
     setPage(m_modes_body);
-    setWidth(ModalWidth::L);
 }
 
 // ===== Shared =====
@@ -125,9 +127,8 @@ void AddKey::onModeClicked() {
     m_flow->start();
 }
 
-void AddKey::onFlowViewChanged(const QString &title, ModalWidth width) {
+void AddKey::onFlowViewChanged(const QString &title) {
     setWindowTitle(title);
-    setWidth(width);
 }
 
 void AddKey::onFlowBack() {

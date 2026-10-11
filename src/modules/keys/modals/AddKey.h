@@ -32,7 +32,7 @@ public:
 
 public slots:
     void onModeClicked();
-    void onFlowViewChanged(const QString &title, ModalWidth width);
+    void onFlowViewChanged(const QString &title);
     void onFlowBack();
 
 protected:
@@ -68,8 +68,8 @@ public:
     virtual void start() = 0;
 
 signals:
-    // The window title and width of the view now shown.
-    void viewChanged(const QString &title, ModalWidth width);
+    // The window title of the view now shown; every view keeps AddKey's one width.
+    void viewChanged(const QString &title);
     // Back left the flow: AddKey shows its mode list again.
     void back();
     // The key is added: AddKey closes.
