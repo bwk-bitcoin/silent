@@ -189,11 +189,7 @@ impl QrSession {
             part_bytes
         };
         if target_part_bytes != self.encoder_part_bytes {
-            let config = bwk_qr::config::Config {
-                bbqr_part_bytes: target_part_bytes,
-                ..bwk_qr::config::Config::default()
-            };
-            self.encoder = bwk_qr::encoder::Encoder::new(config)?;
+            self.encoder = encoder_for(target_part_bytes)?;
             self.encoder_part_bytes = target_part_bytes;
         }
         let frames = self.encoder.encode_request(&request)?;
@@ -387,6 +383,27 @@ fn hex_id(id: RequestId) -> String {
     id.0.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// QR versions a frame can be pinned at.
+const QR_VERSIONS: std::ops::RangeInclusive<u8> = 1..=40;
+
+/// An encoder pinned at the smallest QR version a full part of `part_bytes` fits, so
+/// a smaller part draws a coarser code: bwk-qr renders every part at the pinned
+/// version, and its default (27) would draw a short request as a dense 125-module code.
+fn encoder_for(part_bytes: usize) -> Result<bwk_qr::encoder::Encoder, Error> {
+    let config = |max_qr_version| bwk_qr::config::Config {
+        max_qr_version,
+        bbqr_part_bytes: part_bytes,
+        ..bwk_qr::config::Config::default()
+    };
+    if let Some(encoder) = QR_VERSIONS
+        .clone()
+        .find_map(|version| bwk_qr::encoder::Encoder::new(config(version)).ok())
+    {
+        return Ok(encoder);
+    }
+    Ok(bwk_qr::encoder::Encoder::new(config(*QR_VERSIONS.end()))?)
+}
+
 /// One encoded QR request: the protocol message and the full set of animation frames
 /// a caller pulls from on its own timer. Carries what `commit` needs to turn it into
 /// the session's `Outstanding` request, so a request built off the session (by
@@ -451,11 +468,7 @@ pub fn build_sign_request(
     } else {
         part_bytes
     };
-    let config = bwk_qr::config::Config {
-        bbqr_part_bytes: target_part_bytes,
-        ..bwk_qr::config::Config::default()
-    };
-    let encoder = bwk_qr::encoder::Encoder::new(config)?;
+    let encoder = encoder_for(target_part_bytes)?;
     let frames = encoder.encode_request(&request)?;
     if frames.is_empty() {
         return Err(Error::NoFrames);
