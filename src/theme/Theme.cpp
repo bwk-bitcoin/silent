@@ -31,6 +31,7 @@
 #include <QProxyStyle>
 #include <QStyleFactory>
 #include <QStyleOption>
+#include <QTabBar>
 
 namespace {
 
@@ -51,6 +52,21 @@ public:
             return metric::TAB_CLOSE_SIZE;
         }
         return QProxyStyle::pixelMetric(metric, option, widget);
+    }
+
+    auto subElementRect(SubElement element, const QStyleOption *option,
+                        const QWidget *widget = nullptr) const -> QRect override {
+        // The corner beside the tabs spans their full height, from the top: the module
+        // tabs there reach the pane's border as the account tabs do.
+        if (element == SE_TabWidgetRightCorner) {
+            if (const auto *frame = qstyleoption_cast<const QStyleOptionTabWidgetFrame *>(option);
+                frame != nullptr && frame->shape == QTabBar::RoundedNorth) {
+                const QSize size = frame->rightCornerWidgetSize;
+                return {frame->rect.right() - size.width() + 1, frame->rect.top(), size.width(),
+                        frame->tabBarSize.height()};
+            }
+        }
+        return QProxyStyle::subElementRect(element, option, widget);
     }
 
     auto standardIcon(StandardPixmap sp, const QStyleOption *opt = nullptr,

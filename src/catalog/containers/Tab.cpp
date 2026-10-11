@@ -14,6 +14,11 @@ auto Tab::qss(const Palette &p) -> QString {
                "  border-top-right-radius: %9px; margin-right: %10px; }"
                "QTabBar::tab:selected { background: %4; color: %5; }"
                "QTabBar::tab:hover:!selected { background: %6; }"
+               // An idle module bar's current tab is not the page shown: drawn unselected.
+               "QTabBar[class=\"module-tabs\"][idle=\"true\"]::tab:selected { background: %2; "
+               "  color: %3; }"
+               "QTabBar[class=\"module-tabs\"][idle=\"true\"]::tab:selected:hover { "
+               "  background: %6; }"
                // The settings gear's slot after the tabs.
                "QFrame[class=\"tabstrip-end\"] { border: none; border-left: 1px solid %12; }")
         .arg(p.border.name())        // %1

@@ -10,6 +10,7 @@
 #include "views/DashboardLayout.h"
 #include "views/MenuTab.h"
 #include <QFrame>
+#include <QVariant>
 #include <Qontrol>
 #include <algorithm>
 #include <common.h>
@@ -49,8 +50,19 @@ auto MainWindow::initWindow() -> void {
         ->margins(resolve(Padding::S), 0, 0, resolve(Padding::XXS))
         ->push(m_settings_btn)
         ->into(settingsSlot);
+    // A tab bar always has a current tab: while an account or the launcher shows, the
+    // bar is idle and its current tab is drawn as not selected.
+    m_module_bar = new QTabBar;
+    m_module_bar->setProperty("class", "module-tabs");
+    m_module_bar->setDrawBase(false);
+    m_module_bar->setExpanding(false);
+    // As wide as its tabs: no room kept for scroll buttons, right before the gear.
+    m_module_bar->setUsesScrollButtons(false);
+    m_module_bar->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     auto *corner = (new qontrol::Row)
                        ->margins(resolve(Spacing::XS), 0, resolve(Padding::XS), 0)
+                       ->pushAligned(m_module_bar, Qt::AlignBottom)
+                       ->pushSpacer(resolve(Spacing::XS))
                        ->push(settingsSlot);
     m_tab->setCornerWidget(corner, Qt::TopRightCorner);
     m_tab->setUsesScrollButtons(true);
@@ -63,6 +75,11 @@ auto MainWindow::initWindow() -> void {
 
     connect(m_tab, &QTabWidget::tabCloseRequested, this, &MainWindow::onTabCloseRequested,
             qontrol::UNIQUE);
+    connect(m_tab, &QTabWidget::currentChanged, this, &MainWindow::onCurrentTabChanged,
+            qontrol::UNIQUE);
+    // Clicked, not current changed: the idle bar's current tab is clicked to open it.
+    connect(m_module_bar, &QTabBar::tabBarClicked, this, &MainWindow::onModuleTabClicked,
+            qontrol::UNIQUE);
 
     m_init = true;
 }
@@ -72,11 +89,6 @@ auto MainWindow::updateTabs() -> void {
     QWidget *current = m_tab->currentWidget();
     while (m_tab->count() > 0) {
         m_tab->removeTab(0);
-    }
-
-    if (m_keys_tab != nullptr) {
-        int keysIndex = m_tab->addTab(m_keys_tab, TR("main-keys-tab"));
-        m_tab->tabBar()->setTabButton(keysIndex, QTabBar::RightSide, nullptr);
     }
 
     for (const auto &tab : m_tabs) {
@@ -91,8 +103,28 @@ auto MainWindow::updateTabs() -> void {
     int menuIndex = m_tab->addTab(m_menu_tab, TR("main-menu-tab"));
     m_tab->tabBar()->setTabButton(menuIndex, QTabBar::RightSide, nullptr);
 
+    // A module's page sits in the tab widget, its tab hidden there: the module bar
+    // shows it on the right.
+    if (m_keys_tab != nullptr) {
+        int keysIndex = m_tab->addTab(m_keys_tab, TR("main-keys-tab"));
+        m_tab->tabBar()->setTabButton(keysIndex, QTabBar::RightSide, nullptr);
+        m_tab->tabBar()->setTabVisible(keysIndex, false);
+    }
+    updateModuleTabs();
+
     if (current != nullptr && m_tab->indexOf(current) >= 0) {
         m_tab->setCurrentWidget(current);
+    }
+    onCurrentTabChanged();
+}
+
+void MainWindow::updateModuleTabs() {
+    while (m_module_bar->count() > 0) {
+        m_module_bar->removeTab(0);
+    }
+    if (m_keys_tab != nullptr) {
+        int index = m_module_bar->addTab(TR("main-keys-tab"));
+        m_module_bar->setTabData(index, QVariant::fromValue(static_cast<QObject *>(m_keys_tab)));
     }
 }
 
@@ -189,6 +221,33 @@ auto MainWindow::onTabCloseRequested(int index) -> void {
     auto *hosted = m_tab->widget(index);
     if (hosted != nullptr && hosted != m_menu_tab && hosted != m_keys_tab) {
         emit hostedTabCloseRequested(hosted);
+    }
+}
+
+void MainWindow::onCurrentTabChanged() {
+    // Select the current page's module tab, or idle the bar for any other page.
+    QWidget *current = m_tab->currentWidget();
+    int moduleIndex = -1;
+    for (int i = 0; i < m_module_bar->count(); ++i) {
+        if (m_module_bar->tabData(i).value<QObject *>() == current) {
+            moduleIndex = i;
+        }
+    }
+    if (moduleIndex >= 0) {
+        m_module_bar->setCurrentIndex(moduleIndex);
+    }
+    bool idle = moduleIndex < 0;
+    if (m_module_bar->property("idle").toBool() != idle) {
+        m_module_bar->setProperty("idle", idle);
+        m_module_bar->style()->unpolish(m_module_bar);
+        m_module_bar->style()->polish(m_module_bar);
+    }
+}
+
+void MainWindow::onModuleTabClicked(int index) {
+    auto *page = qobject_cast<QWidget *>(m_module_bar->tabData(index).value<QObject *>());
+    if (page != nullptr) {
+        m_tab->setCurrentWidget(page);
     }
 }
 

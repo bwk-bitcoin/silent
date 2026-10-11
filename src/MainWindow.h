@@ -4,6 +4,7 @@
 #include <QEvent>
 #include <QList>
 #include <QPair>
+#include <QTabBar>
 #include <QWidget>
 #include <Qontrol>
 
@@ -31,6 +32,8 @@ signals:
 
 public slots:
     auto onTabCloseRequested(int index) -> void;
+    void onCurrentTabChanged();
+    void onModuleTabClicked(int index);
 
 protected:
     auto closeEvent(QCloseEvent *event) -> void override;
@@ -39,10 +42,13 @@ protected:
 protected:
     auto initWindow() -> void;
     auto retranslateUi() -> void;
+    void updateModuleTabs();
 
 private:
     bool m_init = false;
     catalog::Tabs *m_tab = nullptr;
+    // The module tabs (Keys), right aligned before the gear, apart from the accounts.
+    QTabBar *m_module_bar = nullptr;
     catalog::Button *m_settings_btn = nullptr;
     QList<QPair<QString, QWidget *>> m_tabs;
     QWidget *m_menu_tab = nullptr;
