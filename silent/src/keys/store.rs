@@ -353,6 +353,8 @@ mod tests {
             model: "model".to_string(),
             serial: "serial".to_string(),
             module: "module".to_string(),
+            version: String::new(),
+            capabilities: 0,
         });
         record.xpubs.push(XpubEntry {
             path: DerivationPath::from_str("m/86'/1'/0'").expect("valid path"),

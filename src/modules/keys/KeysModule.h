@@ -25,6 +25,10 @@ namespace keys::flow {
 class SigningFlow;
 } // namespace keys::flow
 
+namespace qr {
+struct QrDevice;
+} // namespace qr
+
 namespace keys {
 
 // The CXX bridge exports its opaque handle as ::KeysModule, so the C++ module lives in
@@ -124,6 +128,9 @@ public:
                                  const QString &xpub) -> KeyOpResult;
     // Remembers `entry`'s device for the key holding its fingerprint.
     [[nodiscard]] auto recordDevice(const plugin::SignerEntry &entry) -> KeyOpResult;
+    // Remembers the device that handed the key holding `fingerprint` over QR.
+    [[nodiscard]] auto recordQrDevice(const QString &fingerprint, const qr::QrDevice &device)
+        -> KeyOpResult;
     // The path a device exports an xpub at without asking: BIP84, account 0, the coin
     // type of the network.
     [[nodiscard]] static auto defaultXpubPath() -> QString;

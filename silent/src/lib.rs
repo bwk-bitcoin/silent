@@ -386,6 +386,10 @@ mod ffi {
         pub model: String,
         pub serial: String,
         pub module: String,
+        /// Firmware version, empty for a USB device.
+        pub version: String,
+        /// bwk-qr capability bits, 0 for a USB device.
+        pub capabilities: u32,
     }
 
     /// A device the signer bus can see right now, fed in from the hwi module.
@@ -400,6 +404,10 @@ mod ffi {
         pub model: String,
         pub serial: String,
         pub module: String,
+        /// Firmware version, empty for a USB device.
+        pub version: String,
+        /// bwk-qr capability bits, 0 for a USB device.
+        pub capabilities: u32,
     }
 
     /// A cached extended public key at a derivation path for a registered key.
@@ -1165,6 +1173,14 @@ mod ffi {
         fn descriptor(self: &QrResponse) -> String;
         /// The signed PSBT as v2 hex when kind() is SignedPsbt, else empty.
         fn psbt_hex(self: &QrResponse) -> String;
+        /// The device vendor when kind() is Xpubs, else empty.
+        fn vendor(self: &QrResponse) -> String;
+        /// The device model when kind() is Xpubs, else empty.
+        fn model(self: &QrResponse) -> String;
+        /// The device firmware version when kind() is Xpubs, else empty.
+        fn version(self: &QrResponse) -> String;
+        /// The device capability bits when kind() is Xpubs, else 0.
+        fn capabilities(self: &QrResponse) -> u32;
         /// The derived xpubs when kind() is Xpubs, else empty.
         fn xpubs(self: &QrResponse) -> Vec<KeyXpub>;
         /// The device's verify_address answer when kind() is AddressVerified, else false.

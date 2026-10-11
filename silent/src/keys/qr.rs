@@ -222,8 +222,10 @@ pub enum QrResponse {
     Xpubs {
         fingerprint: Fingerprint,
         xpubs: Vec<(DerivationPath, Xpub)>,
+        vendor: String,
         model: String,
         version: String,
+        capabilities: u32,
     },
     Registration {
         alias: String,
@@ -259,11 +261,13 @@ fn validate_xpubs(
     Ok(QrResponse::Xpubs {
         fingerprint: Fingerprint::from(&xpubs.fingerprint),
         xpubs: converted,
+        vendor: xpubs.vendor,
         model: xpubs.model,
         version: format!(
             "{}.{}.{}",
             xpubs.version.major, xpubs.version.minor, xpubs.version.patch
         ),
+        capabilities: xpubs.capabilities.0,
     })
 }
 

@@ -28,7 +28,8 @@ public:
 signals:
     void request(const qr::QrRequest &request);
     // `path` is written m/...
-    void xpub(const QString &fingerprint, const QString &path, const QString &xpub);
+    void xpub(const QString &fingerprint, const QString &path, const QString &xpub,
+              const qr::QrDevice &device);
     void spDescriptor(const QString &descriptor);
     void signedPsbt(const QString &psbt_v2_hex);
     void addressVerified(bool matched);

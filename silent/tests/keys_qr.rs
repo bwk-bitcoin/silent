@@ -647,3 +647,59 @@ fn test_signed_answer_identical_to_the_request_is_refused_as_nothing_signed() {
         "expected NothingSigned, got {error}"
     );
 }
+
+// ===== Case 21: an accepted xpubs response carries what it says about the device =====
+
+#[test]
+fn test_xpubs_response_carries_the_device() {
+    let network = bitcoin::Network::Bitcoin;
+    let path = DerivationPath::from_str("m/84'/0'/0'").expect("path");
+    let xpub = HotSigner::new_from_mnemonics(network, TEST_MNEMONIC)
+        .expect("valid signer")
+        .xpub(&path)
+        .xkey;
+
+    let mut session = QrSession::new();
+    session
+        .get_xpubs(vec![path.clone()])
+        .expect("get_xpubs request");
+    let response = Response {
+        id: session.outstanding_id().expect("outstanding request"),
+        body: response::Body::Xpubs(response::Xpubs {
+            xpubs: vec![(&xpub).into()],
+            fingerprint: bwk_qr_protocol::types::Fingerprint([0xde, 0xad, 0xbe, 0xef]),
+            vendor: "vendor".to_string(),
+            model: "model".to_string(),
+            version: response::FirmwareVersion {
+                major: 1,
+                minor: 2,
+                patch: 3,
+                flag: response::ReleaseFlag::Stable,
+            },
+            capabilities: response::Capabilities(0x0000_000b),
+        }),
+    };
+    let encoded = bwk_qr_protocol::encode_response(&response).expect("encode response");
+
+    let Ok(QrResponse::Xpubs {
+        fingerprint,
+        xpubs,
+        vendor,
+        model,
+        version,
+        capabilities,
+    }) = session.decode_response(&encoded)
+    else {
+        panic!("expected an accepted xpubs response");
+    };
+    assert_eq!(
+        fingerprint.to_string(),
+        "deadbeef",
+        "unexpected fingerprint"
+    );
+    assert_eq!(xpubs, vec![(path, xpub)], "unexpected xpubs");
+    assert_eq!(vendor, "vendor", "unexpected vendor");
+    assert_eq!(model, "model", "unexpected model");
+    assert_eq!(version, "1.2.3", "unexpected version");
+    assert_eq!(capabilities, 0x0000_000b, "unexpected capabilities");
+}

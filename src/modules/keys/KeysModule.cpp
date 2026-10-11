@@ -10,6 +10,7 @@
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/signer.h"
+#include "qr/QrTypes.h"
 
 #include <QDebug>
 #include <QThread>
@@ -715,6 +716,27 @@ auto KeysModule::recordDevice(const plugin::SignerEntry &entry) -> KeyOpResult {
     return result;
 }
 
+auto KeysModule::recordQrDevice(const QString &fingerprint, const qr::QrDevice &device)
+    -> KeyOpResult {
+    if (!m_rust.has_value()) {
+        return failedOp(TR("keys-module-not-ready"));
+    }
+    LiveDevice live;
+    live.fingerprint = rust::String(fingerprint.toStdString());
+    // As over USB, the device kind is its brand.
+    live.kind = rust::String(device.vendor.toStdString());
+    live.brand = rust::String(device.vendor.toStdString());
+    live.model = rust::String(device.model.toStdString());
+    live.version = rust::String(device.version.toStdString());
+    live.capabilities = device.capabilities;
+    live.module = rust::String("qr");
+    auto result = m_rust.value()->record_device(std::move(live));
+    if (result.is_ok) {
+        emit keysChanged();
+    }
+    return result;
+}
+
 auto KeysModule::coinType() -> int {
     return KeysModule::network() == Network::Bitcoin ? 0 : 1;
 }
@@ -732,6 +754,8 @@ auto KeysModule::toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice {
     device.brand = rust::String(entry.signer->brand().toStdString());
     device.model = rust::String(entry.signer->model().toStdString());
     device.serial = rust::String(entry.signer->serial().toStdString());
+    // USB reports no firmware version nor capabilities.
+    device.capabilities = 0;
     if (entry.module != nullptr) {
         device.module =
             rust::String(entry.module->meta().value(QStringLiteral("id")).toStdString());

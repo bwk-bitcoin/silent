@@ -19,6 +19,7 @@
 #include "theme/Icon.h"
 #include "theme/Palette.h"
 
+#include <QDebug>
 #include <Qontrol>
 #include <common.h>
 
@@ -233,6 +234,11 @@ void QrFlow::onNextClicked() {
         return;
     case View::Review:
         if (m_review->add({KeyRouteKind::Qr})) {
+            // The key is added either way: a device not remembered only goes unseen.
+            auto recorded = m_module->recordQrDevice(m_fingerprint, m_device);
+            if (!recorded.is_ok) {
+                qWarning() << "keys:" << KeysModule::toQt(recorded.error);
+            }
             emit added();
         }
         return;
@@ -244,8 +250,11 @@ void QrFlow::onNextClicked() {
     }
 }
 
-void QrFlow::onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub) {
+void QrFlow::onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub,
+                      const qr::QrDevice &device) {
     stop();
+    m_fingerprint = fingerprint;
+    m_device = device;
     m_review->setKey(fingerprint, {{.path = path, .xpub = xpub}}, QString());
     showReview();
 }

@@ -111,8 +111,12 @@ void BwkQrEngine::forwardResponse(const ::QrResponse &decoded) {
             emit error(qr::QrError::RequestFailed, TR("keys-qr-wrong-kind"));
             return;
         }
+        qr::QrDevice device{.vendor = KeysModule::toQt(decoded.vendor()),
+                            .model = KeysModule::toQt(decoded.model()),
+                            .version = KeysModule::toQt(decoded.version()),
+                            .capabilities = decoded.capabilities()};
         emit xpub(KeysModule::toQt(xpubs[0].fingerprint), xpubPath(KeysModule::toQt(xpubs[0].path)),
-                  KeysModule::toQt(xpubs[0].xpub));
+                  KeysModule::toQt(xpubs[0].xpub), device);
         return;
     }
     case QrResponseKind::SpDescriptor:

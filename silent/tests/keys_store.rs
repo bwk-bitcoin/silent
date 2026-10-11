@@ -161,12 +161,16 @@ fn test_record_round_trip_every_field() {
         model: "model-a".to_string(),
         serial: "serial-a".to_string(),
         module: "hwi".to_string(),
+        version: String::new(),
+        capabilities: 0,
     });
     record.devices.push(DeviceRecord {
         kind: "hardware".to_string(),
         model: "model-b".to_string(),
         serial: "serial-b".to_string(),
         module: "hwi".to_string(),
+        version: String::new(),
+        capabilities: 0,
     });
     record.xpubs.push(XpubEntry {
         path: DerivationPath::from_str("m/86'/1'/0'").expect("valid path"),
@@ -340,6 +344,8 @@ fn test_device_dedupe() {
         model: "model-x".to_string(),
         serial: "serial-x".to_string(),
         module: "hwi".to_string(),
+        version: String::new(),
+        capabilities: 0,
     };
     key_manager
         .record_device(fp, device.clone())

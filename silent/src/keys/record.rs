@@ -127,14 +127,22 @@ impl Routes {
 }
 
 /// A device a key's hot route or hardware routes were seen on. Identity is the tuple
-/// of these four fields (`same_device`): the key record it lives in is already the
-/// fingerprint, so there is no fingerprint field here.
+/// of `kind`, `model`, `serial` and `module` (`same_device`): the key record it lives
+/// in is already the fingerprint, so there is no fingerprint field here. `version`
+/// and `capabilities` are what the device last reported, so a firmware upgrade
+/// refreshes them on the same device.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceRecord {
     pub kind: String,
     pub model: String,
     pub serial: String,
     pub module: String,
+    /// Firmware version, empty when the route does not report one (USB).
+    #[serde(default)]
+    pub version: String,
+    /// bwk-qr capability bits, 0 when the route does not report them (USB).
+    #[serde(default)]
+    pub capabilities: u32,
 }
 
 impl DeviceRecord {
@@ -347,6 +355,8 @@ mod tests {
             model: "model".to_string(),
             serial: "serial".to_string(),
             module: "module".to_string(),
+            version: "1.2.3".to_string(),
+            capabilities: 0x0000_000b,
         });
         record.xpubs.push(XpubEntry {
             path: DerivationPath::from_str("m/86'/1'/0'").expect("valid path"),
@@ -366,6 +376,24 @@ mod tests {
         assert_eq!(
             round_tripped, record,
             "round tripped record {round_tripped:?} differs from original {record:?}"
+        );
+    }
+
+    #[test]
+    fn device_record_without_version_and_capabilities_deserializes() {
+        let json = r#"{"kind":"hardware","model":"model","serial":"serial","module":"hwi"}"#;
+        let device: DeviceRecord = serde_json::from_str(json).expect("deserialize device");
+        assert_eq!(
+            device,
+            DeviceRecord {
+                kind: "hardware".to_string(),
+                model: "model".to_string(),
+                serial: "serial".to_string(),
+                module: "hwi".to_string(),
+                version: String::new(),
+                capabilities: 0,
+            },
+            "a record stored before version and capabilities should load with them empty"
         );
     }
 

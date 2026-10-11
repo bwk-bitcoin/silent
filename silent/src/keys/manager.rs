@@ -35,6 +35,10 @@ pub struct LiveDevice {
     pub serial: String,
     /// Name of the module that produced this device, for example "hwi".
     pub module: String,
+    /// Firmware version, empty when the module does not report one (hwi).
+    pub version: String,
+    /// bwk-qr capability bits, 0 when the module does not report them (hwi).
+    pub capabilities: u32,
     /// None until the device reports one: a locked or unsupported device has none.
     pub fingerprint: Option<Fingerprint>,
 }
@@ -46,6 +50,8 @@ impl LiveDevice {
             model: self.model.clone(),
             serial: self.serial.clone(),
             module: self.module.clone(),
+            version: self.version.clone(),
+            capabilities: self.capabilities,
         }
     }
 }
@@ -517,14 +523,16 @@ impl KeyManagerImpl for KeyManager {
         device: DeviceRecord,
     ) -> Result<(), Error> {
         self.mutate(fingerprint, |record| {
-            if record
+            // A known device keeps its entry and takes the version and capabilities
+            // it reports now.
+            match record
                 .devices
-                .iter()
-                .any(|existing| existing.same_device(&device))
+                .iter_mut()
+                .find(|existing| existing.same_device(&device))
             {
-                return Ok(());
+                Some(existing) => *existing = device,
+                None => record.devices.push(device),
             }
-            record.devices.push(device);
             Ok(())
         })
     }
@@ -1198,6 +1206,8 @@ mod tests {
             model: "model".to_string(),
             serial: "serial".to_string(),
             module: "hwi".to_string(),
+            version: String::new(),
+            capabilities: 0,
         };
         manager
             .record_device(fingerprint(1), device.clone())
@@ -1229,6 +1239,41 @@ mod tests {
     }
 
     #[test]
+    fn record_device_refreshes_a_known_device() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+
+        let device = DeviceRecord {
+            kind: "vendor".to_string(),
+            model: "model".to_string(),
+            serial: String::new(),
+            module: "qr".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: 0x0000_0001,
+        };
+        manager
+            .record_device(fingerprint(1), device.clone())
+            .expect("first record");
+        let mut upgraded = device.clone();
+        upgraded.version = "1.1.0".to_string();
+        upgraded.capabilities = 0x0000_0003;
+        manager
+            .record_device(fingerprint(1), upgraded.clone())
+            .expect("upgraded record");
+
+        let store = KeyStore::new(tmp.path().to_path_buf(), Network::Regtest);
+        let on_disk = store.load(fingerprint(1)).expect("load record");
+        assert_eq!(
+            on_disk.devices,
+            vec![upgraded],
+            "expected the known device refreshed in place, got {:?}",
+            on_disk.devices
+        );
+    }
+
+    #[test]
     fn record_device_dedupes_against_disk_not_stale_memory() {
         let tmp = temp_dir::TempDir::new().expect("create temp dir");
         let mut manager_a = manager_over(tmp.path(), Network::Regtest);
@@ -1244,6 +1289,8 @@ mod tests {
             model: "model".to_string(),
             serial: "serial".to_string(),
             module: "hwi".to_string(),
+            version: String::new(),
+            capabilities: 0,
         };
         manager_a
             .record_device(fp, device.clone())
@@ -1288,6 +1335,8 @@ mod tests {
             model: "model".to_string(),
             serial: "serial".to_string(),
             module: "hwi".to_string(),
+            version: String::new(),
+            capabilities: 0,
             fingerprint: Some(fingerprint(1)),
         }]);
         let with_device = manager.best_route(fingerprint(1));
@@ -1327,6 +1376,8 @@ mod tests {
             model: "model".to_string(),
             serial: "serial".to_string(),
             module: "hwi".to_string(),
+            version: String::new(),
+            capabilities: 0,
             fingerprint: Some(fingerprint(42)),
         }]);
 
@@ -1665,6 +1716,8 @@ mod tests {
             model: "model".to_string(),
             serial: serial.to_string(),
             module: "hwi".to_string(),
+            version: String::new(),
+            capabilities: 0,
             fingerprint: fp,
         }
     }

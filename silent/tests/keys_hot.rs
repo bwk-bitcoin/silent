@@ -370,6 +370,8 @@ fn test_hot_material_sign_is_independent_of_a_later_module_mutation() {
         model: "model".to_string(),
         serial: "serial".to_string(),
         module: "hwi".to_string(),
+        version: String::new(),
+        capabilities: 0,
     }]);
 
     let psbt_hex = hex::encode(

@@ -292,6 +292,8 @@ impl KeysModule {
                 model: device.model.clone(),
                 serial: device.serial.clone(),
                 module: device.module.clone(),
+                version: device.version.clone(),
+                capabilities: device.capabilities,
             })
             .collect()
     }
@@ -826,6 +828,38 @@ impl QrResponse {
         }
     }
 
+    /// The device vendor when kind() is Xpubs, else empty.
+    pub fn vendor(&self) -> String {
+        match self.inner.as_ref() {
+            Ok(qr::QrResponse::Xpubs { vendor, .. }) => vendor.clone(),
+            _ => String::new(),
+        }
+    }
+
+    /// The device model when kind() is Xpubs, else empty.
+    pub fn model(&self) -> String {
+        match self.inner.as_ref() {
+            Ok(qr::QrResponse::Xpubs { model, .. }) => model.clone(),
+            _ => String::new(),
+        }
+    }
+
+    /// The device firmware version when kind() is Xpubs, else empty.
+    pub fn version(&self) -> String {
+        match self.inner.as_ref() {
+            Ok(qr::QrResponse::Xpubs { version, .. }) => version.clone(),
+            _ => String::new(),
+        }
+    }
+
+    /// The device capability bits when kind() is Xpubs, else 0.
+    pub fn capabilities(&self) -> u32 {
+        match self.inner.as_ref() {
+            Ok(qr::QrResponse::Xpubs { capabilities, .. }) => *capabilities,
+            _ => 0,
+        }
+    }
+
     /// The derived xpubs when kind() is Xpubs, else empty.
     pub fn xpubs(&self) -> Vec<ffi::KeyXpub> {
         match self.inner.as_ref() {
@@ -941,6 +975,8 @@ fn to_manager_live_device(device: ffi::LiveDevice) -> LiveDevice {
         model: device.model,
         serial: device.serial,
         module: device.module,
+        version: device.version,
+        capabilities: device.capabilities,
         fingerprint,
     }
 }
@@ -958,6 +994,8 @@ fn to_ffi_live_device(device: &LiveDevice) -> ffi::LiveDevice {
         model: device.model.clone(),
         serial: device.serial.clone(),
         module: device.module.clone(),
+        version: device.version.clone(),
+        capabilities: device.capabilities,
     }
 }
 

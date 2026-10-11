@@ -105,6 +105,16 @@ struct QrScan {
     int total = 0;
 };
 
+// What a device says about itself when it hands its xpubs.
+struct QrDevice {
+    QString vendor;
+    QString model;
+    // Firmware version, written major.minor.patch.
+    QString version;
+    // The codec's capability bits.
+    quint32 capabilities = 0;
+};
+
 // Why a codec could not start an exchange or refused an answer. Only RequestFailed
 // ends the exchange: after the others the scan goes on.
 enum class QrError : std::uint8_t { RequestFailed, WrongRequest, Unsupported, Refused };
@@ -117,4 +127,5 @@ Q_DECLARE_METATYPE(qr::QrFrame)
 Q_DECLARE_METATYPE(qr::CameraFrame)
 Q_DECLARE_METATYPE(qr::QrRender)
 Q_DECLARE_METATYPE(qr::QrScan)
+Q_DECLARE_METATYPE(qr::QrDevice)
 Q_DECLARE_METATYPE(qr::QrError)

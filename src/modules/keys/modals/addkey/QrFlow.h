@@ -44,7 +44,8 @@ public:
 public slots:
     void onBackClicked();
     void onNextClicked();
-    void onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub);
+    void onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub,
+                  const qr::QrDevice &device);
     void onQrError(qr::QrError kind, const QString &message);
     void onQrFrame(const qr::QrFrame &frame);
 
@@ -87,6 +88,9 @@ private:
     KeysModule *m_module = nullptr;
     View m_view = View::Display;
     qr::QrEngine *m_qr_engine = nullptr;
+    // The key on review and the device that handed it, recorded once the key is added.
+    QString m_fingerprint;
+    qr::QrDevice m_device;
 
     qr::QrDisplayEngine *m_qr_display_engine = nullptr;
     catalog::Label *m_qr_hint = nullptr;

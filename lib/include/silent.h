@@ -1488,6 +1488,10 @@ struct KeyDevice final {
   ::rust::String model;
   ::rust::String serial;
   ::rust::String module;
+  // Firmware version, empty for a USB device.
+  ::rust::String version;
+  // bwk-qr capability bits, 0 for a USB device.
+  ::std::uint32_t capabilities CXX_DEFAULT_VALUE(0);
 
   using IsRelocatable = ::std::true_type;
 };
@@ -1506,6 +1510,10 @@ struct LiveDevice final {
   ::rust::String model;
   ::rust::String serial;
   ::rust::String module;
+  // Firmware version, empty for a USB device.
+  ::rust::String version;
+  // bwk-qr capability bits, 0 for a USB device.
+  ::std::uint32_t capabilities CXX_DEFAULT_VALUE(0);
 
   using IsRelocatable = ::std::true_type;
 };
@@ -2214,6 +2222,18 @@ struct QrResponse final : public ::rust::Opaque {
 
   // The signed PSBT as v2 hex when kind() is SignedPsbt, else empty.
   ::rust::String psbt_hex() const noexcept;
+
+  // The device vendor when kind() is Xpubs, else empty.
+  ::rust::String vendor() const noexcept;
+
+  // The device model when kind() is Xpubs, else empty.
+  ::rust::String model() const noexcept;
+
+  // The device firmware version when kind() is Xpubs, else empty.
+  ::rust::String version() const noexcept;
+
+  // The device capability bits when kind() is Xpubs, else 0.
+  ::std::uint32_t capabilities() const noexcept;
 
   // The derived xpubs when kind() is Xpubs, else empty.
   ::rust::Vec<::KeyXpub> xpubs() const noexcept;
