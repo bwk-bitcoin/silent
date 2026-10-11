@@ -29,7 +29,6 @@
 #include <QPainter>
 #include <QPalette>
 #include <QProxyStyle>
-#include <QScrollBar>
 #include <QStyleFactory>
 #include <QStyleOption>
 
@@ -80,18 +79,6 @@ public:
         }
         QProxyStyle::drawPrimitive(pe, opt, painter, widget);
     }
-
-    void polish(QWidget *widget) override {
-        QProxyStyle::polish(widget);
-        // A scrollbar says it paints every pixel, so Qt paints nothing behind it, but
-        // ours leave their track transparent: what shows there is whatever the window
-        // buffer held (dark on some setups). Have the background painted under them.
-        if (qobject_cast<QScrollBar *>(widget) != nullptr) {
-            widget->setAttribute(Qt::WA_OpaquePaintEvent, false);
-        }
-    }
-
-    using QProxyStyle::polish;
 };
 
 } // namespace
