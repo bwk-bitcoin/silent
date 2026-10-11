@@ -147,7 +147,7 @@ void HotKeyFlow::showHotChoose() {
     m_view = View::HotChoose;
     onHotChooseChanged();
     viewSlots()->setHeader(nullptr);
-    viewSlots()->setBody(m_choose_body);
+    viewSlots()->setWideBody(m_choose_body);
     viewSlots()->setFooter(m_choose_actions);
     emit viewChanged(TR("keys-add-hot-title"));
 }
@@ -206,7 +206,7 @@ auto HotKeyFlow::viewBackup() -> QWidget * {
 void HotKeyFlow::showBackup() {
     m_view = View::Backup;
     viewSlots()->setHeader(nullptr);
-    viewSlots()->setBody(m_backup_body);
+    viewSlots()->setWideBody(m_backup_body);
     viewSlots()->setFooter(m_backup_actions);
     emit viewChanged(TR("keys-add-backup-title"));
 }

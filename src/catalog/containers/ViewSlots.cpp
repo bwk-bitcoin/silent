@@ -26,6 +26,10 @@ void ViewSlots::setBody(QWidget *body) {
     replace(m_body, m_body_widget, body, true);
 }
 
+void ViewSlots::setWideBody(QWidget *body) {
+    replace(m_body, m_body_widget, body, false);
+}
+
 void ViewSlots::setFooter(QWidget *footer) {
     replace(m_footer, m_footer_widget, footer, false);
 }

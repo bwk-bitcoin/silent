@@ -21,6 +21,9 @@ public:
     void setHeader(QWidget *header);
     void setBody(QWidget *body);
     void setFooter(QWidget *footer);
+    // Puts `body` in the body filling the width, as the design's block bodies, instead
+    // of centred at its own width.
+    void setWideBody(QWidget *body);
     // Empties the header and the footer and puts `page` in the body, filling the width.
     void setPage(QWidget *page);
     // Hides `widget` and keeps it here until a view shows it.
