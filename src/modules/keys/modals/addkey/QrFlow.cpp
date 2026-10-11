@@ -1,5 +1,7 @@
 #include "QrFlow.h"
 
+#include "modules/keys/DeviceName.h"
+
 #include "KeyReview.h"
 
 #include "catalog/Button.h"
@@ -248,7 +250,8 @@ void QrFlow::onQrXpubs(const QString &fingerprint, const QList<qr::QrXpub> &xpub
     for (const auto &entry : xpubs) {
         pathXpubs.append({.path = entry.path, .xpub = entry.xpub});
     }
-    m_review->setKey(fingerprint, pathXpubs, QString());
+    // The device as people know it ("Coldcard Mk4"), a default the user can change.
+    m_review->setKey(fingerprint, pathXpubs, deviceName(device.vendor, device.model));
     showReview();
 }
 
