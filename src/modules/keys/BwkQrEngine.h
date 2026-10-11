@@ -28,8 +28,8 @@ public slots:
 protected:
     // Hands the session's request on, or says why it could not be built.
     void issue(const QrMessageResult &message);
-    // The answer of a validated response, by its kind.
-    void answer(const ::QrResponse &decoded);
+    // Forwards a validated response as the signal of its kind.
+    void forwardResponse(const ::QrResponse &decoded);
 
 private:
     // Non-owning: the keys module outlives every flow it opens.

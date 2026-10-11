@@ -100,10 +100,10 @@ void BwkQrEngine::response(const qr::QrResponse &response) {
         return;
     }
     m_waiting = false;
-    answer(*decoded);
+    forwardResponse(*decoded);
 }
 
-void BwkQrEngine::answer(const ::QrResponse &decoded) {
+void BwkQrEngine::forwardResponse(const ::QrResponse &decoded) {
     switch (decoded.kind()) {
     case QrResponseKind::Xpubs: {
         auto xpubs = decoded.xpubs();
