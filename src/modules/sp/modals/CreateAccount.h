@@ -13,7 +13,6 @@
 namespace catalog {
 class Button;
 class ComboBox;
-class CopyField;
 class FieldNote;
 class Input;
 class Label;
@@ -96,6 +95,8 @@ protected:
     // The key list of the picked network, or the empty state saying where keys are.
     void populateKeys();
     void refreshKeyRows();
+    // Forgets the descriptors fetched from the picked key.
+    void clearFetched();
     void applyNetworkDefaults();
     void showFetchError(const QString &message);
     // Runs the fetch the last click asked for, once this window has closed.
@@ -115,9 +116,6 @@ private:
     catalog::Button *m_get_segwit = nullptr;
     catalog::Label *m_pick_key = nullptr;
     catalog::FieldNote *m_fetch_error = nullptr;
-    catalog::CopyField *m_descriptor_field = nullptr;
-    catalog::CopyField *m_taproot_field = nullptr;
-    catalog::CopyField *m_segwit_field = nullptr;
     EndpointRow m_blindbit;
     EndpointRow m_electrum;
     catalog::Button *m_create = nullptr;

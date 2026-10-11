@@ -6,7 +6,6 @@
 #include "catalog/Variants.h"
 #include "catalog/containers/ModalActions.h"
 #include "catalog/containers/ScrollArea.h"
-#include "catalog/display/CopyField.h"
 #include "catalog/display/Label.h"
 #include "catalog/display/RouteIcons.h"
 #include "catalog/feedback/EmptyState.h"
@@ -170,16 +169,6 @@ void CreateAccount::init() {
     m_fetch_error = new catalog::FieldNote(QString(), catalog::FieldNote::Tone::Error);
     m_fetch_error->setVisible(false);
 
-    m_descriptor_field = new catalog::CopyField;
-    m_descriptor_field->setWrap(true);
-    m_descriptor_field->setVisible(false);
-    m_taproot_field = new catalog::CopyField;
-    m_taproot_field->setWrap(true);
-    m_taproot_field->setVisible(false);
-    m_segwit_field = new catalog::CopyField;
-    m_segwit_field->setWrap(true);
-    m_segwit_field->setVisible(false);
-
     m_create = catalog::btnCreate();
     m_actions = new catalog::ModalActions;
     m_actions->addAction(m_create);
@@ -230,10 +219,7 @@ void CreateAccount::view() {
                     ->push(sectionLabel(TR("create-account-key-section")))
                     ->push(m_keys_column)
                     ->push(m_fetch_row)
-                    ->push(m_fetch_error)
-                    ->push(m_descriptor_field)
-                    ->push(m_taproot_field)
-                    ->push(m_segwit_field);
+                    ->push(m_fetch_error);
 
     auto *endpoints = (new catalog::FieldGroup)
                           ->addField(TR("settings-blindbit-url"), m_blindbit.control())
@@ -372,10 +358,25 @@ void CreateAccount::refreshKeyRows() {
         }
     }
     bool picked = !m_key_fp.isEmpty();
-    for (auto *button : {m_get_sp, m_get_taproot, m_get_segwit}) {
-        button->setEnabled(picked);
+    // A fetched one is done: greyed out with a check mark, until the key or the network
+    // changes and clears it.
+    const std::array<std::pair<catalog::Button *, bool>, 3> buttons = {{
+        {m_get_sp, !m_descriptor.isEmpty()},
+        {m_get_taproot, !m_taproot_descriptor.isEmpty()},
+        {m_get_segwit, !m_segwit_descriptor.isEmpty()},
+    }};
+    for (const auto &[button, fetched] : buttons) {
+        button->setEnabled(picked && !fetched);
+        button->setIcon(fetched ? icon::check(IconColor::Success) : QIcon());
     }
     m_pick_key->setVisible(!picked);
+}
+
+void CreateAccount::clearFetched() {
+    m_descriptor.clear();
+    m_descriptor_fingerprint.clear();
+    m_taproot_descriptor.clear();
+    m_segwit_descriptor.clear();
 }
 
 void CreateAccount::onKeyClicked() {
@@ -385,13 +386,7 @@ void CreateAccount::onKeyClicked() {
     }
     auto fingerprint = row->property("fingerprint").toString();
     if (fingerprint != m_key_fp) {
-        m_descriptor.clear();
-        m_descriptor_fingerprint.clear();
-        m_descriptor_field->setVisible(false);
-        m_taproot_descriptor.clear();
-        m_taproot_field->setVisible(false);
-        m_segwit_descriptor.clear();
-        m_segwit_field->setVisible(false);
+        clearFetched();
     }
     m_key_fp = fingerprint;
     m_fetch_error->setVisible(false);
@@ -402,11 +397,8 @@ void CreateAccount::onKeyClicked() {
 
 void CreateAccount::onNetworkChanged() {
     m_key_fp.clear();
-    // Built for the key of another network.
-    m_taproot_descriptor.clear();
-    m_taproot_field->setVisible(false);
-    m_segwit_descriptor.clear();
-    m_segwit_field->setVisible(false);
+    // Fetched from a key of another network.
+    clearFetched();
     m_fetch_error->setVisible(false);
     populateKeys();
     applyNetworkDefaults();
@@ -477,8 +469,6 @@ void CreateAccount::onSpDescriptorReady(ReqId req_id, const QString &descriptor,
     m_descriptor = descriptor;
     m_descriptor_fingerprint = fingerprint;
     m_descriptor_network = network();
-    m_descriptor_field->setValue(descriptor);
-    m_descriptor_field->setVisible(true);
 }
 
 void CreateAccount::onXpubReady(ReqId req_id, const QString &xpub, const QString &fingerprint,
@@ -497,10 +487,7 @@ void CreateAccount::onXpubReady(ReqId req_id, const QString &xpub, const QString
         showFetchError(TR("create-account-xpub-invalid"));
         return;
     }
-    auto *field = taproot ? m_taproot_field : m_segwit_field;
     (taproot ? m_taproot_descriptor : m_segwit_descriptor) = descriptor;
-    field->setValue(descriptor);
-    field->setVisible(true);
 }
 
 void CreateAccount::onKeysCancelled(ReqId req_id) {
