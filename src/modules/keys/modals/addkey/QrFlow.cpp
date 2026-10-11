@@ -69,9 +69,11 @@ void QrFlow::view() {
 // ===== QR code view =====
 
 void QrFlow::initDisplay() {
-    // A plain code on white, the highest contrast, with no tuning controls.
+    // A plain code on white, at the highest contrast and the lowest density (the
+    // coarsest code, the easiest to scan), with no tuning controls.
     m_qr_display_engine = new qr::BbqrDisplayEngine(this);
     m_qr_display_engine->setContrast(qr::QrContrast::Highest);
+    m_qr_display_engine->setDensity(qr::QrDensity::Lowest);
     m_qr_hint = new Label(LabelRole::Body);
     m_qr_hint->setTone(LabelTone::Secondary);
     m_qr_hint->setAlignment(Qt::AlignCenter);

@@ -138,8 +138,8 @@ const int QR_REBUILD_SPINNER_SIZE = 28;
 const int CAMERA_STATE_ICON_SIZE = 40;
 const int QR_DISPLAY_SIZE = 400;
 const int QR_DISPLAY_PADDING = 16;
-// A request that fits one plain code (an xpub request), without the airgap tuning.
-const int QR_REQUEST_SIZE = 240;
+// A plain request code (an xpub request), without the airgap tuning.
+const int QR_REQUEST_SIZE = 360;
 const int QR_REQUEST_PADDING = 12;
 // Fits the body of the narrowest modal showing a QR request (ModalWidth::L).
 const int QR_HINT_MAX_WIDTH = 520;
