@@ -354,6 +354,7 @@ fn test_bad_xpub_count_is_refused() {
         body: response::Body::Xpubs(response::Xpubs {
             xpubs: vec![bwk_qr_protocol::types::Xpub([0u8; 78])],
             fingerprint: bwk_qr_protocol::types::Fingerprint([0u8; 4]),
+            vendor: "vendor".to_string(),
             model: "model".to_string(),
             version: response::FirmwareVersion {
                 major: 1,
