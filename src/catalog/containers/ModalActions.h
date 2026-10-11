@@ -20,7 +20,7 @@ class ModalActions : public QWidget {
     Q_OBJECT
 
 public:
-    enum class Back { None, Back, Previous, OtherSigner, AllSettings };
+    enum class Back { None, Back, OtherSigner, AllSettings };
 
     explicit ModalActions(QWidget *parent = nullptr);
     void setBack(Back back);

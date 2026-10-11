@@ -217,7 +217,6 @@ receive-show-qr => "Show QR code"
 
 btn-back => "Back"
 
-btn-previous => "Previous"
 
 btn-other-signer => "Other Signer"
 

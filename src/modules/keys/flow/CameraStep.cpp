@@ -75,7 +75,7 @@ void CameraStep::init() {
 
     m_settings = catalog::btnCameraSettings();
     m_actions = new catalog::ModalActions;
-    m_actions->setBack(catalog::ModalActions::Back::Previous);
+    m_actions->setBack(catalog::ModalActions::Back::Back);
     m_actions->addAction(m_settings);
 
     m_preview_timer = new QTimer(this);

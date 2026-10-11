@@ -35,9 +35,6 @@ void ModalActions::setBack(Back back) {
     case Back::Back:
         m_back = btnBack();
         break;
-    case Back::Previous:
-        m_back = btnPrevious();
-        break;
     case Back::OtherSigner:
         m_back = btnOtherSigner();
         break;

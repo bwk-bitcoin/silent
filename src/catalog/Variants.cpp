@@ -64,14 +64,6 @@ auto btnBack() -> Button * {
                  .width = BtnWidth::M});
 }
 
-auto btnPrevious() -> Button * {
-    return make({.role = ButtonRole::Default,
-                 .label = TR("btn-previous"),
-                 .icon = icon::chevronLeft,
-                 .iconSize = 14,
-                 .width = BtnWidth::M});
-}
-
 auto btnOtherSigner() -> Button * {
     return make({.role = ButtonRole::Default,
                  .label = TR("btn-other-signer"),

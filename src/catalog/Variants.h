@@ -12,7 +12,6 @@ class CopyButton;
 // icon, tooltip, width). Screens pick a helper, they never configure one by hand.
 
 auto btnBack() -> Button *;
-auto btnPrevious() -> Button *;
 auto btnOtherSigner() -> Button *;
 auto btnAllSettings() -> Button *;
 auto btnStepperMinus() -> Button *;
