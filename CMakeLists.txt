@@ -216,6 +216,8 @@ set(SILENT_APP_SOURCES
     src/catalog/containers/Separator.cpp
     src/catalog/containers/ScrollArea.h
     src/catalog/containers/ScrollArea.cpp
+    src/catalog/containers/ScrollBar.h
+    src/catalog/containers/ScrollBar.cpp
     src/catalog/containers/ModalActions.h
     src/catalog/containers/ModalActions.cpp
     src/catalog/containers/Section.h

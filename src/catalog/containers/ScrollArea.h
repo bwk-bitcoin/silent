@@ -36,16 +36,16 @@ public:
         return resolve(Spacing::XS);
     }
 
-    // Space between the area's edge and its content: a scrollbar-wide gutter and a
-    // padding on each side (the right gutter is the bar itself while it shows), the
-    // edge line and the padding above and below. Content laid out next to an area
-    // aligns with its content by these.
+    // Space between the area's edge and its content. Across the scroll axis, a
+    // scrollbar-wide gutter and a padding on each side (the right gutter is the bar
+    // itself); along it, only the room of the edge line, so the content runs to the
+    // edges. Content laid out next to an area aligns with its content by these.
     static constexpr auto insetH() -> int {
         return scrollBarWidth() + resolve(Spacing::XS);
     }
 
     static constexpr auto insetV() -> int {
-        return EDGE_LINE + resolve(Spacing::XS);
+        return EDGE_LINE;
     }
 
 public slots:

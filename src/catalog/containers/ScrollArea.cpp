@@ -1,5 +1,7 @@
 #include "catalog/containers/ScrollArea.h"
 
+#include "catalog/containers/ScrollBar.h"
+
 #include "theme/Theme.h"
 
 #include <QEvent>
@@ -15,6 +17,8 @@ ScrollArea::ScrollArea(QWidget *parent) : QScrollArea(parent) {
     setProperty("class", "scroll-area");
     setFrameShape(QFrame::NoFrame);
     setWidgetResizable(true);
+    // Its own bar: the style and Qt version paint no track under the handle.
+    setVerticalScrollBar(new ScrollBar(Qt::Vertical));
     connect(verticalScrollBar(), &QScrollBar::rangeChanged, this, &ScrollArea::onRangeChanged,
             qontrol::UNIQUE);
     // Always there, so the right gutter is the bar's whether the content overflows or
