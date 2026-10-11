@@ -113,14 +113,6 @@ set(SILENT_APP_SOURCES
     src/modules/keys/KeysView.cpp
     src/modules/keys/flow/FlowCopy.h
     src/modules/keys/flow/FlowCopy.cpp
-    src/modules/keys/flow/PickerStep.h
-    src/modules/keys/flow/PickerStep.cpp
-    src/modules/keys/flow/UsbStep.h
-    src/modules/keys/flow/UsbStep.cpp
-    src/modules/keys/flow/SdStep.h
-    src/modules/keys/flow/SdStep.cpp
-    src/modules/keys/flow/PasswordStep.h
-    src/modules/keys/flow/PasswordStep.cpp
     src/modules/keys/flow/QrDisplayStep.h
     src/modules/keys/flow/QrDisplayStep.cpp
     src/modules/keys/flow/CameraViewport.h
@@ -129,8 +121,6 @@ set(SILENT_APP_SOURCES
     src/modules/keys/flow/CameraSettings.cpp
     src/modules/keys/flow/CameraStep.h
     src/modules/keys/flow/CameraStep.cpp
-    src/modules/keys/flow/VerifyResultStep.h
-    src/modules/keys/flow/VerifyResultStep.cpp
     src/modules/keys/flow/SigningFlow.h
     src/modules/keys/flow/SigningFlow.cpp
     src/modules/keys/signers/RouteSigner.h

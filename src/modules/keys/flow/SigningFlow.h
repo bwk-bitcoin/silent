@@ -7,10 +7,9 @@
 #include <QSet>
 #include <QString>
 
+#include <cstdint>
+
 #include "FlowCopy.h"
-#include "PickerStep.h"
-#include "UsbStep.h"
-#include "VerifyResultStep.h"
 #include "catalog/containers/Modal.h"
 
 #include <interfaces/types.h>
@@ -19,7 +18,19 @@
 class ISigner;
 
 namespace catalog {
+class Button;
+class Card;
+class ChunkedAddress;
+class Input;
+class Label;
+class ModalActions;
 class ModalStatus;
+class Notice;
+class SelectRow;
+} // namespace catalog
+
+namespace qontrol {
+class Column;
 }
 
 namespace keys {
@@ -29,9 +40,41 @@ class KeysModule;
 namespace keys::flow {
 
 class CameraStep;
-class PasswordStep;
 class QrDisplayStep;
-class SdStep;
+
+// Where a key stands in the flow; it picks the row's pill, line and whether it can be
+// picked.
+enum class SignerStatus : std::uint8_t {
+    First,
+    Ready,
+    Signed,
+    Waiting,
+    Disconnected,
+    NoHot,
+    NoRoute,
+    Unregistered
+};
+
+// One key the request needs.
+struct FlowRow {
+    QString fingerprint;
+    QString alias;
+    // Unknown when the key has no route to show; a disconnected key keeps its USB one.
+    KeyRouteKind route = KeyRouteKind::Unknown;
+    // The live device's host instance id, for a Usb route.
+    QString device_id;
+    // The device as people know it ("Ledger"), empty when unknown.
+    QString device;
+    SignerStatus status = SignerStatus::NoRoute;
+
+    [[nodiscard]] auto usable() const -> bool;
+};
+
+// A connected device that is not one of the request's keys.
+struct OtherDevice {
+    QString name;
+    QString fingerprint;
+};
 
 // One modal per request: the signer picker, then the picked key's route step (USB,
 // SD card, QR code and camera, hot key password), then for an address its result.
@@ -57,8 +100,11 @@ public:
         QString fingerprint;
     };
 
+    enum class UsbError : std::uint8_t { Rejected, Disconnected, Failed };
+    enum class VerifyResult : std::uint8_t { Matched, Mismatch, Error };
+
     SigningFlow(KeysModule *module, Request request);
-    ~SigningFlow() override = default;
+    ~SigningFlow() override;
     // Shows the first step. Call once the answer signals are connected: a route that
     // fails at once answers before the window opens (see answered()).
     void begin();
@@ -75,14 +121,15 @@ signals:
 
 public slots:
     void done(int result) override;
-    void onRowPicked(int index);
+    void onRowClicked();
     void onUsbBack();
     void onUsbRetry();
     void onDeviceSigned(ReqId req_id, const QString &psbt_base64);
     void onDeviceAddressDisplayed(ReqId req_id, const QString &address);
     void onDeviceError(std::optional<ReqId> req_id, const QString &message);
     void onInstanceRemoved(const QString &id);
-    void onPasswordEntered(QString password);
+    void onPasswordEdited();
+    void onPasswordProceed();
     void onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex, const QString &error,
                      bool wrong_password);
     void onHotDescriptorFetched(ReqId req_id, bool is_ok, const QString &descriptor,
@@ -113,13 +160,18 @@ protected:
     [[nodiscard]] auto rememberedDevice(const QString &fingerprint) const -> QString;
     [[nodiscard]] auto currentDeviceLabel() const -> QString;
     [[nodiscard]] auto hasPicker() const -> bool;
-    void showPicker();
+    [[nodiscard]] auto buildRow(const FlowRow &row, int index) const -> catalog::SelectRow *;
+    void viewPicker();
+    void viewUsb();
+    void viewUsbError(UsbError error);
+    void viewPassword();
+    void viewBusy();
+    void viewSd();
+    void viewQrDisplay();
+    void viewCamera();
+    void viewVerifyResult(VerifyResult result);
+    void refreshSd();
     void startRoute();
-    void showUsb();
-    void showUsbError(UsbStep::Error error);
-    void showPassword();
-    void showQrDisplay();
-    void showCamera();
     void startUsb();
     void startHot();
     void startSd();
@@ -127,7 +179,6 @@ protected:
     void stopRoute();
     void releaseDevice();
     void rowSigned(const QString &psbt_v2_hex);
-    void showVerifyResult(VerifyResultStep::Result result);
     void deliverDescriptor(const QString &descriptor);
     void fail(const QString &message);
 
@@ -141,7 +192,7 @@ private:
     // Keys that signed in this flow.
     QSet<QString> m_signed;
     std::optional<FlowRow> m_current;
-    std::optional<VerifyResultStep::Result> m_verify_result;
+    std::optional<VerifyResult> m_verify_result;
     bool m_answered = false;
 
     QPointer<ISigner> m_device;
@@ -151,14 +202,58 @@ private:
     ReqId m_sd_req = 0;
     QString m_sd_dir;
 
-    PickerStep *m_picker = nullptr;
-    UsbStep *m_usb = nullptr;
-    SdStep *m_sd = nullptr;
-    PasswordStep *m_password = nullptr;
-    catalog::ModalStatus *m_busy = nullptr;
+    // Picker: one row per key the request needs, an empty state when there is none,
+    // then the connected devices that cannot help.
+    QWidget *m_picker_step = nullptr;
+    qontrol::Column *m_picker_column = nullptr;
+
+    // USB: a spinner while the device waits for the user, then why it failed, with
+    // Back to the other signers and Try Again.
+    QWidget *m_usb_step = nullptr;
+    catalog::ModalStatus *m_usb_status = nullptr;
+    catalog::Card *m_usb_address_card = nullptr;
+    catalog::ChunkedAddress *m_usb_address = nullptr;
+    catalog::ModalActions *m_usb_actions = nullptr;
+    catalog::Button *m_usb_retry = nullptr;
+
+    // SD card, in two rows: save the unsigned transaction, then load the signed one
+    // back. A failed save or load is reported under the rows, with a retry.
+    enum class SdPhase : std::uint8_t { Save, Load };
+    enum class SdFailure : std::uint8_t { None, Write, Read };
+    SdPhase m_sd_phase = SdPhase::Save;
+    SdFailure m_sd_failure = SdFailure::None;
+    QWidget *m_sd_step = nullptr;
+    catalog::SelectRow *m_sd_save_row = nullptr;
+    catalog::SelectRow *m_sd_load_row = nullptr;
+    catalog::Notice *m_sd_write_error = nullptr;
+    catalog::Notice *m_sd_read_error = nullptr;
+    catalog::ModalActions *m_sd_actions = nullptr;
+    catalog::Button *m_sd_save = nullptr;
+    catalog::Button *m_sd_save_retry = nullptr;
+    catalog::Button *m_sd_load = nullptr;
+    catalog::Button *m_sd_load_retry = nullptr;
+
+    // Hot key password: the value is handed over once and cleared; a QString cannot be
+    // zeroized, so this is best effort.
+    QWidget *m_password_step = nullptr;
+    catalog::Label *m_password_prompt = nullptr;
+    catalog::Input *m_password_input = nullptr;
+    catalog::Notice *m_password_error = nullptr;
+    catalog::ModalActions *m_password_actions = nullptr;
+    catalog::Button *m_password_proceed = nullptr;
+
+    catalog::ModalStatus *m_busy_step = nullptr;
+
     QrDisplayStep *m_qr = nullptr;
     CameraStep *m_camera = nullptr;
-    VerifyResultStep *m_result = nullptr;
+
+    // Verify result: what the device said about the address, with the address itself,
+    // and Try Again unless it matched.
+    QWidget *m_result_step = nullptr;
+    catalog::ModalStatus *m_result_status = nullptr;
+    catalog::ChunkedAddress *m_result_address = nullptr;
+    catalog::ModalActions *m_result_actions = nullptr;
+    catalog::Button *m_result_retry = nullptr;
 };
 
 } // namespace keys::flow

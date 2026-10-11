@@ -31,10 +31,6 @@ class WordGrid;
 
 namespace keys {
 class KeysModule;
-
-namespace flow {
-class PasswordStep;
-} // namespace flow
 } // namespace keys
 
 namespace keys::modal {
@@ -77,7 +73,8 @@ public slots:
     void onDescriptorRegistered(ReqId req_id, bool registered);
     void onRegistrationError(std::optional<ReqId> req_id, const QString &message);
     void showPassword();
-    void onPasswordEntered(QString password);
+    void onPasswordEdited();
+    void onPasswordProceed();
     void onMnemonicRevealed(ReqId req_id, const MnemonicResult &result);
     void toggleWords();
     void closeWords();
@@ -90,6 +87,7 @@ protected:
     void view();
     [[nodiscard]] auto info() const -> std::optional<KeyInfo>;
     [[nodiscard]] auto buildDetail() -> QWidget *;
+    [[nodiscard]] auto buildPassword() -> QWidget *;
     [[nodiscard]] auto buildReveal() -> QWidget *;
     [[nodiscard]] auto buildRemove() -> QWidget *;
     // The title on the left, the fingerprint and the key status on the right.
@@ -147,7 +145,14 @@ private:
     QString m_register_descriptor;
     ReqId m_register_req = 0;
 
-    flow::PasswordStep *m_password = nullptr;
+    // The value is handed over once and cleared; a QString cannot be zeroized, so this
+    // is best effort.
+    catalog::Input *m_password_input = nullptr;
+    catalog::Notice *m_password_error = nullptr;
+    catalog::Button *m_password_proceed = nullptr;
+    catalog::Button *m_password_unlocking = nullptr;
+    catalog::ModalActions *m_password_actions = nullptr;
+    QWidget *m_password_body = nullptr;
     // The outstanding reveal request, so a stale answer is ignored.
     ReqId m_reveal_req = 0;
     catalog::WordGrid *m_words = nullptr;

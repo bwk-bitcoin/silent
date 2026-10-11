@@ -5,7 +5,6 @@
 #include "modules/keys/DeviceName.h"
 #include "modules/keys/KeysModule.h"
 #include "modules/keys/KeysView.h"
-#include "modules/keys/flow/PasswordStep.h"
 
 #include "AppController.h"
 #include "catalog/Button.h"
@@ -110,6 +109,7 @@ KeyDetail::KeyDetail(KeysModule *module, const QString &fingerprint)
 }
 
 KeyDetail::~KeyDetail() {
+    m_password_input->clear();
     m_words->setWords({});
 }
 
@@ -156,8 +156,19 @@ void KeyDetail::init() {
     m_detail_actions = new catalog::ModalActions;
     m_detail_actions->addAction(m_reveal);
 
-    m_password = new flow::PasswordStep(catalog::btnShowMnemonic());
-    m_password->setBackVisible(true);
+    m_password_input = new catalog::Input;
+    m_password_input->setEchoMode(QLineEdit::Password);
+    m_password_input->setFixedWidth(metric::PASSWORD_INPUT_WIDTH);
+    m_password_error = new catalog::Notice(catalog::Notice::Tone::Error);
+    m_password_error->setVisible(false);
+    m_password_proceed = catalog::btnShowMnemonic();
+    m_password_unlocking = catalog::btnUnlocking();
+    m_password_unlocking->setEnabled(false);
+    m_password_unlocking->setVisible(false);
+    m_password_actions = new catalog::ModalActions;
+    m_password_actions->setBack(catalog::ModalActions::Back::Back);
+    m_password_actions->addAction(m_password_unlocking);
+    m_password_actions->addAction(m_password_proceed);
 
     m_words = new catalog::WordGrid;
     m_hide_words = catalog::btnHideWords();
@@ -187,9 +198,13 @@ void KeyDetail::doConnect() {
         connect(table, &catalog::Table::rebuilt, this, &KeyDetail::adjustSize, qontrol::UNIQUE);
     }
     connect(m_reveal, &QPushButton::clicked, this, &KeyDetail::showPassword, qontrol::UNIQUE);
-    connect(m_password, &flow::PasswordStep::passwordEntered, this, &KeyDetail::onPasswordEntered,
+    connect(m_password_input, &QLineEdit::textEdited, this, &KeyDetail::onPasswordEdited,
             qontrol::UNIQUE);
-    connect(m_password, &flow::PasswordStep::backClicked, this, &KeyDetail::showDetail,
+    connect(m_password_input, &QLineEdit::returnPressed, this, &KeyDetail::onPasswordProceed,
+            qontrol::UNIQUE);
+    connect(m_password_proceed, &QPushButton::clicked, this, &KeyDetail::onPasswordProceed,
+            qontrol::UNIQUE);
+    connect(m_password_actions, &catalog::ModalActions::backClicked, this, &KeyDetail::showDetail,
             qontrol::UNIQUE);
     connect(m_hide_words, &QPushButton::clicked, this, &KeyDetail::toggleWords, qontrol::UNIQUE);
     connect(m_show_words, &QPushButton::clicked, this, &KeyDetail::toggleWords, qontrol::UNIQUE);
@@ -205,6 +220,8 @@ void KeyDetail::view() {
     m_detail->setFitContent(true);
     m_detail->setWidget(buildDetail());
 
+    m_password_body = buildPassword();
+
     auto *done = catalog::btnDone();
     connect(done, &QPushButton::clicked, this, &KeyDetail::closeWords, qontrol::UNIQUE);
     m_reveal_actions->addAction(done);
@@ -216,8 +233,8 @@ void KeyDetail::view() {
     m_remove_body = buildRemove();
 
     // Owned by the modal, hidden until their view shows them.
-    QList<QWidget *> views = {m_password,       m_password->actions(), m_reveal_body,
-                              m_reveal_actions, m_remove_body,         m_remove_actions};
+    QList<QWidget *> views = {m_password_body,  m_password_actions, m_reveal_body,
+                              m_reveal_actions, m_remove_body,      m_remove_actions};
     for (auto *widget : views) {
         widget->hide();
         widget->setParent(this);
@@ -262,6 +279,16 @@ auto KeyDetail::buildDetail() -> QWidget * {
         ->push(m_routes_section)
         ->push(m_xpubs_section)
         ->push(m_accounts_section);
+}
+
+auto KeyDetail::buildPassword() -> QWidget * {
+    auto *body = new QWidget;
+    (new qontrol::Column)
+        ->spacing(resolve(Spacing::M))
+        ->push(new catalog::Field(TR("flow-password"), m_password_input))
+        ->push(m_password_error)
+        ->into(body);
+    return body;
 }
 
 auto KeyDetail::buildReveal() -> QWidget * {
@@ -715,6 +742,8 @@ void KeyDetail::showRouteResult(const KeyOpResult &result) {
 }
 
 void KeyDetail::showDetail() {
+    // A password error is about the attempt left behind.
+    m_password_error->setVisible(false);
     showHeader(m_alias);
     setBody(m_detail);
     setFooter(m_detail_actions);
@@ -725,15 +754,39 @@ void KeyDetail::showFetch() {
     AppController::execModal(new FetchXpub(m_module, m_fingerprint));
 }
 
+// An empty field with the focus in it, and the error kept if one was just shown.
 void KeyDetail::showPassword() {
-    m_password->reset();
+    m_password_input->clear();
+    m_password_input->setEnabled(true);
+    m_password_unlocking->setVisible(false);
+    m_password_proceed->setVisible(true);
+    onPasswordEdited();
     showHeader(TR("keys-reveal-title"));
-    setBody(m_password);
-    setFooter(m_password->actions());
+    setBody(m_password_body);
+    setFooter(m_password_actions);
+    m_password_input->setFocus();
 }
 
-void KeyDetail::onPasswordEntered(QString password) {
-    m_password->setBusy(true);
+void KeyDetail::onPasswordEdited() {
+    bool empty = m_password_input->text().isEmpty();
+    if (!empty) {
+        m_password_error->setVisible(false);
+    }
+    m_password_proceed->setEnabled(!empty);
+    m_password_actions->setReason(empty ? TR("flow-password-reason") : QString());
+}
+
+void KeyDetail::onPasswordProceed() {
+    if (m_reveal_req != 0 || m_password_input->text().isEmpty()) {
+        return;
+    }
+    QString password = m_password_input->text();
+    m_password_input->clear();
+    m_password_input->setEnabled(false);
+    m_password_error->setVisible(false);
+    m_password_proceed->setVisible(false);
+    m_password_unlocking->setVisible(true);
+    m_password_actions->setReason(QString());
     m_reveal_req = m_module->nextReqId();
     m_module->revealMnemonic(m_reveal_req, m_fingerprint, password);
     password.fill(QChar());
@@ -745,13 +798,12 @@ void KeyDetail::onMnemonicRevealed(ReqId req_id, const MnemonicResult &result) {
         return;
     }
     m_reveal_req = 0;
-    m_password->setBusy(false);
     if (!result.is_ok) {
-        m_password->reset();
-        m_password->showError(result.wrong_password
-                                  ? TR("flow-password-wrong")
+        m_password_error->setText(
+            result.wrong_password ? TR("flow-password-wrong")
                                   : TR("keys-reveal-failed").arg(KeysModule::toQt(result.error)));
-        adjustSize();
+        m_password_error->setVisible(true);
+        showPassword();
         return;
     }
     // A QString cannot be zeroized: Rust owns the real wiping of the phrase.
