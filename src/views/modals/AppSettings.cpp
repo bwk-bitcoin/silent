@@ -205,25 +205,9 @@ void AppSettings::doConnect() {
 }
 
 void AppSettings::view() {
-    m_extensions = foldable(QString());
-    m_extensions->setContent(m_section_column);
-    m_main = new catalog::ScrollArea;
-    m_main->setFitContent(true);
-    m_main->setWidget((new qontrol::Column)
-                          ->spacing(resolve(Spacing::S))
-                          ->push(buildGeneral())
-                          ->push(new catalog::Separator)
-                          ->push(buildPlugins())
-                          ->push(m_extensions_separator)
-                          ->push(m_extensions));
-    for (auto *section : {m_general, m_plugins, m_extensions}) {
-        connect(section->header(), &catalog::SectionHeader::toggled, this, &AppSettings::adjustSize,
-                qontrol::UNIQUE);
-    }
-    m_disable = buildDisable();
-    m_section = new catalog::ScrollArea;
-    m_section->setFitContent(true);
-    m_section->setWidget(buildSection());
+    m_main = viewMain();
+    m_disable = viewDisable();
+    m_section = viewSection();
     // Owned by the modal, hidden until their view shows them.
     QList<QWidget *> views = {m_disable, m_disable_actions, m_section, m_section_actions};
     for (auto *widget : views) {
@@ -231,6 +215,26 @@ void AppSettings::view() {
         widget->setParent(this);
     }
     retranslateUi();
+}
+
+auto AppSettings::viewMain() -> catalog::ScrollArea * {
+    m_extensions = foldable(QString());
+    m_extensions->setContent(m_section_column);
+    auto *column = (new qontrol::Column)
+                       ->spacing(resolve(Spacing::S))
+                       ->push(buildGeneral())
+                       ->push(new catalog::Separator)
+                       ->push(buildPlugins())
+                       ->push(m_extensions_separator)
+                       ->push(m_extensions);
+    for (auto *section : {m_general, m_plugins, m_extensions}) {
+        connect(section->header(), &catalog::SectionHeader::toggled, this, &AppSettings::adjustSize,
+                qontrol::UNIQUE);
+    }
+    auto *scroll = new catalog::ScrollArea;
+    scroll->setFitContent(true);
+    scroll->setWidget(column);
+    return scroll;
 }
 
 auto AppSettings::buildGeneral() -> QWidget * {
@@ -262,7 +266,7 @@ auto AppSettings::buildPlugins() -> QWidget * {
     return m_plugins;
 }
 
-auto AppSettings::buildDisable() -> QWidget * {
+auto AppSettings::viewDisable() -> QWidget * {
     return (new qontrol::Column)
         ->spacing(resolve(Spacing::M))
         ->push(m_disable_question)
@@ -270,11 +274,16 @@ auto AppSettings::buildDisable() -> QWidget * {
         ->push(m_disable_themes);
 }
 
-auto AppSettings::buildSection() -> QWidget * {
+auto AppSettings::viewSection() -> catalog::ScrollArea * {
     auto *card = new catalog::Card(catalog::Card::Role::Inset);
     card->setPad(catalog::Card::Pad::M);
     card->setContent(m_section_slot);
-    return (new qontrol::Column)->spacing(resolve(Spacing::S))->push(m_section_text)->push(card);
+    auto *column =
+        (new qontrol::Column)->spacing(resolve(Spacing::S))->push(m_section_text)->push(card);
+    auto *scroll = new catalog::ScrollArea;
+    scroll->setFitContent(true);
+    scroll->setWidget(column);
+    return scroll;
 }
 
 void AppSettings::onDisableBack() {

@@ -229,21 +229,19 @@ void KeyDetail::view() {
     auto *removeKey = catalog::btnRemoveKey();
     connect(removeKey, &QPushButton::clicked, this, &KeyDetail::showRemove, qontrol::UNIQUE);
     m_detail_actions->addAction(removeKey);
-    m_detail = new catalog::ScrollArea;
-    m_detail->setFitContent(true);
-    m_detail->setWidget(buildDetail());
+    m_detail = viewDetail();
 
-    m_password_body = buildPassword();
+    m_password_body = viewPassword();
 
     auto *done = catalog::btnDone();
     connect(done, &QPushButton::clicked, this, &KeyDetail::closeWords, qontrol::UNIQUE);
     m_reveal_actions->addAction(done);
-    m_reveal_body = buildReveal();
+    m_reveal_body = viewReveal();
 
     auto *confirmRemove = catalog::btnRemoveKey();
     connect(confirmRemove, &QPushButton::clicked, this, &KeyDetail::removeKey, qontrol::UNIQUE);
     m_remove_actions->addAction(confirmRemove);
-    m_remove_body = buildRemove();
+    m_remove_body = viewRemove();
 
     // Owned by the modal, hidden until their view shows them.
     QList<QWidget *> views = {m_password_body,  m_password_actions, m_reveal_body,
@@ -254,7 +252,7 @@ void KeyDetail::view() {
     }
 }
 
-auto KeyDetail::buildDetail() -> QWidget * {
+auto KeyDetail::viewDetail() -> catalog::ScrollArea * {
     auto *aliasRow = (new qontrol::Row)
                          ->spacing(resolve(Spacing::XS))
                          ->push(m_alias_input, 1)
@@ -283,17 +281,21 @@ auto KeyDetail::buildDetail() -> QWidget * {
                 qontrol::UNIQUE);
     }
 
-    return (new qontrol::Column)
-        ->spacing(resolve(Spacing::XS))
-        ->push(alias)
-        ->push(m_route_error)
-        ->push(m_devices_section)
-        ->push(m_routes_section)
-        ->push(m_xpubs_section)
-        ->push(m_accounts_section);
+    auto *column = (new qontrol::Column)
+                       ->spacing(resolve(Spacing::XS))
+                       ->push(alias)
+                       ->push(m_route_error)
+                       ->push(m_devices_section)
+                       ->push(m_routes_section)
+                       ->push(m_xpubs_section)
+                       ->push(m_accounts_section);
+    auto *scroll = new catalog::ScrollArea;
+    scroll->setFitContent(true);
+    scroll->setWidget(column);
+    return scroll;
 }
 
-auto KeyDetail::buildPassword() -> QWidget * {
+auto KeyDetail::viewPassword() -> QWidget * {
     auto *body = new QWidget;
     (new qontrol::Column)
         ->spacing(resolve(Spacing::M))
@@ -303,7 +305,7 @@ auto KeyDetail::buildPassword() -> QWidget * {
     return body;
 }
 
-auto KeyDetail::buildReveal() -> QWidget * {
+auto KeyDetail::viewReveal() -> QWidget * {
     auto *warning = new catalog::Notice(catalog::Notice::Tone::Warning);
     warning->setTitle(TR("keys-reveal-warning-title"));
     warning->setText(TR("keys-reveal-warning"));
@@ -314,7 +316,7 @@ auto KeyDetail::buildReveal() -> QWidget * {
         ->push((new qontrol::Column)->spacing(resolve(Spacing::S))->push(toggle)->push(m_words));
 }
 
-auto KeyDetail::buildRemove() -> QWidget * {
+auto KeyDetail::viewRemove() -> QWidget * {
     return (new qontrol::Column)
         ->spacing(resolve(Spacing::M))
         ->push(m_remove_question)

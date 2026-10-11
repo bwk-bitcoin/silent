@@ -353,14 +353,12 @@ void AddKey::doConnect() {
 }
 
 void AddKey::view() {
-    m_modes_body = buildModes();
-    m_review_body = new catalog::ScrollArea;
-    m_review_body->setFitContent(true);
-    m_review_body->setWidget(buildReview());
-    m_paste_body = buildPaste();
-    m_choose_body = buildHotChoose();
-    m_backup_body = buildBackup();
-    m_password_body = buildHotPassword();
+    m_modes_body = viewModes();
+    m_review_body = viewReview();
+    m_paste_body = viewPaste();
+    m_choose_body = viewHotChoose();
+    m_backup_body = viewBackup();
+    m_password_body = viewHotPassword();
     // Owned by the modal, hidden until their view shows them.
     QList<QWidget *> views = {m_modes_body,        m_qr,
                               m_qr->actions(),     m_camera,
@@ -377,7 +375,7 @@ void AddKey::view() {
     }
 }
 
-auto AddKey::buildModes() -> QWidget * {
+auto AddKey::viewModes() -> QWidget * {
     auto *column = (new qontrol::Column)->spacing(resolve(Spacing::S));
     for (auto *row : m_mode_rows) {
         column->push(row);
@@ -385,22 +383,26 @@ auto AddKey::buildModes() -> QWidget * {
     return column;
 }
 
-auto AddKey::buildReview() -> QWidget * {
+auto AddKey::viewReview() -> catalog::ScrollArea * {
     m_file_area = (new qontrol::Column)
                       ->spacing(resolve(Spacing::S))
                       ->push(m_drop)
                       ->push(m_read_error)
                       ->push(m_file_error);
-    return (new qontrol::Column)
-        ->spacing(resolve(Spacing::M))
-        ->push(m_file_area)
-        ->push(m_review_table)
-        ->push(m_review_duplicate)
-        ->push(m_review_alias_field)
-        ->push(m_review_error);
+    auto *column = (new qontrol::Column)
+                       ->spacing(resolve(Spacing::M))
+                       ->push(m_file_area)
+                       ->push(m_review_table)
+                       ->push(m_review_duplicate)
+                       ->push(m_review_alias_field)
+                       ->push(m_review_error);
+    auto *scroll = new catalog::ScrollArea;
+    scroll->setFitContent(true);
+    scroll->setWidget(column);
+    return scroll;
 }
 
-auto AddKey::buildPaste() -> QWidget * {
+auto AddKey::viewPaste() -> QWidget * {
     auto *fields = new catalog::FieldGroup;
     fields->addField(TR("keys-xpub"), m_paste)
         ->addNote(m_paste_note)
@@ -412,7 +414,7 @@ auto AddKey::buildPaste() -> QWidget * {
         ->push(m_paste_error);
 }
 
-auto AddKey::buildHotChoose() -> QWidget * {
+auto AddKey::viewHotChoose() -> QWidget * {
     return (new qontrol::Column)
         ->spacing(resolve(Spacing::M))
         ->push((new qontrol::Column)
@@ -423,7 +425,7 @@ auto AddKey::buildHotChoose() -> QWidget * {
         ->push(m_words_input);
 }
 
-auto AddKey::buildBackup() -> QWidget * {
+auto AddKey::viewBackup() -> QWidget * {
     auto *warning = new catalog::Notice(catalog::Notice::Tone::Warning);
     warning->setTitle(TR("keys-backup-title"));
     warning->setText(TR("keys-backup-body"));
@@ -434,7 +436,7 @@ auto AddKey::buildBackup() -> QWidget * {
         ->push(m_backup_check);
 }
 
-auto AddKey::buildHotPassword() -> QWidget * {
+auto AddKey::viewHotPassword() -> QWidget * {
     auto *lead = new Label(TR("keys-password-lead"), LabelRole::Body);
     lead->setTone(LabelTone::Secondary);
     lead->setWordWrap(true);

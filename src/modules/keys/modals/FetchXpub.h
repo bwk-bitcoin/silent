@@ -54,8 +54,9 @@ protected:
     void initFetching();
     void doConnect();
     void view();
-    void viewFetch();
-    void viewFetching();
+    [[nodiscard]] auto viewFetch() -> QWidget *;
+    void showFetch();
+    void showFetching();
     [[nodiscard]] auto purpose() const -> QString;
     [[nodiscard]] auto path() const -> QString;
     [[nodiscard]] auto pathFor(const QString &purpose, int account) const -> QString;

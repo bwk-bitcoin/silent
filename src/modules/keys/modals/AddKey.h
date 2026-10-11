@@ -105,12 +105,12 @@ protected:
     void view();
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
-    [[nodiscard]] auto buildModes() -> QWidget *;
-    [[nodiscard]] auto buildReview() -> QWidget *;
-    [[nodiscard]] auto buildPaste() -> QWidget *;
-    [[nodiscard]] auto buildHotChoose() -> QWidget *;
-    [[nodiscard]] auto buildBackup() -> QWidget *;
-    [[nodiscard]] auto buildHotPassword() -> QWidget *;
+    [[nodiscard]] auto viewModes() -> QWidget *;
+    [[nodiscard]] auto viewReview() -> catalog::ScrollArea *;
+    [[nodiscard]] auto viewPaste() -> QWidget *;
+    [[nodiscard]] auto viewHotChoose() -> QWidget *;
+    [[nodiscard]] auto viewBackup() -> QWidget *;
+    [[nodiscard]] auto viewHotPassword() -> QWidget *;
     void showQr();
     void showQrDisplay();
     void showCamera();

@@ -112,6 +112,13 @@ void FetchXpub::doConnect() {
 }
 
 void FetchXpub::view() {
+    m_fetch_step = viewFetch();
+    m_account->setText(QString::number(freeAccount(purpose())));
+    refresh();
+    showFetch();
+}
+
+auto FetchXpub::viewFetch() -> QWidget * {
     m_template = (new qontrol::Row)
                      ->spacing(resolve(Spacing::XXS))
                      ->push(m_prefix)
@@ -123,19 +130,10 @@ void FetchXpub::view() {
     m_fields->addField(TR("keys-path-type"), m_purpose)
         ->addField(TR("keys-path"), m_template)
         ->addField(TR("keys-path"), m_custom);
-    m_fetch_step = new QWidget;
-    (new qontrol::Column)
-        ->spacing(resolve(Spacing::M))
-        ->push(m_fields)
-        ->push(m_error)
-        ->into(m_fetch_step);
-
-    m_account->setText(QString::number(freeAccount(purpose())));
-    refresh();
-    viewFetch();
+    return (new qontrol::Column)->spacing(resolve(Spacing::M))->push(m_fields)->push(m_error);
 }
 
-void FetchXpub::viewFetch() {
+void FetchXpub::showFetch() {
     setWindowTitle(TR("keys-fetch-title"));
     setHeader(nullptr);
     setBody(m_fetch_step);
@@ -143,7 +141,7 @@ void FetchXpub::viewFetch() {
     setWidth(ModalWidth::L);
 }
 
-void FetchXpub::viewFetching() {
+void FetchXpub::showFetching() {
     setWindowTitle(TR("keys-fetch-title"));
     setHeader(nullptr);
     setBody(m_fetching_step);
@@ -185,7 +183,7 @@ void FetchXpub::onFetchClicked() {
     connect(device->signer, &ISigner::error, this, &FetchXpub::onDeviceError, qontrol::UNIQUE);
     m_req = device->signer->getXpub(m_path);
     m_fetching_step->setSubtitle(TR("keys-fetching-sub").arg(deviceName(*device->signer)));
-    viewFetching();
+    showFetching();
 }
 
 void FetchXpub::onDeviceXpub(ReqId req_id, const QString &xpub) {
@@ -306,7 +304,7 @@ void FetchXpub::showError(const QString &error) {
     m_error->setText(error);
     m_error->setVisible(true);
     // Shown again so the window fits the error it now holds.
-    viewFetch();
+    showFetch();
 }
 
 } // namespace keys::modal

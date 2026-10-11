@@ -66,10 +66,11 @@ protected:
     void initSection();
     void doConnect();
     void view();
+    auto viewMain() -> catalog::ScrollArea *;
     auto buildGeneral() -> QWidget *;
     auto buildPlugins() -> QWidget *;
-    auto buildDisable() -> QWidget *;
-    auto buildSection() -> QWidget *;
+    auto viewDisable() -> QWidget *;
+    auto viewSection() -> catalog::ScrollArea *;
     auto pluginRow(const QString &id, const QString &meta) -> catalog::SelectRow *;
     void rebuildSettingSectionRows();
     [[nodiscard]] auto sectionModuleName(Host::SectionId section) const -> QString;

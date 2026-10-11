@@ -91,10 +91,10 @@ protected:
     void doConnect();
     void view();
     [[nodiscard]] auto info() const -> std::optional<KeyInfo>;
-    [[nodiscard]] auto buildDetail() -> QWidget *;
-    [[nodiscard]] auto buildPassword() -> QWidget *;
-    [[nodiscard]] auto buildReveal() -> QWidget *;
-    [[nodiscard]] auto buildRemove() -> QWidget *;
+    [[nodiscard]] auto viewDetail() -> catalog::ScrollArea *;
+    [[nodiscard]] auto viewPassword() -> QWidget *;
+    [[nodiscard]] auto viewReveal() -> QWidget *;
+    [[nodiscard]] auto viewRemove() -> QWidget *;
     // The title on the left, the fingerprint and the key status on the right.
     void showHeader(const QString &title);
     void refreshDevices();
