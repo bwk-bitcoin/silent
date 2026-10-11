@@ -4,11 +4,13 @@
 
 #include "catalog/Button.h"
 #include "catalog/Variants.h"
+#include "catalog/containers/Card.h"
 #include "catalog/containers/ModalActions.h"
 #include "catalog/containers/Separator.h"
 #include "catalog/containers/ViewSlots.h"
 #include "catalog/display/Label.h"
 #include "catalog/inputs/Stepper.h"
+#include "catalog/panels/receive/ChunkedAddress.h"
 #include "i18n/Tr.h"
 #include "modules/keys/BwkQrEngine.h"
 #include "modules/keys/flow/CameraStep.h"
@@ -111,6 +113,13 @@ void QrRouteFlow::initDisplay() {
     m_qr_hint->setAlignment(Qt::AlignCenter);
     // On one line when it fits, as the design's text takes its natural width.
     m_qr_hint->setTextWrapped(copy().qrHint, metric::QR_HINT_MAX_WIDTH);
+    // The address being checked, to compare with the one the device shows.
+    m_qr_address = new catalog::ChunkedAddress;
+    m_qr_address->setAddress(request().address);
+    m_qr_address_card = new catalog::Card(catalog::Card::Role::Inset);
+    m_qr_address_card->setPad(catalog::Card::Pad::M);
+    m_qr_address_card->setContent(m_qr_address);
+    m_qr_address_card->setVisible(request().context == Context::Verify);
     m_qr_display = new qr::QrDisplay;
     m_qr_contrast = levelStepper(TR("keys-qr-contrast"));
     m_qr_density = levelStepper(TR("keys-qr-density"));
@@ -152,6 +161,7 @@ auto QrRouteFlow::viewDisplay() -> QWidget * {
     return (new qontrol::Column)
         ->spacing(resolve(Spacing::M))
         ->push(m_qr_hint)
+        ->push(m_qr_address_card)
         ->push(m_qr_display)
         ->push(new catalog::Separator)
         ->push(tuning);

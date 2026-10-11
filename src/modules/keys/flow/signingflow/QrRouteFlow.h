@@ -9,6 +9,8 @@
 
 namespace catalog {
 class Button;
+class Card;
+class ChunkedAddress;
 class Label;
 class ModalActions;
 class Stepper;
@@ -87,6 +89,8 @@ private:
 
     qr::QrDisplayEngine *m_qr_display_engine = nullptr;
     catalog::Label *m_qr_hint = nullptr;
+    catalog::ChunkedAddress *m_qr_address = nullptr;
+    catalog::Card *m_qr_address_card = nullptr;
     qr::QrDisplay *m_qr_display = nullptr;
     catalog::Stepper *m_qr_contrast = nullptr;
     catalog::Stepper *m_qr_density = nullptr;
