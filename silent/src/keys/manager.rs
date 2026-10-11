@@ -13,7 +13,8 @@ use bitcoin::{
     secp256k1::{All, Secp256k1},
     Network,
 };
-use bwk_sp::bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor;
+use bwk_sp::bwk_sign::bwk_descriptor::{descriptor::Descriptor, sp_descriptor::SpDescriptor};
+use bwk_sp::bwk_sign::miniscript::{DescriptorPublicKey, ForEachKey};
 use zeroize::Zeroizing;
 
 use crate::keys::{
@@ -653,13 +654,19 @@ impl KeyManagerImpl for KeyManager {
     }
 
     fn keys_for_descriptor(&self, descriptor: &str) -> Vec<Fingerprint> {
+        // A key the descriptor names in its key origins holds part of it, registered
+        // or not (an account's segwit and taproot sub-accounts were not registered).
+        let named = Descriptor::from_str(descriptor).ok();
         self.records
             .iter()
-            .filter(|(_, record)| {
+            .filter(|(fingerprint, record)| {
                 record
                     .descriptors
                     .iter()
                     .any(|entry| entry.descriptor == descriptor)
+                    || named
+                        .as_ref()
+                        .is_some_and(|parsed| descriptor_has_key(parsed, **fingerprint))
             })
             .map(|(fingerprint, _)| *fingerprint)
             .collect()
@@ -675,6 +682,28 @@ impl KeyManagerImpl for KeyManager {
         let descriptors = self.registered_sp_descriptors()?;
         let artifacts = inspect_bytes(psbt_bytes, &descriptors, &self.secp)?;
         Ok(self.plan_from_artifacts(&artifacts))
+    }
+}
+
+/// The fingerprint of `key`'s origin, None for a key without one.
+pub(crate) fn descriptor_key_fingerprint(key: &DescriptorPublicKey) -> Option<Fingerprint> {
+    match key {
+        DescriptorPublicKey::Single(k) => k.origin.as_ref(),
+        DescriptorPublicKey::XPub(k) => k.origin.as_ref(),
+        DescriptorPublicKey::MultiXPub(k) => k.origin.as_ref(),
+    }
+    .map(|(fg, _)| *fg)
+}
+
+/// Whether `descriptor` names `fingerprint` among its key origins. Every key of a
+/// miniscript descriptor is walked (its `fingerprint()` returns only one); an sp()
+/// descriptor is single-key.
+pub(crate) fn descriptor_has_key(descriptor: &Descriptor, fingerprint: Fingerprint) -> bool {
+    match descriptor.as_miniscript() {
+        Some(miniscript) => {
+            miniscript.for_any_key(|key| descriptor_key_fingerprint(key) == Some(fingerprint))
+        }
+        None => descriptor.fingerprint() == Some(fingerprint),
     }
 }
 
@@ -1656,6 +1685,21 @@ mod tests {
             ),
             "expected DescriptorNotRegistered on the second clear, got {second:?}"
         );
+    }
+
+    #[test]
+    fn keys_for_descriptor_finds_a_key_its_origins_name_unregistered() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let fp = Fingerprint::from_str("73c5da0a").unwrap();
+        manager
+            .add_key(KeyRecord::new(fp, Network::Regtest, "cold".to_string()))
+            .expect("add key");
+        // An account's segwit sub-account, never registered with the key.
+        let segwit = "wpkh([73c5da0a/84'/1'/0']tpubDC8msFGeGuwnKG9Upg7DM2b4DaRqg3CUZa5g8v2SRQ6K4NSkxUgd7HsL2XVWbVm39yBA4LAxysQAm397zwQSQoQgewGiYZqrA9DsP4zbQ1M/<0;1>/*)";
+        assert_eq!(manager.keys_for_descriptor(segwit), vec![fp]);
+        let other = segwit.replace("73c5da0a", "deadbeef");
+        assert!(manager.keys_for_descriptor(&other).is_empty());
     }
 
     #[test]

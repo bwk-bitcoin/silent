@@ -12,7 +12,6 @@ use base64::{prelude::BASE64_STANDARD, Engine};
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
 use bitcoin::Network as BtcNetwork;
 use bwk_sp::bwk_sign::bwk_descriptor::descriptor::Descriptor;
-use bwk_sp::bwk_sign::miniscript::{DescriptorPublicKey, ForEachKey};
 use bwk_sp::bwk_tx::bwk_psbt::Error as PsbtV2Error;
 use zeroize::Zeroizing;
 
@@ -22,7 +21,7 @@ use crate::hwi::wallet_name;
 use crate::keys::{
     crypto::{open_mnemonic, Password},
     hot::{seal_mnemonic, sign_hot, sp_descriptor, xpub_at},
-    manager::{KeyManager, KeyManagerImpl, LiveDevice, SigningCandidate},
+    manager::{descriptor_has_key, KeyManager, KeyManagerImpl, LiveDevice, SigningCandidate},
     psbt, qr,
     record::{KeyRecord, RouteKind, SecretEnvelope},
     store::KeyStore,
@@ -380,13 +379,7 @@ impl KeysModule {
         // membership in a multi-key (e.g. multisig) descriptor. For the Miniscript
         // variant, walk every key origin instead; SP descriptors are inherently
         // single-key so `fingerprint()` is still exact there.
-        let has_key = match parsed.as_miniscript() {
-            Some(miniscript) => {
-                miniscript.for_any_key(|key| descriptor_key_fingerprint(key) == Some(fp))
-            }
-            None => parsed.fingerprint() == Some(fp),
-        };
-        if !has_key {
+        if !descriptor_has_key(&parsed, fp) {
             return failed_op(&format!(
                 "descriptor's key origins do not include key '{fingerprint}'"
             ));
@@ -953,15 +946,6 @@ fn is_direct_child(parent: &DerivationPath, child: &DerivationPath) -> bool {
 /// The key origin's fingerprint, if any. Mirrors the per-variant match in
 /// `Descriptor::fingerprint()`, but is applied per-key via `for_any_key` instead
 /// of stopping at the first key that has an origin.
-fn descriptor_key_fingerprint(key: &DescriptorPublicKey) -> Option<Fingerprint> {
-    match key {
-        DescriptorPublicKey::Single(k) => k.origin.as_ref(),
-        DescriptorPublicKey::XPub(k) => k.origin.as_ref(),
-        DescriptorPublicKey::MultiXPub(k) => k.origin.as_ref(),
-    }
-    .map(|(fg, _)| *fg)
-}
-
 fn to_key_info(record: &KeyRecord, manager: &KeyManager) -> ffi::KeyInfo {
     ffi::KeyInfo {
         fingerprint: record.fingerprint.to_string(),
