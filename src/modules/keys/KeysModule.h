@@ -137,6 +137,7 @@ public:
                                     const QString &path, const QString &xpub) -> KeyOpResult;
     [[nodiscard]] auto cacheXpub(const QString &fingerprint, const QString &path,
                                  const QString &xpub) -> KeyOpResult;
+    [[nodiscard]] auto removeXpub(const QString &fingerprint, const QString &path) -> KeyOpResult;
     // Remembers `entry`'s device for the key holding its fingerprint.
     [[nodiscard]] auto recordDevice(const plugin::SignerEntry &entry) -> KeyOpResult;
     // Remembers the device that handed the key holding `fingerprint` over QR.

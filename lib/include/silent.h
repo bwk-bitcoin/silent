@@ -2220,6 +2220,10 @@ struct KeysModule final : public ::rust::Opaque {
 
   ::rust::Vec<::KeyDevice> key_devices(::rust::Str fingerprint) const noexcept;
   ::KeyOpResult cache_xpub(::rust::Str fingerprint, ::rust::Str path, ::rust::Str xpub) noexcept;
+
+  // Drops a cached xpub that no registered descriptor carries.
+  ::KeyOpResult remove_xpub(::rust::Str fingerprint, ::rust::Str path) noexcept;
+
   ::rust::Vec<::KeyXpub> key_xpubs(::rust::Str fingerprint) const noexcept;
   ::KeyOpResult register_descriptor(::rust::Str fingerprint, ::rust::Str descriptor) noexcept;
   ::KeyOpResult unregister_descriptor(::rust::Str fingerprint, ::rust::Str descriptor) noexcept;

@@ -815,6 +815,18 @@ auto KeysModule::cacheXpub(const QString &fingerprint, const QString &path, cons
     return result;
 }
 
+auto KeysModule::removeXpub(const QString &fingerprint, const QString &path) -> KeyOpResult {
+    if (rust() == nullptr) {
+        return failedOp(TR("keys-module-not-ready"));
+    }
+    auto result = rust()->remove_xpub(rust::String(fingerprint.toStdString()),
+                                      rust::String(path.toStdString()));
+    if (result.is_ok) {
+        emit keysChanged();
+    }
+    return result;
+}
+
 auto KeysModule::recordDevice(const plugin::SignerEntry &entry) -> KeyOpResult {
     if (rust() == nullptr) {
         return failedOp(TR("keys-module-not-ready"));

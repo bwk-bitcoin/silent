@@ -66,6 +66,7 @@ public slots:
     void onConfirmRouteClicked();
     void onCancelRouteClicked();
     void onFetchXpubClicked();
+    void onRemoveXpubClicked();
     void onRegisterClicked();
     void onDescriptorIsRegistered(ReqId req_id, bool registered);
     void onDescriptorRegistered(ReqId req_id, bool registered);

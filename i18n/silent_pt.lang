@@ -467,6 +467,7 @@ keys-remove-hot
 keys-remove-question => "Remove “%1” (%2) from this computer?" => "NONE"
 keys-remove-route => "Remove Route" => "NONE"
 keys-remove-title => "Remove Key" => "NONE"
+keys-remove-xpub => "Remove Xpub" => "Remove Xpub"
 keys-reveal-failed => "Could not open the key: %1" => "NONE"
 keys-reveal-title => "Reveal Mnemonic" => "NONE"
 keys-reveal-warning
@@ -518,6 +519,7 @@ keys-xpub-other-key
 keys-xpub-unavailable
 => "This key has no connected device, QR code or hot key route to get an xpub from."
 => "This key has no connected device, QR code or hot key route to get an xpub from.";;
+keys-xpub-used => "An account uses this xpub" => "An account uses this xpub"
 keys-xpubs-empty => "No xpub cached yet." => "NONE"
 keys-xpubs-empty-offline
 => "No xpub cached. Connect the device to fetch them."

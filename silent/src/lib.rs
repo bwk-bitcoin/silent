@@ -1126,6 +1126,8 @@ mod ffi {
             path: &str,
             xpub: &str,
         ) -> KeyOpResult;
+        /// Drops a cached xpub that no registered descriptor carries.
+        fn remove_xpub(self: &mut KeysModule, fingerprint: &str, path: &str) -> KeyOpResult;
         fn key_xpubs(self: &KeysModule, fingerprint: &str) -> Vec<KeyXpub>;
         fn register_descriptor(
             self: &mut KeysModule,

@@ -661,6 +661,10 @@ keys-remove-route => "Remove Route"
 
 keys-cached-xpubs => "Cached Xpubs"
 
+keys-remove-xpub => "Remove Xpub"
+
+keys-xpub-used => "An account uses this xpub"
+
 keys-xpubs-empty => "No xpub cached yet."
 
 keys-xpubs-empty-offline => "No xpub cached. Connect the device to fetch them."

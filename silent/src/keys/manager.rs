@@ -168,6 +168,9 @@ pub trait KeyManagerImpl {
         path: DerivationPath,
         xpub: Xpub,
     ) -> Result<(), Error>;
+    /// Drops the xpub cached at `path`, unless a registered descriptor carries it.
+    fn remove_xpub(&mut self, fingerprint: Fingerprint, path: &DerivationPath)
+        -> Result<(), Error>;
     fn xpub(&self, fingerprint: Fingerprint, path: &DerivationPath) -> Option<Xpub>;
 
     fn set_descriptor_registered(
@@ -570,6 +573,34 @@ impl KeyManagerImpl for KeyManager {
                 .position(|entry| entry.path > path)
                 .unwrap_or(record.xpubs.len());
             record.xpubs.insert(index, XpubEntry { path, xpub });
+            Ok(())
+        })
+    }
+
+    fn remove_xpub(
+        &mut self,
+        fingerprint: Fingerprint,
+        path: &DerivationPath,
+    ) -> Result<(), Error> {
+        self.mutate(fingerprint, |record| {
+            let Some(index) = record.xpubs.iter().position(|entry| &entry.path == path) else {
+                return Err(Error::XpubNotCached {
+                    fingerprint,
+                    path: path.clone(),
+                });
+            };
+            let xpub = record.xpubs[index].xpub.to_string();
+            if record
+                .descriptors
+                .iter()
+                .any(|entry| entry.descriptor.contains(&xpub))
+            {
+                return Err(Error::XpubInUse {
+                    fingerprint,
+                    path: path.clone(),
+                });
+            }
+            record.xpubs.remove(index);
             Ok(())
         })
     }
@@ -1550,6 +1581,69 @@ mod tests {
         assert_eq!(
             found, None,
             "expected no cached xpub for an unqueried path, got {found:?}"
+        );
+    }
+
+    #[test]
+    fn remove_xpub_drops_an_unused_xpub() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+        let path = DerivationPath::from_str("m/86'/1'/0'").expect("valid path");
+        manager
+            .cache_xpub(fingerprint(1), path.clone(), test_xpub())
+            .expect("cache xpub");
+
+        manager
+            .remove_xpub(fingerprint(1), &path)
+            .expect("remove xpub");
+
+        let reloaded = manager_over(tmp.path(), Network::Regtest);
+        let found = reloaded.xpub(fingerprint(1), &path);
+        assert_eq!(found, None, "expected the xpub to be gone, got {found:?}");
+    }
+
+    #[test]
+    fn remove_xpub_refuses_an_xpub_a_descriptor_carries() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+        let path = DerivationPath::from_str("m/86'/1'/0'").expect("valid path");
+        let xpub = test_xpub();
+        manager
+            .cache_xpub(fingerprint(1), path.clone(), xpub)
+            .expect("cache xpub");
+        manager
+            .set_descriptor_registered(
+                fingerprint(1),
+                "wallet".to_string(),
+                format!("tr([00000001/86'/1'/0']{xpub}/<0;1>/*)"),
+            )
+            .expect("register descriptor");
+
+        let result = manager.remove_xpub(fingerprint(1), &path);
+        assert!(
+            matches!(result, Err(Error::XpubInUse { .. })),
+            "expected XpubInUse, got {result:?}"
+        );
+        let found = manager.xpub(fingerprint(1), &path);
+        assert_eq!(found, Some(xpub), "expected the xpub kept, got {found:?}");
+    }
+
+    #[test]
+    fn remove_xpub_on_an_uncached_path_errors() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+        let path = DerivationPath::from_str("m/84'/1'/0'").expect("valid path");
+
+        let result = manager.remove_xpub(fingerprint(1), &path);
+        assert!(
+            matches!(result, Err(Error::XpubNotCached { .. })),
+            "expected XpubNotCached, got {result:?}"
         );
     }
 

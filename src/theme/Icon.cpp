@@ -83,9 +83,9 @@ public:
 
     void paint(QPainter *painter, const QRect &rect, QIcon::Mode mode,
                QIcon::State state) override {
-        Q_UNUSED(mode);
         Q_UNUSED(state);
-        QColor color = resolveColor(m_color);
+        // A disabled button's icon is muted like its text.
+        QColor color = resolveColor(mode == QIcon::Disabled ? IconColor::Muted : m_color);
         QString svg = QString::fromUtf8(m_svg);
         svg.replace(QStringLiteral("stroke=\"currentColor\""),
                     QStringLiteral("stroke=\"%1\"").arg(color.name()));

@@ -339,6 +339,24 @@ impl KeysModule {
         }
     }
 
+    pub fn remove_xpub(&mut self, fingerprint: &str, path: &str) -> ffi::KeyOpResult {
+        let Some(manager) = self.inner.as_mut() else {
+            return failed_op(&self.error);
+        };
+        let fp = match parse_fingerprint(fingerprint) {
+            Ok(fp) => fp,
+            Err(e) => return failed_op(&e),
+        };
+        let deriv_path = match DerivationPath::from_str(path) {
+            Ok(deriv_path) => deriv_path,
+            Err(e) => return failed_op(&format!("invalid derivation path '{path}': {e}")),
+        };
+        match manager.remove_xpub(fp, &deriv_path) {
+            Ok(()) => ok_op(),
+            Err(e) => failed_op(&format!("remove_xpub {fingerprint}: {e}")),
+        }
+    }
+
     pub fn key_xpubs(&self, fingerprint: &str) -> Vec<ffi::KeyXpub> {
         let Some(manager) = self.inner.as_ref() else {
             log::error!("KeysModule::key_xpubs(): {}", self.error);

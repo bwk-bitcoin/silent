@@ -85,6 +85,16 @@ pub enum Error {
         cached: Box<Xpub>,
         found: Box<Xpub>,
     },
+    #[error("key '{fingerprint}' has no xpub cached at '{path}'")]
+    XpubNotCached {
+        fingerprint: Fingerprint,
+        path: DerivationPath,
+    },
+    #[error("the xpub at '{path}' on key '{fingerprint}' is used by a registered descriptor")]
+    XpubInUse {
+        fingerprint: Fingerprint,
+        path: DerivationPath,
+    },
     #[error("key '{fingerprint}' has no descriptor '{descriptor}' registered")]
     DescriptorNotRegistered {
         fingerprint: Fingerprint,

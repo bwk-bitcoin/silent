@@ -53,6 +53,7 @@ namespace {
 
 const char *const K_ROUTE_INDEX = "routeIndex";
 const char *const K_DESCRIPTOR = "descriptor";
+const char *const K_XPUB_PATH = "xpubPath";
 
 // The route kinds a key can be reached over, in the order the picker offers them.
 const QList<KeyRouteKind> ROUTE_KINDS = {KeyRouteKind::Hot, KeyRouteKind::Usb, KeyRouteKind::Qr,
@@ -161,6 +162,7 @@ void KeyDetail::initDetail() {
     m_xpubs_table->addColumn({.width = metric::XPUB_PATH_COLUMN});
     m_xpubs_table->addColumn({.grow = true});
     m_xpubs_table->addColumn({.width = metric::XPUB_PILL_COLUMN, .alignment = Qt::AlignRight});
+    m_xpubs_table->addColumn({.width = metric::XPUB_REMOVE_COLUMN, .alignment = Qt::AlignRight});
 
     m_accounts_table = new catalog::Table;
     m_accounts_table->setHeaderVisible(false);
@@ -364,9 +366,16 @@ void KeyDetail::refreshXpubs() {
         }
         auto *path = new Label(xpubPath(KeysModule::toQt(entry.path)), LabelRole::Mono);
         path->setTone(LabelTone::Secondary);
-        m_xpubs_table->addWidgetRow(xpub,
-                                    {path, new catalog::ShortValue(xpub),
-                                     used ? catalog::pillXpubUsed() : catalog::pillXpubUnused()});
+        // An unused xpub can leave the cache; a used one is held by its account.
+        auto *remove = catalog::btnRemoveXpub();
+        remove->setProperty(K_XPUB_PATH, KeysModule::toQt(entry.path));
+        remove->setEnabled(!used);
+        remove->setToolTip(used ? TR("keys-xpub-used") : TR("keys-remove-xpub"));
+        connect(remove, &QPushButton::clicked, this, &KeyDetail::onRemoveXpubClicked,
+                qontrol::UNIQUE);
+        m_xpubs_table->addWidgetRow(
+            xpub, {path, new catalog::ShortValue(xpub),
+                   used ? catalog::pillXpubUsed() : catalog::pillXpubUnused(), remove});
     }
 
     auto device = readyDevice(m_fingerprint);
@@ -381,7 +390,7 @@ void KeyDetail::refreshXpubs() {
                           ? TR("keys-fetch-xpub-from").arg(deviceName(*device->signer))
                           : TR("keys-fetch-xpub-connect"));
     connect(fetch, &QPushButton::clicked, this, &KeyDetail::onFetchXpubClicked, qontrol::UNIQUE);
-    m_xpubs_table->addWidgetRow(QStringLiteral("add"), {nullptr, empty, fetch}, true);
+    m_xpubs_table->addWidgetRow(QStringLiteral("add"), {nullptr, empty, fetch, nullptr}, true);
     m_xpubs_section->header()->setCount(countText(static_cast<int>(xpubs.size())));
 }
 
@@ -605,6 +614,15 @@ void KeyDetail::onRemoveRouteClicked() {
     }
     auto index = static_cast<std::size_t>(sender()->property(K_ROUTE_INDEX).toInt());
     showRouteResult(m_module->removeRoute(m_fingerprint, current->routes[index]));
+}
+
+void KeyDetail::onRemoveXpubClicked() {
+    QString path = sender()->property(K_XPUB_PATH).toString();
+    auto result = m_module->removeXpub(m_fingerprint, path);
+    if (!result.is_ok) {
+        qWarning() << "KeyDetail: removing xpub" << path
+                   << "failed:" << KeysModule::toQt(result.error);
+    }
 }
 
 void KeyDetail::onAddRouteClicked() {

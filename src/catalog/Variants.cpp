@@ -492,6 +492,11 @@ auto btnRemoveRoute() -> Button * {
                  .width = BtnWidth::Icon});
 }
 
+auto btnRemoveXpub() -> Button * {
+    return make(
+        {.role = ButtonRole::InlineIcon, .icon = icon::x, .iconSize = 14, .width = BtnWidth::Icon});
+}
+
 auto btnSaveLabel() -> Button * {
     return make({.role = ButtonRole::InlineIcon,
                  .icon = icon::check,

@@ -85,6 +85,7 @@ auto btnMoveDown() -> Button *;
 auto btnMoveUp() -> Button *;
 auto btnRemovePayment() -> Button *;
 auto btnRemoveRoute() -> Button *;
+auto btnRemoveXpub() -> Button *;
 auto btnSaveLabel() -> Button *;
 auto btnVerifyOnDeviceSm() -> Button *;
 auto btnCreateNewWallet() -> Button *;
