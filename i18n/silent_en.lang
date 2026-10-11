@@ -864,12 +864,6 @@ create-account-no-key-sub
 
 create-account-no-key-on-title => "No Key on %1"
 
-create-account-no-key-on-sub-one
-=> "1 key is registered on %1. Pick that network, or add a %2 key.";;
-
-create-account-no-key-on-sub-many
-=> "%1 keys are registered on %2. Pick that network, or add a %3 key.";;
-
 create-account-reason-name => "Enter an account name."
 
 create-account-reason-spaces => "The account name cannot contain spaces."

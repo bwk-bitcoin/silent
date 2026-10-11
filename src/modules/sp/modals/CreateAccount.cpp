@@ -325,35 +325,24 @@ void CreateAccount::populateKeys() {
     if (m_keys.isEmpty()) {
         // The keys module answers for the network it holds, so other networks count
         // only the keys it has loaded.
-        int elsewhere = 0;
-        QStringList networks;
+        bool elsewhere = false;
         for (auto other : NETWORKS) {
-            if (other == network() || bus == nullptr) {
-                continue;
-            }
-            auto count = static_cast<int>(bus->keys(other).size());
-            if (count > 0) {
-                elsewhere += count;
-                networks.append(keys::networkLabel(other));
+            if (other != network() && bus != nullptr && !bus->keys(other).empty()) {
+                elsewhere = true;
             }
         }
         catalog::EmptyState *empty = nullptr;
-        if (elsewhere == 0) {
+        if (!elsewhere) {
             empty = new catalog::EmptyState(icon::key, TR("create-account-no-key-title"),
                                             TR("create-account-no-key-sub"));
+            auto *openKeys = catalog::btnOpenKeysTab();
+            connect(openKeys, &QPushButton::clicked, this, &CreateAccount::onOpenKeysTab,
+                    qontrol::UNIQUE);
+            empty->setAction(openKeys);
         } else {
-            QString here = keys::networkLabel(network());
-            QString sub = elsewhere == 1
-                              ? TR("create-account-no-key-on-sub-one").arg(networks.first(), here)
-                              : TR("create-account-no-key-on-sub-many")
-                                    .arg(QString::number(elsewhere), networks.join(", "), here);
-            empty = new catalog::EmptyState(icon::key,
-                                            TR("create-account-no-key-on-title").arg(here), sub);
+            empty = new catalog::EmptyState(
+                icon::key, TR("create-account-no-key-on-title").arg(keys::networkLabel(network())));
         }
-        auto *openKeys = catalog::btnOpenKeysTab();
-        connect(openKeys, &QPushButton::clicked, this, &CreateAccount::onOpenKeysTab,
-                qontrol::UNIQUE);
-        empty->setAction(openKeys);
         m_keys_column->push(empty);
         empty->show();
     }
