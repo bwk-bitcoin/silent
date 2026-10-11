@@ -59,7 +59,6 @@ public:
 public slots:
     void onBackClicked();
     void onNextClicked();
-    void onKeyChanged();
     void onAliasEdited();
     void onSaveAliasClicked();
     void onMoveUpClicked();
@@ -73,8 +72,6 @@ public slots:
     void onDescriptorIsRegistered(ReqId req_id, bool registered);
     void onDescriptorRegistered(ReqId req_id, bool registered);
     void onRegistrationError(std::optional<ReqId> req_id, const QString &message);
-    void onRevealClicked();
-    void onRemoveClicked();
     void onPasswordEdited();
     void onMnemonicRevealed(ReqId req_id, const MnemonicResult &result);
     void onToggleWordsClicked();

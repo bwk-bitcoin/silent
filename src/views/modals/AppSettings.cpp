@@ -208,10 +208,6 @@ void AppSettings::onPluginToggled(bool enabled) {
     }
 }
 
-void AppSettings::onPluginsChanged() {
-    rebuildPluginRows();
-}
-
 void AppSettings::onOpenSectionClicked() {
     if (sender() == nullptr || m_host == nullptr) {
         return;
@@ -410,7 +406,7 @@ void AppSettings::connectMain() {
     connect(m_scan_btn, &QPushButton::clicked, this, &AppSettings::onScanClicked, qontrol::UNIQUE);
     if (m_plugin_registry != nullptr) {
         connect(m_plugin_registry, &PluginRegistry::enabledPluginsChanged, this,
-                &AppSettings::onPluginsChanged, qontrol::UNIQUE);
+                &AppSettings::rebuildPluginRows, qontrol::UNIQUE);
     }
     if (m_host_events != nullptr) {
         connect(m_host_events, &HostEvents::settingSectionsChanged, this,

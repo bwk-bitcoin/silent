@@ -50,7 +50,6 @@ public slots:
     void onLanguageSelectionChanged(int index);
     void onScanClicked();
     void onPluginToggled(bool enabled);
-    void onPluginsChanged();
     void onOpenSectionClicked();
     void onHostSettingsSectionsChanged();
     void onHostInstanceChanged(const QString &id);

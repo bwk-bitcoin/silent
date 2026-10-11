@@ -141,10 +141,6 @@ void KeyDetail::onNextClicked() {
     }
 }
 
-void KeyDetail::onKeyChanged() {
-    refresh();
-}
-
 void KeyDetail::onAliasEdited() {
     bool changed = m_alias_input->text().trimmed() != m_alias;
     m_save_alias->setVisible(changed);
@@ -261,14 +257,6 @@ void KeyDetail::onRegistrationError(std::optional<ReqId> req_id, const QString &
     finishRegistrationRequest(registering ? Registration::NotRegistered : Registration::Unknown);
 }
 
-void KeyDetail::onRevealClicked() {
-    showPassword();
-}
-
-void KeyDetail::onRemoveClicked() {
-    showRemove();
-}
-
 void KeyDetail::onPasswordEdited() {
     bool empty = m_password_input->text().isEmpty();
     if (!empty) {
@@ -315,9 +303,8 @@ void KeyDetail::init() {
 }
 
 void KeyDetail::doConnect() {
-    connect(m_module, &KeysModule::keysChanged, this, &KeyDetail::onKeyChanged, qontrol::UNIQUE);
-    connect(m_module, &KeysModule::liveDevicesChanged, this, &KeyDetail::onKeyChanged,
-            qontrol::UNIQUE);
+    connect(m_module, &KeysModule::keysChanged, this, &KeyDetail::refresh, qontrol::UNIQUE);
+    connect(m_module, &KeysModule::liveDevicesChanged, this, &KeyDetail::refresh, qontrol::UNIQUE);
     connectDetail();
     connectPassword();
     connectReveal();
@@ -395,8 +382,8 @@ void KeyDetail::connectDetail() {
     for (auto *table : {m_devices_table, m_routes_table, m_xpubs_table, m_accounts_table}) {
         connect(table, &catalog::Table::rebuilt, this, &KeyDetail::adjustSize, qontrol::UNIQUE);
     }
-    connect(m_reveal, &QPushButton::clicked, this, &KeyDetail::onRevealClicked, qontrol::UNIQUE);
-    connect(m_remove, &QPushButton::clicked, this, &KeyDetail::onRemoveClicked, qontrol::UNIQUE);
+    connect(m_reveal, &QPushButton::clicked, this, &KeyDetail::showPassword, qontrol::UNIQUE);
+    connect(m_remove, &QPushButton::clicked, this, &KeyDetail::showRemove, qontrol::UNIQUE);
 }
 
 auto KeyDetail::viewDetail() -> catalog::ScrollArea * {
