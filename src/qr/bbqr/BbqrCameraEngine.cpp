@@ -10,8 +10,8 @@
 
 namespace qr {
 
-BbqrCameraEngine::BbqrCameraEngine(const QrCameraSettings &settings, QObject *parent)
-    : QrCameraEngine(settings, parent),
+BbqrCameraEngine::BbqrCameraEngine(QObject *parent)
+    : QrCameraEngine(parent),
       m_scanner(::bbqr_scanner_new()) {
     if (!m_scanner->is_ok()) {
         qWarning() << "bbqr scanner:"

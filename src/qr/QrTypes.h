@@ -11,10 +11,58 @@
 
 namespace qr {
 
-// Every tuning setting runs over the same levels.
+// Each setting's value is what it means to the engine, not a level: levels are the
+// steppers' abstraction, mapped by the ...FromLevel() functions below.
+
+// Bytes each frame of an animated request carries: denser frames are fewer.
+enum class QrDensity : std::uint32_t {
+    Lowest = 50,
+    Low = 100,
+    Medium = 150,
+    High = 200,
+    Highest = 250
+};
+
+// Milliseconds each frame of an animated request stays on screen.
+enum class QrSpeed : std::uint16_t {
+    Slowest = 440,
+    Slow = 360,
+    Medium = 280,
+    Fast = 200,
+    Fastest = 120
+};
+
+// Lightness percent of the quiet zone around a displayed code: a dark grey at the
+// lowest, white at the highest.
+enum class QrContrast : std::uint8_t {
+    Lowest = 40,
+    Low = 55,
+    Medium = 70,
+    High = 85,
+    Highest = 100
+};
+
+// Contrast factor applied to each camera frame before it is scanned, in percent.
+enum class QrCameraContrast : std::uint8_t {
+    Lowest = 83,
+    Low = 111,
+    Medium = 139,
+    High = 167,
+    Highest = 195
+};
+
+// The steppers' levels, lowest to highest; DEFAULT_LEVEL is each setting's Medium.
 constexpr int MIN_LEVEL = 1;
 constexpr int MAX_LEVEL = 5;
 constexpr int DEFAULT_LEVEL = 3;
+
+// A stepper level to the setting it stands for, clamped to the levels' range.
+auto densityFromLevel(int level) -> QrDensity;
+auto speedFromLevel(int level) -> QrSpeed;
+auto contrastFromLevel(int level) -> QrContrast;
+auto cameraContrastFromLevel(int level) -> QrCameraContrast;
+// The level a camera contrast stands at, for Camera Settings to show it.
+auto cameraContrastLevel(QrCameraContrast contrast) -> int;
 
 // A request as a codec encoded it, for a transport to frame.
 struct QrRequest {
@@ -55,18 +103,6 @@ struct QrScan {
     QList<QByteArray> payloads;
     int seen = 0;
     int total = 0;
-};
-
-// At the lowest contrast the quiet zone is a dark grey, at the highest white.
-struct QrDisplaySettings {
-    int density = DEFAULT_LEVEL;
-    int contrast = DEFAULT_LEVEL;
-    int speed = DEFAULT_LEVEL;
-};
-
-// Contrast is applied to each received camera frame, before it is scanned.
-struct QrCameraSettings {
-    int contrast = DEFAULT_LEVEL;
 };
 
 // Why a codec could not start an exchange or refused an answer. Only RequestFailed

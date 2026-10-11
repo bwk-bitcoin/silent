@@ -855,7 +855,7 @@ void SigningFlow::loadSd() {
 
 void SigningFlow::initQr() {
     m_qr_engine = new BwkQrEngine(m_module, this);
-    m_qr_display_engine = new qr::BbqrDisplayEngine(qr::QrDisplaySettings{}, this);
+    m_qr_display_engine = new qr::BbqrDisplayEngine(this);
     m_qr_hint = new catalog::Label(catalog::LabelRole::Body);
     m_qr_hint->setTone(catalog::LabelTone::Secondary);
     m_qr_hint->setAlignment(Qt::AlignCenter);
@@ -1321,9 +1321,9 @@ void SigningFlow::onQrError(qr::QrError kind, const QString &message) {
 }
 
 void SigningFlow::onQrSettingsChanged() {
-    m_qr_display_engine->setSettings(qr::QrDisplaySettings{.density = m_qr_density->value(),
-                                                           .contrast = m_qr_contrast->value(),
-                                                           .speed = m_qr_speed->value()});
+    m_qr_display_engine->setDensity(qr::densityFromLevel(m_qr_density->value()));
+    m_qr_display_engine->setContrast(qr::contrastFromLevel(m_qr_contrast->value()));
+    m_qr_display_engine->setSpeed(qr::speedFromLevel(m_qr_speed->value()));
 }
 
 void SigningFlow::onQrFrame(const qr::QrFrame &frame) {

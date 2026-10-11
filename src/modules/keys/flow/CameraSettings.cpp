@@ -35,7 +35,7 @@ void CameraSettings::init() {
 
     m_contrast_stepper = new catalog::Stepper;
     m_contrast_stepper->setRange(qr::MIN_LEVEL, qr::MAX_LEVEL);
-    m_contrast_stepper->setValue(m_engine->settings().contrast);
+    m_contrast_stepper->setValue(qr::cameraContrastLevel(m_engine->contrast()));
 }
 
 void CameraSettings::doConnect() {
@@ -62,8 +62,8 @@ void CameraSettings::view() {
                       ->pushAligned(fields, Qt::AlignHCenter));
 }
 
-void CameraSettings::onContrastPicked(int contrast) {
-    m_engine->setSettings(qr::QrCameraSettings{.contrast = contrast});
+void CameraSettings::onContrastPicked(int level) {
+    m_engine->setContrast(qr::cameraContrastFromLevel(level));
 }
 
 } // namespace keys::flow

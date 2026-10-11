@@ -11,7 +11,7 @@ class BbqrCameraEngine : public QrCameraEngine {
     Q_OBJECT
 
 public:
-    explicit BbqrCameraEngine(const QrCameraSettings &settings, QObject *parent = nullptr);
+    explicit BbqrCameraEngine(QObject *parent = nullptr);
     ~BbqrCameraEngine() override;
 
 protected:

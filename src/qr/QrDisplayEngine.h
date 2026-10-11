@@ -24,13 +24,13 @@ class QrDisplayEngine : public QObject {
     Q_OBJECT
 
 public:
-    static constexpr int BASE_INTERVAL_MS = 520;
-    static constexpr int SPEED_STEP_MS = 80;
-
-    explicit QrDisplayEngine(const QrDisplaySettings &settings, QObject *parent = nullptr);
+    // Every setting starts at its Medium.
+    explicit QrDisplayEngine(QObject *parent = nullptr);
     ~QrDisplayEngine() override;
-    void setSettings(const QrDisplaySettings &settings);
-    [[nodiscard]] auto settings() const -> QrDisplaySettings;
+    // A density change renders the frames again; contrast and speed apply at once.
+    void setDensity(QrDensity density);
+    void setContrast(QrContrast contrast);
+    void setSpeed(QrSpeed speed);
     // Pauses on the frame shown; restart() plays again from the first.
     void stop();
     void restart();
@@ -46,19 +46,21 @@ public slots:
     void onFrameTick();
 
 protected:
-    // Renders a payload into its frames at a density level. Called on worker threads,
-    // so it reads nothing the engine changes.
-    [[nodiscard]] virtual auto render(const QByteArray &payload, int density) const -> QrRender = 0;
+    // Renders a payload into its frames at a density. Called on worker threads, so it
+    // reads nothing the engine changes.
+    [[nodiscard]] virtual auto render(const QByteArray &payload, QrDensity density) const
+        -> QrRender = 0;
     void stopWorker();
     void startRender();
     void emitFrame();
-    [[nodiscard]] auto frameInterval() const -> int;
     [[nodiscard]] auto background() const -> QColor;
     // Rebuilt only when the contrast changes, so the per-frame path never allocates.
     void rebuildColorTable();
 
 private:
-    QrDisplaySettings m_settings;
+    QrDensity m_density = QrDensity::Medium;
+    QrContrast m_contrast = QrContrast::Medium;
+    QrSpeed m_speed = QrSpeed::Medium;
     QByteArray m_payload;
     QList<QImage> m_frames;
     QString m_error;

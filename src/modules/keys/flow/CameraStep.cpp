@@ -31,7 +31,7 @@ CameraStep::CameraStep(QWidget *parent) : QWidget(parent) {
 
 void CameraStep::init() {
     m_camera = new qr::QrCamera(this);
-    m_engine = new qr::BbqrCameraEngine(qr::QrCameraSettings{}, this);
+    m_engine = new qr::BbqrCameraEngine(this);
 
     m_hint = new Label(LabelRole::Body);
     m_hint->setTone(LabelTone::Secondary);

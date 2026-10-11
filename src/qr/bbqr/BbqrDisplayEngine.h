@@ -4,17 +4,17 @@
 
 namespace qr {
 
-// Plays a payload as BBQR frames: each density level packs more bytes in a frame,
-// so fewer, denser frames.
+// Plays a payload as BBQR frames, each carrying the density's bytes.
 class BbqrDisplayEngine : public QrDisplayEngine {
     Q_OBJECT
 
 public:
-    explicit BbqrDisplayEngine(const QrDisplaySettings &settings, QObject *parent = nullptr);
+    explicit BbqrDisplayEngine(QObject *parent = nullptr);
     ~BbqrDisplayEngine() override;
 
 protected:
-    [[nodiscard]] auto render(const QByteArray &payload, int density) const -> QrRender override;
+    [[nodiscard]] auto render(const QByteArray &payload, QrDensity density) const
+        -> QrRender override;
 };
 
 } // namespace qr

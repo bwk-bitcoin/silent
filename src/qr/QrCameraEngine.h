@@ -44,10 +44,12 @@ class QrCameraEngine : public QObject {
     friend class QrScanWorker;
 
 public:
-    explicit QrCameraEngine(const QrCameraSettings &settings, QObject *parent = nullptr);
+    // The contrast starts at its Medium.
+    explicit QrCameraEngine(QObject *parent = nullptr);
     ~QrCameraEngine() override;
-    void setSettings(const QrCameraSettings &settings);
-    [[nodiscard]] auto settings() const -> QrCameraSettings;
+    // Applied to each received frame before it is scanned.
+    void setContrast(QrCameraContrast contrast);
+    [[nodiscard]] auto contrast() const -> QrCameraContrast;
     // Drops the parts seen so far, for a scan from scratch.
     void reset();
 
@@ -77,7 +79,7 @@ protected:
     [[nodiscard]] auto applyContrast(const QImage &image) const -> QImage;
 
 private:
-    QrCameraSettings m_settings;
+    QrCameraContrast m_contrast = QrCameraContrast::Medium;
     QThread *m_thread = nullptr;
     QrScanWorker *m_worker = nullptr;
     // Per channel value after the contrast.

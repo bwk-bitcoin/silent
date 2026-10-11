@@ -69,8 +69,8 @@ void QrFlow::view() {
 
 void QrFlow::initDisplay() {
     // A plain code on white, the highest contrast, with no tuning controls.
-    m_qr_display_engine =
-        new qr::BbqrDisplayEngine(qr::QrDisplaySettings{.contrast = qr::MAX_LEVEL}, this);
+    m_qr_display_engine = new qr::BbqrDisplayEngine(this);
+    m_qr_display_engine->setContrast(qr::QrContrast::Highest);
     m_qr_hint = new Label(LabelRole::Body);
     m_qr_hint->setTone(LabelTone::Secondary);
     m_qr_hint->setAlignment(Qt::AlignCenter);

@@ -255,6 +255,7 @@ set(SILENT_APP_SOURCES
     src/catalog/inputs/Stepper.h
     src/catalog/inputs/Stepper.cpp
     src/qr/QrTypes.h
+    src/qr/QrTypes.cpp
     src/qr/QrEngine.h
     src/qr/QrEngine.cpp
     src/qr/QrDisplayEngine.h

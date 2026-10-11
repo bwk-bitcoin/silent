@@ -11,23 +11,18 @@ namespace qr {
 
 namespace {
 
-// Contrast sets the quiet zone's lightness, on the design's blue grey: the lowest
-// level is a dark grey, the highest white.
+// The quiet zone sits on the design's blue grey, its lightness the contrast.
 constexpr int BACKGROUND_HUE = 220;
 constexpr qreal BACKGROUND_SATURATION = 0.14;
-constexpr int MIN_LIGHTNESS_PERCENT = 40;
-constexpr int LIGHTNESS_STEP_PERCENT = 15;
 constexpr qreal PERCENT = 100.0;
 constexpr qreal FULL_CIRCLE = 360.0;
 constexpr int MAX_COLOR_VALUE = 255;
 
 } // namespace
 
-QrDisplayEngine::QrDisplayEngine(const QrDisplaySettings &settings, QObject *parent)
-    : QObject(parent),
-      m_settings(settings) {
+QrDisplayEngine::QrDisplayEngine(QObject *parent) : QObject(parent) {
     m_frame_timer = new QTimer(this);
-    m_frame_timer->setInterval(frameInterval());
+    m_frame_timer->setInterval(static_cast<int>(m_speed));
     rebuildColorTable();
     connect(m_frame_timer, &QTimer::timeout, this, &QrDisplayEngine::onFrameTick, qontrol::UNIQUE);
     connect(this, &QrDisplayEngine::rendered, this, &QrDisplayEngine::onRendered, qontrol::UNIQUE);
@@ -45,23 +40,28 @@ void QrDisplayEngine::stopWorker() {
     }
 }
 
-void QrDisplayEngine::setSettings(const QrDisplaySettings &settings) {
-    QrDisplaySettings previous = m_settings;
-    m_settings = settings;
-    if (settings.contrast != previous.contrast) {
-        rebuildColorTable();
-        emitFrame();
+void QrDisplayEngine::setDensity(QrDensity density) {
+    if (density == m_density) {
+        return;
     }
-    if (settings.speed != previous.speed) {
-        m_frame_timer->setInterval(frameInterval());
-    }
-    if (settings.density != previous.density && !m_payload.isEmpty()) {
+    m_density = density;
+    if (!m_payload.isEmpty()) {
         startRender();
     }
 }
 
-auto QrDisplayEngine::settings() const -> QrDisplaySettings {
-    return m_settings;
+void QrDisplayEngine::setContrast(QrContrast contrast) {
+    if (contrast == m_contrast) {
+        return;
+    }
+    m_contrast = contrast;
+    rebuildColorTable();
+    emitFrame();
+}
+
+void QrDisplayEngine::setSpeed(QrSpeed speed) {
+    m_speed = speed;
+    m_frame_timer->setInterval(static_cast<int>(m_speed));
 }
 
 void QrDisplayEngine::stop() {
@@ -92,7 +92,7 @@ void QrDisplayEngine::startRender() {
     m_index = 0;
     emitFrame();
     auto *thread = QThread::create(
-        [this, payload = m_payload, density = m_settings.density, generation = m_generation]() {
+        [this, payload = m_payload, density = m_density, generation = m_generation]() {
             emit rendered(generation, render(payload, density));
         });
     connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
@@ -139,15 +139,9 @@ void QrDisplayEngine::emitFrame() {
     emit frame(out);
 }
 
-auto QrDisplayEngine::frameInterval() const -> int {
-    return BASE_INTERVAL_MS - m_settings.speed * SPEED_STEP_MS;
-}
-
 auto QrDisplayEngine::background() const -> QColor {
-    int lightness =
-        MIN_LIGHTNESS_PERCENT + (m_settings.contrast - MIN_LEVEL) * LIGHTNESS_STEP_PERCENT;
     return QColor::fromHslF(BACKGROUND_HUE / FULL_CIRCLE, BACKGROUND_SATURATION,
-                            lightness / PERCENT);
+                            static_cast<int>(m_contrast) / PERCENT);
 }
 
 void QrDisplayEngine::rebuildColorTable() {

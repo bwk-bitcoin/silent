@@ -11,10 +11,8 @@ namespace qr {
 
 namespace {
 
-// The contrast scales each channel around mid grey (the design's CSS
-// contrast(0.55 + level * 0.28)).
-constexpr double CONTRAST_BASE = 0.55;
-constexpr double CONTRAST_STEP = 0.28;
+// The contrast scales each channel around mid grey, as the design's CSS contrast().
+constexpr double PERCENT = 100.0;
 constexpr double MID_GREY = 128.0;
 constexpr int CHANNEL_LEVELS = 256;
 constexpr int MAX_CHANNEL = 255;
@@ -33,9 +31,7 @@ void QrScanWorker::reset() {
     m_engine->clear();
 }
 
-QrCameraEngine::QrCameraEngine(const QrCameraSettings &settings, QObject *parent)
-    : QObject(parent),
-      m_settings(settings) {
+QrCameraEngine::QrCameraEngine(QObject *parent) : QObject(parent) {
     rebuildContrastTable();
     m_thread = new QThread(this);
     m_worker = new QrScanWorker(this);
@@ -62,13 +58,13 @@ void QrCameraEngine::stopWorker() {
     m_worker = nullptr;
 }
 
-void QrCameraEngine::setSettings(const QrCameraSettings &settings) {
-    m_settings = settings;
+void QrCameraEngine::setContrast(QrCameraContrast contrast) {
+    m_contrast = contrast;
     rebuildContrastTable();
 }
 
-auto QrCameraEngine::settings() const -> QrCameraSettings {
-    return m_settings;
+auto QrCameraEngine::contrast() const -> QrCameraContrast {
+    return m_contrast;
 }
 
 void QrCameraEngine::reset() {
@@ -94,7 +90,7 @@ void QrCameraEngine::onScanned(const QrScan &scan) {
 }
 
 void QrCameraEngine::rebuildContrastTable() {
-    double factor = CONTRAST_BASE + m_settings.contrast * CONTRAST_STEP;
+    double factor = static_cast<int>(m_contrast) / PERCENT;
     m_contrast_table.resize(CHANNEL_LEVELS);
     for (int level = 0; level < CHANNEL_LEVELS; ++level) {
         auto value = static_cast<int>(std::lround((level - MID_GREY) * factor + MID_GREY));

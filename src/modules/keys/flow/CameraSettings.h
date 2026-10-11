@@ -26,7 +26,7 @@ public:
     CameraSettings(qr::QrCamera *camera, qr::QrCameraEngine *engine);
 
 public slots:
-    void onContrastPicked(int contrast);
+    void onContrastPicked(int level);
 
 protected:
     void init();
