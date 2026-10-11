@@ -26,6 +26,14 @@ Q_IMPORT_PLUGIN(HwiPlugin)
 #endif
 
 auto main(int argc, char *argv[]) -> int {
+#ifdef Q_OS_LINUX
+    // On KDE the file dialog runs in our process and takes the app's theme: through the
+    // portal it runs in its own and follows the OS theme. Read only by KDE's platform
+    // theme, before the application exists.
+    if (!qEnvironmentVariableIsSet("PLASMA_INTEGRATION_USE_PORTAL")) {
+        qputenv("PLASMA_INTEGRATION_USE_PORTAL", "1");
+    }
+#endif
     QApplication app(argc, argv);
 #ifdef Q_OS_LINUX
     QApplication::setStyle(QStyleFactory::create("Fusion"));
