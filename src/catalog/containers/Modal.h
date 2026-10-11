@@ -32,6 +32,8 @@ public:
 protected:
     // Hides `widget` and gives it to the modal, kept until a view shows it.
     void keep(QWidget *widget);
+    // Fits the window to its content at its fixed width.
+    void refit();
     auto event(QEvent *event) -> bool override;
 
 private:

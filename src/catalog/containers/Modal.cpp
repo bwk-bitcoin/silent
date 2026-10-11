@@ -41,14 +41,23 @@ void Modal::setVisible(bool visible) {
         // The position is computed from the size at this point: lay the content out
         // first, or the modal is centred at its unlaid size and grows down from there.
         layout()->activate();
-        adjustSize();
+        refit();
     }
     qontrol::Modal::setVisible(visible);
 }
 
 void Modal::setWidth(ModalWidth width) {
     setFixedWidth(resolve(width));
+    refit();
+}
+
+void Modal::refit() {
     adjustSize();
+    // adjustSize() sizes wrapped text for the content's preferred width, narrower than
+    // the modal's fixed one, so it leaves the height of lines that no longer wrap.
+    if (layout()->hasHeightForWidth()) {
+        resize(width(), layout()->totalHeightForWidth(width()));
+    }
 }
 
 auto Modal::event(QEvent *event) -> bool {
@@ -56,7 +65,7 @@ auto Modal::event(QEvent *event) -> bool {
     // A size change deep in a slot reaches the window a few events after the setter
     // that caused it: fit the window again once it does.
     if (event->type() == QEvent::LayoutRequest) {
-        adjustSize();
+        refit();
     }
     return handled;
 }
