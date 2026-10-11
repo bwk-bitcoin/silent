@@ -130,9 +130,11 @@ void KeysTab::init() {
     m_device_scroll = new catalog::ScrollArea;
     m_device_scroll->setFitContent(true);
     m_device_scroll->setWidget(m_device_column);
+    // Outside the scroll area: the keys list below cannot squeeze it into a scroll.
+    m_devices_empty = new catalog::EmptyState(icon::usb, TR("keys-devices-empty-title"));
     m_devices = new catalog::Section(TR("keys-devices"));
     m_devices->header()->setFoldable(true);
-    m_devices->setContent(m_device_scroll);
+    m_devices->setContent((new qontrol::Column)->push(m_device_scroll)->push(m_devices_empty));
 
     m_key_column = (new qontrol::Column)->spacing(resolve(Spacing::S));
     m_key_scroll = new catalog::ScrollArea;
@@ -235,12 +237,9 @@ void KeysTab::rebuildDevices() {
         // after the scroll area measured the column without it: show it now.
         row->show();
     }
-    if (count == 0) {
-        auto *empty = new catalog::EmptyState(icon::usb, TR("keys-devices-empty-title"));
-        m_device_column->push(empty);
-        empty->show();
-    }
     m_device_column->pushStretch(1);
+    m_device_scroll->setVisible(count > 0);
+    m_devices_empty->setVisible(count == 0);
     m_devices->header()->setCount(count > 0 ? QString::number(count) : QString());
     m_device_scroll->updateGeometry();
 }

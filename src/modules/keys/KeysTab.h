@@ -13,6 +13,7 @@ class ISigner;
 
 namespace catalog {
 class ComboBox;
+class EmptyState;
 class Notice;
 class ScrollArea;
 class Section;
@@ -71,6 +72,7 @@ private:
     catalog::Section *m_devices = nullptr;
     catalog::ScrollArea *m_device_scroll = nullptr;
     qontrol::Column *m_device_column = nullptr;
+    catalog::EmptyState *m_devices_empty = nullptr;
     catalog::Section *m_keys = nullptr;
     catalog::ScrollArea *m_key_scroll = nullptr;
     qontrol::Column *m_key_column = nullptr;
