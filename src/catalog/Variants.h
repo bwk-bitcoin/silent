@@ -52,6 +52,7 @@ auto btnUnlocking() -> Button *;
 auto btnAddAKey() -> Button *;
 auto btnAddPayment() -> Button *;
 auto btnClear() -> Button *;
+auto btnCancelSigned() -> Button *;
 auto btnConnectBlindbit() -> Button *;
 auto btnConnectElectrum() -> Button *;
 auto btnDisconnectBlindbit() -> Button *;

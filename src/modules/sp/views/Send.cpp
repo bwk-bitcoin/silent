@@ -323,6 +323,7 @@ void Send::init() {
     m_sign_btn = catalog::btnSign();
     m_broadcast_btn = catalog::btnBroadcast();
     m_clear_outputs_btn = catalog::btnClear();
+    m_cancel_signed_btn = catalog::btnCancelSigned();
 
     m_fee_estimate_label = new Label();
     m_fee_estimate_label->setVisible(false);
@@ -336,6 +337,8 @@ void Send::init() {
     m_fee_value_input->setText("1");
 
     m_fee_indicator = new catalog::ValidationMark;
+
+    m_fee_rate_label = new Label(TR("send-fee-rate-label"), LabelRole::InfoLabel);
 
     m_fee_label = new Label(TR("send-fee-rate-unit"));
     m_fee_label->setFixedWidth(
@@ -417,6 +420,8 @@ void Send::doConnect() {
     connect(m_broadcast_btn, &QPushButton::clicked, this, &Send::onSendTransaction,
             qontrol::UNIQUE);
     connect(m_clear_outputs_btn, &QPushButton::clicked, this, &Send::onClearOutputs,
+            qontrol::UNIQUE);
+    connect(m_cancel_signed_btn, &QPushButton::clicked, this, &Send::onCancelSigned,
             qontrol::UNIQUE);
     connect(m_clear_inputs_btn, &QPushButton::clicked, this, &Send::onClearInputs, qontrol::UNIQUE);
     connect(m_auto_coin_selection, &Checkbox::toggled, this, &Send::onAutoSelectionToggled,
@@ -755,7 +760,7 @@ auto Send::transactionView() -> QWidget * {
 
     auto *warningRow = (new qontrol::Row)->push(m_warning_label)->pushSpacer();
     auto *actionRow = (new qontrol::Row)
-                          ->push(new Label(TR("send-fee-rate-label"), LabelRole::InfoLabel))
+                          ->push(m_fee_rate_label)
                           ->pushSpacer(resolve(Spacing::S))
                           ->push(m_fee_toggle)
                           ->pushSpacer(resolve(Spacing::S))
@@ -771,9 +776,18 @@ auto Send::transactionView() -> QWidget * {
         actionRow->push(catalog::pillTxSigned())->pushSpacer(resolve(Spacing::S));
     }
     actionRow->push(m_clear_outputs_btn)
+        ->push(m_cancel_signed_btn)
         ->pushSpacer(resolve(Spacing::S))
         ->push(m_sign_btn)
         ->push(m_broadcast_btn);
+    // Signed, the fee is settled: only the processed fee stays, and Cancel discards the
+    // signed transaction where Clear would empty the payments.
+    for (QWidget *feeInput : std::initializer_list<QWidget *>{
+             m_fee_rate_label, m_fee_toggle, m_fee_value_input, m_fee_indicator, m_fee_label}) {
+        feeInput->setVisible(!isSigned);
+    }
+    m_clear_outputs_btn->setVisible(!isSigned);
+    m_cancel_signed_btn->setVisible(isSigned);
     m_sign_btn->setVisible(!isSigned);
     m_broadcast_btn->setVisible(isSigned);
 
@@ -942,6 +956,13 @@ void Send::onClearOutputs() {
     m_outputs.clear();
     onAddOutput();
     onProcess();
+    view();
+}
+
+void Send::onCancelSigned() {
+    qDebug() << "Send::onCancelSigned()";
+    m_signed_tx_hex.clear();
+    m_tx_template = std::nullopt;
     view();
 }
 
@@ -1601,8 +1622,6 @@ void Send::onSignResult(TxResult result) {
     m_signed_tx_hex = QString::fromStdString(std::string(result.value.c_str()));
     m_psbt_result = std::nullopt;
     m_sign_req_id = 0;
-    m_warning_label->setText(TR("confirm-send-signed"));
-    m_warning_label->setVisible(true);
     view();
 }
 

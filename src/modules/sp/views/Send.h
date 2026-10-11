@@ -129,6 +129,7 @@ public slots:
     void onOutputDeleteClicked();
     void onOutputMaxToggled();
     void onClearOutputs();
+    void onCancelSigned();
     void onClearInputs();
     void onFeeToggled();
     void onSetBroadcastable(bool broadcastable);
@@ -213,6 +214,7 @@ private:
     catalog::Toggle *m_fee_toggle = nullptr;
     catalog::Input *m_fee_value_input = nullptr;
     catalog::Label *m_fee_label = nullptr;
+    catalog::Label *m_fee_rate_label = nullptr;
     catalog::ValidationMark *m_fee_indicator = nullptr;
 
     catalog::Label *m_warning_label = nullptr;
@@ -233,6 +235,7 @@ private:
     catalog::Label *m_auto_count = nullptr;
 
     catalog::Button *m_clear_outputs_btn = nullptr;
+    catalog::Button *m_cancel_signed_btn = nullptr;
     catalog::Button *m_clear_inputs_btn = nullptr;
     catalog::Button *m_sign_btn = nullptr;
     catalog::Button *m_broadcast_btn = nullptr;

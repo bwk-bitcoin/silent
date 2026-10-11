@@ -296,6 +296,11 @@ auto btnClear() -> Button * {
     return make({.role = ButtonRole::Default, .label = TR("common-clear"), .width = BtnWidth::M});
 }
 
+auto btnCancelSigned() -> Button * {
+    return make(
+        {.role = ButtonRole::Destructive, .label = TR("common-cancel"), .width = BtnWidth::M});
+}
+
 auto btnConnectBlindbit() -> Button * {
     return make(
         {.role = ButtonRole::Default, .label = TR("btn-connect-blindbit"), .width = BtnWidth::L});

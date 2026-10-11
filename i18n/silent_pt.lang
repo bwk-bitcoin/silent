@@ -88,9 +88,6 @@ common-testing => "Testing…" => "Testando..."
 common-yes => "Yes" => "Sim"
 confirm-send-broadcasting => "Broadcasting…" => "Transmitindo..."
 confirm-send-failed => "Broadcast Failed\n\n%1" => "Falha na transmissao\n\n%1"
-confirm-send-signed
-=> "Signed. Ready to broadcast."
-=> "Assinada. Pronta para transmitir.";;
 confirm-send-success
 => "Transaction Sent\n\nTxid: %1"
 => "Transaction Sent\n\nTxid: %1";;
