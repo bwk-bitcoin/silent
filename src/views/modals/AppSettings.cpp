@@ -199,6 +199,8 @@ auto AppSettings::viewMain() -> catalog::ScrollArea * {
     auto *scroll = new catalog::ScrollArea;
     scroll->setFitContent(true);
     scroll->setWidget(column);
+    // One width whatever the rows hold, as the design's column: longer texts wrap in it.
+    scroll->setFixedWidth(metric::SETTINGS_BODY_WIDTH + (2 * scroll->frameWidth()));
     return scroll;
 }
 
