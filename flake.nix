@@ -88,6 +88,7 @@
         outputHashes = {
           "blindbitd-0.0.1" = "sha256-XfO7P9uVLbw8mpiqLZbUoKw8XsxqM1MyeBuq6TKeZ24=";
           "bwk-sp-0.1.0" = "sha256-Aqay/Ud3iVHatX7oJ3a2ru4DpSloiVOfyBpl1jKAakk=";
+          "electrsd-0.29.0" = "sha256-kpma4FwkvZxjvVlN/9TnpmWpABkN3iNgQZUtFNp65IM=";
         };
       };
 
@@ -127,6 +128,11 @@ replace-with = "vendored-sources"
 
 [source."git+https://github.com/pythcoiner/blindbitd.git"]
 git = "https://github.com/pythcoiner/blindbitd.git"
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/pythcoiner/electrsd.git?branch=buffered_logs"]
+git = "https://github.com/pythcoiner/electrsd.git"
+branch = "buffered_logs"
 replace-with = "vendored-sources"
 
 [source.vendored-sources]
