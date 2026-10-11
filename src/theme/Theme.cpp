@@ -74,6 +74,10 @@ public:
             painter->drawPixmap(x, y, pix);
             return;
         }
+        // The stylesheet styles focus itself: no dotted rectangle on top.
+        if (pe == PE_FrameFocusRect) {
+            return;
+        }
         QProxyStyle::drawPrimitive(pe, opt, painter, widget);
     }
 
@@ -102,7 +106,11 @@ void Theme::init() {
         return;
     }
     s_instance = new Theme(qApp);
-    qApp->setStyle(new AppStyle(QStyleFactory::create("Fusion")));
+    // One known base under the stylesheet on every platform, not whatever style the
+    // desktop installs. Windows over Fusion: it follows the palette and does not guess
+    // a dark theme from a widget's background (Fusion does since Qt 6.9, and takes our
+    // transparent areas for dark ones).
+    qApp->setStyle(new AppStyle(QStyleFactory::create("Windows")));
 }
 
 auto Theme::get() -> Theme * {

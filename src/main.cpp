@@ -15,7 +15,6 @@
 #include "theme/Theme.h"
 #include <QApplication>
 #include <QFontDatabase>
-#include <QStyleFactory>
 #include <QtPlugin>
 #include <common.h>
 #include <memory>
@@ -35,9 +34,6 @@ auto main(int argc, char *argv[]) -> int {
     }
 #endif
     QApplication app(argc, argv);
-#ifdef Q_OS_LINUX
-    QApplication::setStyle(QStyleFactory::create("Fusion"));
-#endif
 
     // Embed default font
     QFontDatabase::addApplicationFontFromData(QByteArray(
