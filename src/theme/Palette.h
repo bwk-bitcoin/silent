@@ -136,6 +136,11 @@ const int PASSWORD_INPUT_WIDTH = 260;
 const int CAMERA_SOURCE_WIDTH = 220;
 const int QR_REBUILD_SPINNER_SIZE = 28;
 const int CAMERA_STATE_ICON_SIZE = 40;
+// The close cross of a tab, as the design's 12px icon.
+const int TAB_CLOSE_SIZE = 12;
+// Space after the cross inside its button: with the few pixels Qt keeps from the
+// tab edge, the cross ends a tab's right padding (Padding::M) from it.
+const int TAB_CLOSE_TRAIL = 10;
 const int QR_DISPLAY_SIZE = 400;
 const int QR_DISPLAY_PADDING = 16;
 // A plain request code (an xpub request), without the airgap tuning.

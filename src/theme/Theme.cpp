@@ -39,6 +39,20 @@ public:
     explicit AppStyle(QStyle *base) : QProxyStyle(base) {
     }
 
+    auto pixelMetric(PixelMetric metric, const QStyleOption *option = nullptr,
+                     const QWidget *widget = nullptr) const -> int override {
+        // The tab close button holds the cross on its left and the space after it: Qt
+        // keeps the button only a few pixels from the tab edge whatever the padding, so
+        // the button itself carries the rest of the tab's right padding.
+        if (metric == PM_TabCloseIndicatorWidth) {
+            return metric::TAB_CLOSE_SIZE + metric::TAB_CLOSE_TRAIL;
+        }
+        if (metric == PM_TabCloseIndicatorHeight) {
+            return metric::TAB_CLOSE_SIZE;
+        }
+        return QProxyStyle::pixelMetric(metric, option, widget);
+    }
+
     auto standardIcon(StandardPixmap sp, const QStyleOption *opt = nullptr,
                       const QWidget *widget = nullptr) const -> QIcon override {
         if (sp == SP_TabCloseButton) {
@@ -50,10 +64,11 @@ public:
     void drawPrimitive(PrimitiveElement pe, const QStyleOption *opt, QPainter *painter,
                        const QWidget *widget = nullptr) const override {
         if (pe == PE_IndicatorTabClose) {
-            constexpr int icon_size = 10;
+            const int icon_size = metric::TAB_CLOSE_SIZE;
             auto ic = standardIcon(SP_TabCloseButton, opt, widget);
             auto pix = ic.pixmap(icon_size, icon_size);
-            int x = opt->rect.x() + (opt->rect.width() - icon_size) / 2;
+            // On the button's left: the space after it is the tab's padding.
+            int x = opt->rect.x();
             int y = opt->rect.y() + (opt->rect.height() - icon_size) / 2;
             painter->drawPixmap(x, y, pix);
             return;
