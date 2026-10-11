@@ -135,6 +135,8 @@ status-disconnected => "Disconnected"
 status-disconnecting => "Disconnecting..."
 status-electrum-disconnected => "Electrum disconnected"
 status-not-configured => "Not configured"
+
+status-electrum-unused => "Not used: no segwit or taproot address"
 status-scanning => "Scanning..."
 status-scanning-progress => "Scanning... %1 / %2"
 status-synced-watching => "Synced at block %1 - Watching..."

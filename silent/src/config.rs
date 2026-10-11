@@ -223,19 +223,6 @@ impl Config {
             self.data_dir.clone(),
         );
         config.set_dust_limit(self.dust_limit);
-        // The sub-accounts, segwit first: watch-only, the key signs their spends.
-        for sub_account in [&self.segwit_descriptor, &self.taproot_descriptor] {
-            if sub_account.is_empty() {
-                continue;
-            }
-            let descriptor = MiniscriptDescriptor::<DescriptorPublicKey>::from_str(sub_account)
-                .map_err(|e| format!("invalid sub-account descriptor: {e}"))?;
-            config.descriptors.push(SubAccountConfig {
-                descriptor: descriptor.into(),
-                mnemonic: None,
-                endpoint: Default::default(),
-            });
-        }
         // Only seeds a fresh store: bwk keeps the persisted birthday once scanned.
         let birthday = match self.network {
             Network::Bitcoin => MAINNET_BIRTHDAY_HEIGHT,
@@ -248,6 +235,22 @@ impl Config {
             if let (Some(host), Some(port)) = (electrum_host, electrum_port) {
                 config.set_electrum_endpoint(host, port);
             }
+        }
+
+        // The sub-accounts, segwit first: watch-only, the key signs their spends. Each
+        // watches the account's Electrum server: bwk keeps a sub-account with no
+        // endpoint offline.
+        for sub_account in [&self.segwit_descriptor, &self.taproot_descriptor] {
+            if sub_account.is_empty() {
+                continue;
+            }
+            let descriptor = MiniscriptDescriptor::<DescriptorPublicKey>::from_str(sub_account)
+                .map_err(|e| format!("invalid sub-account descriptor: {e}"))?;
+            config.descriptors.push(SubAccountConfig {
+                descriptor: descriptor.into(),
+                mnemonic: None,
+                endpoint: config.endpoint().clone(),
+            });
         }
 
         Ok(config.with_persistence(Some(bwk_sp::bwk::persist::PersistenceKind::default())))
@@ -669,6 +672,17 @@ mod tests {
 
         config.set_taproot_descriptor("tr(garbage)".into());
         assert!(config.to_sp_config().is_err());
+    }
+
+    #[test]
+    fn sub_accounts_watch_the_account_electrum_server() {
+        let (fingerprint, xpub) = key_xpub("m/84'/1'/0'");
+        let mut config = config_for(Network::Regtest);
+        config.set_segwit_descriptor(segwit_descriptor_for(fingerprint, xpub, Network::Regtest));
+        config.set_electrum_url("127.0.0.1:50001".to_string());
+        let sp_config = config.to_sp_config().unwrap();
+        assert!(sp_config.endpoint().url().is_some());
+        assert_eq!(&sp_config.descriptors[0].endpoint, sp_config.endpoint());
     }
 
     const TEST_DESCRIPTOR: &str =

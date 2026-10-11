@@ -717,6 +717,9 @@ status-connecting => "Connecting..." => "Conectando..."
 status-disconnected => "Disconnected" => "Desconectado"
 status-disconnecting => "Disconnecting..." => "Desconectando..."
 status-electrum-disconnected => "Electrum disconnected" => "Electrum desconectado"
+status-electrum-unused
+=> "Not used: no segwit or taproot address"
+=> "Not used: no segwit or taproot address";;
 status-not-configured => "Not configured" => "No configurado"
 status-scanning => "Scanning..." => "Escaneando..."
 status-scanning-progress => "Scanning... %1 / %2" => "Escaneando... %1 / %2"

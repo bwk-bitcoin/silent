@@ -1,9 +1,9 @@
 #include "StatusBar.h"
 #include "AccountController.h"
+#include "catalog/StatusBarItem.h"
+#include "catalog/containers/Separator.h"
 #include "i18n/Tr.h"
 #include "views/utils.h"
-#include "catalog/containers/Separator.h"
-#include "catalog/StatusBarItem.h"
 #include <QBrush>
 #include <QDebug>
 #include <common.h>
@@ -32,11 +32,14 @@ StatusBar::StatusBar(AccountController *controller, QWidget *parent)
     m_connected = m_controller->isScannerRunning();
     onUpdateConnectionState(m_connected);
 
-    // Set initial electrum state (sub-accounts auto-start on construction)
-    if (!m_electrum_url.isEmpty()) {
-        m_electrum_item->setLabel(TR("status-connecting"));
-    } else {
+    // Set initial electrum state (sub-accounts auto-start on construction). Only the
+    // segwit and taproot sub-accounts connect: without them nothing will.
+    if (m_electrum_url.isEmpty()) {
         m_electrum_item->setLabel(TR("status-not-configured"));
+    } else if (!m_controller->hasSegwit() && !m_controller->hasTaproot()) {
+        m_electrum_item->setLabel(TR("status-electrum-unused"));
+    } else {
+        m_electrum_item->setLabel(TR("status-connecting"));
     }
 
     // Connect toggle signals
@@ -62,15 +65,11 @@ void StatusBar::initUI() {
     m_electrum_item = new catalog::StatusBarItem(this);
 
     // Left half: blindbit
-    auto *leftRow = (new qontrol::Row)
-                        ->push(m_blindbit_item)
-                        ->pushSpacer();
+    auto *leftRow = (new qontrol::Row)->push(m_blindbit_item)->pushSpacer();
 
     // Right half: electrum
-    auto *rightRow = (new qontrol::Row)
-                          ->pushSpacer(resolve(Spacing::S))
-                          ->push(m_electrum_item)
-                          ->pushSpacer();
+    auto *rightRow =
+        (new qontrol::Row)->pushSpacer(resolve(Spacing::S))->push(m_electrum_item)->pushSpacer();
 
     // Combine with equal proportions
     auto *contentRow = (new qontrol::Row)->push(leftRow)->push(vline)->push(rightRow);

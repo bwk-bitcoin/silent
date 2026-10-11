@@ -1,9 +1,10 @@
 #include "catalog/StatusBarItem.h"
 
 #include "catalog/display/Label.h"
-#include "theme/Palette.h"
 #include "catalog/inputs/Toggle.h"
+#include "theme/Palette.h"
 
+#include <QSignalBlocker>
 #include <Qontrol>
 #include <common.h>
 
@@ -23,6 +24,9 @@ void StatusBarItem::setLabel(const QString &label) {
 }
 
 void StatusBarItem::setOn(bool on) {
+    // Shows a state, it does not ask for one: toggled() is the user's switch only, or
+    // showing a started scanner would start it again.
+    QSignalBlocker blocker(m_toggle);
     m_toggle->setChecked(on);
 }
 
