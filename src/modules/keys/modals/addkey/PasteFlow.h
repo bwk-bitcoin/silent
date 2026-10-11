@@ -4,8 +4,8 @@
 
 #include <QString>
 
-#include "modules/keys/modals/AddKey.h"
 #include "modules/keys/KeysModule.h"
+#include "modules/keys/modals/AddKey.h"
 
 namespace catalog {
 class Button;
