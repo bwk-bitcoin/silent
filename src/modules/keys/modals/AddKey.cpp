@@ -294,9 +294,23 @@ void AddKey::initStatus() {
 }
 
 void AddKey::doConnect() {
+    connectModes();
+    connectQr();
+    connectReview();
+    connectPaste();
+    connectHotChoose();
+    connectBackup();
+    connectHotPassword();
+    connectStatus();
+}
+
+void AddKey::connectModes() {
     for (auto *row : m_mode_rows) {
         connect(row, &catalog::SelectRow::clicked, this, &AddKey::onModeClicked, qontrol::UNIQUE);
     }
+}
+
+void AddKey::connectQr() {
     connect(m_qr, &flow::QrDisplayStep::nextClicked, this, &AddKey::onQrNext, qontrol::UNIQUE);
     connect(m_qr->actions(), &catalog::ModalActions::backClicked, this, &AddKey::showModes,
             qontrol::UNIQUE);
@@ -305,21 +319,27 @@ void AddKey::doConnect() {
     connect(qrRoute, &QrRoute::xpubDecoded, this, &AddKey::onQrXpub, qontrol::UNIQUE);
     connect(qrRoute, &QrRoute::scanFailed, this, &AddKey::onQrScanFailed, qontrol::UNIQUE);
     connect(qrRoute, &QrRoute::failed, this, &AddKey::onQrFailed, qontrol::UNIQUE);
+}
 
+void AddKey::connectReview() {
     connect(m_review_alias, &QLineEdit::textEdited, this, &AddKey::updateReview, qontrol::UNIQUE);
     connect(m_review_table, &catalog::Table::rebuilt, this, &AddKey::adjustSize, qontrol::UNIQUE);
     connect(m_open_file, &QPushButton::clicked, this, &AddKey::openFile, qontrol::UNIQUE);
     connect(m_add_reviewed, &QPushButton::clicked, this, &AddKey::addReviewed, qontrol::UNIQUE);
     connect(m_review_actions, &catalog::ModalActions::backClicked, this, &AddKey::onReviewBack,
             qontrol::UNIQUE);
+}
 
+void AddKey::connectPaste() {
     connect(m_paste, &catalog::ValidatedInput::textChanged, this, &AddKey::updatePaste,
             qontrol::UNIQUE);
     connect(m_paste_alias, &QLineEdit::textEdited, this, &AddKey::updatePaste, qontrol::UNIQUE);
     connect(m_add_pasted, &QPushButton::clicked, this, &AddKey::addPasted, qontrol::UNIQUE);
     connect(m_paste_actions, &catalog::ModalActions::backClicked, this, &AddKey::showModes,
             qontrol::UNIQUE);
+}
 
+void AddKey::connectHotChoose() {
     for (auto *row : {m_generate12, m_generate24, m_import}) {
         connect(row, &catalog::SelectRow::clicked, this, &AddKey::onHotKindClicked,
                 qontrol::UNIQUE);
@@ -332,13 +352,17 @@ void AddKey::doConnect() {
             qontrol::UNIQUE);
     connect(m_module, &KeysModule::mnemonicGenerated, this, &AddKey::onMnemonicGenerated,
             qontrol::UNIQUE);
+}
 
+void AddKey::connectBackup() {
     connect(m_backup_check, &QCheckBox::toggled, this, &AddKey::updateBackup, qontrol::UNIQUE);
     connect(m_backup_continue, &QPushButton::clicked, this, &AddKey::showHotPassword,
             qontrol::UNIQUE);
     connect(m_backup_actions, &catalog::ModalActions::backClicked, this, &AddKey::showHotChoose,
             qontrol::UNIQUE);
+}
 
+void AddKey::connectHotPassword() {
     for (auto *input : {m_hot_alias, m_password, m_confirm}) {
         connect(input, &QLineEdit::textEdited, this, &AddKey::updateHotPassword, qontrol::UNIQUE);
     }
@@ -347,7 +371,9 @@ void AddKey::doConnect() {
             &AddKey::onHotPasswordBack, qontrol::UNIQUE);
     connect(m_module, &KeysModule::hotKeyImported, this, &AddKey::onHotKeyImported,
             qontrol::UNIQUE);
+}
 
+void AddKey::connectStatus() {
     connect(m_done, &QPushButton::clicked, this, &QDialog::accept, qontrol::UNIQUE);
     connect(m_try_again, &QPushButton::clicked, this, &AddKey::onFailureRetry, qontrol::UNIQUE);
 }

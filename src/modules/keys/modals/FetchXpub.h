@@ -53,6 +53,7 @@ protected:
     void initFetch();
     void initFetching();
     void doConnect();
+    void connectFetch();
     void view();
     [[nodiscard]] auto viewFetch() -> QWidget *;
     void showFetch();

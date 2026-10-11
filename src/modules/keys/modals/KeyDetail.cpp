@@ -201,8 +201,13 @@ void KeyDetail::initRemove() {
 void KeyDetail::doConnect() {
     connect(m_module, &KeysModule::keysChanged, this, &KeyDetail::refresh, qontrol::UNIQUE);
     connect(m_module, &KeysModule::liveDevicesChanged, this, &KeyDetail::refresh, qontrol::UNIQUE);
-    connect(m_module, &KeysModule::mnemonicRevealed, this, &KeyDetail::onMnemonicRevealed,
-            qontrol::UNIQUE);
+    connectDetail();
+    connectPassword();
+    connectReveal();
+    connectRemove();
+}
+
+void KeyDetail::connectDetail() {
     connect(m_alias_input, &QLineEdit::textEdited, this, &KeyDetail::onAliasEdited,
             qontrol::UNIQUE);
     connect(m_alias_input, &QLineEdit::returnPressed, this, &KeyDetail::saveAlias, qontrol::UNIQUE);
@@ -211,6 +216,9 @@ void KeyDetail::doConnect() {
         connect(table, &catalog::Table::rebuilt, this, &KeyDetail::adjustSize, qontrol::UNIQUE);
     }
     connect(m_reveal, &QPushButton::clicked, this, &KeyDetail::showPassword, qontrol::UNIQUE);
+}
+
+void KeyDetail::connectPassword() {
     connect(m_password_input, &QLineEdit::textEdited, this, &KeyDetail::onPasswordEdited,
             qontrol::UNIQUE);
     connect(m_password_input, &QLineEdit::returnPressed, this, &KeyDetail::onPasswordProceed,
@@ -219,8 +227,16 @@ void KeyDetail::doConnect() {
             qontrol::UNIQUE);
     connect(m_password_actions, &catalog::ModalActions::backClicked, this, &KeyDetail::showDetail,
             qontrol::UNIQUE);
+    connect(m_module, &KeysModule::mnemonicRevealed, this, &KeyDetail::onMnemonicRevealed,
+            qontrol::UNIQUE);
+}
+
+void KeyDetail::connectReveal() {
     connect(m_hide_words, &QPushButton::clicked, this, &KeyDetail::toggleWords, qontrol::UNIQUE);
     connect(m_show_words, &QPushButton::clicked, this, &KeyDetail::toggleWords, qontrol::UNIQUE);
+}
+
+void KeyDetail::connectRemove() {
     connect(m_remove_actions, &catalog::ModalActions::backClicked, this, &KeyDetail::showDetail,
             qontrol::UNIQUE);
 }

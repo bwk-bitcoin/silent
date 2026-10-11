@@ -89,6 +89,10 @@ protected:
     void initReveal();
     void initRemove();
     void doConnect();
+    void connectDetail();
+    void connectPassword();
+    void connectReveal();
+    void connectRemove();
     void view();
     [[nodiscard]] auto info() const -> std::optional<KeyInfo>;
     [[nodiscard]] auto viewDetail() -> catalog::ScrollArea *;

@@ -277,11 +277,33 @@ void SigningFlow::initVerifyResult() {
 }
 
 void SigningFlow::doConnect() {
+    connectUsb();
+    connectSd();
+    connectPassword();
+    connectQr();
+    connectVerifyResult();
+}
+
+void SigningFlow::connectUsb() {
     connect(m_usb_actions, &catalog::ModalActions::backClicked, this, &SigningFlow::onUsbBack,
             qontrol::UNIQUE);
     connect(m_usb_retry, &QPushButton::clicked, this, &SigningFlow::onUsbRetry, qontrol::UNIQUE);
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
             &SigningFlow::onInstanceRemoved, qontrol::UNIQUE);
+}
+
+void SigningFlow::connectSd() {
+    connect(m_sd_save, &QPushButton::clicked, this, &SigningFlow::onSdSaveClicked, qontrol::UNIQUE);
+    connect(m_sd_save_retry, &QPushButton::clicked, this, &SigningFlow::onSdSaveClicked,
+            qontrol::UNIQUE);
+    connect(m_sd_load, &QPushButton::clicked, this, &SigningFlow::onSdLoadClicked, qontrol::UNIQUE);
+    connect(m_sd_load_retry, &QPushButton::clicked, this, &SigningFlow::onSdLoadClicked,
+            qontrol::UNIQUE);
+    connect(m_module, &KeysModule::sdSaved, this, &SigningFlow::onSdSaved, qontrol::UNIQUE);
+    connect(m_module, &KeysModule::sdLoaded, this, &SigningFlow::onSdLoaded, qontrol::UNIQUE);
+}
+
+void SigningFlow::connectPassword() {
     connect(m_password_input, &QLineEdit::textEdited, this, &SigningFlow::onPasswordEdited,
             qontrol::UNIQUE);
     connect(m_password_input, &QLineEdit::returnPressed, this, &SigningFlow::onPasswordProceed,
@@ -291,14 +313,9 @@ void SigningFlow::doConnect() {
     connect(m_module, &KeysModule::hotSigned, this, &SigningFlow::onHotSigned, qontrol::UNIQUE);
     connect(m_module, &KeysModule::hotSpDescriptorFetched, this,
             &SigningFlow::onHotDescriptorFetched, qontrol::UNIQUE);
-    connect(m_sd_save, &QPushButton::clicked, this, &SigningFlow::onSdSaveClicked, qontrol::UNIQUE);
-    connect(m_sd_save_retry, &QPushButton::clicked, this, &SigningFlow::onSdSaveClicked,
-            qontrol::UNIQUE);
-    connect(m_sd_load, &QPushButton::clicked, this, &SigningFlow::onSdLoadClicked, qontrol::UNIQUE);
-    connect(m_sd_load_retry, &QPushButton::clicked, this, &SigningFlow::onSdLoadClicked,
-            qontrol::UNIQUE);
-    connect(m_module, &KeysModule::sdSaved, this, &SigningFlow::onSdSaved, qontrol::UNIQUE);
-    connect(m_module, &KeysModule::sdLoaded, this, &SigningFlow::onSdLoaded, qontrol::UNIQUE);
+}
+
+void SigningFlow::connectQr() {
     connect(m_qr, &QrDisplayStep::nextClicked, this, &SigningFlow::onQrNext, qontrol::UNIQUE);
     connect(m_camera, &CameraStep::backClicked, this, &SigningFlow::onCameraBack, qontrol::UNIQUE);
     auto *qrRoute = m_module->qrRoute();
@@ -308,6 +325,9 @@ void SigningFlow::doConnect() {
             qontrol::UNIQUE);
     connect(qrRoute, &QrRoute::scanFailed, this, &SigningFlow::onQrScanFailed, qontrol::UNIQUE);
     connect(qrRoute, &QrRoute::failed, this, &SigningFlow::onQrFailed, qontrol::UNIQUE);
+}
+
+void SigningFlow::connectVerifyResult() {
     connect(m_result_retry, &QPushButton::clicked, this, &SigningFlow::onVerifyRetry,
             qontrol::UNIQUE);
 }

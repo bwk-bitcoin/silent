@@ -65,6 +65,9 @@ protected:
     void initDisable();
     void initSection();
     void doConnect();
+    void connectMain();
+    void connectDisable();
+    void connectSection();
     void view();
     auto viewMain() -> catalog::ScrollArea *;
     auto buildGeneral() -> QWidget *;

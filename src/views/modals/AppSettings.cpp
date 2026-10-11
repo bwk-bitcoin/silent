@@ -178,18 +178,23 @@ void AppSettings::initSection() {
 }
 
 void AppSettings::doConnect() {
+    if (m_host_events != nullptr) {
+        connect(m_host_events, &HostEvents::instanceRegistered, this,
+                &AppSettings::onHostInstanceChanged, qontrol::UNIQUE);
+        connect(m_host_events, &HostEvents::instanceRemoved, this,
+                &AppSettings::onHostInstanceChanged, qontrol::UNIQUE);
+    }
+    connectMain();
+    connectDisable();
+    connectSection();
+}
+
+void AppSettings::connectMain() {
     connect(m_theme_picker, qOverload<int>(&QComboBox::currentIndexChanged), this,
             &AppSettings::onThemeSelectionChanged, qontrol::UNIQUE);
     connect(m_language_picker, qOverload<int>(&QComboBox::currentIndexChanged), this,
             &AppSettings::onLanguageSelectionChanged, qontrol::UNIQUE);
     connect(m_scan_btn, &QPushButton::clicked, this, &AppSettings::scanPlugins, qontrol::UNIQUE);
-    connect(m_disable_btn, &QPushButton::clicked, this, &AppSettings::disablePlugin,
-            qontrol::UNIQUE);
-    connect(m_disable_actions, &catalog::ModalActions::backClicked, this,
-            &AppSettings::onDisableBack, qontrol::UNIQUE);
-    connect(m_done_btn, &QPushButton::clicked, this, &AppSettings::closeSection, qontrol::UNIQUE);
-    connect(m_section_actions, &catalog::ModalActions::backClicked, this,
-            &AppSettings::closeSection, qontrol::UNIQUE);
     if (m_plugin_registry != nullptr) {
         connect(m_plugin_registry, &PluginRegistry::enabledPluginsChanged, this,
                 &AppSettings::rebuildPluginRows, qontrol::UNIQUE);
@@ -197,11 +202,20 @@ void AppSettings::doConnect() {
     if (m_host_events != nullptr) {
         connect(m_host_events, &HostEvents::settingSectionsChanged, this,
                 &AppSettings::onHostSettingsSectionsChanged, qontrol::UNIQUE);
-        connect(m_host_events, &HostEvents::instanceRegistered, this,
-                &AppSettings::onHostInstanceChanged, qontrol::UNIQUE);
-        connect(m_host_events, &HostEvents::instanceRemoved, this,
-                &AppSettings::onHostInstanceChanged, qontrol::UNIQUE);
     }
+}
+
+void AppSettings::connectDisable() {
+    connect(m_disable_btn, &QPushButton::clicked, this, &AppSettings::disablePlugin,
+            qontrol::UNIQUE);
+    connect(m_disable_actions, &catalog::ModalActions::backClicked, this,
+            &AppSettings::onDisableBack, qontrol::UNIQUE);
+}
+
+void AppSettings::connectSection() {
+    connect(m_done_btn, &QPushButton::clicked, this, &AppSettings::closeSection, qontrol::UNIQUE);
+    connect(m_section_actions, &catalog::ModalActions::backClicked, this,
+            &AppSettings::closeSection, qontrol::UNIQUE);
 }
 
 void AppSettings::view() {

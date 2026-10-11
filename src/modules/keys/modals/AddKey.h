@@ -102,6 +102,14 @@ protected:
     void initHotPassword();
     void initStatus();
     void doConnect();
+    void connectModes();
+    void connectQr();
+    void connectReview();
+    void connectPaste();
+    void connectHotChoose();
+    void connectBackup();
+    void connectHotPassword();
+    void connectStatus();
     void view();
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;

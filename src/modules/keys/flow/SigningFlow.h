@@ -157,6 +157,11 @@ protected:
     void initQr();
     void initVerifyResult();
     void doConnect();
+    void connectUsb();
+    void connectSd();
+    void connectPassword();
+    void connectQr();
+    void connectVerifyResult();
     void view();
     [[nodiscard]] auto viewPicker() -> QWidget *;
     [[nodiscard]] auto viewUsb() -> QWidget *;

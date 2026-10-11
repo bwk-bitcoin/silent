@@ -102,13 +102,17 @@ void FetchXpub::initFetching() {
 }
 
 void FetchXpub::doConnect() {
+    connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
+            &FetchXpub::onInstanceRemoved, qontrol::UNIQUE);
+    connectFetch();
+}
+
+void FetchXpub::connectFetch() {
     connect(m_purpose, &QComboBox::activated, this, &FetchXpub::onPurposeChanged, qontrol::UNIQUE);
     connect(m_account, &QLineEdit::textEdited, this, &FetchXpub::onAccountEdited, qontrol::UNIQUE);
     connect(m_script, &QComboBox::activated, this, &FetchXpub::onInputChanged, qontrol::UNIQUE);
     connect(m_custom, &QLineEdit::textEdited, this, &FetchXpub::onInputChanged, qontrol::UNIQUE);
     connect(m_fetch, &QPushButton::clicked, this, &FetchXpub::onFetchClicked, qontrol::UNIQUE);
-    connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
-            &FetchXpub::onInstanceRemoved, qontrol::UNIQUE);
 }
 
 void FetchXpub::view() {
