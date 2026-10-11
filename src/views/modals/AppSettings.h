@@ -61,6 +61,9 @@ public slots:
 
 protected:
     void init();
+    void initMain();
+    void initDisable();
+    void initSection();
     void doConnect();
     void view();
     auto buildGeneral() -> QWidget *;
@@ -71,6 +74,7 @@ protected:
     void rebuildSettingSectionRows();
     [[nodiscard]] auto sectionModuleName(Host::SectionId section) const -> QString;
     void showDisable(const QString &id);
+    void showSection(const QString &title);
     void setScanning(bool scanning);
     void refreshThemeProviders();
     void requestThemeList();

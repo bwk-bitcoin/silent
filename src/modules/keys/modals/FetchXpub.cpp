@@ -54,7 +54,11 @@ void FetchXpub::init() {
          m_module->rust()->key_xpubs(rust::String(m_fingerprint.toStdString()))) {
         m_cached.append(xpubPath(KeysModule::toQt(entry.path)));
     }
+    initFetch();
+    initFetching();
+}
 
+void FetchXpub::initFetch() {
     m_purpose = new catalog::ComboBox;
     m_purpose->addItem(TR("keys-purpose-84"), QStringLiteral("84"));
     m_purpose->addItem(TR("keys-purpose-86"), QStringLiteral("86"));
@@ -88,7 +92,9 @@ void FetchXpub::init() {
     m_fetch = catalog::btnFetchThisXpub();
     m_actions = new catalog::ModalActions;
     m_actions->addAction(m_fetch);
+}
 
+void FetchXpub::initFetching() {
     m_fetching_step = new catalog::ModalStatus;
     m_fetching_step->setSpinner();
     m_fetching_step->setTitle(TR("keys-fetching-title"));
@@ -106,9 +112,6 @@ void FetchXpub::doConnect() {
 }
 
 void FetchXpub::view() {
-    setWindowTitle(TR("keys-fetch-title"));
-    setWidth(ModalWidth::L);
-
     m_template = (new qontrol::Row)
                      ->spacing(resolve(Spacing::XXS))
                      ->push(m_prefix)
@@ -133,13 +136,19 @@ void FetchXpub::view() {
 }
 
 void FetchXpub::viewFetch() {
+    setWindowTitle(TR("keys-fetch-title"));
+    setHeader(nullptr);
     setBody(m_fetch_step);
     setFooter(m_actions);
+    setWidth(ModalWidth::L);
 }
 
 void FetchXpub::viewFetching() {
+    setWindowTitle(TR("keys-fetch-title"));
+    setHeader(nullptr);
     setBody(m_fetching_step);
     setFooter(nullptr);
+    setWidth(ModalWidth::L);
 }
 
 void FetchXpub::onPurposeChanged() {

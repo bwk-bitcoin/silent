@@ -110,7 +110,12 @@ void AppSettings::init() {
     if (m_host != nullptr) {
         m_host_events = m_host->events();
     }
+    initMain();
+    initDisable();
+    initSection();
+}
 
+void AppSettings::initMain() {
     m_theme_picker = new catalog::ComboBox;
     m_theme_picker->setWidth(Size::S);
     m_theme_picker->setEnabled(false);
@@ -150,7 +155,9 @@ void AppSettings::init() {
 
     m_extensions_separator = new catalog::Separator;
     m_section_column = (new qontrol::Column)->spacing(resolve(Spacing::S));
+}
 
+void AppSettings::initDisable() {
     m_disable_question = wrapped(LabelRole::Body);
     m_disable_accounts = new Notice;
     m_disable_themes = new Notice;
@@ -158,7 +165,9 @@ void AppSettings::init() {
     m_disable_actions->setBack(catalog::ModalActions::Back::Back);
     m_disable_btn = catalog::btnDisablePlugin();
     m_disable_actions->addAction(m_disable_btn);
+}
 
+void AppSettings::initSection() {
     m_section_text = wrapped(LabelRole::Body);
     m_section_text->setTone(LabelTone::Secondary);
     m_section_slot = new qontrol::Column;
@@ -221,7 +230,6 @@ void AppSettings::view() {
         widget->hide();
         widget->setParent(this);
     }
-    setWidth(ModalWidth::Wide);
     retranslateUi();
 }
 
@@ -277,8 +285,10 @@ void AppSettings::onDisableBack() {
 
 void AppSettings::showMain() {
     setWindowTitle(TR("settings-title"));
+    setHeader(nullptr);
     setBody(m_main);
     setFooter(nullptr);
+    setWidth(ModalWidth::Wide);
 }
 
 void AppSettings::rebuildPluginRows() {
@@ -400,8 +410,10 @@ void AppSettings::showDisable(const QString &id) {
     m_disable_themes->setVisible(!themes.isEmpty());
 
     setWindowTitle(TR("settings-disable-title"));
+    setHeader(nullptr);
     setBody(m_disable);
     setFooter(m_disable_actions);
+    setWidth(ModalWidth::Wide);
 }
 
 void AppSettings::disablePlugin() {
@@ -524,11 +536,17 @@ void AppSettings::onOpenSectionClicked() {
         m_open_section_id = entry.id;
         m_section_slot->push(entry.content);
         entry.content->show();
-        setWindowTitle(title);
-        setBody(m_section);
-        setFooter(m_section_actions);
+        showSection(title);
         return;
     }
+}
+
+void AppSettings::showSection(const QString &title) {
+    setWindowTitle(title);
+    setHeader(nullptr);
+    setBody(m_section);
+    setFooter(m_section_actions);
+    setWidth(ModalWidth::Wide);
 }
 
 void AppSettings::closeSection() {

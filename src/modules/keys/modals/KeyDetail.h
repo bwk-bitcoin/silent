@@ -76,6 +76,7 @@ public slots:
     void onPasswordEdited();
     void onPasswordProceed();
     void onMnemonicRevealed(ReqId req_id, const MnemonicResult &result);
+    void showReveal();
     void toggleWords();
     void closeWords();
     void showRemove();

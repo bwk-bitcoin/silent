@@ -252,7 +252,6 @@ void KeyDetail::view() {
         widget->hide();
         widget->setParent(this);
     }
-    setWidth(ModalWidth::L);
 }
 
 auto KeyDetail::buildDetail() -> QWidget * {
@@ -760,6 +759,7 @@ void KeyDetail::showDetail() {
     showHeader(m_alias);
     setBody(m_detail);
     setFooter(m_detail_actions);
+    setWidth(ModalWidth::L);
 }
 
 void KeyDetail::showFetch() {
@@ -777,6 +777,7 @@ void KeyDetail::showPassword() {
     showHeader(TR("keys-reveal-title"));
     setBody(m_password_body);
     setFooter(m_password_actions);
+    setWidth(ModalWidth::L);
     m_password_input->setFocus();
 }
 
@@ -823,12 +824,17 @@ void KeyDetail::onMnemonicRevealed(ReqId req_id, const MnemonicResult &result) {
     QString mnemonic = KeysModule::toQt(result.mnemonic);
     m_words->setWords(mnemonic.split(QLatin1Char(' '), Qt::SkipEmptyParts));
     mnemonic.fill(QChar());
+    showReveal();
+}
+
+void KeyDetail::showReveal() {
     m_words->setMasked(false);
     m_hide_words->setVisible(true);
     m_show_words->setVisible(false);
     showHeader(TR("keys-reveal-title"));
     setBody(m_reveal_body);
     setFooter(m_reveal_actions);
+    setWidth(ModalWidth::L);
 }
 
 void KeyDetail::toggleWords() {
@@ -864,6 +870,7 @@ void KeyDetail::showRemove() {
     showHeader(TR("keys-remove-title"));
     setBody(m_remove_body);
     setFooter(m_remove_actions);
+    setWidth(ModalWidth::L);
 }
 
 void KeyDetail::removeKey() {

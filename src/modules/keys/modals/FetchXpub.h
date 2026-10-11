@@ -50,6 +50,8 @@ public slots:
 
 protected:
     void init();
+    void initFetch();
+    void initFetching();
     void doConnect();
     void view();
     void viewFetch();
