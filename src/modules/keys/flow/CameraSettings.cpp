@@ -54,7 +54,7 @@ void CameraSettings::view() {
                        ->addField(TR("flow-camera-source"), m_camera_combo)
                        ->addField(TR("flow-camera-contrast"), m_contrast_stepper);
     // As wide as the fields under it, as the design's preview takes their width.
-    m_display->setFixedWidth(fields->sizeHint().width());
+    m_display->setSize(fields->sizeHint().width());
     setMainWidget((new qontrol::Column)
                       ->margins(resolve(Padding::L))
                       ->spacing(resolve(Spacing::M))

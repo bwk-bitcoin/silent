@@ -58,6 +58,10 @@ QrCameraDisplay::QrCameraDisplay(QWidget *parent) : QWidget(parent) {
     setState(QrCamera::State::Starting);
 }
 
+void QrCameraDisplay::setSize(int width) {
+    setFixedSize(width, width * ASPECT_HEIGHT / ASPECT_WIDTH);
+}
+
 void QrCameraDisplay::setState(QrCamera::State state) {
     using State = QrCamera::State;
     IconFn glyph = nullptr;
