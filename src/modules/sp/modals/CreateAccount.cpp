@@ -44,8 +44,12 @@ constexpr auto MAINNET_ELECTRUM_URL = "electrum.pythcoiner.dev:50002";
 // Regtest BlindBit when the app found no local regtest setup.
 constexpr auto REGTEST_BLINDBIT_URL = "http://localhost:8080";
 
-// exec() result of a window closed to fetch the descriptor in its place.
+// exec() result of a window closed to fetch a descriptor or an xpub in its place.
 constexpr int FETCH_RESULT = QDialog::Accepted + 1;
+
+// The BIP44-style purpose of each sub-account's xpub path.
+constexpr int TAPROOT_PURPOSE = 86;
+constexpr int SEGWIT_PURPOSE = 84;
 
 constexpr std::array<Network, 4> NETWORKS = {Network::Regtest, Network::Signet, Network::Testnet,
                                              Network::Bitcoin};
@@ -151,14 +155,15 @@ void CreateAccount::init() {
 
     m_keys_column = new qontrol::Column;
 
-    m_get_descriptor = catalog::btnGetDescriptor();
-    m_get_again = catalog::btnGetAgain();
-    m_get_again->setVisible(false);
+    m_get_sp = catalog::btnGetSilentPayment();
+    m_get_taproot = catalog::btnGetTaproot();
+    m_get_segwit = catalog::btnGetSegwit();
     m_pick_key = new Label(TR("create-account-pick-key"), LabelRole::Caption);
     m_fetch_row = (new qontrol::Row)
                       ->spacing(resolve(Spacing::S))
-                      ->push(m_get_descriptor)
-                      ->push(m_get_again)
+                      ->push(m_get_sp)
+                      ->push(m_get_taproot)
+                      ->push(m_get_segwit)
                       ->push(m_pick_key)
                       ->pushSpacer();
 
@@ -168,6 +173,12 @@ void CreateAccount::init() {
     m_descriptor_field = new catalog::CopyField;
     m_descriptor_field->setWrap(true);
     m_descriptor_field->setVisible(false);
+    m_taproot_field = new catalog::CopyField;
+    m_taproot_field->setWrap(true);
+    m_taproot_field->setVisible(false);
+    m_segwit_field = new catalog::CopyField;
+    m_segwit_field->setWrap(true);
+    m_segwit_field->setVisible(false);
 
     m_create = catalog::btnCreate();
     m_actions = new catalog::ModalActions;
@@ -179,10 +190,10 @@ void CreateAccount::doConnect() {
             qontrol::UNIQUE);
     connect(m_network_combo, &QComboBox::currentIndexChanged, this,
             &CreateAccount::onNetworkChanged, qontrol::UNIQUE);
-    connect(m_get_descriptor, &QPushButton::clicked, this, &CreateAccount::onFetchClicked,
-            qontrol::UNIQUE);
-    connect(m_get_again, &QPushButton::clicked, this, &CreateAccount::onFetchClicked,
-            qontrol::UNIQUE);
+    for (auto *button : {m_get_sp, m_get_taproot, m_get_segwit}) {
+        connect(button, &QPushButton::clicked, this, &CreateAccount::onFetchClicked,
+                qontrol::UNIQUE);
+    }
     connect(m_blindbit.testButton(), &QPushButton::clicked, this, &CreateAccount::onTestBlindbit,
             qontrol::UNIQUE);
     connect(m_blindbit.input(), &QLineEdit::textEdited, this, &CreateAccount::onBlindbitEdited,
@@ -201,6 +212,7 @@ void CreateAccount::doConnect() {
     if (bus != nullptr) {
         connect(bus, &IKeys::spDescriptorReady, this, &CreateAccount::onSpDescriptorReady,
                 qontrol::UNIQUE);
+        connect(bus, &IKeys::xpubReady, this, &CreateAccount::onXpubReady, qontrol::UNIQUE);
         connect(bus, &IKeys::descriptorRegistered, this, &CreateAccount::onDescriptorRegistered,
                 qontrol::UNIQUE);
         connect(bus, &IKeys::error, this, &CreateAccount::onKeysError, qontrol::UNIQUE);
@@ -219,7 +231,9 @@ void CreateAccount::view() {
                     ->push(m_keys_column)
                     ->push(m_fetch_row)
                     ->push(m_fetch_error)
-                    ->push(m_descriptor_field);
+                    ->push(m_descriptor_field)
+                    ->push(m_taproot_field)
+                    ->push(m_segwit_field);
 
     auto *endpoints = (new catalog::FieldGroup)
                           ->addField(TR("settings-blindbit-url"), m_blindbit.control())
@@ -248,7 +262,7 @@ void CreateAccount::view() {
 auto CreateAccount::exec() -> int {
     int result = catalog::Modal::exec();
     while (result == FETCH_RESULT) {
-        fetchDescriptor();
+        runFetch();
         result = catalog::Modal::exec();
     }
     return result;
@@ -358,11 +372,9 @@ void CreateAccount::refreshKeyRows() {
         }
     }
     bool picked = !m_key_fp.isEmpty();
-    bool fetched = !m_descriptor.isEmpty();
-    m_get_descriptor->setVisible(!fetched);
-    m_get_again->setVisible(fetched);
-    m_get_descriptor->setEnabled(picked);
-    m_get_again->setEnabled(picked);
+    for (auto *button : {m_get_sp, m_get_taproot, m_get_segwit}) {
+        button->setEnabled(picked);
+    }
     m_pick_key->setVisible(!picked);
 }
 
@@ -376,6 +388,10 @@ void CreateAccount::onKeyClicked() {
         m_descriptor.clear();
         m_descriptor_fingerprint.clear();
         m_descriptor_field->setVisible(false);
+        m_taproot_descriptor.clear();
+        m_taproot_field->setVisible(false);
+        m_segwit_descriptor.clear();
+        m_segwit_field->setVisible(false);
     }
     m_key_fp = fingerprint;
     m_fetch_error->setVisible(false);
@@ -386,6 +402,11 @@ void CreateAccount::onKeyClicked() {
 
 void CreateAccount::onNetworkChanged() {
     m_key_fp.clear();
+    // Built for the key of another network.
+    m_taproot_descriptor.clear();
+    m_taproot_field->setVisible(false);
+    m_segwit_descriptor.clear();
+    m_segwit_field->setVisible(false);
     m_fetch_error->setVisible(false);
     populateKeys();
     applyNetworkDefaults();
@@ -402,23 +423,49 @@ void CreateAccount::onFetchClicked() {
     if (m_key_fp.isEmpty() || Host::get()->keys() == nullptr) {
         return;
     }
-    m_fetch_requested = true;
+    auto *button = sender();
+    if (button == m_get_sp) {
+        m_pending_fetch = Fetch::SilentPayment;
+    } else if (button == m_get_taproot) {
+        m_pending_fetch = Fetch::Taproot;
+    } else if (button == m_get_segwit) {
+        m_pending_fetch = Fetch::Segwit;
+    } else {
+        return;
+    }
     done(FETCH_RESULT);
 }
 
-void CreateAccount::fetchDescriptor() {
+void CreateAccount::runFetch() {
     auto *bus = Host::get()->keys();
-    if (!m_fetch_requested || bus == nullptr) {
+    if (!m_pending_fetch.has_value() || bus == nullptr) {
         return;
     }
-    m_fetch_requested = false;
+    Fetch fetch = m_pending_fetch.value();
+    m_pending_fetch.reset();
     m_fetch_error->setVisible(false);
-    m_descriptor_req_id = bus->newRequest();
-    // Returns once the flow's window has closed, its answer delivered.
-    bus->spDescriptor(m_descriptor_req_id, m_key_fp);
+    // Each returns once the flow's window has closed, its answer delivered.
+    switch (fetch) {
+    case Fetch::SilentPayment:
+        m_descriptor_req_id = bus->newRequest();
+        bus->spDescriptor(m_descriptor_req_id, m_key_fp);
+        break;
+    case Fetch::Taproot:
+    case Fetch::Segwit:
+        m_xpub_fetch = fetch;
+        m_xpub_req_id = bus->newRequest();
+        bus->xpub(m_xpub_req_id, m_key_fp,
+                  subAccountPath(fetch == Fetch::Taproot ? TAPROOT_PURPOSE : SEGWIT_PURPOSE));
+        break;
+    }
     refreshKeyRows();
     updateActions();
     adjustSize();
+}
+
+auto CreateAccount::subAccountPath(int purpose) const -> QString {
+    int coin = network() == Network::Bitcoin ? 0 : 1;
+    return QStringLiteral("m/%1'/%2'/0'").arg(purpose).arg(coin);
 }
 
 void CreateAccount::onSpDescriptorReady(ReqId req_id, const QString &descriptor,
@@ -434,9 +481,34 @@ void CreateAccount::onSpDescriptorReady(ReqId req_id, const QString &descriptor,
     m_descriptor_field->setVisible(true);
 }
 
+void CreateAccount::onXpubReady(ReqId req_id, const QString &xpub, const QString &fingerprint,
+                                [[maybe_unused]] const QString &path) {
+    if (req_id != m_xpub_req_id) {
+        return;
+    }
+    m_xpub_req_id = 0;
+    auto key = rust::String(fingerprint.toStdString());
+    auto value = rust::String(xpub.toStdString());
+    bool taproot = m_xpub_fetch == Fetch::Taproot;
+    QString descriptor = QString::fromStdString(
+        std::string(taproot ? ::taproot_descriptor_for(key, value, network())
+                            : ::segwit_descriptor_for(key, value, network())));
+    if (descriptor.isEmpty()) {
+        showFetchError(TR("create-account-xpub-invalid"));
+        return;
+    }
+    auto *field = taproot ? m_taproot_field : m_segwit_field;
+    (taproot ? m_taproot_descriptor : m_segwit_descriptor) = descriptor;
+    field->setValue(descriptor);
+    field->setVisible(true);
+}
+
 void CreateAccount::onKeysCancelled(ReqId req_id) {
     if (req_id == m_descriptor_req_id) {
         m_descriptor_req_id = 0;
+    }
+    if (req_id == m_xpub_req_id) {
+        m_xpub_req_id = 0;
     }
 }
 
@@ -446,6 +518,11 @@ void CreateAccount::onKeysError(std::optional<ReqId> req_id, const QString &mess
     }
     if (req_id.value() == m_descriptor_req_id) {
         m_descriptor_req_id = 0;
+        showFetchError(message);
+        return;
+    }
+    if (req_id.value() == m_xpub_req_id) {
+        m_xpub_req_id = 0;
         showFetchError(message);
         return;
     }
@@ -486,6 +563,8 @@ void CreateAccount::onDescriptorRegistered(ReqId req_id) {
                              rust::String(m_descriptor.toStdString()),
                              rust::String(blindbitUrl.toStdString()),
                              rust::String(electrumUrl.toStdString()), 546, rust::String("sp"));
+    config->set_taproot_descriptor(rust::String(m_taproot_descriptor.toStdString()));
+    config->set_segwit_descriptor(rust::String(m_segwit_descriptor.toStdString()));
     config->to_file();
 
     AppController::get()->onAccountCreated(name);

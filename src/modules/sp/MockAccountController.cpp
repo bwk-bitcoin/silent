@@ -45,47 +45,47 @@ auto MockAccountController::loadPanels() -> void {
 
 auto MockAccountController::getCoins() -> rust::Vec<RustCoin> {
     rust::Vec<RustCoin> coins;
-    coins.push_back(dummyCoin(
-        "segwit", "3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b:0", "salary",
-        12500000, 850123));
-    coins.push_back(dummyCoin(
-        "taproot", "8f5a2c1e9b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6a:1", "",
-        5000000, 849876));
-    coins.push_back(dummyCoin(
-        "segwit", "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d:0", "savings",
-        100000000, 847000));
-    coins.push_back(dummyCoin(
-        "taproot", "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d:2", "tip",
-        250000, 848500));
-    coins.push_back(dummyCoin(
-        "segwit", "2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c:0", "rent",
-        37500000, 846200));
-    coins.push_back(dummyCoin(
-        "taproot", "f1e2d3c4b5a6978869504132f1e2d3c4b5a697886950413200ffeeddccbbaa99:1", "",
-        780000, 848900));
-    coins.push_back(dummyCoin(
-        "segwit", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899:3",
-        "cold storage", 64000000, 845300));
+    coins.push_back(dummyCoin("segwit",
+                              "3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b:0",
+                              "salary", 12500000, 850123));
+    coins.push_back(dummyCoin("taproot",
+                              "8f5a2c1e9b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6a:1",
+                              "", 5000000, 849876));
+    coins.push_back(dummyCoin("segwit",
+                              "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d:0",
+                              "savings", 100000000, 847000));
+    coins.push_back(dummyCoin("taproot",
+                              "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d:2",
+                              "tip", 250000, 848500));
+    coins.push_back(dummyCoin("segwit",
+                              "2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c:0",
+                              "rent", 37500000, 846200));
+    coins.push_back(dummyCoin("taproot",
+                              "f1e2d3c4b5a6978869504132f1e2d3c4b5a697886950413200ffeeddccbbaa99:1",
+                              "", 780000, 848900));
+    coins.push_back(dummyCoin("segwit",
+                              "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899:3",
+                              "cold storage", 64000000, 845300));
     return coins;
 }
 
 auto MockAccountController::getPaymentHistory() -> rust::Vec<RustTx> {
     rust::Vec<RustTx> txs;
-    txs.push_back(dummyTx(
-        "incoming", "3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b", 12500000,
-        850123));
-    txs.push_back(dummyTx(
-        "outgoing", "8f5a2c1e9b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6a", 5000000,
-        849876));
-    txs.push_back(dummyTx(
-        "incoming", "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d", 100000000,
-        0));
-    txs.push_back(dummyTx(
-        "outgoing", "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d", 250000,
-        848500));
-    txs.push_back(dummyTx(
-        "incoming", "0f1e2d3c4b5a6978f8e9d0c1b2a3948576f5e4d3c2b1a09f8e7d6c5b4a3f2e1d", 99999999,
-        847000));
+    txs.push_back(dummyTx("incoming",
+                          "3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b",
+                          12500000, 850123));
+    txs.push_back(dummyTx("outgoing",
+                          "8f5a2c1e9b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6a",
+                          5000000, 849876));
+    txs.push_back(dummyTx("incoming",
+                          "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
+                          100000000, 0));
+    txs.push_back(dummyTx("outgoing",
+                          "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d",
+                          250000, 848500));
+    txs.push_back(dummyTx("incoming",
+                          "0f1e2d3c4b5a6978f8e9d0c1b2a3948576f5e4d3c2b1a09f8e7d6c5b4a3f2e1d",
+                          99999999, 847000));
     return txs;
 }
 
@@ -108,8 +108,13 @@ auto MockAccountController::newTaprootAddr() -> rust::String {
     return rust::String(addr.toStdString());
 }
 
-auto MockAccountController::hasSubAccounts() -> bool {
-    return true; // surface the segwit/taproot sections in the debug Receive view
+// Surface the segwit and taproot sections in the debug Receive view.
+auto MockAccountController::hasSegwit() -> bool {
+    return true;
+}
+
+auto MockAccountController::hasTaproot() -> bool {
+    return true;
 }
 
 auto MockAccountController::simulateTx(TransactionTemplate tx) -> TransactionSimulation {

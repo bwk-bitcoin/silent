@@ -1006,6 +1006,7 @@ struct SigningPlan;
 struct FingerprintsResult;
 struct MnemonicResult;
 struct SignResult;
+struct HotXpubResult;
 struct HotSpDescriptorResult;
 struct PsbtPayloadResult;
 struct CameraListResult;
@@ -1689,9 +1690,25 @@ struct SignResult final {
 };
 #endif // CXXBRIDGE1_STRUCT_SignResult
 
+#ifndef CXXBRIDGE1_STRUCT_HotXpubResult
+#define CXXBRIDGE1_STRUCT_HotXpubResult
+// Result of `hot_sp_descriptor`.
+struct HotXpubResult final {
+  // Whether the xpub was derived.
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Error message (empty if is_ok is true).
+  ::rust::String error;
+  // The password did not open the hot secret.
+  bool wrong_password CXX_DEFAULT_VALUE(false);
+  // The xpub at the asked path. Empty on error.
+  ::rust::String xpub;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_HotXpubResult
+
 #ifndef CXXBRIDGE1_STRUCT_HotSpDescriptorResult
 #define CXXBRIDGE1_STRUCT_HotSpDescriptorResult
-// Result of `hot_sp_descriptor`.
 struct HotSpDescriptorResult final {
   // Whether the descriptor was derived.
   bool is_ok CXX_DEFAULT_VALUE(false);
@@ -1796,6 +1813,18 @@ struct Config final : public ::rust::Opaque {
   // Set SP descriptor.
   void set_descriptor(::rust::String descriptor) noexcept;
 
+  // The segwit sub-account descriptor, empty for none.
+  ::rust::String get_segwit_descriptor() const noexcept;
+
+  // Set the segwit sub-account descriptor, empty for none.
+  void set_segwit_descriptor(::rust::String descriptor) noexcept;
+
+  // The taproot sub-account descriptor, empty for none.
+  ::rust::String get_taproot_descriptor() const noexcept;
+
+  // Set the taproot sub-account descriptor, empty for none.
+  void set_taproot_descriptor(::rust::String descriptor) noexcept;
+
   // Get network.
   ::Network get_network() const noexcept;
 
@@ -1879,6 +1908,12 @@ struct Account final : public ::rust::Opaque {
 
   // Get the number of sub-accounts.
   ::std::uint32_t sub_account_count() const noexcept;
+
+  // Whether the account has a segwit (wpkh) sub-account.
+  bool has_segwit() const noexcept;
+
+  // Whether the account has a taproot (tr) sub-account.
+  bool has_taproot() const noexcept;
 
   // Generate a new segwit (wpkh) receiving address.
   ::rust::String new_segwit_addr() noexcept;
@@ -2467,6 +2502,14 @@ void app_set_qr_camera_contrast_level(::std::uint8_t level) noexcept;
 // Delete an account's data from disk.
 bool delete_config(::rust::String account_name) noexcept;
 
+// The segwit sub-account descriptor of a key, from its xpub at 84'/coin'/0'.
+// Empty when the fingerprint or the xpub is invalid.
+::rust::String segwit_descriptor_for(::rust::String fingerprint, ::rust::String xpub, ::Network network) noexcept;
+
+// The taproot sub-account descriptor of a key, from its xpub at 86'/coin'/0'.
+// Empty when the fingerprint or the xpub is invalid.
+::rust::String taproot_descriptor_for(::rust::String fingerprint, ::rust::String xpub, ::Network network) noexcept;
+
 // Create a new account from an account name (loads config from file).
 // Check is_ok() before use; get_error() for failure reason.
 ::rust::Box<::Account> new_account(::rust::String account_name) noexcept;
@@ -2512,6 +2555,11 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 // account creation. Blocks on Argon2id while opening the envelope: call
 // from a QThread, never from the GUI thread.
 ::HotSpDescriptorResult hot_sp_descriptor(::HotMaterial const &material, ::rust::Str password) noexcept;
+
+// The xpub at `path` of `material`'s hot secret, for an account's segwit or
+// taproot sub-account. Blocks on Argon2id while opening the envelope: call
+// from a QThread, never from the GUI thread.
+::HotXpubResult hot_xpub(::HotMaterial const &material, ::rust::Str password, ::rust::Str path) noexcept;
 
 // Converts a v2 PSBT into its v0 base64 payload for a USB signing device.
 // Cheap; safe to call from the GUI thread. Refuses a PSBT with a pending SP

@@ -43,6 +43,18 @@ auto flowCopy(Context context) -> FlowCopy {
                 .sdTitle = TR("flow-fetch-sd-title"),
                 .hotPrompt = TR("flow-fetch-hot-prompt"),
                 .hotBusy = TR("flow-fetch-hot-busy")};
+    case Context::FetchXpub:
+        return {.title = TR("flow-fetch-xpub-title"),
+                .pickerLead = QString(),
+                .usbTitle = TR("flow-usb-confirm-title"),
+                .usbWait = TR("flow-fetch-xpub-usb-wait"),
+                .qrTitle = TR("flow-fetch-xpub-qr-title"),
+                .qrHint = TR("flow-fetch-xpub-qr-hint"),
+                .scanTitle = TR("flow-fetch-xpub-scan-title"),
+                .scanHint = TR("flow-fetch-xpub-scan-hint"),
+                .sdTitle = TR("flow-fetch-xpub-title"),
+                .hotPrompt = TR("flow-fetch-xpub-hot-prompt"),
+                .hotBusy = TR("flow-fetch-xpub-hot-busy")};
     }
     return {};
 }
@@ -55,6 +67,8 @@ auto hotProceedButton(Context context) -> catalog::Button * {
         return catalog::btnCheckAddress();
     case Context::Fetch:
         return catalog::btnGetDescriptorHot();
+    case Context::FetchXpub:
+        return catalog::btnGetXpubHot();
     }
     return catalog::btnProceed();
 }

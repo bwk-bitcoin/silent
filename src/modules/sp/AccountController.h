@@ -24,7 +24,8 @@ public:
     virtual auto getSpAddress() -> rust::String;
     virtual auto newSegwitAddr() -> rust::String;
     virtual auto newTaprootAddr() -> rust::String;
-    virtual auto hasSubAccounts() -> bool;
+    virtual auto hasSegwit() -> bool;
+    virtual auto hasTaproot() -> bool;
     virtual auto getDescriptor() -> rust::String;
     virtual auto addressVerifyInfo(const QString &address) -> AddressVerifyInfo;
     auto coins() -> qontrol::Screen *;

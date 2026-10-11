@@ -7,9 +7,17 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::OnceLock;
 
-use bitcoin::{secp256k1::Secp256k1, Network as BtcNetwork};
-use bwk_sp::account::config::Config as SpConfig;
-use bwk_sp::bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor;
+use bitcoin::{
+    bip32::{ChildNumber, Fingerprint, Xpub},
+    secp256k1::Secp256k1,
+    Network as BtcNetwork,
+};
+use bwk_sp::account::config::{Config as SpConfig, SubAccountConfig};
+use bwk_sp::bwk_sign::bwk_descriptor::{
+    descriptor::{tr_path, wpkh_path},
+    sp_descriptor::SpDescriptor,
+};
+use bwk_sp::bwk_sign::miniscript::{Descriptor as MiniscriptDescriptor, DescriptorPublicKey};
 use serde::{Deserialize, Serialize};
 
 use crate::ffi::Network;
@@ -63,6 +71,12 @@ pub struct Config {
     pub network: Network,
     /// BIP392 Silent Payments descriptor.
     pub descriptor: String,
+    /// The key's BIP84 segwit descriptor, its sub-account: empty for none.
+    #[serde(default)]
+    pub segwit_descriptor: String,
+    /// The key's BIP86 taproot descriptor, its sub-account: empty for none.
+    #[serde(default)]
+    pub taproot_descriptor: String,
     /// Blindbit server URL
     pub blindbit_url: String,
     /// Electrum server address (host:port) for sub-account syncing
@@ -125,6 +139,8 @@ impl Config {
             account_name,
             network,
             descriptor,
+            segwit_descriptor: String::new(),
+            taproot_descriptor: String::new(),
             blindbit_url,
             electrum_url,
             dust_limit,
@@ -207,6 +223,19 @@ impl Config {
             self.data_dir.clone(),
         );
         config.set_dust_limit(self.dust_limit);
+        // The sub-accounts, segwit first: watch-only, the key signs their spends.
+        for sub_account in [&self.segwit_descriptor, &self.taproot_descriptor] {
+            if sub_account.is_empty() {
+                continue;
+            }
+            let descriptor = MiniscriptDescriptor::<DescriptorPublicKey>::from_str(sub_account)
+                .map_err(|e| format!("invalid sub-account descriptor: {e}"))?;
+            config.descriptors.push(SubAccountConfig {
+                descriptor: descriptor.into(),
+                mnemonic: None,
+                endpoint: Default::default(),
+            });
+        }
         // Only seeds a fresh store: bwk keeps the persisted birthday once scanned.
         let birthday = match self.network {
             Network::Bitcoin => MAINNET_BIRTHDAY_HEIGHT,
@@ -232,6 +261,26 @@ impl Config {
     /// Set SP descriptor.
     pub fn set_descriptor(&mut self, descriptor: String) {
         self.descriptor = descriptor;
+    }
+
+    /// The segwit sub-account descriptor, empty for none.
+    pub fn get_segwit_descriptor(&self) -> String {
+        self.segwit_descriptor.clone()
+    }
+
+    /// Set the segwit sub-account descriptor, empty for none.
+    pub fn set_segwit_descriptor(&mut self, descriptor: String) {
+        self.segwit_descriptor = descriptor;
+    }
+
+    /// The taproot sub-account descriptor, empty for none.
+    pub fn get_taproot_descriptor(&self) -> String {
+        self.taproot_descriptor.clone()
+    }
+
+    /// Set the taproot sub-account descriptor, empty for none.
+    pub fn set_taproot_descriptor(&mut self, descriptor: String) {
+        self.taproot_descriptor = descriptor;
     }
 
     /// Get network.
@@ -414,6 +463,45 @@ pub fn new_config(
     Box::new(config)
 }
 
+/// The BIP84 segwit descriptor of the key `fingerprint`, from its xpub at
+/// `84'/coin'/0'`, as the account's segwit sub-account. Empty when the fingerprint or
+/// the xpub is invalid.
+pub fn segwit_descriptor_for(fingerprint: String, xpub: String, network: Network) -> String {
+    sub_account_descriptor("wpkh", &fingerprint, &xpub, network)
+}
+
+/// The BIP86 taproot descriptor of the key `fingerprint`, from its xpub at
+/// `86'/coin'/0'`, as the account's taproot sub-account. Empty when the fingerprint or
+/// the xpub is invalid.
+pub fn taproot_descriptor_for(fingerprint: String, xpub: String, network: Network) -> String {
+    sub_account_descriptor("tr", &fingerprint, &xpub, network)
+}
+
+/// `wpkh` or `tr` over the account 0 path of that script type, as bwk builds its own
+/// (`bwk_descriptor::descriptor::{wpkh, tr}`), receive and change in one.
+fn sub_account_descriptor(script: &str, fingerprint: &str, xpub: &str, network: Network) -> String {
+    let account = ChildNumber::from_hardened_idx(0).expect("account 0 is a valid index");
+    let path = match script {
+        "wpkh" => wpkh_path(network.into(), account),
+        _ => tr_path(network.into(), account),
+    };
+    let built = path.map_err(|e| e.to_string()).and_then(|path| {
+        let fingerprint = Fingerprint::from_str(fingerprint).map_err(|e| e.to_string())?;
+        let xpub = Xpub::from_str(xpub).map_err(|e| e.to_string())?;
+        MiniscriptDescriptor::<DescriptorPublicKey>::from_str(&format!(
+            "{script}([{fingerprint}/{path}]{xpub}/<0;1>/*)"
+        ))
+        .map_err(|e| e.to_string())
+    });
+    match built {
+        Ok(descriptor) => descriptor.to_string(),
+        Err(e) => {
+            log::error!("sub_account_descriptor {script}: {e}");
+            String::new()
+        }
+    }
+}
+
 /// Delete an account's data from disk.
 pub fn delete_config(account_name: String) -> bool {
     let data_dir = datadir();
@@ -513,6 +601,74 @@ mod tests {
 
         let config: Config = serde_json::from_str(json).expect("config json should deserialize");
         assert_eq!(config.plugin_id, "sp");
+        // A config written before the sub-account descriptors has none.
+        assert!(config.segwit_descriptor.is_empty());
+        assert!(config.taproot_descriptor.is_empty());
+    }
+
+    /// A key's fingerprint and its xpub at `path`, from a fixed seed.
+    fn key_xpub(path: &str) -> (String, String) {
+        use bitcoin::bip32::{DerivationPath, Xpriv};
+        let secp = Secp256k1::new();
+        let master = Xpriv::new_master(BtcNetwork::Regtest, &[7u8; 32]).unwrap();
+        let derived = master
+            .derive_priv(&secp, &DerivationPath::from_str(path).unwrap())
+            .unwrap();
+        (
+            master.fingerprint(&secp).to_string(),
+            Xpub::from_priv(&secp, &derived).to_string(),
+        )
+    }
+
+    #[test]
+    fn builds_the_segwit_and_taproot_descriptors_of_a_key() {
+        let (fingerprint, xpub) = key_xpub("m/84'/1'/0'");
+        let segwit = segwit_descriptor_for(fingerprint.clone(), xpub.clone(), Network::Regtest);
+        assert!(
+            segwit.starts_with(&format!("wpkh([{fingerprint}/84'/1'/0']{xpub}/<0;1>/*)")),
+            "{segwit}"
+        );
+
+        let (fingerprint, xpub) = key_xpub("m/86'/1'/0'");
+        let taproot = taproot_descriptor_for(fingerprint.clone(), xpub.clone(), Network::Regtest);
+        assert!(
+            taproot.starts_with(&format!("tr([{fingerprint}/86'/1'/0']{xpub}/<0;1>/*)")),
+            "{taproot}"
+        );
+    }
+
+    #[test]
+    fn an_invalid_key_builds_no_descriptor() {
+        let (fingerprint, xpub) = key_xpub("m/84'/1'/0'");
+        assert!(segwit_descriptor_for("nothex".into(), xpub, Network::Regtest).is_empty());
+        assert!(
+            taproot_descriptor_for(fingerprint, "xpubnope".into(), Network::Regtest).is_empty()
+        );
+    }
+
+    #[test]
+    fn each_sub_account_descriptor_adds_a_sub_account() {
+        let (fingerprint, segwit_xpub) = key_xpub("m/84'/1'/0'");
+        let (_, taproot_xpub) = key_xpub("m/86'/1'/0'");
+        let mut config = config_for(Network::Regtest);
+        assert_eq!(config.to_sp_config().unwrap().descriptors.len(), 0);
+
+        config.set_segwit_descriptor(segwit_descriptor_for(
+            fingerprint.clone(),
+            segwit_xpub,
+            Network::Regtest,
+        ));
+        assert_eq!(config.to_sp_config().unwrap().descriptors.len(), 1);
+
+        config.set_taproot_descriptor(taproot_descriptor_for(
+            fingerprint,
+            taproot_xpub,
+            Network::Regtest,
+        ));
+        assert_eq!(config.to_sp_config().unwrap().descriptors.len(), 2);
+
+        config.set_taproot_descriptor("tr(garbage)".into());
+        assert!(config.to_sp_config().is_err());
     }
 
     const TEST_DESCRIPTOR: &str =

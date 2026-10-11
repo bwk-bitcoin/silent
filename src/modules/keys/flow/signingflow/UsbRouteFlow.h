@@ -43,6 +43,7 @@ public slots:
     void onBackClicked();
     void onNextClicked();
     void onDeviceSigned(ReqId req_id, const QString &psbt_base64);
+    void onDeviceXpub(ReqId req_id, const QString &xpub);
     void onDeviceAddressDisplayed(ReqId req_id, const QString &address);
     void onDeviceError(std::optional<ReqId> req_id, const QString &message);
     void onInstanceRemoved(const QString &id);

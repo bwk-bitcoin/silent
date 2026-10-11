@@ -12,6 +12,7 @@ use bwk_sp::bwk::bwk_electrum::{
     coin_store::PaymentType,
     notification::{Notification as BwkNotification, SpNotification, TxListenerNotif},
 };
+use bwk_sp::bwk_sign::miniscript::{Descriptor as MiniscriptDescriptor, DescriptorPublicKey};
 use bwk_sp::receiver::RecipientAddress;
 
 use crate::config::Config;
@@ -33,6 +34,23 @@ struct AccountInner {
 pub struct Account {
     inner: Option<AccountInner>,
     error: String,
+}
+
+/// The script of a sub-account, read off its descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubAccountScript {
+    Segwit,
+    Taproot,
+}
+
+impl SubAccountScript {
+    fn of(descriptor: &MiniscriptDescriptor<DescriptorPublicKey>) -> Option<Self> {
+        match descriptor {
+            MiniscriptDescriptor::Wpkh(_) => Some(Self::Segwit),
+            MiniscriptDescriptor::Tr(_) => Some(Self::Taproot),
+            _ => None,
+        }
+    }
 }
 
 impl Account {
@@ -203,23 +221,44 @@ impl Account {
         }
     }
 
-    /// Generate a new segwit (wpkh) receiving address from sub-account index 0.
-    pub fn new_segwit_addr(&mut self) -> String {
-        let Some(inner) = &mut self.inner else {
-            return String::new();
-        };
-        let Some(scanner) = inner.account.scanners_mut().nth(0) else {
-            return String::new();
-        };
-        scanner.new_addr().address.assume_checked().to_string()
+    /// Whether the account has a segwit (wpkh) sub-account.
+    pub fn has_segwit(&self) -> bool {
+        self.sub_account_index(SubAccountScript::Segwit).is_some()
     }
 
-    /// Generate a new taproot receiving address from sub-account index 1.
+    /// Whether the account has a taproot (tr) sub-account.
+    pub fn has_taproot(&self) -> bool {
+        self.sub_account_index(SubAccountScript::Taproot).is_some()
+    }
+
+    /// Generate a new segwit (wpkh) receiving address, empty without that sub-account.
+    pub fn new_segwit_addr(&mut self) -> String {
+        self.new_sub_account_addr(SubAccountScript::Segwit)
+    }
+
+    /// Generate a new taproot receiving address, empty without that sub-account.
     pub fn new_taproot_addr(&mut self) -> String {
+        self.new_sub_account_addr(SubAccountScript::Taproot)
+    }
+
+    /// The sub-account of that script, found by its descriptor: an account may
+    /// have either one alone.
+    fn sub_account_index(&self, script: SubAccountScript) -> Option<usize> {
+        let inner = self.inner.as_ref()?;
+        inner
+            .account
+            .scanners()
+            .position(|scanner| SubAccountScript::of(&scanner.descriptor()) == Some(script))
+    }
+
+    fn new_sub_account_addr(&mut self, script: SubAccountScript) -> String {
+        let Some(index) = self.sub_account_index(script) else {
+            return String::new();
+        };
         let Some(inner) = &mut self.inner else {
             return String::new();
         };
-        let Some(scanner) = inner.account.scanners_mut().nth(1) else {
+        let Some(scanner) = inner.account.scanners_mut().nth(index) else {
             return String::new();
         };
         scanner.new_addr().address.assume_checked().to_string()
@@ -232,6 +271,11 @@ impl Account {
         let Some(inner) = &self.inner else {
             return vec![];
         };
+        let scripts: Vec<Option<SubAccountScript>> = inner
+            .account
+            .scanners()
+            .map(|scanner| SubAccountScript::of(&scanner.descriptor()))
+            .collect();
         inner
             .account
             .all_coins()
@@ -239,9 +283,11 @@ impl Account {
             .map(|coin| {
                 let account_type = match coin.origin {
                     CoinOrigin::Sp => "SP",
-                    CoinOrigin::SubAccount(0) => "Segwit",
-                    CoinOrigin::SubAccount(1) => "Taproot",
-                    CoinOrigin::SubAccount(_) => "Unknown",
+                    CoinOrigin::SubAccount(index) => match scripts.get(index).copied().flatten() {
+                        Some(SubAccountScript::Segwit) => "Segwit",
+                        Some(SubAccountScript::Taproot) => "Taproot",
+                        None => "Unknown",
+                    },
                 }
                 .to_string();
                 RustCoin {

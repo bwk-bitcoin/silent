@@ -14,7 +14,8 @@ public:
     auto getSpAddress() -> rust::String override;
     auto newSegwitAddr() -> rust::String override;
     auto newTaprootAddr() -> rust::String override;
-    auto hasSubAccounts() -> bool override;
+    auto hasSegwit() -> bool override;
+    auto hasTaproot() -> bool override;
     auto simulateTx(TransactionTemplate tx) -> TransactionSimulation override;
 
 private:

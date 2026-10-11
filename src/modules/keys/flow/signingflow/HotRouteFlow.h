@@ -37,6 +37,8 @@ public slots:
                      bool wrong_password);
     void onHotDescriptorFetched(ReqId req_id, bool is_ok, const QString &descriptor,
                                 const QString &error, bool wrong_password);
+    void onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpub, const QString &error,
+                          bool wrong_password);
 
 protected:
     // The view on display: the primary action acts on it.

@@ -11,7 +11,8 @@ class Button;
 namespace keys::flow {
 
 // What a signing flow was opened for: it sets every title and line the steps show.
-enum class Context : std::uint8_t { Sign, Verify, Fetch };
+// Fetch asks the key for its sp() descriptor, FetchXpub for its xpub at a path.
+enum class Context : std::uint8_t { Sign, Verify, Fetch, FetchXpub };
 
 // The copy of one context. `usbWait` takes the device name, `hotPrompt` the key alias.
 struct FlowCopy {

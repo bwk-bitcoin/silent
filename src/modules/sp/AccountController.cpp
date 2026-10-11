@@ -271,7 +271,9 @@ auto AccountController::stop() -> void {
     auto *teardown = QThread::create([acc = std::move(account), notif]() mutable {
         acc->stop_scanner();
         acc->stop_electrum();
-        { auto dropped = std::move(acc); } // drop the account, disconnecting the channel
+        {
+            auto dropped = std::move(acc);
+        } // drop the account, disconnecting the channel
         if (notif != nullptr) {
             notif->wait();
         }
@@ -327,8 +329,13 @@ auto AccountController::newTaprootAddr() -> rust::String {
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-auto AccountController::hasSubAccounts() -> bool {
-    return m_account.has_value() && m_account.value()->has_sub_accounts();
+auto AccountController::hasSegwit() -> bool {
+    return m_account.has_value() && m_account.value()->has_segwit();
+}
+
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+auto AccountController::hasTaproot() -> bool {
+    return m_account.has_value() && m_account.value()->has_taproot();
 }
 
 auto AccountController::getDescriptor() -> rust::String {

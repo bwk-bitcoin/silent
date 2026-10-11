@@ -138,6 +138,7 @@ void SigningFlow::begin() {
         showPicker();
         return;
     case Context::Fetch:
+    case Context::FetchXpub:
         m_current = fetchRow();
         startRoute();
         return;
@@ -325,7 +326,8 @@ auto SigningFlow::fetchRow() const -> FlowRow {
             continue;
         }
         row.alias = KeysModule::toQt(info.alias);
-        row.route = KeysModule::descriptorRoute(info);
+        row.route = m_request.context == Context::FetchXpub ? KeysModule::xpubRoute(info)
+                                                            : KeysModule::descriptorRoute(info);
     }
     return row;
 }
@@ -408,6 +410,8 @@ void SigningFlow::startRoute() {
             &SigningFlow::onVerifyResultChanged, qontrol::UNIQUE);
     connect(m_flow, &SigningRouteFlow::descriptorFetched, this, &SigningFlow::onDescriptorFetched,
             qontrol::UNIQUE);
+    connect(m_flow, &SigningRouteFlow::xpubFetched, this, &SigningFlow::onXpubFetched,
+            qontrol::UNIQUE);
     connect(m_flow, &SigningRouteFlow::failed, this, &SigningFlow::onFailed, qontrol::UNIQUE);
     setPage(m_flow);
     m_flow->start();
@@ -488,6 +492,12 @@ void SigningFlow::onDescriptorFetched(const QString &descriptor) {
     accept();
 }
 
+void SigningFlow::onXpubFetched(const QString &xpub) {
+    m_answered = true;
+    emit xpubFetched(m_request.req_id, xpub, m_request.fingerprint, m_request.path);
+    accept();
+}
+
 void SigningFlow::onFailed(const QString &message) {
     m_answered = true;
     emit failed(m_request.req_id, message);
@@ -532,7 +542,7 @@ auto SigningRouteFlow::psbt() const -> const QString & {
 }
 
 auto SigningRouteFlow::hasPicker() const -> bool {
-    return m_request.context != Context::Fetch;
+    return m_request.context != Context::Fetch && m_request.context != Context::FetchXpub;
 }
 
 auto SigningRouteFlow::deviceLabel() const -> QString {

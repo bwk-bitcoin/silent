@@ -31,7 +31,9 @@ Receive::Receive(AccountController *ctrl) : m_controller(ctrl), m_sp_address("")
 
 void Receive::init() {
     m_sp_address = m_controller->getSpAddress();
-    m_has_sub_accounts = m_controller->hasSubAccounts();
+    m_has_segwit = m_controller->hasSegwit();
+    m_has_taproot = m_controller->hasTaproot();
+    m_has_sub_accounts = m_has_segwit || m_has_taproot;
     m_sp_section = new catalog::FoldSection(TR("receive-silent-payment-address"));
     m_sp_row = new catalog::AddressRow;
     m_sp_row->setGenerateVisible(false);
@@ -263,13 +265,15 @@ void Receive::showAddressHistory(const QString &title,
 void Receive::view() {
     auto *col = (new qontrol::Column)->pushSpacer(resolve(Spacing::XXL))->push(m_sp_section);
 
-    if (m_has_sub_accounts) {
-        auto vSpace = Spacing::S;
+    auto vSpace = Spacing::S;
+    if (m_has_segwit) {
         col->pushSpacer(resolve(vSpace))
             ->push(new catalog::Separator)
             ->pushSpacer(resolve(vSpace))
-            ->push(m_segwit_section)
-            ->pushSpacer(resolve(vSpace))
+            ->push(m_segwit_section);
+    }
+    if (m_has_taproot) {
+        col->pushSpacer(resolve(vSpace))
             ->push(new catalog::Separator)
             ->pushSpacer(resolve(vSpace))
             ->push(m_taproot_section);

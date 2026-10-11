@@ -211,6 +211,11 @@ keys-sp-descriptor-unavailable
 keys-sp-descriptor-no-origin
 => "That descriptor carries no key origin and cannot be used.";;
 
+keys-xpub-unavailable
+=> "This key has no connected device, QR code or hot key route to get an xpub from.";;
+
+keys-xpub-other-key => "The device answered with the xpub of another key."
+
 main-keys-tab => "Keys"
 
 receive-show-qr => "Show QR code"
@@ -260,6 +265,8 @@ btn-done => "Done"
 
 btn-get-descriptor => "Get Descriptor"
 
+btn-get-xpub => "Get Xpub"
+
 btn-load-signed-psbt => "Load Signed PSBT…"
 
 btn-next-scan-the-answer => "Next: Scan the Answer"
@@ -290,7 +297,11 @@ btn-connect-electrum => "Connect Electrum"
 
 btn-generate-new => "Generate New"
 
-btn-get-again => "Get Again"
+btn-get-silent-payment => "Silent Payment"
+
+btn-get-taproot => "Taproot"
+
+btn-get-segwit => "Segwit"
 
 btn-open => "Open"
 
@@ -507,6 +518,8 @@ flow-verify-title => "Verify Address"
 
 flow-fetch-title => "Get Descriptor"
 
+flow-fetch-xpub-title => "Get Xpub"
+
 flow-sign-picker-lead => "Each key below must sign this transaction."
 
 flow-verify-picker-lead => "Pick the device to check this address on."
@@ -522,11 +535,15 @@ flow-verify-usb-wait
 
 flow-fetch-usb-wait => "Approve the silent payment descriptor export on %1."
 
+flow-fetch-xpub-usb-wait => "Approve the xpub export on %1."
+
 flow-sign-qr-title => "Show Transaction"
 
 flow-verify-qr-title => "Show Address Request"
 
 flow-fetch-qr-title => "Show Descriptor Request"
+
+flow-fetch-xpub-qr-title => "Show Xpub Request"
 
 flow-sign-qr-hint => "Scan this code with the signing device."
 
@@ -536,11 +553,15 @@ flow-verify-qr-hint
 flow-fetch-qr-hint
 => "Scan this code with the device to request its silent payment descriptor.";;
 
+flow-fetch-xpub-qr-hint => "Scan this code with the device to request its xpub."
+
 flow-sign-scan-title => "Scan Signed Transaction"
 
 flow-verify-scan-title => "Scan the Device Answer"
 
 flow-fetch-scan-title => "Scan Descriptor"
+
+flow-fetch-xpub-scan-title => "Scan Xpub"
 
 flow-sign-scan-hint
 => "Hold the signed transaction code from the device in front of the camera.";;
@@ -550,6 +571,9 @@ flow-verify-scan-hint
 
 flow-fetch-scan-hint
 => "Hold the descriptor code from the device in front of the camera.";;
+
+flow-fetch-xpub-scan-hint
+=> "Hold the xpub code from the device in front of the camera.";;
 
 flow-sign-sd-title => "Sign with SD Card"
 
@@ -564,11 +588,15 @@ flow-verify-hot-prompt => "Enter the password of “%1” to check this address.
 flow-fetch-hot-prompt
 => "Enter the password of “%1” to get its silent payment descriptor.";;
 
+flow-fetch-xpub-hot-prompt => "Enter the password of “%1” to get its xpub."
+
 flow-sign-hot-busy => "Signing the transaction…"
 
 flow-verify-hot-busy => "Checking the address…"
 
 flow-fetch-hot-busy => "Getting the descriptor…"
+
+flow-fetch-xpub-hot-busy => "Getting the xpub…"
 
 flow-hot-busy-with => "With “%1”."
 
@@ -870,7 +898,9 @@ create-account-reason-spaces => "The account name cannot contain spaces."
 
 create-account-reason-exists => "An account named “%1” already exists."
 
-create-account-reason-descriptor => "Get the descriptor of a key first."
+create-account-reason-descriptor => "Get the silent payment descriptor of a key first."
+
+create-account-xpub-invalid => "The key answered with an xpub no descriptor can be built from."
 
 create-account-reason-descriptor-network
 => "The descriptor is for %1, not %2. Get it again.";;

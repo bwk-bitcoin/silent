@@ -84,10 +84,11 @@ public:
         QString descriptor;
         // Sign: names the SD card files.
         QString wallet_name;
-        // Verify.
+        // Verify, and FetchXpub: the path of the xpub.
         QString path;
+        // Verify.
         QString address;
-        // Fetch: the one key asked, so there is no picker.
+        // Fetch and FetchXpub: the one key asked, so there is no picker.
         QString fingerprint;
     };
 
@@ -104,6 +105,7 @@ signals:
     void psbtSigned(ReqId req_id, QString psbt_v2_hex);
     void addressVerified(ReqId req_id, bool matched);
     void descriptorFetched(ReqId req_id, QString descriptor, QString fingerprint);
+    void xpubFetched(ReqId req_id, QString xpub, QString fingerprint, QString path);
     // A failure the flow cannot recover from; the window closes.
     void failed(ReqId req_id, QString message);
     // Closed before an answer, or after showing why there is none.
@@ -116,6 +118,7 @@ public slots:
     void onPsbtSigned(const QString &psbt_v2_hex);
     void onVerifyResultChanged(std::optional<SigningFlow::VerifyResult> result);
     void onDescriptorFetched(const QString &descriptor);
+    void onXpubFetched(const QString &xpub);
     void onFailed(const QString &message);
 
 protected:
@@ -184,6 +187,7 @@ signals:
     // What the device said about the address, none while it is asked again.
     void verifyResultChanged(std::optional<SigningFlow::VerifyResult> result);
     void descriptorFetched(const QString &descriptor);
+    void xpubFetched(const QString &xpub);
     // A failure the route cannot recover from: SigningFlow closes.
     void failed(const QString &message);
 

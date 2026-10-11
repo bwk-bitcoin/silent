@@ -94,6 +94,11 @@ void UsbRouteFlow::start() {
         // A descriptor only comes back over QR codes or from a hot key.
         emit failed(TR("keys-sp-descriptor-unavailable"));
         return;
+    case Context::FetchXpub:
+        connect(m_device, &ISigner::xpub, this, &UsbRouteFlow::onDeviceXpub, qontrol::UNIQUE);
+        connect(m_device, &ISigner::error, this, &UsbRouteFlow::onDeviceError, qontrol::UNIQUE);
+        m_device_req = m_device->getXpub(request().path);
+        break;
     }
     m_usb_status->setSpinner();
     m_usb_status->setTitle(copy().usbTitle);
@@ -265,6 +270,14 @@ void UsbRouteFlow::onDeviceSigned(ReqId req_id, const QString &psbt_base64) {
         return;
     }
     emit psbtSigned(KeysModule::toQt(merged.psbt_v2_hex));
+}
+
+void UsbRouteFlow::onDeviceXpub(ReqId req_id, const QString &xpub) {
+    if (m_device_req == 0 || req_id != m_device_req) {
+        return;
+    }
+    releaseDevice();
+    emit xpubFetched(xpub);
 }
 
 void UsbRouteFlow::onDeviceAddressDisplayed(ReqId req_id, [[maybe_unused]] const QString &address) {

@@ -77,6 +77,9 @@ void QrRouteFlow::start() {
     case Context::Fetch:
         m_qr_engine->getSpDescriptor();
         return;
+    case Context::FetchXpub:
+        m_qr_engine->getXpubs({request().path});
+        return;
     }
 }
 
@@ -185,6 +188,7 @@ void QrRouteFlow::connectCamera() {
             qontrol::UNIQUE);
     connect(m_qr_engine, &qr::QrEngine::spDescriptor, this, &QrRouteFlow::onQrDescriptor,
             qontrol::UNIQUE);
+    connect(m_qr_engine, &qr::QrEngine::xpubs, this, &QrRouteFlow::onQrXpubs, qontrol::UNIQUE);
     connect(m_qr_engine, &qr::QrEngine::error, this, &QrRouteFlow::onQrError, qontrol::UNIQUE);
 }
 
@@ -282,6 +286,18 @@ void QrRouteFlow::onQrVerified(bool matched) {
 void QrRouteFlow::onQrDescriptor(const QString &descriptor) {
     m_camera->stop();
     emit descriptorFetched(descriptor);
+}
+
+void QrRouteFlow::onQrXpubs(const QString &fingerprint, const QList<qr::QrXpub> &xpubs,
+                            const qr::QrDevice & /*device*/) {
+    m_camera->stop();
+    // Only the asked key's xpub is handed over, never another device's.
+    if (QString::compare(fingerprint, row().fingerprint, Qt::CaseInsensitive) != 0 ||
+        xpubs.isEmpty()) {
+        emit failed(TR("keys-xpub-other-key"));
+        return;
+    }
+    emit xpubFetched(xpubs.first().xpub);
 }
 
 void QrRouteFlow::onQrError(qr::QrError kind, const QString &message) {

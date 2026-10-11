@@ -28,8 +28,9 @@ struct KeyEntry {
 
 // The keys module, as accounts and plugins see it. An account never picks a signer:
 // it hands over a PSBT and the module owns the picker and every route step. Each of
-// sign(), verifyAddress() and spDescriptor() runs one modal flow and returns once its
-// window has closed; it answers exactly once, with its result, error() or cancelled().
+// sign(), verifyAddress(), spDescriptor() and xpub() runs one modal flow (xpub() none
+// when cached) and returns once its window has closed; it answers exactly once, with
+// its result, error() or cancelled().
 class IKeys : public QObject {
     Q_OBJECT
 
@@ -52,6 +53,10 @@ public:
     // Fetches the sp() descriptor from the key, over its best route. The only
     // descriptor a key ever hands out: see the SP exception in the design.
     virtual void spDescriptor(ReqId req_id, const QString &fingerprint) = 0;
+    // Fetches the key's xpub at `path` (an account's segwit or taproot sub-account):
+    // from the key's cache when it holds one, else over the key's route. Answers
+    // xpubReady(), error() or cancelled().
+    virtual void xpub(ReqId req_id, const QString &fingerprint, const QString &path) = 0;
     // Records that `descriptor` is registered with this key, and registers it on the
     // devices that need it.
     virtual void registerDescriptor(ReqId req_id, const QString &fingerprint,
@@ -64,6 +69,7 @@ signals:
     // not match, not a transport failure: it never comes through error().
     void verified(ReqId req_id, bool verified);
     void spDescriptorReady(ReqId req_id, QString descriptor, QString fingerprint);
+    void xpubReady(ReqId req_id, QString xpub, QString fingerprint, QString path);
     void descriptorRegistered(ReqId req_id, QString fingerprint);
     // A failure the caller reports, once.
     void error(std::optional<ReqId> req_id, QString message);

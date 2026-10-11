@@ -60,6 +60,7 @@ public:
     void verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
                        const QString &address) override;
     void spDescriptor(ReqId req_id, const QString &fingerprint) override;
+    void xpub(ReqId req_id, const QString &fingerprint, const QString &path) override;
     void registerDescriptor(ReqId req_id, const QString &fingerprint,
                             const QString &descriptor) override;
 
@@ -71,6 +72,8 @@ public slots:
     void deliverError(std::optional<ReqId> req_id, const QString &message);
     void deliverCancelled(ReqId req_id);
     void deliverSpDescriptor(ReqId req_id, const QString &descriptor, const QString &fingerprint);
+    void deliverXpub(ReqId req_id, const QString &xpub, const QString &fingerprint,
+                     const QString &path);
     void deliverDescriptorRegistered(ReqId req_id, const QString &fingerprint);
 
 private:
@@ -108,6 +111,9 @@ public:
     // The route a key hands its sp() descriptor over: its first QR or usable hot
     // route, Unknown when it has none.
     [[nodiscard]] static auto descriptorRoute(const KeyInfo &info) -> KeyRouteKind;
+    // The route a key hands an xpub over: its connected USB device first, then its QR
+    // or usable hot route, Unknown when it has none.
+    [[nodiscard]] static auto xpubRoute(const KeyInfo &info) -> KeyRouteKind;
     // Key record mutators. Each forwards to the Rust handle and, on success, emits
     // keysChanged() so the tab rebuilds; modals call these instead of rust() directly.
     [[nodiscard]] auto setAlias(const QString &fingerprint, const QString &alias) -> KeyOpResult;
@@ -159,6 +165,9 @@ public:
                        const QString &address);
     // Fetches the sp() descriptor of `fingerprint`'s key over its QR or hot route.
     void spDescriptor(ReqId req_id, const QString &fingerprint);
+    // The xpub at `path` of `fingerprint`'s key: from its cache when it holds one,
+    // else over its route (see xpubRoute()), then cached.
+    void fetchXpub(ReqId req_id, const QString &fingerprint, const QString &path);
     // Records `descriptor` as registered with `fingerprint`'s key and answers
     // `req_id` through the bus's descriptorRegistered or error signal.
     void registerDescriptor(ReqId req_id, const QString &fingerprint, const QString &descriptor);
@@ -176,6 +185,8 @@ public:
     void signHot(ReqId req_id, const QString &fingerprint, const QString &password,
                  const QString &psbt_v2_hex);
     void fetchHotSpDescriptor(ReqId req_id, const QString &fingerprint, const QString &password);
+    void fetchHotXpub(ReqId req_id, const QString &fingerprint, const QString &password,
+                      const QString &path);
     void saveSdPsbt(ReqId req_id, const QString &path, const QString &psbt_v2_hex);
     void loadSdPsbt(ReqId req_id, const QString &path);
 
@@ -207,6 +218,9 @@ signals:
                                  bool wrong_password);
     void hotSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error,
                                 bool wrong_password);
+    void hotXpubFinished(ReqId req_id, bool is_ok, QString xpub, QString error,
+                         bool wrong_password);
+    void hotXpubFetched(ReqId req_id, bool is_ok, QString xpub, QString error, bool wrong_password);
     // Emitted from the worker thread; queued to the GUI thread receivers.
     void sdSaved(ReqId req_id, bool is_ok, QString error);
     void sdLoaded(ReqId req_id, bool is_ok, QString psbt_hex, QString error);
@@ -222,6 +236,11 @@ private slots:
                            bool wrong_password);
     void onHotSpDescriptorFinished(ReqId req_id, bool is_ok, QString descriptor, QString error,
                                    bool wrong_password);
+    void onHotXpubFinished(ReqId req_id, bool is_ok, QString xpub, QString error,
+                           bool wrong_password);
+    // A flow fetched an xpub: cached on its key, then handed to the caller.
+    void onFlowXpubFetched(ReqId req_id, const QString &xpub, const QString &fingerprint,
+                           const QString &path);
 
 protected:
     void createModule();

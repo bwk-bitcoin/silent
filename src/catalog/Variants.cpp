@@ -211,6 +211,10 @@ auto btnGetDescriptorHot() -> Button * {
         {.role = ButtonRole::Primary, .label = TR("btn-get-descriptor"), .width = BtnWidth::L});
 }
 
+auto btnGetXpubHot() -> Button * {
+    return make({.role = ButtonRole::Primary, .label = TR("btn-get-xpub"), .width = BtnWidth::L});
+}
+
 auto btnLoadSignedPsbt() -> Button * {
     return make({.role = ButtonRole::Primary,
                  .label = TR("btn-load-signed-psbt"),
@@ -327,13 +331,18 @@ auto btnGenerateNew() -> Button * {
                  .width = BtnWidth::L});
 }
 
-auto btnGetAgain() -> Button * {
-    return make({.role = ButtonRole::Default, .label = TR("btn-get-again"), .width = BtnWidth::L});
+auto btnGetSilentPayment() -> Button * {
+    return make(
+        {.role = ButtonRole::Default, .label = TR("btn-get-silent-payment"), .width = BtnWidth::L});
 }
 
-auto btnGetDescriptor() -> Button * {
+auto btnGetTaproot() -> Button * {
     return make(
-        {.role = ButtonRole::Default, .label = TR("btn-get-descriptor"), .width = BtnWidth::L});
+        {.role = ButtonRole::Default, .label = TR("btn-get-taproot"), .width = BtnWidth::M});
+}
+
+auto btnGetSegwit() -> Button * {
+    return make({.role = ButtonRole::Default, .label = TR("btn-get-segwit"), .width = BtnWidth::M});
 }
 
 auto btnOpen() -> Button * {

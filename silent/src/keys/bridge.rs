@@ -21,7 +21,7 @@ use crate::ffi;
 use crate::hwi::wallet_name;
 use crate::keys::{
     crypto::{open_mnemonic, Password},
-    hot::{seal_mnemonic, sign_hot, sp_descriptor},
+    hot::{seal_mnemonic, sign_hot, sp_descriptor, xpub_at},
     manager::{KeyManager, KeyManagerImpl, LiveDevice, SigningCandidate},
     psbt, qr,
     record::{KeyRecord, RouteKind, SecretEnvelope},
@@ -714,6 +714,31 @@ pub fn hot_sp_descriptor(material: &HotMaterial, password: &str) -> ffi::HotSpDe
     }
 }
 
+/// The xpub at `path` of `material`'s hot secret.
+pub fn hot_xpub(material: &HotMaterial, password: &str, path: &str) -> ffi::HotXpubResult {
+    let password = Password::new(password.to_string());
+    let (record, network) = match material.inner.as_ref() {
+        Ok(pair) => pair,
+        Err(e) => return failed_hot_xpub(e),
+    };
+    let path = match DerivationPath::from_str(path) {
+        Ok(path) => path,
+        Err(e) => return failed_hot_xpub(&format!("invalid derivation path '{path}': {e}")),
+    };
+    match xpub_at(record, *network, password, &path) {
+        Ok(xpub) => ffi::HotXpubResult {
+            is_ok: true,
+            error: String::new(),
+            wrong_password: false,
+            xpub: xpub.to_string(),
+        },
+        Err(e) => ffi::HotXpubResult {
+            wrong_password: matches!(e, Error::WrongPassword),
+            ..failed_hot_xpub(&format!("hot_xpub {}: {e}", record.fingerprint))
+        },
+    }
+}
+
 /// Converts `psbt_v2_hex` into its v0 base64 payload for a USB signing device.
 /// Cheap; safe to call from the GUI thread. Refuses a PSBT with a pending SP
 /// output: a signing device only ever signs its own bip32 inputs, and the signing
@@ -1082,6 +1107,15 @@ fn failed_hot_sp_descriptor(error: &str) -> ffi::HotSpDescriptorResult {
         error: error.to_string(),
         wrong_password: false,
         descriptor: String::new(),
+    }
+}
+
+fn failed_hot_xpub(error: &str) -> ffi::HotXpubResult {
+    ffi::HotXpubResult {
+        is_ok: false,
+        error: error.to_string(),
+        wrong_password: false,
+        xpub: String::new(),
     }
 }
 

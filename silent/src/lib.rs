@@ -537,6 +537,17 @@ mod ffi {
 
     /// Result of `hot_sp_descriptor`.
     #[derive(Debug, Clone)]
+    pub struct HotXpubResult {
+        /// Whether the xpub was derived.
+        pub is_ok: bool,
+        /// Error message (empty if is_ok is true).
+        pub error: String,
+        /// The password did not open the hot secret.
+        pub wrong_password: bool,
+        /// The xpub at the asked path. Empty on error.
+        pub xpub: String,
+    }
+
     pub struct HotSpDescriptorResult {
         /// Whether the descriptor was derived.
         pub is_ok: bool,
@@ -766,6 +777,14 @@ mod ffi {
         /// Delete an account's data from disk.
         fn delete_config(account_name: String) -> bool;
 
+        /// The segwit sub-account descriptor of a key, from its xpub at 84'/coin'/0'.
+        /// Empty when the fingerprint or the xpub is invalid.
+        fn segwit_descriptor_for(fingerprint: String, xpub: String, network: Network) -> String;
+
+        /// The taproot sub-account descriptor of a key, from its xpub at 86'/coin'/0'.
+        /// Empty when the fingerprint or the xpub is invalid.
+        fn taproot_descriptor_for(fingerprint: String, xpub: String, network: Network) -> String;
+
         /// Check if the config was loaded successfully.
         fn is_ok(self: &Config) -> bool;
 
@@ -780,6 +799,18 @@ mod ffi {
 
         /// Set SP descriptor.
         fn set_descriptor(self: &mut Config, descriptor: String);
+
+        /// The segwit sub-account descriptor, empty for none.
+        fn get_segwit_descriptor(self: &Config) -> String;
+
+        /// Set the segwit sub-account descriptor, empty for none.
+        fn set_segwit_descriptor(self: &mut Config, descriptor: String);
+
+        /// The taproot sub-account descriptor, empty for none.
+        fn get_taproot_descriptor(self: &Config) -> String;
+
+        /// Set the taproot sub-account descriptor, empty for none.
+        fn set_taproot_descriptor(self: &mut Config, descriptor: String);
 
         /// Get network.
         fn get_network(self: &Config) -> Network;
@@ -857,6 +888,12 @@ mod ffi {
 
         /// Get the number of sub-accounts.
         fn sub_account_count(self: &Account) -> u32;
+
+        /// Whether the account has a segwit (wpkh) sub-account.
+        fn has_segwit(self: &Account) -> bool;
+
+        /// Whether the account has a taproot (tr) sub-account.
+        fn has_taproot(self: &Account) -> bool;
 
         /// Generate a new segwit (wpkh) receiving address.
         fn new_segwit_addr(self: &mut Account) -> String;
@@ -1141,6 +1178,11 @@ mod ffi {
         /// account creation. Blocks on Argon2id while opening the envelope: call
         /// from a QThread, never from the GUI thread.
         fn hot_sp_descriptor(material: &HotMaterial, password: &str) -> HotSpDescriptorResult;
+
+        /// The xpub at `path` of `material`'s hot secret, for an account's segwit or
+        /// taproot sub-account. Blocks on Argon2id while opening the envelope: call
+        /// from a QThread, never from the GUI thread.
+        fn hot_xpub(material: &HotMaterial, password: &str, path: &str) -> HotXpubResult;
 
         /// Converts a v2 PSBT into its v0 base64 payload for a USB signing device.
         /// Cheap; safe to call from the GUI thread. Refuses a PSBT with a pending SP
@@ -1680,7 +1722,10 @@ pub use app_state::{
 };
 pub use bbqr::{bbqr_frames, bbqr_scanner_new, BbqrFrames, BbqrScanner};
 pub use camera::{camera_list, camera_open, CameraHandle};
-pub use config::{config_from_file, delete_config, list_configs, new_config, set_datadir, Config};
+pub use config::{
+    config_from_file, delete_config, list_configs, new_config, segwit_descriptor_for, set_datadir,
+    taproot_descriptor_for, Config,
+};
 pub use ffi::{
     BackendInfo, CameraFrameResult, CameraListResult, FingerprintsResult, KeyDescriptor, KeyDevice,
     KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice,
@@ -1694,7 +1739,7 @@ pub use hwi_config::{
     NoiseConfigData, PersistedBitboxNoiseConfig,
 };
 pub use keys::bridge::{
-    hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, new_keys_module, usb_merge_signed,
+    hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, hot_xpub, new_keys_module, usb_merge_signed,
     usb_sign_payload, HotMaterial, KeysModule, QrResponse, SealedHotKey,
 };
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};

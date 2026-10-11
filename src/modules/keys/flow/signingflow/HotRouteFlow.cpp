@@ -81,6 +81,8 @@ void HotRouteFlow::connectPassword() {
     connect(module(), &KeysModule::hotSigned, this, &HotRouteFlow::onHotSigned, qontrol::UNIQUE);
     connect(module(), &KeysModule::hotSpDescriptorFetched, this,
             &HotRouteFlow::onHotDescriptorFetched, qontrol::UNIQUE);
+    connect(module(), &KeysModule::hotXpubFetched, this, &HotRouteFlow::onHotXpubFetched,
+            qontrol::UNIQUE);
 }
 
 auto HotRouteFlow::viewPassword() -> QWidget * {
@@ -120,6 +122,9 @@ void HotRouteFlow::proceedPassword() {
         break;
     case Context::Fetch:
         module()->fetchHotSpDescriptor(m_hot_req, row().fingerprint, password);
+        break;
+    case Context::FetchXpub:
+        module()->fetchHotXpub(m_hot_req, row().fingerprint, password, request().path);
         break;
     case Context::Verify:
         // A hot key has no screen: verify rows never pick it.
@@ -197,6 +202,25 @@ void HotRouteFlow::onHotDescriptorFetched(ReqId req_id, bool is_ok, const QStrin
     m_hot_req = 0;
     if (is_ok) {
         emit descriptorFetched(descriptor);
+        return;
+    }
+    if (wrong_password) {
+        m_password_error->setText(TR("flow-password-wrong"));
+        m_password_error->setVisible(true);
+        showPassword();
+        return;
+    }
+    emit failed(error);
+}
+
+void HotRouteFlow::onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpub,
+                                    const QString &error, bool wrong_password) {
+    if (m_hot_req == 0 || req_id != m_hot_req) {
+        return;
+    }
+    m_hot_req = 0;
+    if (is_ok) {
+        emit xpubFetched(xpub);
         return;
     }
     if (wrong_password) {

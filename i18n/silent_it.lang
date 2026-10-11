@@ -30,8 +30,11 @@ btn-edit-label => "Edit label" => "NONE"
 btn-fetch-xpub => "Fetch Xpub" => "NONE"
 btn-fetch-xpubs-from-the-device => "Fetch Xpubs From the Device" => "NONE"
 btn-generate-new => "Generate New" => "NONE"
-btn-get-again => "Get Again" => "NONE"
 btn-get-descriptor => "Get Descriptor" => "NONE"
+btn-get-segwit => "Segwit" => "Segwit"
+btn-get-silent-payment => "Silent Payment" => "Silent Payment"
+btn-get-taproot => "Taproot" => "Taproot"
+btn-get-xpub => "Get Xpub" => "Get Xpub"
 btn-hide-words => "Hide Words" => "NONE"
 btn-less => "Less" => "NONE"
 btn-load-signed-psbt => "Load Signed PSBT…" => "NONE"
@@ -109,7 +112,9 @@ create-account-no-key-sub
 create-account-no-key-title => "No Key Registered" => "NONE"
 create-account-pick-key => "Pick a key first." => "NONE"
 create-account-reason-backends => "Test both backends first." => "NONE"
-create-account-reason-descriptor => "Get the descriptor of a key first." => "NONE"
+create-account-reason-descriptor
+=> "Get the silent payment descriptor of a key first."
+=> "NONE";;
 create-account-reason-descriptor-network
 => "The descriptor is for %1, not %2. Get it again."
 => "NONE";;
@@ -117,6 +122,9 @@ create-account-reason-exists => "An account named “%1” already exists." => "
 create-account-reason-name => "Enter an account name." => "NONE"
 create-account-reason-spaces => "The account name cannot contain spaces." => "NONE"
 create-account-title => "Create Account" => "Crea account"
+create-account-xpub-invalid
+=> "The key answered with an xpub no descriptor can be built from."
+=> "The key answered with an xpub no descriptor can be built from.";;
 delete-wallet-confirmation
 => "Delete wallet “%1”? This cannot be undone."
 => "Eliminare il wallet '%1'? Non puo essere annullato.";;
@@ -150,6 +158,22 @@ flow-fetch-title => "Get Descriptor" => "NONE"
 flow-fetch-usb-wait
 => "Approve the silent payment descriptor export on %1."
 => "NONE";;
+flow-fetch-xpub-hot-busy => "Getting the xpub…" => "Getting the xpub…"
+flow-fetch-xpub-hot-prompt
+=> "Enter the password of “%1” to get its xpub."
+=> "Enter the password of “%1” to get its xpub.";;
+flow-fetch-xpub-qr-hint
+=> "Scan this code with the device to request its xpub."
+=> "Scan this code with the device to request its xpub.";;
+flow-fetch-xpub-qr-title => "Show Xpub Request" => "Show Xpub Request"
+flow-fetch-xpub-scan-hint
+=> "Hold the xpub code from the device in front of the camera."
+=> "Hold the xpub code from the device in front of the camera.";;
+flow-fetch-xpub-scan-title => "Scan Xpub" => "Scan Xpub"
+flow-fetch-xpub-title => "Get Xpub" => "Get Xpub"
+flow-fetch-xpub-usb-wait
+=> "Approve the xpub export on %1."
+=> "Approve the xpub export on %1.";;
 flow-hot-busy-with => "With “%1”." => "NONE"
 flow-no-signer-sign
 => "No key of this account is registered on this computer. Add one in the Keys tab."
@@ -491,6 +515,12 @@ keys-words-unknown-many => "%1 words are not in the word list." => "NONE"
 keys-words-unknown-one => "1 word is not in the word list." => "NONE"
 keys-xpub => "Xpub:" => "NONE"
 keys-xpub-not-cached => "No cached xpub for this derivation path." => "NONE"
+keys-xpub-other-key
+=> "The device answered with the xpub of another key."
+=> "The device answered with the xpub of another key.";;
+keys-xpub-unavailable
+=> "This key has no connected device, QR code or hot key route to get an xpub from."
+=> "This key has no connected device, QR code or hot key route to get an xpub from.";;
 keys-xpubs-empty => "No xpub cached yet." => "NONE"
 keys-xpubs-empty-offline
 => "No xpub cached. Connect the device to fetch them."

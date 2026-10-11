@@ -32,6 +32,20 @@ auto failedOp(const QString &error) -> KeyOpResult {
     return result;
 }
 
+// One derivation path written two ways: with or without the leading "m/", hardened
+// steps as ' or h. The cache writes "84'/1'/0'", callers ask "m/84'/1'/0'".
+auto samePath(QString lhs, QString rhs) -> bool {
+    auto normalize = [](QString &path) {
+        path.replace(QChar('h'), QChar('\''));
+        if (path.startsWith(QStringLiteral("m/"))) {
+            path.remove(0, 2);
+        }
+    };
+    normalize(lhs);
+    normalize(rhs);
+    return lhs == rhs;
+}
+
 } // namespace
 
 Network KeysModule::s_network = Network::Bitcoin;
@@ -70,6 +84,10 @@ void KeysBus::spDescriptor(ReqId req_id, const QString &fingerprint) {
     m_module->spDescriptor(req_id, fingerprint);
 }
 
+void KeysBus::xpub(ReqId req_id, const QString &fingerprint, const QString &path) {
+    m_module->fetchXpub(req_id, fingerprint, path);
+}
+
 void KeysBus::registerDescriptor(ReqId req_id, const QString &fingerprint,
                                  const QString &descriptor) {
     m_module->registerDescriptor(req_id, fingerprint, descriptor);
@@ -96,6 +114,11 @@ void KeysBus::deliverSpDescriptor(ReqId req_id, const QString &descriptor,
     emit spDescriptorReady(req_id, descriptor, fingerprint);
 }
 
+void KeysBus::deliverXpub(ReqId req_id, const QString &xpub, const QString &fingerprint,
+                          const QString &path) {
+    emit xpubReady(req_id, xpub, fingerprint, path);
+}
+
 void KeysBus::deliverDescriptorRegistered(ReqId req_id, const QString &fingerprint) {
     emit descriptorRegistered(req_id, fingerprint);
 }
@@ -114,6 +137,8 @@ KeysModule::KeysModule(QObject *parent) : IModule(parent) {
             qontrol::UNIQUE);
     connect(this, &KeysModule::hotSpDescriptorFinished, this,
             &KeysModule::onHotSpDescriptorFinished, qontrol::UNIQUE);
+    connect(this, &KeysModule::hotXpubFinished, this, &KeysModule::onHotXpubFinished,
+            qontrol::UNIQUE);
     createModule();
     m_bus = std::make_unique<KeysBus>(this);
     Host::get()->setKeys(m_bus.get(), this);
@@ -275,6 +300,13 @@ auto KeysModule::descriptorRoute(const KeyInfo &info) -> KeyRouteKind {
     return KeyRouteKind::Unknown;
 }
 
+auto KeysModule::xpubRoute(const KeyInfo &info) -> KeyRouteKind {
+    if (findLiveDeviceSigner(toQt(info.fingerprint)) != nullptr) {
+        return KeyRouteKind::Usb;
+    }
+    return descriptorRoute(info);
+}
+
 auto KeysModule::findLiveDeviceSigner(const QString &fingerprint) -> ISigner * {
     for (const auto &live : Host::get()->signers()) {
         if (live.signer != nullptr && live.signer->fingerprint() == fingerprint) {
@@ -318,6 +350,8 @@ void KeysModule::runFlow(flow::SigningFlow *flow) {
     connect(flow, &flow::SigningFlow::addressVerified, m_bus.get(), &KeysBus::deliverVerified,
             qontrol::UNIQUE);
     connect(flow, &flow::SigningFlow::descriptorFetched, m_bus.get(), &KeysBus::deliverSpDescriptor,
+            qontrol::UNIQUE);
+    connect(flow, &flow::SigningFlow::xpubFetched, this, &KeysModule::onFlowXpubFetched,
             qontrol::UNIQUE);
     connect(flow, &flow::SigningFlow::failed, m_bus.get(), &KeysBus::deliverError, qontrol::UNIQUE);
     connect(flow, &flow::SigningFlow::cancelled, m_bus.get(), &KeysBus::deliverCancelled,
@@ -376,6 +410,31 @@ void KeysModule::spDescriptor(ReqId req_id, const QString &fingerprint) {
     }
     runFlow(new flow::SigningFlow(
         this, {.context = flow::Context::Fetch, .req_id = req_id, .fingerprint = fingerprint}));
+}
+
+void KeysModule::fetchXpub(ReqId req_id, const QString &fingerprint, const QString &path) {
+    if (rust() == nullptr) {
+        m_bus->deliverError(req_id, TR("keys-module-not-ready"));
+        return;
+    }
+    for (const auto &cached : rust()->key_xpubs(rust::String(fingerprint.toStdString()))) {
+        if (samePath(toQt(cached.path), path)) {
+            m_bus->deliverXpub(req_id, toQt(cached.xpub), fingerprint, path);
+            return;
+        }
+    }
+    auto infos = keys();
+    auto found = std::ranges::find_if(infos, [&fingerprint](const KeyInfo &info) {
+        return QString::compare(toQt(info.fingerprint), fingerprint, Qt::CaseInsensitive) == 0;
+    });
+    if (found == infos.end() || xpubRoute(*found) == KeyRouteKind::Unknown) {
+        m_bus->deliverError(req_id, TR("keys-xpub-unavailable"));
+        return;
+    }
+    runFlow(new flow::SigningFlow(this, {.context = flow::Context::FetchXpub,
+                                         .req_id = req_id,
+                                         .path = path,
+                                         .fingerprint = fingerprint}));
 }
 
 void KeysModule::registerDescriptor(ReqId req_id, const QString &fingerprint,
@@ -534,6 +593,46 @@ void KeysModule::onHotSpDescriptorFinished(ReqId req_id, bool is_ok, QString des
                                            QString error, bool wrong_password) {
     emit hotSpDescriptorFetched(req_id, is_ok, std::move(descriptor), std::move(error),
                                 wrong_password);
+}
+
+void KeysModule::fetchHotXpub(ReqId req_id, const QString &fingerprint, const QString &password,
+                              const QString &path) {
+    if (rust() == nullptr) {
+        emit hotXpubFinished(req_id, false, QString(), TR("keys-module-not-ready"), false);
+        return;
+    }
+    auto material = rust()->hot_material(rust::String(fingerprint.toStdString()));
+    if (!material->is_ok()) {
+        emit hotXpubFinished(req_id, false, QString(), toQt(material->get_error()), false);
+        return;
+    }
+    auto *thread =
+        QThread::create([this, req_id, material = material.into_raw(),
+                         password = password.toStdString(), path = path.toStdString()]() mutable {
+            auto box = rust::Box<HotMaterial>::from_raw(material);
+            auto result = ::hot_xpub(*box, password, path);
+            password.assign(password.size(), '\0');
+            password.clear();
+            emit hotXpubFinished(req_id, result.is_ok, toQt(result.xpub), toQt(result.error),
+                                 result.wrong_password);
+        });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
+void KeysModule::onHotXpubFinished(ReqId req_id, bool is_ok, QString xpub, QString error,
+                                   bool wrong_password) {
+    emit hotXpubFetched(req_id, is_ok, std::move(xpub), std::move(error), wrong_password);
+}
+
+void KeysModule::onFlowXpubFetched(ReqId req_id, const QString &xpub, const QString &fingerprint,
+                                   const QString &path) {
+    // Cached even when the caller is gone: the next ask needs no device.
+    auto cached = cacheXpub(fingerprint, path, xpub);
+    if (!cached.is_ok) {
+        qWarning() << "keys:" << toQt(cached.error);
+    }
+    m_bus->deliverXpub(req_id, xpub, fingerprint, path);
 }
 
 void KeysModule::saveSdPsbt(ReqId req_id, const QString &path, const QString &psbt_v2_hex) {

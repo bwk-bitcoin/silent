@@ -33,6 +33,65 @@ fn create_test_config(account_name: String) -> Config {
 
 // ===== Wallet Creation and Config Tests =====
 
+/// A key's fingerprint and its xpub at `path`, from a fixed seed.
+fn key_xpub(path: &str) -> (String, String) {
+    use bitcoin::bip32::{DerivationPath, Xpriv, Xpub};
+    use bitcoin::secp256k1::Secp256k1;
+    use std::str::FromStr;
+    let secp = Secp256k1::new();
+    let master = Xpriv::new_master(bitcoin::Network::Regtest, &[7u8; 32]).unwrap();
+    let derived = master
+        .derive_priv(&secp, &DerivationPath::from_str(path).unwrap())
+        .unwrap();
+    (
+        master.fingerprint(&secp).to_string(),
+        Xpub::from_priv(&secp, &derived).to_string(),
+    )
+}
+
+#[test]
+fn test_sub_accounts_from_the_key_xpubs() {
+    let (fingerprint, segwit_xpub) = key_xpub("m/84'/1'/0'");
+    let (_, taproot_xpub) = key_xpub("m/86'/1'/0'");
+
+    // Segwit alone: no taproot address, whatever the sub-account's position.
+    let account_name = test_account_name();
+    let mut config = create_test_config(account_name.clone());
+    config.set_segwit_descriptor(silent::segwit_descriptor_for(
+        fingerprint.clone(),
+        segwit_xpub.clone(),
+        Network::Regtest,
+    ));
+    let mut account = Account::new(config).expect("Account creation should succeed");
+    assert!(account.has_segwit());
+    assert!(!account.has_taproot());
+    assert!(account.new_segwit_addr().starts_with("bcrt1q"));
+    assert!(account.new_taproot_addr().is_empty());
+    drop(account);
+    cleanup_test_account(&account_name);
+
+    // Both.
+    let account_name = test_account_name();
+    let mut config = create_test_config(account_name.clone());
+    config.set_segwit_descriptor(silent::segwit_descriptor_for(
+        fingerprint.clone(),
+        segwit_xpub,
+        Network::Regtest,
+    ));
+    config.set_taproot_descriptor(silent::taproot_descriptor_for(
+        fingerprint,
+        taproot_xpub,
+        Network::Regtest,
+    ));
+    let mut account = Account::new(config).expect("Account creation should succeed");
+    assert!(account.has_segwit());
+    assert!(account.has_taproot());
+    assert!(account.new_segwit_addr().starts_with("bcrt1q"));
+    assert!(account.new_taproot_addr().starts_with("bcrt1p"));
+    drop(account);
+    cleanup_test_account(&account_name);
+}
+
 #[test]
 fn test_wallet_creation_from_descriptor() {
     let account_name = test_account_name();

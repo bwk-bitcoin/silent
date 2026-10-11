@@ -5,7 +5,7 @@
 use std::str::FromStr;
 
 use bitcoin::{
-    bip32::{ChildNumber, DerivationPath, Fingerprint},
+    bip32::{ChildNumber, DerivationPath, Fingerprint, Xpub},
     Network, NetworkKind,
 };
 use bwk_sp::{
@@ -130,6 +130,20 @@ pub fn sp_descriptor(
             network: NetworkKind::from(network),
         }),
     })
+}
+
+/// The xpub at `path` of this key's hot secret, for an account's sub-account.
+/// Blocks on Argon2id while opening the envelope, so it must not run on a GUI thread.
+pub fn xpub_at(
+    record: &KeyRecord,
+    network: Network,
+    password: Password,
+    path: &DerivationPath,
+) -> Result<Xpub, Error> {
+    let mnemonic = crypto::open_mnemonic(record, network, password)?;
+    let signer = HotSigner::new_from_mnemonics(network, mnemonic.as_str())
+        .map_err(|e| Error::Signer(e.to_string()))?;
+    Ok(signer.xpub(path).xkey)
 }
 
 /// Signs `psbt_v2_bytes` with this key's hot secret and returns the re-serialized
@@ -341,6 +355,31 @@ mod tests {
             .expect("seal succeeds"),
         );
         record
+    }
+
+    #[test]
+    fn xpub_at_is_the_signers_xpub_at_that_path() {
+        let path = DerivationPath::from_str("m/86'/1'/0'").unwrap();
+        let xpub = xpub_at(
+            &test_record(),
+            Network::Regtest,
+            Password::new("password".to_string()),
+            &path,
+        )
+        .expect("xpub_at succeeds");
+        let signer =
+            HotSigner::new_from_mnemonics(Network::Regtest, TEST_MNEMONIC).expect("signer builds");
+        assert_eq!(xpub, signer.xpub(&path).xkey);
+
+        assert!(matches!(
+            xpub_at(
+                &test_record(),
+                Network::Regtest,
+                Password::new("wrong".to_string()),
+                &path,
+            ),
+            Err(Error::WrongPassword)
+        ));
     }
 
     #[test]

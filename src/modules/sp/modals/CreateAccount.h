@@ -78,6 +78,8 @@ public slots:
     void onBlindbitEdited();
     void onElectrumEdited();
     void onSpDescriptorReady(ReqId req_id, const QString &descriptor, const QString &fingerprint);
+    void onXpubReady(ReqId req_id, const QString &xpub, const QString &fingerprint,
+                     const QString &path);
     void onDescriptorRegistered(ReqId req_id);
     void onKeysError(std::optional<ReqId> req_id, const QString &message);
     void onKeysCancelled(ReqId req_id);
@@ -96,7 +98,10 @@ protected:
     void refreshKeyRows();
     void applyNetworkDefaults();
     void showFetchError(const QString &message);
-    void fetchDescriptor();
+    // Runs the fetch the last click asked for, once this window has closed.
+    void runFetch();
+    // The xpub path of a sub-account, at account 0 of the picked network's coin type.
+    [[nodiscard]] auto subAccountPath(int purpose) const -> QString;
 
 private:
     catalog::Input *m_name_input = nullptr;
@@ -105,11 +110,14 @@ private:
     QList<catalog::SelectRow *> m_key_rows;
     QList<KeyEntry> m_keys;
     QWidget *m_fetch_row = nullptr;
-    catalog::Button *m_get_descriptor = nullptr;
-    catalog::Button *m_get_again = nullptr;
+    catalog::Button *m_get_sp = nullptr;
+    catalog::Button *m_get_taproot = nullptr;
+    catalog::Button *m_get_segwit = nullptr;
     catalog::Label *m_pick_key = nullptr;
     catalog::FieldNote *m_fetch_error = nullptr;
     catalog::CopyField *m_descriptor_field = nullptr;
+    catalog::CopyField *m_taproot_field = nullptr;
+    catalog::CopyField *m_segwit_field = nullptr;
     EndpointRow m_blindbit;
     EndpointRow m_electrum;
     catalog::Button *m_create = nullptr;
@@ -121,9 +129,17 @@ private:
     // onCreate() registers it under the key it belongs to.
     QString m_descriptor_fingerprint;
     Network m_descriptor_network = Network::Regtest;
+    // The sub-account descriptors, built from the key's xpubs: empty for none.
+    QString m_taproot_descriptor;
+    QString m_segwit_descriptor;
     ReqId m_descriptor_req_id = 0;
+    ReqId m_xpub_req_id = 0;
     ReqId m_register_req_id = 0;
-    bool m_fetch_requested = false;
+    // What the window closed to fetch, run by exec() in its place.
+    enum class Fetch : std::uint8_t { SilentPayment, Taproot, Segwit };
+    std::optional<Fetch> m_pending_fetch;
+    // The sub-account the outstanding xpub request is for.
+    Fetch m_xpub_fetch = Fetch::Taproot;
 };
 
 } // namespace modal

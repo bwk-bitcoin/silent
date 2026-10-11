@@ -52,7 +52,10 @@ private:
     AccountController *m_controller = nullptr;
     QWidget *m_main_widget = nullptr;
     rust::String m_sp_address;
+    // Either sub-account: both rows are built, only the account's own are shown.
     bool m_has_sub_accounts = false;
+    bool m_has_segwit = false;
+    bool m_has_taproot = false;
     catalog::FoldSection *m_sp_section = nullptr;
     catalog::FoldSection *m_segwit_section = nullptr;
     catalog::FoldSection *m_taproot_section = nullptr;
