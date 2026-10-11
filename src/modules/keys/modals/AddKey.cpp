@@ -85,9 +85,8 @@ auto AddKey::viewModes() -> QWidget * {
 
 void AddKey::showModes() {
     setWindowTitle(TR("keys-add-title"));
-    setHeader(nullptr);
-    setBody(m_modes_body);
-    setFooter(nullptr);
+    // The rows span the modal, as in the design, rather than centred at their width.
+    setPage(m_modes_body);
     setWidth(ModalWidth::L);
 }
 
