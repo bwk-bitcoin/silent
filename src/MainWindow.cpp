@@ -66,6 +66,8 @@ auto MainWindow::initWindow() -> void {
 }
 
 auto MainWindow::updateTabs() -> void {
+    // Removing every tab moves the current one to the first tab added back: keep it.
+    QWidget *current = m_tab->currentWidget();
     while (m_tab->count() > 0) {
         m_tab->removeTab(0);
     }
@@ -86,6 +88,10 @@ auto MainWindow::updateTabs() -> void {
     // Menu tab has no close button
     int menuIndex = m_tab->addTab(m_menu_tab, TR("main-menu-tab"));
     m_tab->tabBar()->setTabButton(menuIndex, QTabBar::RightSide, nullptr);
+
+    if (current != nullptr && m_tab->indexOf(current) >= 0) {
+        m_tab->setCurrentWidget(current);
+    }
 }
 
 void MainWindow::showKeysTab() {
@@ -105,6 +111,8 @@ auto MainWindow::addTab(QWidget *content, const QString &title) -> int {
     }
     m_tabs.append(QPair<QString, QWidget *>(title, content));
     updateTabs();
+    // The account just opened is the one to show.
+    m_tab->setCurrentWidget(content);
     return m_tab->indexOf(content);
 }
 
