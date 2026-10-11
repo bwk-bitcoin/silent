@@ -56,6 +56,8 @@ auto MainWindow::initWindow() -> void {
     m_tab->setUsesScrollButtons(true);
 
     updateTabs();
+    // The app opens on the launcher; an account opened afterwards takes its place.
+    m_tab->setCurrentWidget(m_menu_tab);
 
     setCentralWidget(m_tab);
 
