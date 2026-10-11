@@ -109,6 +109,10 @@ void QrDisplayStep::setHint(const QString &hint) {
     m_hint->setTextWrapped(hint, metric::QR_HINT_MAX_WIDTH);
 }
 
+void QrDisplayStep::setSize(int size) {
+    m_display->setSize(size);
+}
+
 void QrDisplayStep::setTunable(bool tunable) {
     m_display->setTunable(tunable);
     m_separator->setVisible(tunable);

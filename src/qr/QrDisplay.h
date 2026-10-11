@@ -18,7 +18,9 @@ class QrDisplay : public QWidget {
 
 public:
     explicit QrDisplay(QWidget *parent = nullptr);
-    // False shows a plain code, smaller and without the part count.
+    // The code's square side, QR_DISPLAY_SIZE until set.
+    void setSize(int size);
+    // False shows a plain code without the part count.
     void setTunable(bool tunable);
 
 public slots:

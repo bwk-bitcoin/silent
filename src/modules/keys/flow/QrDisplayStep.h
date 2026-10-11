@@ -27,6 +27,8 @@ class QrDisplayStep : public QWidget {
 public:
     explicit QrDisplayStep(QWidget *parent = nullptr);
     void setHint(const QString &hint);
+    // The code's square side, QR_DISPLAY_SIZE until set.
+    void setSize(int size);
     // False shows the plain white code without the part count and the tuning controls.
     void setTunable(bool tunable);
     // Plays the request again from its first frame.

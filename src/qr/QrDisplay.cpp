@@ -18,7 +18,7 @@ using catalog::LabelTone;
 
 QrDisplay::QrDisplay(QWidget *parent) : QWidget(parent) {
     m_code = new catalog::QrCode;
-    m_code->setFixedSize(metric::QR_DISPLAY_SIZE, metric::QR_DISPLAY_SIZE);
+    setSize(metric::QR_DISPLAY_SIZE);
     m_code->setPadding(metric::QR_DISPLAY_PADDING);
     m_code->setRadius(radius::QR_CARD);
 
@@ -55,10 +55,12 @@ QrDisplay::QrDisplay(QWidget *parent) : QWidget(parent) {
     setRenderingShown(true);
 }
 
+void QrDisplay::setSize(int size) {
+    m_code->setFixedSize(size, size);
+}
+
 void QrDisplay::setTunable(bool tunable) {
     m_tunable = tunable;
-    int size = tunable ? metric::QR_DISPLAY_SIZE : metric::QR_REQUEST_SIZE;
-    m_code->setFixedSize(size, size);
     m_code->setPadding(tunable ? metric::QR_DISPLAY_PADDING : metric::QR_REQUEST_PADDING);
     m_code->setRadius(tunable ? radius::QR_CARD : radius::BUTTON);
     m_part->setVisible(tunable);
