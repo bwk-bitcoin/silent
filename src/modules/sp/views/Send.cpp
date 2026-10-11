@@ -807,11 +807,7 @@ auto Send::inputsView() -> QWidget * {
     m_inputs_amounts_row->setParent(nullptr);
     m_auto_summary->setParent(nullptr);
 
-    bool autoMode = m_auto_coin_selection->isChecked();
     m_coin_table = new catalog::Table;
-    // In auto mode the coins are picked for the user: the table is still shown
-    // (and scrollable), but rows are not selectable.
-    m_coin_table->setSelectionEnabled(!autoMode);
     m_coin_table->setHeaderVisible(true);
     // Show at most a 6-row window; the body scrolls beyond that.
     constexpr int c_max_visible_coins = 6;
@@ -850,7 +846,6 @@ auto Send::inputsView() -> QWidget * {
     m_auto_coin_selection->setParent(nullptr);
     m_inputs_title_label->setParent(nullptr);
     m_clear_inputs_btn->setParent(nullptr);
-    m_clear_inputs_btn->setVisible(!autoMode); // Clear sits in the coins header, manual only
 
     auto *titleRow = (new qontrol::Row)
                          ->spacing(resolve(Spacing::S))
@@ -862,12 +857,7 @@ auto Send::inputsView() -> QWidget * {
     // Update total and minimum displays
     onUpdateInputsTotal();
 
-    // Stacked, the auto selection folds to its total; otherwise the coin table shows,
-    // its rows not selectable in auto mode.
-    bool folded = autoMode && m_stacked;
-    m_auto_summary->setVisible(folded);
-    m_coin_table->setVisible(!folded);
-    m_inputs_amounts_row->setVisible(!folded);
+    applyInputsMode();
 
     auto *col = new qontrol::Column;
     col->push(titleRow)->pushSpacer(resolve(Spacing::S))->push(m_auto_summary)->push(m_coin_table);
@@ -1038,8 +1028,11 @@ void Send::onAutoSelectionToggled() {
         // Switching to manual: populate m_selected_coins from last auto selection
         onUpdateSelectedCoinsFromSimulation();
     }
+    // Only the inputs section changes: rebuilding the screen would make it blink.
+    applyInputsMode();
+    updateCoinCheckboxes();
+    onUpdateInputsTotal();
     onProcess();
-    view();
 }
 
 void Send::onCoinsUpdated(CoinState state) {
@@ -1139,6 +1132,20 @@ void Send::updateCoinCheckboxes() {
         // already made non-selectable via setSelectionEnabled(!autoMode).
     }
     updateInputsTitle();
+}
+
+void Send::applyInputsMode() {
+    qDebug() << "Send::applyInputsMode()";
+    bool autoMode = m_auto_coin_selection->isChecked();
+    // In auto mode the coins are picked for the user: the table is still shown
+    // (and scrollable), but rows are not selectable.
+    m_coin_table->setSelectionEnabled(!autoMode);
+    m_clear_inputs_btn->setVisible(!autoMode); // Clear sits in the coins header, manual only
+    // Stacked, the auto selection folds to its total; otherwise the coin table shows.
+    bool folded = autoMode && m_stacked;
+    m_auto_summary->setVisible(folded);
+    m_coin_table->setVisible(!folded);
+    m_inputs_amounts_row->setVisible(!folded);
 }
 
 void Send::updateInputsTitle() {

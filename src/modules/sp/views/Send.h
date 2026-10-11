@@ -174,6 +174,7 @@ protected:
     void disconnectSigner() const;
     auto output() -> QWidget *;
     void updateCoinCheckboxes();
+    void applyInputsMode();
     void updateInputsTitle();
     // Sign and Broadcast share one enabled state; only one shows at a time.
     void setSendEnabled(bool enabled);
