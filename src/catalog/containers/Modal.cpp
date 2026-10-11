@@ -112,6 +112,11 @@ void closeOnlyTitlebar(QDialog *dialog) {
                            Qt::WindowCloseButtonHint);
 }
 
+void fixedDialog(QDialog *dialog) {
+    closeOnlyTitlebar(dialog);
+    dialog->layout()->setSizeConstraint(QLayout::SetFixedSize);
+}
+
 auto modalHeader(const QString &title, QWidget *end) -> QWidget * {
     auto *row = (new qontrol::Row)->push(new Label(title, LabelRole::Heading), 1);
     if (end != nullptr) {

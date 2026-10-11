@@ -16,9 +16,8 @@ using catalog::Button;
 using catalog::ButtonRole;
 
 CustomLaunchers::CustomLaunchers([[maybe_unused]] QWidget *parent) {
-    catalog::closeOnlyTitlebar(this);
+    catalog::fixedDialog(this);
     setWindowTitle(TR("menu-custom"));
-    resize(360, 240);
     init();
     doConnect();
     view();

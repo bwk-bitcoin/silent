@@ -1481,7 +1481,7 @@ void Send::onValidationResult(PsbtValidation result) {
 auto Send::showReuseWarning(PsbtValidation result) -> bool {
     auto issues = QString::fromStdString(std::string(result.issues.c_str()));
     auto *modal = new qontrol::Modal();
-    catalog::closeOnlyTitlebar(modal);
+    catalog::fixedDialog(modal);
     modal->setWindowTitle(TR("send-address-reuse-warning"));
     auto *label = new Label(issues + "\n\n" + TR("send-proceed-anyway"));
     label->setWordWrap(true);

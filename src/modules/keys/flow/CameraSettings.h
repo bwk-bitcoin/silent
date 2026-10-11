@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Qontrol>
+#include "catalog/containers/Modal.h"
 
 namespace catalog {
 class ComboBox;
@@ -18,7 +18,7 @@ namespace keys::flow {
 // The one small modal allowed over a flow: picks the camera and the scan contrast,
 // applied at once while the scan keeps running behind it, with the frames the scan
 // reads so the change is seen here.
-class CameraSettings final : public qontrol::Modal {
+class CameraSettings final : public catalog::Modal {
     Q_OBJECT
 
 public:

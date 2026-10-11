@@ -44,6 +44,9 @@ private:
 // Keeps only Close in the window manager titlebar of `dialog`: a modal is neither
 // minimized nor maximized.
 void closeOnlyTitlebar(QDialog *dialog);
+// For a dialog that is not a catalog::Modal: Close only, and sized to its content so
+// it cannot be resized, as KWin keeps maximize on a resizable window whatever the hints.
+void fixedDialog(QDialog *dialog);
 
 // The title on the left of a modal header, with an optional widget on its right (a
 // fingerprint and a status pill).

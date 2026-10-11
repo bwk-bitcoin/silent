@@ -17,9 +17,7 @@ namespace keys::flow {
 CameraSettings::CameraSettings(qr::QrCamera *camera, qr::QrCameraEngine *engine)
     : m_camera(camera),
       m_engine(engine) {
-    catalog::closeOnlyTitlebar(this);
     setWindowTitle(TR("flow-camera-settings-title"));
-    setFixedWidth(resolve(ModalWidth::XS));
     init();
     doConnect();
     view();
@@ -57,11 +55,11 @@ void CameraSettings::view() {
                        ->addField(TR("flow-camera-contrast"), m_contrast_stepper);
     // As wide as the fields under it, as the design's preview takes their width.
     m_display->setWidth(fields->sizeHint().width());
-    setMainWidget((new qontrol::Column)
-                      ->margins(resolve(Padding::L))
-                      ->spacing(resolve(Spacing::M))
-                      ->pushAligned(m_display, Qt::AlignHCenter)
-                      ->pushAligned(fields, Qt::AlignHCenter));
+    setBody((new qontrol::Column)
+                ->spacing(resolve(Spacing::M))
+                ->pushAligned(m_display, Qt::AlignHCenter)
+                ->pushAligned(fields, Qt::AlignHCenter));
+    setWidth(ModalWidth::XS);
 }
 
 void CameraSettings::onContrastPicked(int level) {

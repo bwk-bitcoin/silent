@@ -31,7 +31,7 @@ void assertGuiThread() {
 class HostedWizardModal final : public qontrol::Modal {
 public:
     explicit HostedWizardModal(QWidget *content) {
-        catalog::closeOnlyTitlebar(this);
+        catalog::fixedDialog(this);
         setMainWidget(content);
     }
 };
