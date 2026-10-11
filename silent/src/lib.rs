@@ -4,9 +4,11 @@
 
 pub mod account;
 pub mod app_state;
+pub mod bbqr;
 pub mod config;
 pub mod hwi;
 pub mod hwi_config;
+pub mod image;
 pub mod keys;
 pub mod sync_estimator;
 
@@ -246,6 +248,23 @@ mod ffi {
         pub descriptor: String,
         /// Origin fingerprint of the sp() descriptor (empty on error).
         pub fingerprint: String,
+    }
+
+    /// One payload a QR scan joined, its bytes as framed.
+    #[derive(Debug, Clone)]
+    pub struct QrPayload {
+        pub data: Vec<u8>,
+    }
+
+    /// What one camera frame gave a BBQR scan: the payloads it completed, and the parts
+    /// seen of the total of the payload being joined (0 of 0 while none is).
+    #[derive(Debug, Clone)]
+    pub struct BbqrScanResult {
+        pub is_ok: bool,
+        pub error: String,
+        pub payloads: Vec<QrPayload>,
+        pub seen: u32,
+        pub total: u32,
     }
 
     /// Grayscale QR image for the C++ UI.
@@ -654,6 +673,12 @@ mod ffi {
 
         /// A camera opened by `camera_open`, installed by `KeysModule::camera_install`.
         type CameraHandle;
+
+        /// The BBQR frames of one payload.
+        type BbqrFrames;
+
+        /// Joins BBQR parts scanned off camera frames back into payloads.
+        type BbqrScanner;
     }
 
     // ===== Utility Functions =====
@@ -674,6 +699,23 @@ mod ffi {
 
         /// Render `text` (an address) as a single QR code.
         fn qr_text_image(text: &str) -> QrImageResult;
+
+        /// Splits `payload` into BBQR parts of `part_bytes`, one QR image each. Touches
+        /// nothing shared: safe on a worker thread.
+        fn bbqr_frames(payload: &[u8], part_bytes: u32) -> Box<BbqrFrames>;
+        fn is_ok(self: &BbqrFrames) -> bool;
+        fn get_error(self: &BbqrFrames) -> String;
+        fn count(self: &BbqrFrames) -> u32;
+        /// An index past the end answers with is_ok false.
+        fn frame(self: &BbqrFrames, index: u32) -> QrImageResult;
+
+        fn bbqr_scanner_new() -> Box<BbqrScanner>;
+        fn is_ok(self: &BbqrScanner) -> bool;
+        fn get_error(self: &BbqrScanner) -> String;
+        /// Scans one RGB888 frame of `width * height * 3` bytes.
+        fn scan(self: &mut BbqrScanner, rgb: &[u8], width: u32, height: u32) -> BbqrScanResult;
+        /// Drops the parts seen so far.
+        fn reset(self: &mut BbqrScanner);
 
         /// Parses an sp() descriptor and requires an origin. Returns the descriptor
         /// unchanged plus its fingerprint, or an error saying the origin is missing.
@@ -1692,6 +1734,7 @@ pub use app_state::{
     app_active_theme, app_enabled_plugins, app_language, app_set_active_theme, app_set_language,
     app_set_plugin_enabled,
 };
+pub use bbqr::{bbqr_frames, bbqr_scanner_new, BbqrFrames, BbqrScanner};
 pub use config::{config_from_file, delete_config, list_configs, new_config, set_datadir, Config};
 pub use ffi::{
     BackendInfo, CameraFrameResult, CameraListResult, FingerprintsResult, KeyDescriptor, KeyDevice,

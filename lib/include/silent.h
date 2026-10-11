@@ -984,6 +984,8 @@ struct TransactionTemplate;
 struct TransactionSimulation;
 struct TxResult;
 struct SpDescriptorResult;
+struct QrPayload;
+struct BbqrScanResult;
 struct QrImageResult;
 struct ConnectionResult;
 struct RegtestDefaults;
@@ -1029,6 +1031,8 @@ struct KeysPoll;
 struct HotMaterial;
 struct SealedHotKey;
 struct CameraHandle;
+struct BbqrFrames;
+struct BbqrScanner;
 
 #ifndef CXXBRIDGE1_ENUM_Network
 #define CXXBRIDGE1_ENUM_Network
@@ -1315,6 +1319,31 @@ struct SpDescriptorResult final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_SpDescriptorResult
+
+#ifndef CXXBRIDGE1_STRUCT_QrPayload
+#define CXXBRIDGE1_STRUCT_QrPayload
+// One payload a QR scan joined, its bytes as framed.
+struct QrPayload final {
+  ::rust::Vec<::std::uint8_t> data;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_QrPayload
+
+#ifndef CXXBRIDGE1_STRUCT_BbqrScanResult
+#define CXXBRIDGE1_STRUCT_BbqrScanResult
+// What one camera frame gave a BBQR scan: the payloads it completed, and the parts
+// seen of the total of the payload being joined (0 of 0 while none is).
+struct BbqrScanResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::Vec<::QrPayload> payloads;
+  ::std::uint32_t seen CXX_DEFAULT_VALUE(0);
+  ::std::uint32_t total CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_BbqrScanResult
 
 #ifndef CXXBRIDGE1_STRUCT_QrImageResult
 #define CXXBRIDGE1_STRUCT_QrImageResult
@@ -2403,6 +2432,52 @@ private:
 };
 #endif // CXXBRIDGE1_STRUCT_CameraHandle
 
+#ifndef CXXBRIDGE1_STRUCT_BbqrFrames
+#define CXXBRIDGE1_STRUCT_BbqrFrames
+// The BBQR frames of one payload.
+struct BbqrFrames final : public ::rust::Opaque {
+  bool is_ok() const noexcept;
+  ::rust::String get_error() const noexcept;
+  ::std::uint32_t count() const noexcept;
+
+  // An index past the end answers with is_ok false.
+  ::QrImageResult frame(::std::uint32_t index) const noexcept;
+
+  ~BbqrFrames() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_BbqrFrames
+
+#ifndef CXXBRIDGE1_STRUCT_BbqrScanner
+#define CXXBRIDGE1_STRUCT_BbqrScanner
+// Joins BBQR parts scanned off camera frames back into payloads.
+struct BbqrScanner final : public ::rust::Opaque {
+  bool is_ok() const noexcept;
+  ::rust::String get_error() const noexcept;
+
+  // Scans one RGB888 frame of `width * height * 3` bytes.
+  ::BbqrScanResult scan(::rust::Slice<::std::uint8_t const> rgb, ::std::uint32_t width, ::std::uint32_t height) noexcept;
+
+  // Drops the parts seen so far.
+  void reset() noexcept;
+
+  ~BbqrScanner() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_BbqrScanner
+
 // Initialize logging with the specified level.
 // Call this once at application startup.
 void init_logging(::LogLevel level) noexcept;
@@ -2418,6 +2493,12 @@ bool validate_sp_descriptor(::rust::String descriptor) noexcept;
 
 // Render `text` (an address) as a single QR code.
 ::QrImageResult qr_text_image(::rust::Str text) noexcept;
+
+// Splits `payload` into BBQR parts of `part_bytes`, one QR image each. Touches
+// nothing shared: safe on a worker thread.
+::rust::Box<::BbqrFrames> bbqr_frames(::rust::Slice<::std::uint8_t const> payload, ::std::uint32_t part_bytes) noexcept;
+
+::rust::Box<::BbqrScanner> bbqr_scanner_new() noexcept;
 
 // Parses an sp() descriptor and requires an origin. Returns the descriptor
 // unchanged plus its fingerprint, or an error saying the origin is missing.

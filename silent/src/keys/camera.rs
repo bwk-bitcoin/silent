@@ -13,7 +13,10 @@ use std::thread::JoinHandle;
 
 use crossbeam::channel;
 
-use crate::keys::error::Error;
+use crate::{
+    image::{box_downscale, downscale_factor, rgb_to_luma, RGB_CHANNELS},
+    keys::error::Error,
+};
 
 #[cfg(target_os = "linux")]
 use nokhwa::pixel_format::RgbFormat;
@@ -423,19 +426,14 @@ fn capture_loop(
         let width = rgb.width();
         let height = rgb.height();
         let rgb_data = rgb.into_raw();
-        let image = bwk_qr::image::Image {
-            data: rgb_to_luma(&rgb_data, width, height),
-            width,
-            height,
-        };
-
-        let factor = downscale_factor(width, height);
+        let factor = downscale_factor(width, height, MAX_FRAME_PIXELS);
+        let luma = box_downscale(&rgb_to_luma(&rgb_data), width, height, 1, factor);
         // a camera frame routinely holds unreadable candidates
-        let process_result = if factor > 1 {
-            decoder.process(&box_downscale(&image, factor))
-        } else {
-            decoder.process(&image)
-        };
+        let process_result = decoder.process(&bwk_qr::image::Image {
+            data: luma.data,
+            width: luma.width,
+            height: luma.height,
+        });
         match process_result {
             Ok(messages) => {
                 for message in messages {
@@ -447,7 +445,13 @@ fn capture_loop(
             Err(e) => log::debug!("camera: bad frame: {e}"),
         }
 
-        let preview = rgb_box_downscale(&rgb_data, width, height, preview_factor(width, height));
+        let preview = box_downscale(
+            &rgb_data,
+            width,
+            height,
+            RGB_CHANNELS,
+            preview_factor(width, height),
+        );
         let progress = decoder.progress();
         let (seen, total) = match progress {
             Some(p) => (p.seen, p.total),
@@ -481,121 +485,6 @@ fn capture_loop(
     let _ = sender.send(CameraMessage::Stopped);
 }
 
-/// Integer luma weights (ITU-R BT.601, times 1000) so grey decoding stays exact
-/// integer math on the RGB frame nokhwa hands back.
-const LUMA_RED: u32 = 299;
-const LUMA_GREEN: u32 = 587;
-const LUMA_BLUE: u32 = 114;
-
-/// Converts an interleaved RGB888 buffer to one byte per pixel for `bwk_qr`, which
-/// only accepts grayscale.
-fn rgb_to_luma(rgb: &[u8], width: u32, height: u32) -> Vec<u8> {
-    let mut data = Vec::with_capacity((width * height) as usize);
-    for pixel in rgb.chunks_exact(3) {
-        let luma = (u32::from(pixel[0]) * LUMA_RED
-            + u32::from(pixel[1]) * LUMA_GREEN
-            + u32::from(pixel[2]) * LUMA_BLUE)
-            / 1000;
-        data.push(luma as u8);
-    }
-    data
-}
-
-/// Averages one channel over a `factor` x `factor` block starting at pixel
-/// (`origin_x`, `origin_y`). Shared by the grayscale and RGB box downscales so the
-/// averaging logic exists once. Out-of-bounds reads (none expected) contribute 0
-/// rather than panicking.
-fn box_downscale_channel(
-    data: &[u8],
-    width: u32,
-    origin_x: u32,
-    origin_y: u32,
-    factor: u32,
-    channels: u32,
-    channel: u32,
-) -> u8 {
-    let mut sum: u32 = 0;
-    for dy in 0..factor {
-        let row_start = ((origin_y + dy) * width * channels) as usize;
-        for dx in 0..factor {
-            let index = row_start + ((origin_x + dx) * channels + channel) as usize;
-            sum += u32::from(data.get(index).copied().unwrap_or(0));
-        }
-    }
-    (sum / (factor * factor)) as u8
-}
-
-/// Integer box downscale by `factor`: each output pixel is the average of a
-/// factor x factor block. Integer only, so no interpolation blurs a QR edge.
-fn box_downscale(image: &bwk_qr::image::Image, factor: u32) -> bwk_qr::image::Image {
-    if factor <= 1 {
-        return image.clone();
-    }
-    let out_width = image.width / factor;
-    let out_height = image.height / factor;
-    let mut data = Vec::with_capacity((out_width * out_height) as usize);
-    for out_y in 0..out_height {
-        for out_x in 0..out_width {
-            data.push(box_downscale_channel(
-                &image.data,
-                image.width,
-                out_x * factor,
-                out_y * factor,
-                factor,
-                1,
-                0,
-            ));
-        }
-    }
-    bwk_qr::image::Image {
-        data,
-        width: out_width,
-        height: out_height,
-    }
-}
-
-/// A downscaled RGB888 preview frame: `data.len() == width * height * 3`.
-struct RgbImage {
-    data: Vec<u8>,
-    width: u32,
-    height: u32,
-}
-
-/// RGB888 counterpart to `box_downscale`: each output pixel is the block average
-/// of red, green and blue independently, via the shared averaging helper.
-fn rgb_box_downscale(data: &[u8], width: u32, height: u32, factor: u32) -> RgbImage {
-    if factor <= 1 {
-        return RgbImage {
-            data: data.to_vec(),
-            width,
-            height,
-        };
-    }
-    let out_width = width / factor;
-    let out_height = height / factor;
-    let mut out = Vec::with_capacity((out_width * out_height * 3) as usize);
-    for out_y in 0..out_height {
-        for out_x in 0..out_width {
-            for channel in 0..3 {
-                out.push(box_downscale_channel(
-                    data,
-                    width,
-                    out_x * factor,
-                    out_y * factor,
-                    factor,
-                    3,
-                    channel,
-                ));
-            }
-        }
-    }
-    RgbImage {
-        data: out,
-        width: out_width,
-        height: out_height,
-    }
-}
-
 /// Smallest integer factor that brings the real capture frame within
 /// `PREVIEW_WIDTH` x `PREVIEW_HEIGHT`. The capture size is no longer fixed, so this
 /// is computed per frame rather than assumed.
@@ -606,19 +495,8 @@ fn preview_factor(width: u32, height: u32) -> u32 {
         .max(1)
 }
 
-/// Smallest factor >= 1 that brings the frame under `MAX_FRAME_PIXELS`.
-fn downscale_factor(width: u32, height: u32) -> u32 {
-    let mut factor: u32 = 1;
-    while (width / factor) as usize * (height / factor) as usize > MAX_FRAME_PIXELS {
-        factor += 1;
-    }
-    factor
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::keys::camera::{rgb_box_downscale, rgb_to_luma};
-
     #[cfg(target_os = "linux")]
     use nokhwa::utils::{CameraFormat, FrameFormat, Resolution};
 
@@ -669,29 +547,5 @@ mod tests {
     fn format_offered_lists_every_mode() {
         let offered = [mode(640, 480, 30, FrameFormat::MJPEG)];
         assert_eq!(format_offered(&offered), "640x480@30 MJPEG");
-    }
-
-    #[test]
-    fn rgb_to_luma_uses_known_weights() {
-        let rgb = [255u8, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255];
-        let luma = rgb_to_luma(&rgb, 2, 2);
-        assert_eq!(luma, vec![76, 149, 29, 255]);
-    }
-
-    #[test]
-    fn rgb_box_downscale_averages_a_4x2_block_by_2() {
-        let width = 4;
-        let height = 2;
-        let mut data = Vec::with_capacity((width * height * 3) as usize);
-        for y in 0..height {
-            for x in 0..width {
-                let value = (y * width + x) as u8;
-                data.extend_from_slice(&[value, value, value]);
-            }
-        }
-        let downscaled = rgb_box_downscale(&data, width, height, 2);
-        assert_eq!(downscaled.width, 2);
-        assert_eq!(downscaled.height, 1);
-        assert_eq!(downscaled.data, vec![2, 2, 2, 4, 4, 4]);
     }
 }
