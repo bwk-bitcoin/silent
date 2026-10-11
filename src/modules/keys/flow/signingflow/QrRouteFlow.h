@@ -13,7 +13,6 @@ class Card;
 class ChunkedAddress;
 class Label;
 class ModalActions;
-class Stepper;
 } // namespace catalog
 
 namespace qr {
@@ -49,7 +48,7 @@ public slots:
     void onQrXpubs(const QString &fingerprint, const QList<qr::QrXpub> &xpubs,
                    const qr::QrDevice &device);
     void onQrError(qr::QrError kind, const QString &message);
-    void onQrSettingsChanged();
+    void onQrSettingsClicked();
     void onQrFrame(const qr::QrFrame &frame);
 
 protected:
@@ -66,7 +65,6 @@ protected:
     [[nodiscard]] auto viewDisplay() -> QWidget *;
     void showDisplay();
     // The steppers' levels to the engine.
-    void applyQrSettings();
 
     // Camera view
     void initCamera();
@@ -92,9 +90,7 @@ private:
     catalog::ChunkedAddress *m_qr_address = nullptr;
     catalog::Card *m_qr_address_card = nullptr;
     qr::QrDisplay *m_qr_display = nullptr;
-    catalog::Stepper *m_qr_contrast = nullptr;
-    catalog::Stepper *m_qr_density = nullptr;
-    catalog::Stepper *m_qr_speed = nullptr;
+    catalog::Button *m_qr_settings = nullptr;
     catalog::Button *m_qr_next = nullptr;
     catalog::ModalActions *m_qr_actions = nullptr;
     QWidget *m_qr_step = nullptr;

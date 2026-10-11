@@ -1,15 +1,15 @@
 #include "QrRouteFlow.h"
 
+#include "AppController.h"
 #include "VerifyResultView.h"
+#include "modules/keys/flow/QrSettings.h"
 
 #include "catalog/Button.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/Card.h"
 #include "catalog/containers/ModalActions.h"
-#include "catalog/containers/Separator.h"
 #include "catalog/containers/ViewSlots.h"
 #include "catalog/display/Label.h"
-#include "catalog/inputs/Stepper.h"
 #include "catalog/panels/receive/ChunkedAddress.h"
 #include "i18n/Tr.h"
 #include "modules/keys/BwkQrEngine.h"
@@ -28,31 +28,6 @@
 #include <common.h>
 
 namespace keys::flow {
-
-namespace {
-
-// One tuning control of the QR view: the stepper over the line that says what it does.
-auto tuneColumn(catalog::Stepper *stepper, const QString &hint) -> QWidget * {
-    auto *caption = new catalog::Label(hint, catalog::LabelRole::Caption);
-    caption->setWordWrap(true);
-    caption->setAlignment(Qt::AlignCenter);
-    auto *column = (new qontrol::Column)
-                       ->spacing(resolve(Spacing::XXS))
-                       ->pushAligned(stepper, Qt::AlignHCenter)
-                       ->push(caption);
-    column->setFixedWidth(resolve(Size::S));
-    return column;
-}
-
-auto levelStepper(const QString &label) -> catalog::Stepper * {
-    auto *stepper = new catalog::Stepper;
-    stepper->setLabel(label);
-    stepper->setRange(qr::MIN_LEVEL, qr::MAX_LEVEL);
-    stepper->setValue(qr::DEFAULT_LEVEL);
-    return stepper;
-}
-
-} // namespace
 
 QrRouteFlow::QrRouteFlow(KeysModule *module, SigningFlow::Request request, FlowRow row,
                          QString psbt)
@@ -121,17 +96,12 @@ void QrRouteFlow::initDisplay() {
     m_qr_address_card->setContent(m_qr_address);
     m_qr_address_card->setVisible(request().context == Context::Verify);
     m_qr_display = new qr::QrDisplay;
-    m_qr_contrast = levelStepper(TR("keys-qr-contrast"));
-    m_qr_density = levelStepper(TR("keys-qr-density"));
-    m_qr_speed = levelStepper(TR("flow-qr-speed"));
-    // The tuning picked last, for any account, before the steppers are connected.
-    auto levels = ::app_qr_display_levels();
-    m_qr_contrast->setValue(levels.contrast);
-    m_qr_density->setValue(levels.density);
-    m_qr_speed->setValue(levels.speed);
-    applyQrSettings();
+    // The tuning picked last, for any account; changed in QR Settings.
+    applyQrLevels(m_qr_display_engine);
+    m_qr_settings = catalog::btnQrSettings();
     m_qr_next = catalog::btnNextScanTheAnswer();
     m_qr_actions = new catalog::ModalActions;
+    m_qr_actions->addAction(m_qr_settings);
     m_qr_actions->addAction(m_qr_next);
 }
 
@@ -140,31 +110,19 @@ void QrRouteFlow::connectDisplay() {
             qontrol::UNIQUE);
     connect(m_qr_display_engine, &qr::QrDisplayEngine::frame, this, &QrRouteFlow::onQrFrame,
             qontrol::UNIQUE);
-    for (auto *stepper : {m_qr_contrast, m_qr_density, m_qr_speed}) {
-        connect(stepper, &catalog::Stepper::valueChanged, this, &QrRouteFlow::onQrSettingsChanged,
-                qontrol::UNIQUE);
-    }
+    connect(m_qr_settings, &QPushButton::clicked, this, &QrRouteFlow::onQrSettingsClicked,
+            qontrol::UNIQUE);
     connect(m_qr_next, &QPushButton::clicked, this, &QrRouteFlow::onNextClicked, qontrol::UNIQUE);
     connect(m_qr_engine, &qr::QrEngine::request, m_qr_display_engine, &qr::QrDisplayEngine::request,
             qontrol::UNIQUE);
 }
 
 auto QrRouteFlow::viewDisplay() -> QWidget * {
-    auto *tuning =
-        (new qontrol::Row)
-            ->spacing(resolve(Spacing::L))
-            ->pushSpacer()
-            ->pushAligned(tuneColumn(m_qr_contrast, TR("flow-qr-contrast-hint")), Qt::AlignTop)
-            ->pushAligned(tuneColumn(m_qr_density, TR("flow-qr-density-hint")), Qt::AlignTop)
-            ->pushAligned(tuneColumn(m_qr_speed, TR("flow-qr-speed-hint")), Qt::AlignTop)
-            ->pushSpacer();
     return (new qontrol::Column)
         ->spacing(resolve(Spacing::M))
         ->push(m_qr_hint)
         ->push(m_qr_address_card)
-        ->push(m_qr_display)
-        ->push(new catalog::Separator)
-        ->push(tuning);
+        ->push(m_qr_display);
 }
 
 void QrRouteFlow::showDisplay() {
@@ -173,12 +131,6 @@ void QrRouteFlow::showDisplay() {
     viewSlots()->setBody(m_qr_step);
     viewSlots()->setFooter(m_qr_actions);
     emit viewChanged(copy().qrTitle, ModalWidth::XXL);
-}
-
-void QrRouteFlow::applyQrSettings() {
-    m_qr_display_engine->setDensity(qr::densityFromLevel(m_qr_density->value()));
-    m_qr_display_engine->setContrast(qr::contrastFromLevel(m_qr_contrast->value()));
-    m_qr_display_engine->setSpeed(qr::speedFromLevel(m_qr_speed->value()));
 }
 
 // ===== Camera view =====
@@ -326,18 +278,12 @@ void QrRouteFlow::onQrError(qr::QrError kind, const QString &message) {
     emit failed(message);
 }
 
-void QrRouteFlow::onQrSettingsChanged() {
-    applyQrSettings();
-    ::app_set_qr_display_levels(QrDisplayLevels{
-        .density = static_cast<std::uint8_t>(m_qr_density->value()),
-        .contrast = static_cast<std::uint8_t>(m_qr_contrast->value()),
-        .speed = static_cast<std::uint8_t>(m_qr_speed->value()),
-    });
+void QrRouteFlow::onQrSettingsClicked() {
+    AppController::execModal(new QrSettings(m_qr_display_engine));
 }
 
 void QrRouteFlow::onQrFrame(const qr::QrFrame &frame) {
     bool rendering = frame.image.isNull() && frame.error.isEmpty();
-    m_qr_density->setEnabled(!rendering);
     m_qr_next->setEnabled(!rendering);
     m_qr_actions->setReason(rendering ? TR("flow-qr-rebuild-reason") : QString());
 }

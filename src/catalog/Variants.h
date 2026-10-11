@@ -24,6 +24,7 @@ auto btnFetchXpub() -> Button *;
 auto btnRegisterAccount() -> Button *;
 auto btnFetchThisXpub() -> Button *;
 auto btnCameraSettings() -> Button *;
+auto btnQrSettings() -> Button *;
 auto btnOpenFile() -> Button *;
 auto btnScanPlugins() -> Button *;
 auto btnScanningPlugins() -> Button *;

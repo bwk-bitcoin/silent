@@ -115,6 +115,8 @@ set(SILENT_APP_SOURCES
     src/modules/keys/flow/FlowCopy.cpp
     src/modules/keys/flow/CameraSettings.h
     src/modules/keys/flow/CameraSettings.cpp
+    src/modules/keys/flow/QrSettings.h
+    src/modules/keys/flow/QrSettings.cpp
     src/modules/keys/flow/CameraStep.h
     src/modules/keys/flow/CameraStep.cpp
     src/modules/keys/flow/SigningFlow.h

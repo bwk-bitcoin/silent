@@ -152,6 +152,14 @@ auto btnCameraSettings() -> Button * {
                  .width = BtnWidth::Icon});
 }
 
+auto btnQrSettings() -> Button * {
+    return make({.role = ButtonRole::InlineIcon,
+                 .icon = icon::settings,
+                 .iconSize = 16,
+                 .tooltip = TR("btn-qr-settings"),
+                 .width = BtnWidth::Icon});
+}
+
 auto btnOpenFile() -> Button * {
     return make({.role = ButtonRole::Primary,
                  .label = TR("btn-open-file"),

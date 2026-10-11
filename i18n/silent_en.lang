@@ -252,6 +252,8 @@ btn-fetch-xpub => "Fetch Xpub"
 
 btn-camera-settings => "Camera Settings"
 
+btn-qr-settings => "QR Settings"
+
 btn-open-file => "Open File…"
 
 btn-scan-for-plugins => "Scan for Plugins"
@@ -476,6 +478,8 @@ flow-camera-failed-title => "The camera failed to open"
 flow-camera-failed-body => "Pick another source in Camera Source."
 
 flow-camera-settings-title => "Camera Settings"
+
+flow-qr-settings-title => "QR Settings"
 
 flow-camera-source => "Camera Source:"
 
