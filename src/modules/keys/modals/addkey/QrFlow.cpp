@@ -6,7 +6,6 @@
 #include "catalog/Variants.h"
 #include "catalog/containers/ModalActions.h"
 #include "catalog/containers/ViewSlots.h"
-#include "catalog/display/Label.h"
 #include "catalog/feedback/ModalStatus.h"
 #include "i18n/Tr.h"
 #include "modules/keys/BwkQrEngine.h"
@@ -24,10 +23,6 @@
 #include <common.h>
 
 namespace keys::modal {
-
-using catalog::Label;
-using catalog::LabelRole;
-using catalog::LabelTone;
 
 QrFlow::QrFlow(KeysModule *module) : m_module(module) {
     init();
@@ -74,11 +69,6 @@ void QrFlow::initDisplay() {
     m_qr_display_engine = new qr::BbqrDisplayEngine(this);
     m_qr_display_engine->setContrast(qr::QrContrast::Highest);
     m_qr_display_engine->setDensity(qr::QrDensity::Lowest);
-    m_qr_hint = new Label(LabelRole::Body);
-    m_qr_hint->setTone(LabelTone::Secondary);
-    m_qr_hint->setAlignment(Qt::AlignCenter);
-    // On one line when it fits, as the design's text takes its natural width.
-    m_qr_hint->setTextWrapped(TR("keys-add-qr-hint"), metric::QR_HINT_MAX_WIDTH);
     m_qr_display = new qr::QrDisplay;
     m_qr_display->setTunable(false);
     m_qr_display->setSize(metric::QR_REQUEST_SIZE);
@@ -101,10 +91,7 @@ void QrFlow::connectDisplay() {
 }
 
 auto QrFlow::viewDisplay() -> QWidget * {
-    return (new qontrol::Column)
-        ->spacing(resolve(Spacing::M))
-        ->push(m_qr_hint)
-        ->pushAligned(m_qr_display, Qt::AlignHCenter);
+    return (new qontrol::Column)->pushAligned(m_qr_display, Qt::AlignHCenter);
 }
 
 void QrFlow::showDisplay() {

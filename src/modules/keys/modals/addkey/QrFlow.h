@@ -8,7 +8,6 @@
 
 namespace catalog {
 class Button;
-class Label;
 class ModalActions;
 class ModalStatus;
 } // namespace catalog
@@ -94,7 +93,6 @@ private:
     qr::QrDevice m_device;
 
     qr::QrDisplayEngine *m_qr_display_engine = nullptr;
-    catalog::Label *m_qr_hint = nullptr;
     qr::QrDisplay *m_qr_display = nullptr;
     catalog::Button *m_qr_next = nullptr;
     catalog::ModalActions *m_qr_actions = nullptr;

@@ -316,9 +316,6 @@ keys-add-mode-qr-sub
 => "NONE";;
 keys-add-password-title => "Add a Key · Choose a Password" => "NONE"
 keys-add-paste-title => "Add a Key · Paste Xpub" => "NONE"
-keys-add-qr-hint
-=> "Scan this request with the device. It answers with its key origin and xpub."
-=> "NONE";;
 keys-add-qr-title => "Add a Key · QR Code" => "NONE"
 keys-add-review-title => "Add a Key · Review" => "NONE"
 keys-add-scan-hint

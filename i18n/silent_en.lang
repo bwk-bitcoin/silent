@@ -736,9 +736,6 @@ keys-add-mode-hot-sub
 
 keys-add-qr-title => "Add a Key · QR Code"
 
-keys-add-qr-hint
-=> "Scan this request with the device. It answers with its key origin and xpub.";;
-
 keys-add-scan-title => "Add a Key · Scan the Answer"
 
 keys-add-scan-hint => "Hold the answer code from the device in front of the camera."
