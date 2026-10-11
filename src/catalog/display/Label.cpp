@@ -3,6 +3,8 @@
 #include "theme/Theme.h"
 #include <QFont>
 #include <QStyle>
+#include <QTextDocument>
+#include <QtMath>
 
 namespace catalog {
 
@@ -115,6 +117,32 @@ void Label::setTextWrapped(const QString &text, int max_width) {
         setMinimumSize(0, 0);
         setMaximumWidth(QWIDGETSIZE_MAX);
     }
+}
+
+void Label::setPrefersOneLine(bool prefers) {
+    m_prefers_one_line = prefers;
+    updateGeometry();
+}
+
+auto Label::sizeHint() const -> QSize {
+    if (!m_prefers_one_line || !wordWrap() || text().isEmpty()) {
+        return QLabel::sizeHint();
+    }
+    QMargins margins = contentsMargins();
+    // The rendered text, not its markup, rounded up: the label lays its text out
+    // unrounded, and a rounded down width leaves the last word a fraction short.
+    QTextDocument document;
+    document.setDefaultFont(font());
+    document.setDocumentMargin(0);
+    bool rich = textFormat() == Qt::RichText ||
+                (textFormat() == Qt::AutoText && Qt::mightBeRichText(text()));
+    if (rich) {
+        document.setHtml(text());
+    } else {
+        document.setPlainText(text());
+    }
+    int width = qCeil(document.idealWidth()) + (2 * margin()) + margins.left() + margins.right();
+    return {width, heightForWidth(width)};
 }
 
 static auto sizeForStep(LabelSize step) -> int {

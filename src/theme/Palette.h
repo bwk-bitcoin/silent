@@ -134,6 +134,7 @@ const int STEPPER_DOTS_WIDTH = 56;
 const int ADDRESS_NOTE_MAX_WIDTH = 520;
 const int PASSWORD_INPUT_WIDTH = 260;
 const int CAMERA_SOURCE_WIDTH = 220;
+const int SETTINGS_PICKER_WIDTH = 160;
 const int QR_REBUILD_SPINNER_SIZE = 28;
 const int CAMERA_STATE_ICON_SIZE = 40;
 // The close cross of a tab, as the design's 12px icon.

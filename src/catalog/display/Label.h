@@ -63,6 +63,10 @@ public:
     // the label to it: a wrapped label left to size itself picks a narrow width and,
     // aligned in a layout, loses lines.
     void setTextWrapped(const QString &text, int max_width);
+    // A wrapped label that still asks for its text's width on one line, as the design's
+    // max-content: it wraps only when the layout gives it less.
+    void setPrefersOneLine(bool prefers);
+    [[nodiscard]] auto sizeHint() const -> QSize override;
     static auto qss(const Palette &p) -> QString;
 
 protected:
@@ -73,6 +77,7 @@ private:
     qreal m_scale = 1.0;
     std::optional<LabelSize> m_size;
     std::optional<QFont::Weight> m_weight;
+    bool m_prefers_one_line = false;
 };
 
 } // namespace catalog

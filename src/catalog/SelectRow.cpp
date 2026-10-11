@@ -33,6 +33,7 @@ SelectRow::SelectRow(QWidget *parent) : QFrame(parent) {
     m_title->setFont(titleFont);
     m_sub = new Label(LabelRole::Caption, this);
     m_sub->setWordWrap(true);
+    m_sub->setPrefersOneLine(true);
     m_sub->setVisible(false);
     auto *body = (new qontrol::Column)->spacing(resolve(Spacing::XXS))->push(m_title)->push(m_sub);
 

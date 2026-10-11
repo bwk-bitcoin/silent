@@ -126,13 +126,13 @@ void AppSettings::view() {
 
 void AppSettings::initMain() {
     m_theme_picker = new catalog::ComboBox;
-    m_theme_picker->setWidth(Size::S);
+    m_theme_picker->setFixedWidth(metric::SETTINGS_PICKER_WIDTH);
     m_theme_picker->setEnabled(false);
     m_theme_note = new catalog::FieldNote;
     m_theme_note->setVisible(false);
 
     m_language_picker = new catalog::ComboBox;
-    m_language_picker->setWidth(Size::S);
+    m_language_picker->setFixedWidth(metric::SETTINGS_PICKER_WIDTH);
     for (const auto &language : LANGUAGES) {
         m_language_picker->addItem(QString::fromUtf8(language.label),
                                    QString::fromLatin1(language.code));
