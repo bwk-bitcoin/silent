@@ -1,6 +1,9 @@
 #include "KeyDetail.h"
 
 #include "FetchXpub.h"
+#include "keydetail/KeyRecord.h"
+#include "keydetail/RemoveFlow.h"
+#include "keydetail/RevealFlow.h"
 
 #include "modules/keys/DeviceName.h"
 #include "modules/keys/KeysModule.h"
@@ -14,11 +17,11 @@
 #include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/Section.h"
 #include "catalog/containers/SectionHeader.h"
+#include "catalog/containers/ViewSlots.h"
 #include "catalog/display/Badge.h"
 #include "catalog/display/Label.h"
 #include "catalog/display/RouteIcons.h"
 #include "catalog/display/ShortValue.h"
-#include "catalog/display/WordGrid.h"
 #include "catalog/feedback/Notice.h"
 #include "catalog/feedback/Spinner.h"
 #include "catalog/form/Field.h"
@@ -108,18 +111,15 @@ KeyDetail::KeyDetail(KeysModule *module, const QString &fingerprint)
     showDetail();
 }
 
-KeyDetail::~KeyDetail() {
-    m_password_input->clear();
-    m_words->setWords({});
+void KeyDetail::done(int result) {
+    closeFlow();
+    catalog::Modal::done(result);
 }
 
 void KeyDetail::init() {
-    auto current = info();
+    auto current = keyInfo(m_module, m_fingerprint);
     m_alias = current.has_value() ? KeysModule::toQt(current->alias) : QString();
     initDetail();
-    initPassword();
-    initReveal();
-    initRemove();
 }
 
 void KeyDetail::doConnect() {
@@ -127,20 +127,10 @@ void KeyDetail::doConnect() {
     connect(m_module, &KeysModule::liveDevicesChanged, this, &KeyDetail::onKeyChanged,
             qontrol::UNIQUE);
     connectDetail();
-    connectPassword();
-    connectReveal();
-    connectRemove();
 }
 
 void KeyDetail::view() {
     m_detail = viewDetail();
-    m_password_body = viewPassword();
-    m_reveal_body = viewReveal();
-    m_remove_body = viewRemove();
-
-    hidePassword();
-    hideReveal();
-    hideRemove();
 }
 
 // ===== Detail view =====
@@ -199,8 +189,8 @@ void KeyDetail::connectDetail() {
     for (auto *table : {m_devices_table, m_routes_table, m_xpubs_table, m_accounts_table}) {
         connect(table, &catalog::Table::rebuilt, this, &KeyDetail::adjustSize, qontrol::UNIQUE);
     }
-    connect(m_reveal, &QPushButton::clicked, this, &KeyDetail::showPassword, qontrol::UNIQUE);
-    connect(m_remove, &QPushButton::clicked, this, &KeyDetail::showRemove, qontrol::UNIQUE);
+    connect(m_reveal, &QPushButton::clicked, this, &KeyDetail::onRevealClicked, qontrol::UNIQUE);
+    connect(m_remove, &QPushButton::clicked, this, &KeyDetail::onRemoveClicked, qontrol::UNIQUE);
 }
 
 auto KeyDetail::viewDetail() -> catalog::ScrollArea * {
@@ -247,9 +237,6 @@ auto KeyDetail::viewDetail() -> catalog::ScrollArea * {
 }
 
 void KeyDetail::showDetail() {
-    m_view = View::Detail;
-    // A password error is about the attempt left behind.
-    m_password_error->setVisible(false);
     showHeader(m_alias);
     setBody(m_detail);
     setFooter(m_detail_actions);
@@ -341,7 +328,7 @@ void KeyDetail::refreshRoutes(const KeyInfo &info) {
 }
 
 void KeyDetail::moveRoute(int from_index, int to_index) {
-    auto current = info();
+    auto current = keyInfo(m_module, m_fingerprint);
     if (!current.has_value()) {
         return;
     }
@@ -399,7 +386,7 @@ void KeyDetail::refreshXpubs() {
 }
 
 void KeyDetail::refreshAccounts(const KeyInfo &info) {
-    QList<KeyAccount> list = accounts();
+    QList<KeyAccount> list = keyAccounts(m_module, m_fingerprint);
     bool applies = registrationApplies(info);
     syncRegistrations(list, applies);
     m_accounts_table->clearRows();
@@ -412,25 +399,6 @@ void KeyDetail::refreshAccounts(const KeyInfo &info) {
     m_accounts_table->setVisible(!list.isEmpty());
     m_accounts_empty->setVisible(list.isEmpty());
     m_accounts_section->header()->setCount(countText(static_cast<int>(list.size())));
-}
-
-auto KeyDetail::accounts() const -> QList<KeyAccount> {
-    // Accounts are told apart by the descriptor they were created with.
-    QHash<QString, QString> names;
-    for (const auto &name : ::list_configs()) {
-        auto config = ::config_from_file(name);
-        if (config->is_ok()) {
-            names.insert(KeysModule::toQt(config->get_descriptor()), KeysModule::toQt(name));
-        }
-    }
-    QList<KeyAccount> list;
-    for (const auto &descriptor :
-         m_module->rust()->key_descriptors(rust::String(m_fingerprint.toStdString()))) {
-        QString value = KeysModule::toQt(descriptor.descriptor);
-        list.append(
-            {.name = names.value(value, KeysModule::toQt(descriptor.alias)), .descriptor = value});
-    }
-    return list;
 }
 
 auto KeyDetail::registrationCell(const KeyAccount &account, bool applies) -> QWidget * {
@@ -529,280 +497,52 @@ void KeyDetail::showRegistrationError(const QString &message) {
     m_register_error->setVisible(true);
 }
 
-// ===== Password view =====
-
-void KeyDetail::initPassword() {
-    m_password_input = new catalog::Input;
-    m_password_input->setEchoMode(QLineEdit::Password);
-    m_password_input->setFixedWidth(metric::PASSWORD_INPUT_WIDTH);
-    m_password_error = new catalog::Notice(catalog::Notice::Tone::Error);
-    m_password_error->setVisible(false);
-    m_password_proceed = catalog::btnShowMnemonic();
-    m_password_unlocking = catalog::btnUnlocking();
-    m_password_unlocking->setEnabled(false);
-    m_password_unlocking->setVisible(false);
-    m_password_actions = new catalog::ModalActions;
-    m_password_actions->setBack(catalog::ModalActions::Back::Back);
-    m_password_actions->addAction(m_password_unlocking);
-    m_password_actions->addAction(m_password_proceed);
-}
-
-void KeyDetail::connectPassword() {
-    connect(m_password_input, &QLineEdit::textEdited, this, &KeyDetail::onPasswordEdited,
-            qontrol::UNIQUE);
-    connect(m_password_input, &QLineEdit::returnPressed, this, &KeyDetail::onNextClicked,
-            qontrol::UNIQUE);
-    connect(m_password_proceed, &QPushButton::clicked, this, &KeyDetail::onNextClicked,
-            qontrol::UNIQUE);
-    connect(m_password_actions, &catalog::ModalActions::backClicked, this,
-            &KeyDetail::onBackClicked, qontrol::UNIQUE);
-    connect(m_module, &KeysModule::mnemonicRevealed, this, &KeyDetail::onMnemonicRevealed,
-            qontrol::UNIQUE);
-}
-
-auto KeyDetail::viewPassword() -> QWidget * {
-    auto *body = new QWidget;
-    (new qontrol::Column)
-        ->spacing(resolve(Spacing::M))
-        ->push(new catalog::Field(TR("flow-password"), m_password_input))
-        ->push(m_password_error)
-        ->into(body);
-    return body;
-}
-
-// An empty field with the focus in it, and the error kept if one was just shown.
-void KeyDetail::showPassword() {
-    m_view = View::Password;
-    m_password_input->clear();
-    m_password_input->setEnabled(true);
-    m_password_unlocking->setVisible(false);
-    m_password_proceed->setVisible(true);
-    onPasswordEdited();
-    showHeader(TR("keys-reveal-title"));
-    setBody(m_password_body);
-    setFooter(m_password_actions);
-    setWidth(ModalWidth::L);
-    m_password_input->setFocus();
-}
-
-void KeyDetail::hidePassword() {
-    keep(m_password_body);
-    keep(m_password_actions);
-}
-
-void KeyDetail::proceedPassword() {
-    if (m_reveal_req != 0 || m_password_input->text().isEmpty()) {
-        return;
-    }
-    QString password = m_password_input->text();
-    m_password_input->clear();
-    m_password_input->setEnabled(false);
-    m_password_error->setVisible(false);
-    m_password_proceed->setVisible(false);
-    m_password_unlocking->setVisible(true);
-    m_password_actions->setReason(QString());
-    m_reveal_req = m_module->nextReqId();
-    m_module->revealMnemonic(m_reveal_req, m_fingerprint, password);
-    password.fill(QChar());
-    password.clear();
-}
-
-// ===== Reveal view =====
-
-void KeyDetail::initReveal() {
-    m_words = new catalog::WordGrid;
-    m_hide_words = catalog::btnHideWords();
-    m_show_words = catalog::btnShowWords();
-    m_words_done = catalog::btnDone();
-    m_reveal_actions = new catalog::ModalActions;
-    m_reveal_actions->addAction(m_words_done);
-}
-
-void KeyDetail::connectReveal() {
-    connect(m_hide_words, &QPushButton::clicked, this, &KeyDetail::onToggleWordsClicked,
-            qontrol::UNIQUE);
-    connect(m_show_words, &QPushButton::clicked, this, &KeyDetail::onToggleWordsClicked,
-            qontrol::UNIQUE);
-    connect(m_words_done, &QPushButton::clicked, this, &KeyDetail::onNextClicked, qontrol::UNIQUE);
-}
-
-auto KeyDetail::viewReveal() -> QWidget * {
-    auto *warning = new catalog::Notice(catalog::Notice::Tone::Warning);
-    warning->setTitle(TR("keys-reveal-warning-title"));
-    warning->setText(TR("keys-reveal-warning"));
-    auto *toggle = (new qontrol::Row)->pushSpacer()->push(m_hide_words)->push(m_show_words);
-    return (new qontrol::Column)
-        ->spacing(resolve(Spacing::M))
-        ->push(warning)
-        ->push((new qontrol::Column)->spacing(resolve(Spacing::S))->push(toggle)->push(m_words));
-}
-
-void KeyDetail::showReveal() {
-    m_view = View::Reveal;
-    m_words->setMasked(false);
-    m_hide_words->setVisible(true);
-    m_show_words->setVisible(false);
-    showHeader(TR("keys-reveal-title"));
-    setBody(m_reveal_body);
-    setFooter(m_reveal_actions);
-    setWidth(ModalWidth::L);
-}
-
-void KeyDetail::hideReveal() {
-    keep(m_reveal_body);
-    keep(m_reveal_actions);
-}
-
-void KeyDetail::closeWords() {
-    m_words->setWords({});
-    showDetail();
-}
-
-// ===== Remove view =====
-
-void KeyDetail::initRemove() {
-    m_remove_question = new Label(LabelRole::Body);
-    m_remove_question->setWordWrap(true);
-    m_remove_accounts = new catalog::Notice(catalog::Notice::Tone::Warning);
-    m_remove_hot = new catalog::Notice(catalog::Notice::Tone::Warning);
-    m_remove_hot->setText(TR("keys-remove-hot"));
-    m_remove_error = new catalog::Notice(catalog::Notice::Tone::Error);
-    m_remove_confirm = catalog::btnRemoveKey();
-    m_remove_actions = new catalog::ModalActions;
-    m_remove_actions->setBack(catalog::ModalActions::Back::Back);
-    m_remove_actions->addAction(m_remove_confirm);
-}
-
-void KeyDetail::connectRemove() {
-    connect(m_remove_actions, &catalog::ModalActions::backClicked, this, &KeyDetail::onBackClicked,
-            qontrol::UNIQUE);
-    connect(m_remove_confirm, &QPushButton::clicked, this, &KeyDetail::onNextClicked,
-            qontrol::UNIQUE);
-}
-
-auto KeyDetail::viewRemove() -> QWidget * {
-    return (new qontrol::Column)
-        ->spacing(resolve(Spacing::M))
-        ->push(m_remove_question)
-        ->push(m_remove_accounts)
-        ->push(m_remove_hot)
-        ->push(m_remove_error);
-}
-
-void KeyDetail::showRemove() {
-    auto current = info();
-    if (!current.has_value()) {
-        return;
-    }
-    m_remove_question->setText(TR("keys-remove-question").arg(m_alias, m_fingerprint));
-    QStringList names;
-    for (const auto &account : accounts()) {
-        names.append(account.name);
-    }
-    m_remove_accounts->setTitle(names.size() == 1
-                                    ? TR("keys-remove-accounts-one")
-                                    : TR("keys-remove-accounts-many").arg(names.size()));
-    m_remove_accounts->setText(
-        TR("keys-remove-accounts-body").arg(names.join(QStringLiteral(", "))));
-    m_remove_accounts->setVisible(!names.isEmpty());
-    m_remove_hot->setVisible(current->has_hot_secret);
-    m_remove_error->setVisible(false);
-    m_view = View::Remove;
-    showHeader(TR("keys-remove-title"));
-    setBody(m_remove_body);
-    setFooter(m_remove_actions);
-    setWidth(ModalWidth::L);
-}
-
-void KeyDetail::hideRemove() {
-    keep(m_remove_body);
-    keep(m_remove_actions);
-}
-
-void KeyDetail::removeKey() {
-    bool registered =
-        !m_module->rust()->key_descriptors(rust::String(m_fingerprint.toStdString())).empty();
-    auto result = m_module->removeKey(m_fingerprint, registered);
-    if (!result.is_ok) {
-        m_remove_error->setText(TR("keys-remove-failed").arg(KeysModule::toQt(result.error)));
-        m_remove_error->setVisible(true);
-        adjustSize();
-        return;
-    }
-    accept();
-}
-
 // ===== Shared =====
 
-auto KeyDetail::info() const -> std::optional<KeyInfo> {
-    if (m_module->rust() == nullptr) {
-        return std::nullopt;
-    }
-    auto result = m_module->rust()->key(rust::String(m_fingerprint.toStdString()));
-    if (!result.is_ok) {
-        return std::nullopt;
-    }
-    return result.key;
-}
-
 void KeyDetail::showHeader(const QString &title) {
-    auto current = info();
+    auto current = keyInfo(m_module, m_fingerprint);
     if (!current.has_value()) {
         return;
     }
     setWindowTitle(title);
-    auto *fingerprint = new Label(m_fingerprint, LabelRole::Mono);
-    fingerprint->setTone(LabelTone::Secondary);
-    fingerprint->setSize(catalog::LabelSize::Sm);
-    auto *end = (new qontrol::Row)
-                    ->spacing(resolve(Spacing::S))
-                    ->push(fingerprint)
-                    ->push(keyStatusPill(current.value()));
     auto *old = m_header;
-    m_header = catalog::modalHeader(title, end);
+    m_header = keyHeader(title, m_fingerprint, current.value());
     setHeader(m_header);
     delete old;
 }
 
+void KeyDetail::openFlow(KeyDetailFlow *flow) {
+    m_flow = flow;
+    connect(m_flow, &KeyDetailFlow::viewChanged, this, &KeyDetail::onFlowViewChanged,
+            qontrol::UNIQUE);
+    connect(m_flow, &KeyDetailFlow::back, this, &KeyDetail::onFlowBack, qontrol::UNIQUE);
+    connect(m_flow, &KeyDetailFlow::removed, this, &KeyDetail::accept, qontrol::UNIQUE);
+    setPage(m_flow);
+    m_flow->start();
+}
+
+void KeyDetail::closeFlow() {
+    if (m_flow == nullptr) {
+        return;
+    }
+    // Deleted later: the flow may still be in the slot that emitted.
+    m_flow->deleteLater();
+    m_flow = nullptr;
+}
+
 // ===== Slots =====
 
-void KeyDetail::onBackClicked() {
-    switch (m_view) {
-    case View::Password:
-    case View::Remove:
-        showDetail();
-        return;
-    case View::Detail:
-    case View::Reveal:
-        return;
-    }
-}
-
-void KeyDetail::onNextClicked() {
-    switch (m_view) {
-    case View::Password:
-        proceedPassword();
-        return;
-    case View::Reveal:
-        closeWords();
-        return;
-    case View::Remove:
-        removeKey();
-        return;
-    case View::Detail:
-        return;
-    }
-}
-
 void KeyDetail::onKeyChanged() {
-    auto current = info();
+    auto current = keyInfo(m_module, m_fingerprint);
     if (!current.has_value()) {
         // Removed: the window is closing.
         return;
     }
     m_alias = KeysModule::toQt(current->alias);
-    // The detail's title is the alias, which may have just changed.
-    showHeader(m_detail->isVisibleTo(this) ? m_alias : windowTitle());
+    // The detail's title is the alias, which may have just changed. A flow keeps its own.
+    if (m_flow == nullptr) {
+        showHeader(m_alias);
+    }
     onAliasEdited();
     refreshDevices();
     refreshRoutes(current.value());
@@ -859,7 +599,7 @@ void KeyDetail::onMoveDownClicked() {
 }
 
 void KeyDetail::onRemoveRouteClicked() {
-    auto current = info();
+    auto current = keyInfo(m_module, m_fingerprint);
     if (!current.has_value()) {
         return;
     }
@@ -927,40 +667,66 @@ void KeyDetail::onRegistrationError(std::optional<ReqId> req_id, const QString &
     finishRegistrationRequest(registering ? Registration::NotRegistered : Registration::Unknown);
 }
 
-void KeyDetail::onPasswordEdited() {
-    bool empty = m_password_input->text().isEmpty();
-    if (!empty) {
-        m_password_error->setVisible(false);
-    }
-    m_password_proceed->setEnabled(!empty);
-    m_password_actions->setReason(empty ? TR("flow-password-reason") : QString());
+void KeyDetail::onRevealClicked() {
+    openFlow(new RevealFlow(m_module, m_fingerprint));
 }
 
-void KeyDetail::onMnemonicRevealed(ReqId req_id, const MnemonicResult &result) {
-    if (m_reveal_req == 0 || req_id != m_reveal_req) {
-        return;
-    }
-    m_reveal_req = 0;
-    if (!result.is_ok) {
-        m_password_error->setText(
-            result.wrong_password ? TR("flow-password-wrong")
-                                  : TR("keys-reveal-failed").arg(KeysModule::toQt(result.error)));
-        m_password_error->setVisible(true);
-        showPassword();
-        return;
-    }
-    // A QString cannot be zeroized: Rust owns the real wiping of the phrase.
-    QString mnemonic = KeysModule::toQt(result.mnemonic);
-    m_words->setWords(mnemonic.split(QLatin1Char(' '), Qt::SkipEmptyParts));
-    mnemonic.fill(QChar());
-    showReveal();
+void KeyDetail::onRemoveClicked() {
+    openFlow(new RemoveFlow(m_module, m_fingerprint));
 }
 
-void KeyDetail::onToggleWordsClicked() {
-    bool masked = m_hide_words->isVisible();
-    m_words->setMasked(masked);
-    m_hide_words->setVisible(!masked);
-    m_show_words->setVisible(masked);
+void KeyDetail::onFlowViewChanged(const QString &title, ModalWidth width) {
+    setWindowTitle(title);
+    setWidth(width);
+}
+
+void KeyDetail::onFlowBack() {
+    showDetail();
+    closeFlow();
+}
+
+// ===== KeyDetailFlow =====
+
+KeyDetailFlow::KeyDetailFlow(KeysModule *module, QString fingerprint)
+    : m_module(module),
+      m_fingerprint(std::move(fingerprint)) {
+    m_slots = new catalog::ViewSlots;
+    (new qontrol::Column)->push(m_slots)->into(this);
+    connect(m_module, &KeysModule::keysChanged, this, &KeyDetailFlow::onKeyChanged,
+            qontrol::UNIQUE);
+    connect(m_module, &KeysModule::liveDevicesChanged, this, &KeyDetailFlow::onKeyChanged,
+            qontrol::UNIQUE);
+}
+
+auto KeyDetailFlow::viewSlots() const -> catalog::ViewSlots * {
+    return m_slots;
+}
+
+auto KeyDetailFlow::module() const -> KeysModule * {
+    return m_module;
+}
+
+auto KeyDetailFlow::fingerprint() const -> const QString & {
+    return m_fingerprint;
+}
+
+void KeyDetailFlow::showHeader(const QString &title) {
+    auto current = keyInfo(m_module, m_fingerprint);
+    if (!current.has_value()) {
+        return;
+    }
+    m_title = title;
+    auto *old = m_header;
+    m_header = keyHeader(title, m_fingerprint, current.value());
+    m_slots->setHeader(m_header);
+    delete old;
+}
+
+// The status on the right follows the key and its device.
+void KeyDetailFlow::onKeyChanged() {
+    if (m_header != nullptr) {
+        showHeader(m_title);
+    }
 }
 
 } // namespace keys::modal

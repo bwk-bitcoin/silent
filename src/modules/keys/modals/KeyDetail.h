@@ -7,8 +7,10 @@
 #include <QPointer>
 #include <QString>
 #include <QStringList>
+#include <QWidget>
 
 #include "catalog/containers/Modal.h"
+#include "theme/Palette.h"
 
 #include <interfaces/types.h>
 #include <silent.h>
@@ -26,7 +28,7 @@ class Notice;
 class ScrollArea;
 class Section;
 class Table;
-class WordGrid;
+class ViewSlots;
 } // namespace catalog
 
 namespace keys {
@@ -35,11 +37,8 @@ class KeysModule;
 
 namespace keys::modal {
 
-// An account whose descriptor this key signs for.
-struct KeyAccount {
-    QString name;
-    QString descriptor;
-};
+class KeyDetailFlow;
+struct KeyAccount;
 
 // Where an account's descriptor stands on the key's connected device.
 enum class Registration { Unknown, Checking, Registering, Registered, NotRegistered };
@@ -47,18 +46,16 @@ enum class Registration { Unknown, Checking, Registering, Registered, NotRegiste
 // One registered key: its alias, the devices it was seen on, its routes in priority
 // order, its cached xpubs and the accounts using it, with each account's descriptor
 // checked and registered on the key's connected device. Revealing the mnemonic of
-// a hot key and removing the key are steps of this same modal; fetching an xpub
+// a hot key and removing the key are flows embedded in its place; fetching an xpub
 // opens its own modal over it.
 class KeyDetail final : public catalog::Modal {
     Q_OBJECT
 
 public:
     KeyDetail(KeysModule *module, const QString &fingerprint);
-    ~KeyDetail() override;
+    void done(int result) override;
 
 public slots:
-    void onBackClicked();
-    void onNextClicked();
     void onKeyChanged();
     void onAliasEdited();
     void onSaveAliasClicked();
@@ -73,14 +70,12 @@ public slots:
     void onDescriptorIsRegistered(ReqId req_id, bool registered);
     void onDescriptorRegistered(ReqId req_id, bool registered);
     void onRegistrationError(std::optional<ReqId> req_id, const QString &message);
-    void onPasswordEdited();
-    void onMnemonicRevealed(ReqId req_id, const MnemonicResult &result);
-    void onToggleWordsClicked();
+    void onRevealClicked();
+    void onRemoveClicked();
+    void onFlowViewChanged(const QString &title, ModalWidth width);
+    void onFlowBack();
 
 protected:
-    // The view on display: Back and the primary action act on it.
-    enum class View { Detail, Password, Reveal, Remove };
-
     void init();
     void doConnect();
     void view();
@@ -97,7 +92,6 @@ protected:
     void showRouteResult(const KeyOpResult &result);
     void refreshXpubs();
     void refreshAccounts(const KeyInfo &info);
-    [[nodiscard]] auto accounts() const -> QList<KeyAccount>;
     [[nodiscard]] auto registrationCell(const KeyAccount &account, bool applies) -> QWidget *;
     // Follows the key's ready device: a new one is asked about every account, and
     // accounts added since are asked about on the same one.
@@ -108,42 +102,14 @@ protected:
     void stopRegistrations();
     void showRegistrationError(const QString &message);
 
-    // Password view
-    // Password view
-    void initPassword();
-    void connectPassword();
-    [[nodiscard]] auto viewPassword() -> QWidget *;
-    void showPassword();
-    void hidePassword();
-    void proceedPassword();
-
-    // Reveal view
-    // Reveal view
-    void initReveal();
-    void connectReveal();
-    [[nodiscard]] auto viewReveal() -> QWidget *;
-    void showReveal();
-    void hideReveal();
-    void closeWords();
-
-    // Remove view
-    // Remove view
-    void initRemove();
-    void connectRemove();
-    [[nodiscard]] auto viewRemove() -> QWidget *;
-    void showRemove();
-    void hideRemove();
-    void removeKey();
-
     // Shared
-    // Shared
-    [[nodiscard]] auto info() const -> std::optional<KeyInfo>;
     // The title on the left, the fingerprint and the key status on the right.
     void showHeader(const QString &title);
+    void openFlow(KeyDetailFlow *flow);
+    void closeFlow();
 
 private:
     KeysModule *m_module = nullptr;
-    View m_view = View::Detail;
     QString m_fingerprint;
     QString m_alias;
 
@@ -179,30 +145,45 @@ private:
     QString m_register_descriptor;
     ReqId m_register_req = 0;
 
-    // The value is handed over once and cleared; a QString cannot be zeroized, so this
-    // is best effort.
-    catalog::Input *m_password_input = nullptr;
-    catalog::Notice *m_password_error = nullptr;
-    catalog::Button *m_password_proceed = nullptr;
-    catalog::Button *m_password_unlocking = nullptr;
-    catalog::ModalActions *m_password_actions = nullptr;
-    QWidget *m_password_body = nullptr;
-    // The outstanding reveal request, so a stale answer is ignored.
-    ReqId m_reveal_req = 0;
-    catalog::WordGrid *m_words = nullptr;
-    catalog::Button *m_hide_words = nullptr;
-    catalog::Button *m_show_words = nullptr;
-    catalog::Button *m_words_done = nullptr;
-    catalog::ModalActions *m_reveal_actions = nullptr;
-    QWidget *m_reveal_body = nullptr;
+    // The flow picked off the detail, deleted once it goes back or the window closes.
+    KeyDetailFlow *m_flow = nullptr;
+};
 
-    catalog::Label *m_remove_question = nullptr;
-    catalog::Notice *m_remove_accounts = nullptr;
-    catalog::Notice *m_remove_hot = nullptr;
-    catalog::Notice *m_remove_error = nullptr;
-    catalog::Button *m_remove_confirm = nullptr;
-    catalog::ModalActions *m_remove_actions = nullptr;
-    QWidget *m_remove_body = nullptr;
+// One step off a key's detail, embedded in KeyDetail in place of the detail: its views,
+// their button bars and the work behind them, under the detail's header. Deleting it
+// stops that work.
+class KeyDetailFlow : public QWidget {
+    Q_OBJECT
+
+public:
+    KeyDetailFlow(KeysModule *module, QString fingerprint);
+    // Shows the first view, once KeyDetail listens to the signals.
+    virtual void start() = 0;
+
+signals:
+    // The window title and width of the view now shown.
+    void viewChanged(const QString &title, ModalWidth width);
+    // Back left the flow: KeyDetail shows the detail again.
+    void back();
+    // The key is removed: KeyDetail closes.
+    void removed();
+
+public slots:
+    void onKeyChanged();
+
+protected:
+    [[nodiscard]] auto viewSlots() const -> catalog::ViewSlots *;
+    [[nodiscard]] auto module() const -> KeysModule *;
+    [[nodiscard]] auto fingerprint() const -> const QString &;
+    // The detail's header under `title`, kept up to date with the key.
+    void showHeader(const QString &title);
+
+private:
+    catalog::ViewSlots *m_slots = nullptr;
+    KeysModule *m_module = nullptr;
+    QString m_fingerprint;
+    QString m_title;
+    QWidget *m_header = nullptr;
 };
 
 } // namespace keys::modal

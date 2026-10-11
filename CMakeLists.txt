@@ -155,6 +155,12 @@ set(SILENT_APP_SOURCES
     src/modules/keys/modals/RegisterDevice.cpp
     src/modules/keys/modals/KeyDetail.h
     src/modules/keys/modals/KeyDetail.cpp
+    src/modules/keys/modals/keydetail/KeyRecord.h
+    src/modules/keys/modals/keydetail/KeyRecord.cpp
+    src/modules/keys/modals/keydetail/RevealFlow.h
+    src/modules/keys/modals/keydetail/RevealFlow.cpp
+    src/modules/keys/modals/keydetail/RemoveFlow.h
+    src/modules/keys/modals/keydetail/RemoveFlow.cpp
     src/modules/keys/modals/FetchXpub.h
     src/modules/keys/modals/FetchXpub.cpp
     src/modules/sp/SpPlugin.h
