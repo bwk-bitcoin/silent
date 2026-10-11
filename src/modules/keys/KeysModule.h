@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 
@@ -55,13 +56,14 @@ public:
 
     [[nodiscard]] QList<KeyEntry> keys(Network network) const override;
     auto newRequest() -> ReqId override;
-    void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors,
-              const QString &wallet_name) override;
-    void verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
-                       const QString &address) override;
-    void spDescriptor(ReqId req_id, const QString &fingerprint) override;
-    void xpub(ReqId req_id, const QString &fingerprint, const QString &path) override;
-    void registerDescriptor(ReqId req_id, const QString &fingerprint,
+    void sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
+              const QStringList &descriptors, const QString &wallet_name) override;
+    void verifyAddress(ReqId req_id, Network network, const QString &descriptor,
+                       const QString &path, const QString &address) override;
+    void spDescriptor(ReqId req_id, Network network, const QString &fingerprint) override;
+    void xpub(ReqId req_id, Network network, const QString &fingerprint,
+              const QString &path) override;
+    void registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
                             const QString &descriptor) override;
 
 public slots:
@@ -99,7 +101,10 @@ public:
     [[nodiscard]] static Network network();
     void setNetwork(Network network);
 
+    // The keys of the active network: a request's while it runs, else the tab's.
     [[nodiscard]] QList<KeyInfo> keys() const;
+    // The keys of the Keys tab's network, whatever request runs.
+    [[nodiscard]] QList<KeyInfo> tabKeys() const;
     [[nodiscard]] bool hasKey(const QString &fingerprint) const;
     // Shared by RouteSigner and OfflineSigner's info() answer: the number of a key's
     // descriptors the Rust side has registered, or 0 while the handle isn't built yet.
@@ -262,11 +267,26 @@ protected:
                                       KeyRouteKind route) -> ISigner *;
     [[nodiscard]] auto offlineSignerFor(const QString &fingerprint, const KeyInfo &info)
         -> ISigner *;
+    // A cached signer's key: the fingerprint on the active network.
+    [[nodiscard]] auto signerKey(const QString &fingerprint) const -> QString;
 
 private:
-    // Box's constness gates the pointee's constness through operator->(), so this is
-    // mutable to let the const rust() accessor hand callers a mutable handle.
-    mutable std::optional<rust::Box<RustKeys>> m_rust;
+    friend class NetworkScope;
+
+    // The network rust() and keys() answer for: a request's while it runs (see
+    // NetworkScope), the Keys tab's otherwise.
+    [[nodiscard]] auto activeNetwork() const -> Network;
+    // The handle of `network`, opened on first use and fed the live devices.
+    [[nodiscard]] auto handle(Network network) const -> RustKeys *;
+    static void pushLiveDevices(RustKeys &handle);
+
+    // One handle per network, so a request for an account on any network finds its
+    // keys whatever network the Keys tab shows. Box's constness gates the pointee's
+    // constness through operator->(), so this is mutable to let the const rust()
+    // accessor hand callers a mutable handle.
+    mutable std::map<Network, rust::Box<RustKeys>> m_handles;
+    // Set by NetworkScope while a request for that network runs.
+    std::optional<Network> m_scope;
     std::unique_ptr<KeysBus> m_bus;
     HwiModule *m_hwi = nullptr;
     QPointer<KeysTab> m_tab;
@@ -276,9 +296,27 @@ private:
     // (a failed config write, another process), so a sealed key always matches.
     static Network s_network; // NOLINT(readability-identifier-naming)
     // Module-supplied signers (hot, QR, SD card), parented to this module and
-    // deleted with it. Reused while a fingerprint's chosen route stays the same;
-    // replaced, never mutated, when it changes.
+    // deleted with it, by network and fingerprint (one seed has the same fingerprint
+    // on every network). Reused while a key's chosen route stays the same; replaced,
+    // never mutated, when it changes.
     QHash<QString, ISigner *> m_signers;
+};
+
+// Makes `network` the keys module's network while it lives: rust(), keys() and the
+// flows a request opens then answer for it, not for the Keys tab's. Every request of
+// the bus runs in one.
+class NetworkScope {
+public:
+    NetworkScope(KeysModule *module, Network network);
+    ~NetworkScope();
+    NetworkScope(const NetworkScope &) = delete;
+    NetworkScope(NetworkScope &&) = delete;
+    auto operator=(const NetworkScope &) -> NetworkScope & = delete;
+    auto operator=(NetworkScope &&) -> NetworkScope & = delete;
+
+private:
+    KeysModule *m_module = nullptr;
+    std::optional<Network> m_previous;
 };
 
 } // namespace keys

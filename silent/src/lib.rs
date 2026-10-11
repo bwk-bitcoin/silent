@@ -889,6 +889,9 @@ mod ffi {
         /// Get the number of sub-accounts.
         fn sub_account_count(self: &Account) -> u32;
 
+        /// The account's network (Regtest when it failed to load).
+        fn network(self: &Account) -> Network;
+
         /// Whether the account has a segwit (wpkh) sub-account.
         fn has_segwit(self: &Account) -> bool;
 

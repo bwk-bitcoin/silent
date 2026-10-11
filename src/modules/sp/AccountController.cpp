@@ -329,6 +329,11 @@ auto AccountController::newTaprootAddr() -> rust::String {
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+auto AccountController::network() -> Network {
+    return m_account.has_value() ? m_account.value()->network() : Network::Regtest;
+}
+
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 auto AccountController::hasSegwit() -> bool {
     return m_account.has_value() && m_account.value()->has_segwit();
 }

@@ -163,7 +163,7 @@ void Receive::showVerifyModal(const QString &address) {
 
     m_verify_req_id = keys->newRequest();
     // Returns once the flow has closed.
-    keys->verifyAddress(m_verify_req_id, descriptor, path, address);
+    keys->verifyAddress(m_verify_req_id, m_controller->network(), descriptor, path, address);
 }
 
 void Receive::onKeysError(std::optional<ReqId> req_id, const QString &message) {

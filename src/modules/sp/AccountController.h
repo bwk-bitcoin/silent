@@ -24,6 +24,8 @@ public:
     virtual auto getSpAddress() -> rust::String;
     virtual auto newSegwitAddr() -> rust::String;
     virtual auto newTaprootAddr() -> rust::String;
+    // The account's network, the one the keys it signs with are registered on.
+    virtual auto network() -> Network;
     virtual auto hasSegwit() -> bool;
     virtual auto hasTaproot() -> bool;
     virtual auto getDescriptor() -> rust::String;

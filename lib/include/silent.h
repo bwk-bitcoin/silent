@@ -1909,6 +1909,9 @@ struct Account final : public ::rust::Opaque {
   // Get the number of sub-accounts.
   ::std::uint32_t sub_account_count() const noexcept;
 
+  // The account's network (Regtest when it failed to load).
+  ::Network network() const noexcept;
+
   // Whether the account has a segwit (wpkh) sub-account.
   bool has_segwit() const noexcept;
 

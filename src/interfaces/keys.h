@@ -43,23 +43,26 @@ public:
     // Allocates a request id. Callers must call this before every request below,
     // store the id, then call the request: an answer may arrive during the call.
     virtual auto newRequest() -> ReqId = 0;
+    // Each request below names the network of the keys it needs (the account's), which
+    // need not be the one the Keys tab shows.
     // Signs the PSBT with every key the descriptors need, in the order the module
     // decides. `wallet_name` names the files of an SD card route.
-    virtual void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors,
-                      const QString &wallet_name) = 0;
+    virtual void sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
+                      const QStringList &descriptors, const QString &wallet_name) = 0;
     // Shows `address` on the device holding the key `descriptor` belongs to.
-    virtual void verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
-                               const QString &address) = 0;
+    virtual void verifyAddress(ReqId req_id, Network network, const QString &descriptor,
+                               const QString &path, const QString &address) = 0;
     // Fetches the sp() descriptor from the key, over its best route. The only
     // descriptor a key ever hands out: see the SP exception in the design.
-    virtual void spDescriptor(ReqId req_id, const QString &fingerprint) = 0;
+    virtual void spDescriptor(ReqId req_id, Network network, const QString &fingerprint) = 0;
     // Fetches the key's xpub at `path` (an account's segwit or taproot sub-account):
     // from the key's cache when it holds one, else over the key's route. Answers
     // xpubReady(), error() or cancelled().
-    virtual void xpub(ReqId req_id, const QString &fingerprint, const QString &path) = 0;
+    virtual void xpub(ReqId req_id, Network network, const QString &fingerprint,
+                      const QString &path) = 0;
     // Records that `descriptor` is registered with this key, and registers it on the
     // devices that need it.
-    virtual void registerDescriptor(ReqId req_id, const QString &fingerprint,
+    virtual void registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
                                     const QString &descriptor) = 0;
 
 signals:

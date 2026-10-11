@@ -85,6 +85,14 @@ impl Account {
         })
     }
 
+    /// The account's network, Regtest when it failed to load: check `is_ok()` first.
+    pub fn network(&self) -> crate::ffi::Network {
+        match &self.inner {
+            Some(inner) => inner.network.into(),
+            None => crate::ffi::Network::Regtest,
+        }
+    }
+
     /// Check if the account was created successfully.
     pub fn is_ok(&self) -> bool {
         self.inner.is_some()

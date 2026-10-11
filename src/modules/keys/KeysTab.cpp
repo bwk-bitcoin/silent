@@ -300,7 +300,7 @@ void KeysTab::rebuildKeys() {
     m_key_column->clear();
     m_key_column->spacing(resolve(Spacing::S));
 
-    QList<KeyInfo> keyList = m_module->keys();
+    QList<KeyInfo> keyList = m_module->tabKeys();
     for (const auto &info : keyList) {
         auto *row = keyRow(info);
         m_key_column->push(row);
@@ -344,7 +344,7 @@ auto KeysTab::keyAlias(const QString &fingerprint) const -> QString {
     if (fingerprint.isEmpty()) {
         return QString();
     }
-    for (const auto &info : m_module->keys()) {
+    for (const auto &info : m_module->tabKeys()) {
         if (QString::compare(KeysModule::toQt(info.fingerprint), fingerprint,
                              Qt::CaseInsensitive) == 0) {
             return KeysModule::toQt(info.alias);
@@ -365,7 +365,7 @@ void KeysTab::onDeviceClicked() {
         return;
     }
     QStringList aliases;
-    for (const auto &info : m_module->keys()) {
+    for (const auto &info : m_module->tabKeys()) {
         aliases.append(KeysModule::toQt(info.alias));
     }
     m_register_instance = entry->instanceId;

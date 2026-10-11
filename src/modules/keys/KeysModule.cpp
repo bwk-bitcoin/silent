@@ -55,11 +55,7 @@ KeysBus::KeysBus(KeysModule *module, QObject *parent) : IKeys(parent), m_module(
 
 QList<KeyEntry> KeysBus::keys(Network network) const {
     QList<KeyEntry> entries;
-    // The module holds one network at a time, so a request for any other network
-    // gets nothing rather than a stale cross-network list.
-    if (network != KeysModule::network()) {
-        return entries;
-    }
+    NetworkScope scope(m_module, network);
     for (const auto &info : m_module->keys()) {
         entries.append(m_module->buildKeyEntry(info));
     }
@@ -70,26 +66,31 @@ auto KeysBus::newRequest() -> ReqId {
     return m_module->nextReqId();
 }
 
-void KeysBus::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors,
-                   const QString &wallet_name) {
+void KeysBus::sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
+                   const QStringList &descriptors, const QString &wallet_name) {
+    NetworkScope scope(m_module, network);
     m_module->sign(req_id, psbt_v2_hex, descriptors, wallet_name);
 }
 
-void KeysBus::verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
-                            const QString &address) {
+void KeysBus::verifyAddress(ReqId req_id, Network network, const QString &descriptor,
+                            const QString &path, const QString &address) {
+    NetworkScope scope(m_module, network);
     m_module->verifyAddress(req_id, descriptor, path, address);
 }
 
-void KeysBus::spDescriptor(ReqId req_id, const QString &fingerprint) {
+void KeysBus::spDescriptor(ReqId req_id, Network network, const QString &fingerprint) {
+    NetworkScope scope(m_module, network);
     m_module->spDescriptor(req_id, fingerprint);
 }
 
-void KeysBus::xpub(ReqId req_id, const QString &fingerprint, const QString &path) {
+void KeysBus::xpub(ReqId req_id, Network network, const QString &fingerprint, const QString &path) {
+    NetworkScope scope(m_module, network);
     m_module->fetchXpub(req_id, fingerprint, path);
 }
 
-void KeysBus::registerDescriptor(ReqId req_id, const QString &fingerprint,
+void KeysBus::registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
                                  const QString &descriptor) {
+    NetworkScope scope(m_module, network);
     m_module->registerDescriptor(req_id, fingerprint, descriptor);
 }
 
@@ -187,14 +188,11 @@ void KeysModule::startInstance(const QString &id) {
 
 void KeysModule::createModule() {
     s_network = ::hwi_config_network();
-    m_rust = std::make_optional(::new_keys_module(s_network));
-    if (!m_rust.value()->is_ok()) {
-        qWarning() << "keys:" << toQt(m_rust.value()->get_error());
-    }
+    static_cast<void>(handle(s_network));
 }
 
 void KeysModule::teardownModule() {
-    m_rust.reset();
+    m_handles.clear();
 }
 
 Network KeysModule::network() {
@@ -205,14 +203,11 @@ void KeysModule::setNetwork(Network network) {
     if (s_network == network) {
         return;
     }
-    if (!m_rust.has_value()) {
-        return;
-    }
     // Does not touch hwi_set_config_network: the tab calls HwiModule::setNetwork for
     // that, which owns the persistence.
-    auto result = m_rust.value()->set_network(network);
-    if (!result.is_ok) {
-        qWarning() << "keys:" << toQt(result.error);
+    auto *opened = handle(network);
+    if (!opened->is_ok()) {
+        qWarning() << "keys:" << toQt(opened->get_error());
         return;
     }
     s_network = network;
@@ -221,10 +216,18 @@ void KeysModule::setNetwork(Network network) {
 
 QList<KeyInfo> KeysModule::keys() const {
     QList<KeyInfo> keys;
-    if (!m_rust.has_value()) {
+    if (rust() == nullptr) {
         return keys;
     }
-    for (const auto &key : m_rust.value()->keys()) {
+    for (const auto &key : rust()->keys()) {
+        keys.append(key);
+    }
+    return keys;
+}
+
+QList<KeyInfo> KeysModule::tabKeys() const {
+    QList<KeyInfo> keys;
+    for (const auto &key : handle(s_network)->keys()) {
         keys.append(key);
     }
     return keys;
@@ -318,7 +321,8 @@ auto KeysModule::findLiveDeviceSigner(const QString &fingerprint) -> ISigner * {
 
 auto KeysModule::routeSignerFor(const QString &fingerprint, const KeyInfo &info, KeyRouteKind route)
     -> ISigner * {
-    auto *cached = m_signers.value(fingerprint, nullptr);
+    QString cacheKey = signerKey(fingerprint);
+    auto *cached = m_signers.value(cacheKey, nullptr);
     auto *cachedRoute = qobject_cast<RouteSigner *>(cached);
     if (cachedRoute != nullptr && cachedRoute->route() == route) {
         return cachedRoute;
@@ -327,12 +331,17 @@ auto KeysModule::routeSignerFor(const QString &fingerprint, const KeyInfo &info,
     if (cached != nullptr) {
         cached->deleteLater();
     }
-    m_signers.insert(fingerprint, created);
+    m_signers.insert(cacheKey, created);
     return created;
 }
 
+auto KeysModule::signerKey(const QString &fingerprint) const -> QString {
+    return QStringLiteral("%1/%2").arg(static_cast<int>(activeNetwork())).arg(fingerprint);
+}
+
 auto KeysModule::offlineSignerFor(const QString &fingerprint, const KeyInfo &info) -> ISigner * {
-    auto *cached = m_signers.value(fingerprint, nullptr);
+    QString cacheKey = signerKey(fingerprint);
+    auto *cached = m_signers.value(cacheKey, nullptr);
     if (qobject_cast<OfflineSigner *>(cached) != nullptr) {
         return cached;
     }
@@ -340,7 +349,7 @@ auto KeysModule::offlineSignerFor(const QString &fingerprint, const KeyInfo &inf
     if (cached != nullptr) {
         cached->deleteLater();
     }
-    m_signers.insert(fingerprint, created);
+    m_signers.insert(cacheKey, created);
     return created;
 }
 
@@ -655,14 +664,14 @@ void KeysModule::loadSdPsbt(ReqId req_id, const QString &path) {
 }
 
 auto KeysModule::setAlias(const QString &fingerprint, const QString &alias) -> KeyOpResult {
-    if (!m_rust.has_value()) {
+    if (rust() == nullptr) {
         KeyOpResult result;
         result.is_ok = false;
         result.error = rust::String("keys: module not ready");
         return result;
     }
-    auto result = m_rust.value()->set_alias(rust::String(fingerprint.toStdString()),
-                                            rust::String(alias.toStdString()));
+    auto result = rust()->set_alias(rust::String(fingerprint.toStdString()),
+                                    rust::String(alias.toStdString()));
     if (result.is_ok) {
         emit keysChanged();
     }
@@ -670,13 +679,13 @@ auto KeysModule::setAlias(const QString &fingerprint, const QString &alias) -> K
 }
 
 auto KeysModule::addRoute(const QString &fingerprint, KeyRouteKind kind) -> KeyOpResult {
-    if (!m_rust.has_value()) {
+    if (rust() == nullptr) {
         KeyOpResult result;
         result.is_ok = false;
         result.error = rust::String("keys: module not ready");
         return result;
     }
-    auto result = m_rust.value()->add_route(rust::String(fingerprint.toStdString()), kind);
+    auto result = rust()->add_route(rust::String(fingerprint.toStdString()), kind);
     if (result.is_ok) {
         emit keysChanged();
     }
@@ -684,13 +693,13 @@ auto KeysModule::addRoute(const QString &fingerprint, KeyRouteKind kind) -> KeyO
 }
 
 auto KeysModule::removeRoute(const QString &fingerprint, KeyRouteKind kind) -> KeyOpResult {
-    if (!m_rust.has_value()) {
+    if (rust() == nullptr) {
         KeyOpResult result;
         result.is_ok = false;
         result.error = rust::String("keys: module not ready");
         return result;
     }
-    auto result = m_rust.value()->remove_route(rust::String(fingerprint.toStdString()), kind);
+    auto result = rust()->remove_route(rust::String(fingerprint.toStdString()), kind);
     if (result.is_ok) {
         emit keysChanged();
     }
@@ -699,14 +708,14 @@ auto KeysModule::removeRoute(const QString &fingerprint, KeyRouteKind kind) -> K
 
 auto KeysModule::setRouteOrder(const QString &fingerprint, rust::Vec<KeyRouteKind> order)
     -> KeyOpResult {
-    if (!m_rust.has_value()) {
+    if (rust() == nullptr) {
         KeyOpResult result;
         result.is_ok = false;
         result.error = rust::String("keys: module not ready");
         return result;
     }
     auto result =
-        m_rust.value()->set_route_order(rust::String(fingerprint.toStdString()), std::move(order));
+        rust()->set_route_order(rust::String(fingerprint.toStdString()), std::move(order));
     if (result.is_ok) {
         emit keysChanged();
     }
@@ -714,13 +723,13 @@ auto KeysModule::setRouteOrder(const QString &fingerprint, rust::Vec<KeyRouteKin
 }
 
 auto KeysModule::removeKey(const QString &fingerprint, bool force) -> KeyOpResult {
-    if (!m_rust.has_value()) {
+    if (rust() == nullptr) {
         KeyOpResult result;
         result.is_ok = false;
         result.error = rust::String("keys: module not ready");
         return result;
     }
-    auto result = m_rust.value()->remove_key(rust::String(fingerprint.toStdString()), force);
+    auto result = rust()->remove_key(rust::String(fingerprint.toStdString()), force);
     if (result.is_ok) {
         emit keysChanged();
     }
@@ -737,32 +746,34 @@ auto KeysModule::addKey(const QString &fingerprint, const QString &alias,
     return result;
 }
 
+// Writes the key store through the handle: not const, whatever rust()'s constness says.
+// NOLINTNEXTLINE(readability-make-member-function-const)
 auto KeysModule::insertKey(const QString &fingerprint, const QString &alias,
                            const QList<KeyRouteKind> &routes, const QList<PathXpub> &xpubs)
     -> KeyOpResult {
-    if (!m_rust.has_value()) {
+    if (rust() == nullptr) {
         return failedOp(TR("keys-module-not-ready"));
     }
     auto key = rust::String(fingerprint.toStdString());
-    auto added = m_rust.value()->add_key(key, rust::String(alias.toStdString()));
+    auto added = rust()->add_key(key, rust::String(alias.toStdString()));
     if (!added.is_ok) {
         return failedOp(toQt(added.error));
     }
     KeyOpResult result{.is_ok = true, .error = rust::String()};
     for (auto route : routes) {
         if (result.is_ok) {
-            result = m_rust.value()->add_route(key, route);
+            result = rust()->add_route(key, route);
         }
     }
     for (const auto &entry : xpubs) {
         if (result.is_ok) {
-            result = m_rust.value()->cache_xpub(key, rust::String(entry.path.toStdString()),
-                                                rust::String(entry.xpub.toStdString()));
+            result = rust()->cache_xpub(key, rust::String(entry.path.toStdString()),
+                                        rust::String(entry.xpub.toStdString()));
         }
     }
     if (!result.is_ok) {
         // A key half added would show up without its routes or xpubs.
-        auto removed = m_rust.value()->remove_key(key, true);
+        auto removed = rust()->remove_key(key, true);
         if (!removed.is_ok) {
             qWarning() << "keys:" << toQt(removed.error);
         }
@@ -778,9 +789,9 @@ auto KeysModule::addDeviceKey(const plugin::SignerEntry &entry, const QString &a
     if (!result.is_ok) {
         return result;
     }
-    result = m_rust.value()->record_device(toLiveDevice(entry));
+    result = rust()->record_device(toLiveDevice(entry));
     if (!result.is_ok) {
-        auto removed = m_rust.value()->remove_key(rust::String(fingerprint.toStdString()), true);
+        auto removed = rust()->remove_key(rust::String(fingerprint.toStdString()), true);
         if (!removed.is_ok) {
             qWarning() << "keys:" << toQt(removed.error);
         }
@@ -792,12 +803,12 @@ auto KeysModule::addDeviceKey(const plugin::SignerEntry &entry, const QString &a
 
 auto KeysModule::cacheXpub(const QString &fingerprint, const QString &path, const QString &xpub)
     -> KeyOpResult {
-    if (!m_rust.has_value()) {
+    if (rust() == nullptr) {
         return failedOp(TR("keys-module-not-ready"));
     }
-    auto result = m_rust.value()->cache_xpub(rust::String(fingerprint.toStdString()),
-                                             rust::String(path.toStdString()),
-                                             rust::String(xpub.toStdString()));
+    auto result =
+        rust()->cache_xpub(rust::String(fingerprint.toStdString()),
+                           rust::String(path.toStdString()), rust::String(xpub.toStdString()));
     if (result.is_ok) {
         emit keysChanged();
     }
@@ -805,10 +816,10 @@ auto KeysModule::cacheXpub(const QString &fingerprint, const QString &path, cons
 }
 
 auto KeysModule::recordDevice(const plugin::SignerEntry &entry) -> KeyOpResult {
-    if (!m_rust.has_value()) {
+    if (rust() == nullptr) {
         return failedOp(TR("keys-module-not-ready"));
     }
-    auto result = m_rust.value()->record_device(toLiveDevice(entry));
+    auto result = rust()->record_device(toLiveDevice(entry));
     if (result.is_ok) {
         emit keysChanged();
     }
@@ -817,7 +828,7 @@ auto KeysModule::recordDevice(const plugin::SignerEntry &entry) -> KeyOpResult {
 
 auto KeysModule::recordQrDevice(const QString &fingerprint, const qr::QrDevice &device)
     -> KeyOpResult {
-    if (!m_rust.has_value()) {
+    if (rust() == nullptr) {
         return failedOp(TR("keys-module-not-ready"));
     }
     LiveDevice live;
@@ -829,7 +840,7 @@ auto KeysModule::recordQrDevice(const QString &fingerprint, const qr::QrDevice &
     live.version = rust::String(device.version.toStdString());
     live.capabilities = device.capabilities;
     live.module = rust::String("qr");
-    auto result = m_rust.value()->record_device(std::move(live));
+    auto result = rust()->record_device(std::move(live));
     if (result.is_ok) {
         emit keysChanged();
     }
@@ -869,7 +880,43 @@ auto KeysModule::toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice {
 }
 
 RustKeys *KeysModule::rust() const {
-    return m_rust.has_value() ? m_rust.value().operator->() : nullptr;
+    return handle(activeNetwork());
+}
+
+auto KeysModule::activeNetwork() const -> Network {
+    return m_scope.value_or(s_network);
+}
+
+auto KeysModule::handle(Network network) const -> RustKeys * {
+    auto found = m_handles.find(network);
+    if (found == m_handles.end()) {
+        found = m_handles.emplace(network, ::new_keys_module(network)).first;
+        if (!found->second->is_ok()) {
+            qWarning() << "keys:" << toQt(found->second->get_error());
+        }
+        pushLiveDevices(*found->second);
+    }
+    return found->second.operator->();
+}
+
+void KeysModule::pushLiveDevices(RustKeys &handle) {
+    rust::Vec<LiveDevice> devices;
+    for (const auto &entry : Host::get()->signers()) {
+        if (entry.signer != nullptr) {
+            devices.push_back(toLiveDevice(entry));
+        }
+    }
+    handle.set_live_devices(std::move(devices));
+}
+
+NetworkScope::NetworkScope(KeysModule *module, Network network)
+    : m_module(module),
+      m_previous(module->m_scope) {
+    m_module->m_scope = network;
+}
+
+NetworkScope::~NetworkScope() {
+    m_module->m_scope = m_previous;
 }
 
 HwiModule *KeysModule::hwi() const {
@@ -912,18 +959,9 @@ void KeysModule::bindHwiModule() {
 }
 
 void KeysModule::refreshLiveDevices() {
-    if (!m_rust.has_value()) {
-        emit liveDevicesChanged();
-        return;
+    for (auto &[network, opened] : m_handles) {
+        pushLiveDevices(*opened);
     }
-    rust::Vec<LiveDevice> devices;
-    for (const auto &entry : Host::get()->signers()) {
-        if (entry.signer == nullptr) {
-            continue;
-        }
-        devices.push_back(toLiveDevice(entry));
-    }
-    m_rust.value()->set_live_devices(std::move(devices));
     emit liveDevicesChanged();
 }
 

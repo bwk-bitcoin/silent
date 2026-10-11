@@ -448,13 +448,13 @@ void CreateAccount::runFetch() {
     switch (fetch) {
     case Fetch::SilentPayment:
         m_descriptor_req_id = bus->newRequest();
-        bus->spDescriptor(m_descriptor_req_id, m_key_fp);
+        bus->spDescriptor(m_descriptor_req_id, network(), m_key_fp);
         break;
     case Fetch::Taproot:
     case Fetch::Segwit:
         m_xpub_fetch = fetch;
         m_xpub_req_id = bus->newRequest();
-        bus->xpub(m_xpub_req_id, m_key_fp,
+        bus->xpub(m_xpub_req_id, network(), m_key_fp,
                   subAccountPath(fetch == Fetch::Taproot ? TAPROOT_PURPOSE : SEGWIT_PURPOSE));
         break;
     }
@@ -547,7 +547,7 @@ void CreateAccount::onCreate() {
     m_fetch_error->setVisible(false);
     m_register_req_id = bus->newRequest();
     updateActions();
-    bus->registerDescriptor(m_register_req_id, m_descriptor_fingerprint, m_descriptor);
+    bus->registerDescriptor(m_register_req_id, network(), m_descriptor_fingerprint, m_descriptor);
 }
 
 void CreateAccount::onDescriptorRegistered(ReqId req_id) {

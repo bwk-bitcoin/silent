@@ -1525,7 +1525,8 @@ void Send::onSendConfirmed() {
     auto descriptor = QString::fromStdString(std::string(m_controller->getDescriptor().c_str()));
     auto walletName = QString::fromStdString(std::string(account.value()->name()));
     m_sign_req_id = Host::get()->keys()->newRequest();
-    Host::get()->keys()->sign(m_sign_req_id, psbtV2Hex, QStringList{descriptor}, walletName);
+    Host::get()->keys()->sign(m_sign_req_id, m_controller->network(), psbtV2Hex,
+                              QStringList{descriptor}, walletName);
 }
 
 void Send::onSignerSigned(ReqId req_id, const QString &psbt_v2_hex) {
