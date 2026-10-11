@@ -32,7 +32,7 @@ class CameraStep : public QWidget {
     Q_OBJECT
 
 public:
-    explicit CameraStep(QWidget *parent = nullptr);
+    explicit CameraStep(QWidget *parent = nullptr, qr::PlainCodes plain = qr::PlainCodes::Ignore);
     void setHint(const QString &hint);
     // Opens the camera picked last, from a clean scan.
     void start();
@@ -51,7 +51,7 @@ public slots:
     void onScanAgainClicked();
 
 protected:
-    void init();
+    void init(qr::PlainCodes plain);
     void doConnect();
     void view();
 

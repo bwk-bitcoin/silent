@@ -6,12 +6,13 @@
 
 namespace qr {
 
-// Joins BBQR parts scanned off camera frames back into their payload.
+// Joins BBQR parts scanned off camera frames back into their payload; reading plain
+// codes too, each one's text is a payload of its own.
 class BbqrCameraEngine : public QrCameraEngine {
     Q_OBJECT
 
 public:
-    explicit BbqrCameraEngine(QObject *parent = nullptr);
+    explicit BbqrCameraEngine(QObject *parent = nullptr, PlainCodes plain = PlainCodes::Ignore);
     ~BbqrCameraEngine() override;
 
 protected:

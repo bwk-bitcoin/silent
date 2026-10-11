@@ -477,6 +477,14 @@ auto btnMoveUp() -> Button * {
                  .width = BtnWidth::Icon});
 }
 
+auto btnScanAddress() -> Button * {
+    return make({.role = ButtonRole::InlineIcon,
+                 .icon = icon::qr,
+                 .iconSize = 16,
+                 .tooltip = TR("btn-scan-address"),
+                 .width = BtnWidth::Icon});
+}
+
 auto btnRemovePayment() -> Button * {
     return make({.role = ButtonRole::InlineIcon,
                  .icon = icon::x,

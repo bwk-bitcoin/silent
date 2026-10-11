@@ -698,6 +698,8 @@ mod ffi {
         fn frame(self: &BbqrFrames, index: u32) -> QrImageResult;
 
         fn bbqr_scanner_new() -> Box<BbqrScanner>;
+        /// Also reads plain codes: each one's text is a payload, as an address code.
+        fn bbqr_text_scanner_new() -> Box<BbqrScanner>;
         fn is_ok(self: &BbqrScanner) -> bool;
         fn get_error(self: &BbqrScanner) -> String;
         /// Scans one RGB888 frame of `width * height * 3` bytes.
@@ -1740,7 +1742,7 @@ pub use app_state::{
     app_set_last_endpoint, app_set_plugin_enabled, app_set_qr_camera_contrast_level,
     app_set_qr_display_levels,
 };
-pub use bbqr::{bbqr_frames, bbqr_scanner_new, BbqrFrames, BbqrScanner};
+pub use bbqr::{bbqr_frames, bbqr_scanner_new, bbqr_text_scanner_new, BbqrFrames, BbqrScanner};
 pub use camera::{camera_list, camera_open, CameraHandle};
 pub use config::{
     config_from_file, delete_config, list_configs, new_config, segwit_descriptor_for, set_datadir,

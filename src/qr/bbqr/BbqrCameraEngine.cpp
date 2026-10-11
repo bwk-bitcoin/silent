@@ -10,9 +10,9 @@
 
 namespace qr {
 
-BbqrCameraEngine::BbqrCameraEngine(QObject *parent)
+BbqrCameraEngine::BbqrCameraEngine(QObject *parent, PlainCodes plain)
     : QrCameraEngine(parent),
-      m_scanner(::bbqr_scanner_new()) {
+      m_scanner(plain == PlainCodes::Read ? ::bbqr_text_scanner_new() : ::bbqr_scanner_new()) {
     if (!m_scanner->is_ok()) {
         qWarning() << "bbqr scanner:"
                    << QString::fromStdString(std::string(m_scanner->get_error()));

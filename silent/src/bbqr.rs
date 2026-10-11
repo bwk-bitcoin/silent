@@ -52,12 +52,23 @@ pub struct ScanOutcome {
 /// stay until a payload completes or `reset` drops them.
 pub struct Scanner {
     decoder: Decoder,
+    /// A plain code's text is a payload of its own, as an address code is.
+    text: bool,
 }
 
 impl Scanner {
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
             decoder: Decoder::new(Config::default())?,
+            text: false,
+        })
+    }
+
+    /// A scanner that also hands back the text of plain codes.
+    pub fn with_text() -> Result<Self, Error> {
+        Ok(Self {
+            text: true,
+            ..Self::new()?
         })
     }
 
@@ -78,10 +89,12 @@ impl Scanner {
                 log::debug!("bbqr: unreadable frame: {e}");
                 Vec::new()
             });
+        let text = self.text;
         let payloads = decoded
             .into_iter()
             .filter_map(|decoded| match decoded {
                 Decoded::Bytes(payload) => Some(payload),
+                Decoded::Text(content) if text => Some(content.into_bytes()),
                 // A plain code is not a BBQR part: nothing to join.
                 _ => None,
             })
@@ -201,6 +214,12 @@ pub fn bbqr_scanner_new() -> Box<BbqrScanner> {
     })
 }
 
+pub fn bbqr_text_scanner_new() -> Box<BbqrScanner> {
+    Box::new(BbqrScanner {
+        inner: Scanner::with_text().map_err(|e| e.to_string()),
+    })
+}
+
 fn failed_image(error: &str) -> ffi::QrImageResult {
     ffi::QrImageResult {
         is_ok: false,
@@ -224,7 +243,7 @@ fn failed_scan(error: &str) -> ffi::BbqrScanResult {
 #[cfg(test)]
 mod tests {
     use crate::bbqr::{frames, Scanner};
-    use bwk_qr::image::Image;
+    use bwk_qr::{config::Config, encoder::Encoder, image::Image};
 
     fn payload() -> Vec<u8> {
         (0..=255u8).cycle().take(300).collect()
@@ -261,6 +280,39 @@ mod tests {
             payloads,
             vec![payload()],
             "the joined payload is the original"
+        );
+    }
+
+    fn address_code() -> Image {
+        Encoder::new(Config::default())
+            .expect("encoder")
+            .encode_text(ADDRESS)
+            .expect("address code")
+    }
+
+    const ADDRESS: &str = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080";
+
+    #[test]
+    fn a_text_scanner_reads_a_plain_code() {
+        let code = address_code();
+        let mut scanner = Scanner::with_text().expect("scanner");
+        let outcome = scanner.scan(&to_rgb(&code), code.width, code.height);
+        assert_eq!(
+            outcome.payloads,
+            vec![ADDRESS.as_bytes().to_vec()],
+            "the plain code's text is the payload"
+        );
+    }
+
+    #[test]
+    fn a_bbqr_scanner_ignores_a_plain_code() {
+        let code = address_code();
+        let mut scanner = Scanner::new().expect("scanner");
+        let outcome = scanner.scan(&to_rgb(&code), code.width, code.height);
+        assert!(
+            outcome.payloads.is_empty(),
+            "a plain code is no BBQR part, got {:?}",
+            outcome.payloads
         );
     }
 

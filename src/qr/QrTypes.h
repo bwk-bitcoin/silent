@@ -51,6 +51,9 @@ enum class QrCameraContrast : std::uint8_t {
     Highest = 195
 };
 
+// Whether a camera scan hands back plain codes (an address) besides BBQR payloads.
+enum class PlainCodes : std::uint8_t { Ignore, Read };
+
 // The steppers' levels, lowest to highest; DEFAULT_LEVEL is each setting's Medium.
 constexpr int MIN_LEVEL = 1;
 constexpr int MAX_LEVEL = 5;

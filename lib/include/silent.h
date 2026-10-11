@@ -2451,6 +2451,9 @@ bool validate_sp_descriptor(::rust::String descriptor) noexcept;
 
 ::rust::Box<::BbqrScanner> bbqr_scanner_new() noexcept;
 
+// Also reads plain codes: each one's text is a payload, as an address code.
+::rust::Box<::BbqrScanner> bbqr_text_scanner_new() noexcept;
+
 // Parses an sp() descriptor and requires an origin. Returns the descriptor
 // unchanged plus its fingerprint, or an error saying the origin is missing.
 ::SpDescriptorResult validate_sp_descriptor_origin(::rust::String descriptor) noexcept;

@@ -23,6 +23,7 @@
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
+#include "modules/sp/modals/ScanAddress.h"
 #include "theme/Palette.h"
 #include "theme/Theme.h"
 #include "views/utils.h"
@@ -163,6 +164,7 @@ OutputW::OutputW(Send *screen, int id) {
     m_address_indicator = new catalog::ValidationMark;
 
     m_delete_btn = catalog::btnRemovePayment();
+    m_scan_btn = catalog::btnScanAddress();
 
     m_amount_input = new Input(InputRole::Mono);
     m_amount_input->setWidth(Size::S);
@@ -218,8 +220,10 @@ OutputW::OutputW(Send *screen, int id) {
     auto *addressRow = (new qontrol::Row)
                            ->spacing(resolve(Spacing::XS))
                            ->push(m_address_input, 1)
-                           ->push(m_address_indicator);
-    // An empty mark keeps the description as wide as the address.
+                           ->push(m_address_indicator)
+                           ->push(m_scan_btn);
+    // An empty mark keeps the description as wide as the address; the scan button takes
+    // its width from the address, so both rows end at the same edge.
     auto *labelRow = (new qontrol::Row)
                          ->spacing(resolve(Spacing::XS))
                          ->push(m_label_input, 1)
@@ -237,6 +241,9 @@ OutputW::OutputW(Send *screen, int id) {
 
     m_delete_btn->setProperty("outputId", id);
     QObject::connect(m_delete_btn, &QPushButton::clicked, screen, &Send::onOutputDeleteClicked,
+                     qontrol::UNIQUE);
+    m_scan_btn->setProperty("outputId", id);
+    QObject::connect(m_scan_btn, &QPushButton::clicked, screen, &Send::onScanAddressClicked,
                      qontrol::UNIQUE);
 
     m_max->setProperty("outputId", id);
@@ -1186,6 +1193,10 @@ auto OutputW::address() -> QString {
     return m_address_input->text();
 }
 
+void OutputW::setAddress(const QString &address) {
+    m_address_input->setText(address);
+}
+
 auto OutputW::amount() -> std::optional<uint64_t> {
     auto amountStr = m_amount_input->text();
     bool ok = false;
@@ -1680,6 +1691,23 @@ void Send::onOutputDeleteClicked() {
     if (btn != nullptr) {
         int id = btn->property("outputId").toInt();
         onDeleteOutput(id);
+    }
+}
+
+void Send::onScanAddressClicked() {
+    auto *btn = qobject_cast<QPushButton *>(sender());
+    if (btn == nullptr) {
+        return;
+    }
+    int id = btn->property("outputId").toInt();
+    auto *scan = new modal::ScanAddress;
+    bool accepted = scan->exec() == QDialog::Accepted;
+    QString text = scan->text();
+    delete scan;
+    // The payment may be gone while the camera ran.
+    auto *output = m_outputs.value(id);
+    if (accepted && output != nullptr) {
+        output->setAddress(text);
     }
 }
 

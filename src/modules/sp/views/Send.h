@@ -88,6 +88,7 @@ public:
     void enableMax(bool max);
     auto isMax() -> bool;
     auto address() -> QString;
+    void setAddress(const QString &address);
     auto amount() -> std::optional<uint64_t>;
     auto label() -> QString;
     void syncUsdFromBtc();
@@ -107,6 +108,7 @@ private:
     catalog::ValidationMark *m_address_indicator = nullptr;
     catalog::ValidationMark *m_amount_indicator = nullptr;
     catalog::Button *m_delete_btn = nullptr;
+    catalog::Button *m_scan_btn = nullptr;
     catalog::Checkbox *m_max = nullptr;
     catalog::Label *m_max_label = nullptr;
     QWidget *m_widget = nullptr;
@@ -127,6 +129,7 @@ public slots:
     void onDeleteOutput(int id);
     void onAddOutput();
     void onOutputDeleteClicked();
+    void onScanAddressClicked();
     void onOutputMaxToggled();
     void onClearOutputs();
     void onCancelSigned();

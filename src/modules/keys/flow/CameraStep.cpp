@@ -23,15 +23,15 @@ using catalog::Label;
 using catalog::LabelRole;
 using catalog::LabelTone;
 
-CameraStep::CameraStep(QWidget *parent) : QWidget(parent) {
-    init();
+CameraStep::CameraStep(QWidget *parent, qr::PlainCodes plain) : QWidget(parent) {
+    init(plain);
     doConnect();
     view();
 }
 
-void CameraStep::init() {
+void CameraStep::init(qr::PlainCodes plain) {
     m_camera = new qr::QrCamera(this);
-    m_engine = new qr::BbqrCameraEngine(this);
+    m_engine = new qr::BbqrCameraEngine(this, plain);
     // The contrast picked last in Camera Settings, for any account.
     m_engine->setContrast(qr::cameraContrastFromLevel(::app_qr_camera_contrast_level()));
 

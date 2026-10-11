@@ -84,6 +84,7 @@ auto btnEditLabelRow() -> Button *;
 auto btnMoveDown() -> Button *;
 auto btnMoveUp() -> Button *;
 auto btnRemovePayment() -> Button *;
+auto btnScanAddress() -> Button *;
 auto btnRemoveRoute() -> Button *;
 auto btnRemoveXpub() -> Button *;
 auto btnSaveLabel() -> Button *;

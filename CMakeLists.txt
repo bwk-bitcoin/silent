@@ -183,6 +183,8 @@ set(SILENT_APP_SOURCES
     src/views/modals/appsettings/SectionFlow.cpp
     src/modules/sp/modals/CreateAccount.h
     src/modules/sp/modals/CreateAccount.cpp
+    src/modules/sp/modals/ScanAddress.h
+    src/modules/sp/modals/ScanAddress.cpp
     src/views/utils.h
     src/views/utils.cpp
     src/views/DashboardLayout.h

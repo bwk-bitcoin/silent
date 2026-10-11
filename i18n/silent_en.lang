@@ -74,6 +74,12 @@ send-max => "MAX"
 send-label => "Description:"
 send-no-account-loaded => "No account loaded."
 send-placeholder-address => "Address"
+
+btn-scan-address => "Scan an Address QR Code"
+
+send-scan-address-title => "Scan Address"
+
+send-scan-address-hint => "Show the address QR code to the camera."
 send-placeholder-amount => "0.002"
 send-placeholder-label => "Label"
 send-prepare-failed => "Prepare Failed"
