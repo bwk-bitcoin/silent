@@ -160,8 +160,10 @@ void KeyDetail::initDetail() {
     m_register_error->setVisible(false);
 
     m_reveal = catalog::btnRevealMnemonic();
+    m_remove = catalog::btnRemoveKey();
     m_detail_actions = new catalog::ModalActions;
     m_detail_actions->addAction(m_reveal);
+    m_detail_actions->addAction(m_remove);
 }
 
 void KeyDetail::initPassword() {
@@ -184,7 +186,9 @@ void KeyDetail::initReveal() {
     m_words = new catalog::WordGrid;
     m_hide_words = catalog::btnHideWords();
     m_show_words = catalog::btnShowWords();
+    m_words_done = catalog::btnDone();
     m_reveal_actions = new catalog::ModalActions;
+    m_reveal_actions->addAction(m_words_done);
 }
 
 void KeyDetail::initRemove() {
@@ -194,8 +198,10 @@ void KeyDetail::initRemove() {
     m_remove_hot = new catalog::Notice(catalog::Notice::Tone::Warning);
     m_remove_hot->setText(TR("keys-remove-hot"));
     m_remove_error = new catalog::Notice(catalog::Notice::Tone::Error);
+    m_remove_confirm = catalog::btnRemoveKey();
     m_remove_actions = new catalog::ModalActions;
     m_remove_actions->setBack(catalog::ModalActions::Back::Back);
+    m_remove_actions->addAction(m_remove_confirm);
 }
 
 void KeyDetail::doConnect() {
@@ -216,17 +222,18 @@ void KeyDetail::connectDetail() {
         connect(table, &catalog::Table::rebuilt, this, &KeyDetail::adjustSize, qontrol::UNIQUE);
     }
     connect(m_reveal, &QPushButton::clicked, this, &KeyDetail::showPassword, qontrol::UNIQUE);
+    connect(m_remove, &QPushButton::clicked, this, &KeyDetail::showRemove, qontrol::UNIQUE);
 }
 
 void KeyDetail::connectPassword() {
     connect(m_password_input, &QLineEdit::textEdited, this, &KeyDetail::onPasswordEdited,
             qontrol::UNIQUE);
-    connect(m_password_input, &QLineEdit::returnPressed, this, &KeyDetail::onPasswordProceed,
+    connect(m_password_input, &QLineEdit::returnPressed, this, &KeyDetail::onNextClicked,
             qontrol::UNIQUE);
-    connect(m_password_proceed, &QPushButton::clicked, this, &KeyDetail::onPasswordProceed,
+    connect(m_password_proceed, &QPushButton::clicked, this, &KeyDetail::onNextClicked,
             qontrol::UNIQUE);
-    connect(m_password_actions, &catalog::ModalActions::backClicked, this, &KeyDetail::showDetail,
-            qontrol::UNIQUE);
+    connect(m_password_actions, &catalog::ModalActions::backClicked, this,
+            &KeyDetail::onBackClicked, qontrol::UNIQUE);
     connect(m_module, &KeysModule::mnemonicRevealed, this, &KeyDetail::onMnemonicRevealed,
             qontrol::UNIQUE);
 }
@@ -234,29 +241,20 @@ void KeyDetail::connectPassword() {
 void KeyDetail::connectReveal() {
     connect(m_hide_words, &QPushButton::clicked, this, &KeyDetail::toggleWords, qontrol::UNIQUE);
     connect(m_show_words, &QPushButton::clicked, this, &KeyDetail::toggleWords, qontrol::UNIQUE);
+    connect(m_words_done, &QPushButton::clicked, this, &KeyDetail::onNextClicked, qontrol::UNIQUE);
 }
 
 void KeyDetail::connectRemove() {
-    connect(m_remove_actions, &catalog::ModalActions::backClicked, this, &KeyDetail::showDetail,
+    connect(m_remove_actions, &catalog::ModalActions::backClicked, this, &KeyDetail::onBackClicked,
+            qontrol::UNIQUE);
+    connect(m_remove_confirm, &QPushButton::clicked, this, &KeyDetail::onNextClicked,
             qontrol::UNIQUE);
 }
 
 void KeyDetail::view() {
-    auto *removeKey = catalog::btnRemoveKey();
-    connect(removeKey, &QPushButton::clicked, this, &KeyDetail::showRemove, qontrol::UNIQUE);
-    m_detail_actions->addAction(removeKey);
     m_detail = viewDetail();
-
     m_password_body = viewPassword();
-
-    auto *done = catalog::btnDone();
-    connect(done, &QPushButton::clicked, this, &KeyDetail::closeWords, qontrol::UNIQUE);
-    m_reveal_actions->addAction(done);
     m_reveal_body = viewReveal();
-
-    auto *confirmRemove = catalog::btnRemoveKey();
-    connect(confirmRemove, &QPushButton::clicked, this, &KeyDetail::removeKey, qontrol::UNIQUE);
-    m_remove_actions->addAction(confirmRemove);
     m_remove_body = viewRemove();
 
     // Owned by the modal, hidden until their view shows them.
@@ -772,6 +770,7 @@ void KeyDetail::showRouteResult(const KeyOpResult &result) {
 }
 
 void KeyDetail::showDetail() {
+    m_view = View::Detail;
     // A password error is about the attempt left behind.
     m_password_error->setVisible(false);
     showHeader(m_alias);
@@ -787,6 +786,7 @@ void KeyDetail::showFetch() {
 
 // An empty field with the focus in it, and the error kept if one was just shown.
 void KeyDetail::showPassword() {
+    m_view = View::Password;
     m_password_input->clear();
     m_password_input->setEnabled(true);
     m_password_unlocking->setVisible(false);
@@ -808,7 +808,7 @@ void KeyDetail::onPasswordEdited() {
     m_password_actions->setReason(empty ? TR("flow-password-reason") : QString());
 }
 
-void KeyDetail::onPasswordProceed() {
+void KeyDetail::proceedPassword() {
     if (m_reveal_req != 0 || m_password_input->text().isEmpty()) {
         return;
     }
@@ -846,6 +846,7 @@ void KeyDetail::onMnemonicRevealed(ReqId req_id, const MnemonicResult &result) {
 }
 
 void KeyDetail::showReveal() {
+    m_view = View::Reveal;
     m_words->setMasked(false);
     m_hide_words->setVisible(true);
     m_show_words->setVisible(false);
@@ -867,6 +868,34 @@ void KeyDetail::closeWords() {
     showDetail();
 }
 
+void KeyDetail::onBackClicked() {
+    switch (m_view) {
+    case View::Password:
+    case View::Remove:
+        showDetail();
+        return;
+    case View::Detail:
+    case View::Reveal:
+        return;
+    }
+}
+
+void KeyDetail::onNextClicked() {
+    switch (m_view) {
+    case View::Password:
+        proceedPassword();
+        return;
+    case View::Reveal:
+        closeWords();
+        return;
+    case View::Remove:
+        removeKey();
+        return;
+    case View::Detail:
+        return;
+    }
+}
+
 void KeyDetail::showRemove() {
     auto current = info();
     if (!current.has_value()) {
@@ -885,6 +914,7 @@ void KeyDetail::showRemove() {
     m_remove_accounts->setVisible(!names.isEmpty());
     m_remove_hot->setVisible(current->has_hot_secret);
     m_remove_error->setVisible(false);
+    m_view = View::Remove;
     showHeader(TR("keys-remove-title"));
     setBody(m_remove_body);
     setFooter(m_remove_actions);

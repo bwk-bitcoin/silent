@@ -206,16 +206,16 @@ void AppSettings::connectMain() {
 }
 
 void AppSettings::connectDisable() {
-    connect(m_disable_btn, &QPushButton::clicked, this, &AppSettings::disablePlugin,
+    connect(m_disable_btn, &QPushButton::clicked, this, &AppSettings::onNextClicked,
             qontrol::UNIQUE);
     connect(m_disable_actions, &catalog::ModalActions::backClicked, this,
-            &AppSettings::onDisableBack, qontrol::UNIQUE);
+            &AppSettings::onBackClicked, qontrol::UNIQUE);
 }
 
 void AppSettings::connectSection() {
-    connect(m_done_btn, &QPushButton::clicked, this, &AppSettings::closeSection, qontrol::UNIQUE);
+    connect(m_done_btn, &QPushButton::clicked, this, &AppSettings::onNextClicked, qontrol::UNIQUE);
     connect(m_section_actions, &catalog::ModalActions::backClicked, this,
-            &AppSettings::closeSection, qontrol::UNIQUE);
+            &AppSettings::onBackClicked, qontrol::UNIQUE);
 }
 
 void AppSettings::view() {
@@ -300,13 +300,36 @@ auto AppSettings::viewSection() -> catalog::ScrollArea * {
     return scroll;
 }
 
-void AppSettings::onDisableBack() {
-    // A Back from the disable view leaves the plugin enabled: its toggle shows it again.
-    rebuildPluginRows();
-    showMain();
+void AppSettings::onBackClicked() {
+    switch (m_view) {
+    case View::Disable:
+        // A Back from the disable view leaves the plugin enabled: its toggle shows it again.
+        rebuildPluginRows();
+        showMain();
+        return;
+    case View::Section:
+        closeSection();
+        return;
+    case View::Main:
+        return;
+    }
+}
+
+void AppSettings::onNextClicked() {
+    switch (m_view) {
+    case View::Disable:
+        disablePlugin();
+        return;
+    case View::Section:
+        closeSection();
+        return;
+    case View::Main:
+        return;
+    }
 }
 
 void AppSettings::showMain() {
+    m_view = View::Main;
     setWindowTitle(TR("settings-title"));
     setHeader(nullptr);
     setBody(m_main);
@@ -432,6 +455,7 @@ void AppSettings::showDisable(const QString &id) {
     m_disable_themes->setText(TR("settings-disable-themes").arg(themes.join(QStringLiteral(", "))));
     m_disable_themes->setVisible(!themes.isEmpty());
 
+    m_view = View::Disable;
     setWindowTitle(TR("settings-disable-title"));
     setHeader(nullptr);
     setBody(m_disable);
@@ -565,6 +589,7 @@ void AppSettings::onOpenSectionClicked() {
 }
 
 void AppSettings::showSection(const QString &title) {
+    m_view = View::Section;
     setWindowTitle(title);
     setHeader(nullptr);
     setBody(m_section);

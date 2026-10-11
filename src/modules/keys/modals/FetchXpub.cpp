@@ -112,7 +112,7 @@ void FetchXpub::connectFetch() {
     connect(m_account, &QLineEdit::textEdited, this, &FetchXpub::onAccountEdited, qontrol::UNIQUE);
     connect(m_script, &QComboBox::activated, this, &FetchXpub::onInputChanged, qontrol::UNIQUE);
     connect(m_custom, &QLineEdit::textEdited, this, &FetchXpub::onInputChanged, qontrol::UNIQUE);
-    connect(m_fetch, &QPushButton::clicked, this, &FetchXpub::onFetchClicked, qontrol::UNIQUE);
+    connect(m_fetch, &QPushButton::clicked, this, &FetchXpub::onNextClicked, qontrol::UNIQUE);
 }
 
 void FetchXpub::view() {
@@ -138,6 +138,7 @@ auto FetchXpub::viewFetch() -> QWidget * {
 }
 
 void FetchXpub::showFetch() {
+    m_view = View::Fetch;
     setWindowTitle(TR("keys-fetch-title"));
     setHeader(nullptr);
     setBody(m_fetch_step);
@@ -146,6 +147,7 @@ void FetchXpub::showFetch() {
 }
 
 void FetchXpub::showFetching() {
+    m_view = View::Fetching;
     setWindowTitle(TR("keys-fetch-title"));
     setHeader(nullptr);
     setBody(m_fetching_step);
@@ -170,7 +172,17 @@ void FetchXpub::onInputChanged() {
     refresh();
 }
 
-void FetchXpub::onFetchClicked() {
+void FetchXpub::onNextClicked() {
+    switch (m_view) {
+    case View::Fetch:
+        fetch();
+        return;
+    case View::Fetching:
+        return;
+    }
+}
+
+void FetchXpub::fetch() {
     if (!reason().isEmpty()) {
         return;
     }

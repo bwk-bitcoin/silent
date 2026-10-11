@@ -311,10 +311,11 @@ void AddKey::connectModes() {
 }
 
 void AddKey::connectQr() {
-    connect(m_qr, &flow::QrDisplayStep::nextClicked, this, &AddKey::onQrNext, qontrol::UNIQUE);
-    connect(m_qr->actions(), &catalog::ModalActions::backClicked, this, &AddKey::showModes,
+    connect(m_qr, &flow::QrDisplayStep::nextClicked, this, &AddKey::onNextClicked, qontrol::UNIQUE);
+    connect(m_qr->actions(), &catalog::ModalActions::backClicked, this, &AddKey::onBackClicked,
             qontrol::UNIQUE);
-    connect(m_camera, &flow::CameraStep::backClicked, this, &AddKey::onCameraBack, qontrol::UNIQUE);
+    connect(m_camera, &flow::CameraStep::backClicked, this, &AddKey::onBackClicked,
+            qontrol::UNIQUE);
     auto *qrRoute = m_module->qrRoute();
     connect(qrRoute, &QrRoute::xpubDecoded, this, &AddKey::onQrXpub, qontrol::UNIQUE);
     connect(qrRoute, &QrRoute::scanFailed, this, &AddKey::onQrScanFailed, qontrol::UNIQUE);
@@ -325,8 +326,8 @@ void AddKey::connectReview() {
     connect(m_review_alias, &QLineEdit::textEdited, this, &AddKey::updateReview, qontrol::UNIQUE);
     connect(m_review_table, &catalog::Table::rebuilt, this, &AddKey::adjustSize, qontrol::UNIQUE);
     connect(m_open_file, &QPushButton::clicked, this, &AddKey::openFile, qontrol::UNIQUE);
-    connect(m_add_reviewed, &QPushButton::clicked, this, &AddKey::addReviewed, qontrol::UNIQUE);
-    connect(m_review_actions, &catalog::ModalActions::backClicked, this, &AddKey::onReviewBack,
+    connect(m_add_reviewed, &QPushButton::clicked, this, &AddKey::onNextClicked, qontrol::UNIQUE);
+    connect(m_review_actions, &catalog::ModalActions::backClicked, this, &AddKey::onBackClicked,
             qontrol::UNIQUE);
 }
 
@@ -334,8 +335,8 @@ void AddKey::connectPaste() {
     connect(m_paste, &catalog::ValidatedInput::textChanged, this, &AddKey::updatePaste,
             qontrol::UNIQUE);
     connect(m_paste_alias, &QLineEdit::textEdited, this, &AddKey::updatePaste, qontrol::UNIQUE);
-    connect(m_add_pasted, &QPushButton::clicked, this, &AddKey::addPasted, qontrol::UNIQUE);
-    connect(m_paste_actions, &catalog::ModalActions::backClicked, this, &AddKey::showModes,
+    connect(m_add_pasted, &QPushButton::clicked, this, &AddKey::onNextClicked, qontrol::UNIQUE);
+    connect(m_paste_actions, &catalog::ModalActions::backClicked, this, &AddKey::onBackClicked,
             qontrol::UNIQUE);
 }
 
@@ -347,8 +348,9 @@ void AddKey::connectHotChoose() {
     connect(m_word_count, &QComboBox::activated, this, &AddKey::onWordCountPicked, qontrol::UNIQUE);
     connect(m_words_input, &catalog::WordInputGrid::wordsChanged, this, &AddKey::updateHotChoose,
             qontrol::UNIQUE);
-    connect(m_choose_continue, &QPushButton::clicked, this, &AddKey::continueHot, qontrol::UNIQUE);
-    connect(m_choose_actions, &catalog::ModalActions::backClicked, this, &AddKey::showModes,
+    connect(m_choose_continue, &QPushButton::clicked, this, &AddKey::onNextClicked,
+            qontrol::UNIQUE);
+    connect(m_choose_actions, &catalog::ModalActions::backClicked, this, &AddKey::onBackClicked,
             qontrol::UNIQUE);
     connect(m_module, &KeysModule::mnemonicGenerated, this, &AddKey::onMnemonicGenerated,
             qontrol::UNIQUE);
@@ -356,9 +358,9 @@ void AddKey::connectHotChoose() {
 
 void AddKey::connectBackup() {
     connect(m_backup_check, &QCheckBox::toggled, this, &AddKey::updateBackup, qontrol::UNIQUE);
-    connect(m_backup_continue, &QPushButton::clicked, this, &AddKey::showHotPassword,
+    connect(m_backup_continue, &QPushButton::clicked, this, &AddKey::onNextClicked,
             qontrol::UNIQUE);
-    connect(m_backup_actions, &catalog::ModalActions::backClicked, this, &AddKey::showHotChoose,
+    connect(m_backup_actions, &catalog::ModalActions::backClicked, this, &AddKey::onBackClicked,
             qontrol::UNIQUE);
 }
 
@@ -366,15 +368,15 @@ void AddKey::connectHotPassword() {
     for (auto *input : {m_hot_alias, m_password, m_confirm}) {
         connect(input, &QLineEdit::textEdited, this, &AddKey::updateHotPassword, qontrol::UNIQUE);
     }
-    connect(m_seal, &QPushButton::clicked, this, &AddKey::sealKey, qontrol::UNIQUE);
-    connect(m_password_actions, &catalog::ModalActions::backClicked, this,
-            &AddKey::onHotPasswordBack, qontrol::UNIQUE);
+    connect(m_seal, &QPushButton::clicked, this, &AddKey::onNextClicked, qontrol::UNIQUE);
+    connect(m_password_actions, &catalog::ModalActions::backClicked, this, &AddKey::onBackClicked,
+            qontrol::UNIQUE);
     connect(m_module, &KeysModule::hotKeyImported, this, &AddKey::onHotKeyImported,
             qontrol::UNIQUE);
 }
 
 void AddKey::connectStatus() {
-    connect(m_done, &QPushButton::clicked, this, &QDialog::accept, qontrol::UNIQUE);
+    connect(m_done, &QPushButton::clicked, this, &AddKey::onNextClicked, qontrol::UNIQUE);
     connect(m_try_again, &QPushButton::clicked, this, &AddKey::onFailureRetry, qontrol::UNIQUE);
 }
 
@@ -482,6 +484,7 @@ void AddKey::done(int result) {
 }
 
 void AddKey::showModes() {
+    m_view = View::Modes;
     stopQr();
     setWindowTitle(TR("keys-add-title"));
     setHeader(nullptr);
@@ -511,12 +514,82 @@ void AddKey::onModeClicked() {
     }
 }
 
+void AddKey::onBackClicked() {
+    switch (m_view) {
+    case View::QrDisplay:
+    case View::Paste:
+    case View::HotChoose:
+        showModes();
+        return;
+    case View::Camera:
+        m_camera->stop();
+        showQrDisplay();
+        m_qr->restart();
+        return;
+    case View::Review:
+        m_review_fingerprint.clear();
+        if (m_source == Source::Qr) {
+            showQr();
+            return;
+        }
+        showModes();
+        return;
+    case View::Backup:
+        showHotChoose();
+        return;
+    case View::HotPassword:
+        if (m_hot_kind == HotKind::Import) {
+            showHotChoose();
+            return;
+        }
+        showBackup();
+        return;
+    case View::Modes:
+    case View::Sealing:
+    case View::Result:
+        return;
+    }
+}
+
+void AddKey::onNextClicked() {
+    switch (m_view) {
+    case View::QrDisplay:
+        m_qr->stop();
+        showCamera();
+        m_camera->start();
+        return;
+    case View::Review:
+        addReviewed();
+        return;
+    case View::Paste:
+        addPasted();
+        return;
+    case View::HotChoose:
+        continueHot();
+        return;
+    case View::Backup:
+        showHotPassword();
+        return;
+    case View::HotPassword:
+        sealKey();
+        return;
+    case View::Result:
+        accept();
+        return;
+    case View::Modes:
+    case View::Camera:
+    case View::Sealing:
+        return;
+    }
+}
+
 void AddKey::showQr() {
     showQrDisplay();
     m_module->qrRoute()->startXpub(m_qr, KeysModule::defaultXpubPath());
 }
 
 void AddKey::showQrDisplay() {
+    m_view = View::QrDisplay;
     setWindowTitle(TR("keys-add-qr-title"));
     setHeader(nullptr);
     setBody(m_qr);
@@ -525,23 +598,12 @@ void AddKey::showQrDisplay() {
 }
 
 void AddKey::showCamera() {
+    m_view = View::Camera;
     setWindowTitle(TR("keys-add-scan-title"));
     setHeader(nullptr);
     setBody(m_camera);
     setFooter(m_camera->actions());
     setWidth(ModalWidth::XXL);
-}
-
-void AddKey::onQrNext() {
-    m_qr->stop();
-    showCamera();
-    m_camera->start();
-}
-
-void AddKey::onCameraBack() {
-    m_camera->stop();
-    showQrDisplay();
-    m_qr->restart();
 }
 
 void AddKey::onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub) {
@@ -579,6 +641,7 @@ void AddKey::showFile() {
 }
 
 void AddKey::showReview(Source source) {
+    m_view = View::Review;
     m_source = source;
     m_review_table->clearRows();
     for (const auto &entry : m_review_xpubs) {
@@ -627,15 +690,6 @@ void AddKey::updateReview() {
     m_add_reviewed->setEnabled(loaded && reason.isEmpty());
     m_review_actions->setReason(reason);
     adjustSize();
-}
-
-void AddKey::onReviewBack() {
-    m_review_fingerprint.clear();
-    if (m_source == Source::Qr) {
-        showQr();
-        return;
-    }
-    showModes();
 }
 
 void AddKey::addReviewed() {
@@ -776,6 +830,7 @@ void AddKey::updatePaste() {
 }
 
 void AddKey::showPaste() {
+    m_view = View::Paste;
     setWindowTitle(TR("keys-add-paste-title"));
     setHeader(nullptr);
     setBody(m_paste_body);
@@ -799,6 +854,7 @@ void AddKey::onHotKindClicked() {
 }
 
 void AddKey::showHotChoose() {
+    m_view = View::HotChoose;
     updateHotChoose();
     setWindowTitle(TR("keys-add-hot-title"));
     setHeader(nullptr);
@@ -885,6 +941,7 @@ void AddKey::onMnemonicGenerated(ReqId req_id, const MnemonicResult &result) {
 }
 
 void AddKey::showBackup() {
+    m_view = View::Backup;
     setWindowTitle(TR("keys-add-backup-title"));
     setHeader(nullptr);
     setBody(m_backup_body);
@@ -899,20 +956,13 @@ void AddKey::updateBackup() {
 }
 
 void AddKey::showHotPassword() {
+    m_view = View::HotPassword;
     updateHotPassword();
     setWindowTitle(TR("keys-add-password-title"));
     setHeader(nullptr);
     setBody(m_password_body);
     setFooter(m_password_actions);
     setWidth(ModalWidth::L);
-}
-
-void AddKey::onHotPasswordBack() {
-    if (m_hot_kind == HotKind::Import) {
-        showHotChoose();
-        return;
-    }
-    showBackup();
 }
 
 void AddKey::updateHotPassword() {
@@ -976,6 +1026,7 @@ void AddKey::showFailure(Failure failure, const QString &title, const QString &m
 }
 
 void AddKey::showSealing() {
+    m_view = View::Sealing;
     setWindowTitle(TR("keys-add-sealing-title"));
     setHeader(nullptr);
     setBody(m_status);
@@ -984,6 +1035,7 @@ void AddKey::showSealing() {
 }
 
 void AddKey::showResult() {
+    m_view = View::Result;
     setWindowTitle(TR("keys-add-title"));
     setHeader(nullptr);
     setBody(m_status);

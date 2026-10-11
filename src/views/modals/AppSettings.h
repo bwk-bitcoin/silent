@@ -48,18 +48,20 @@ public slots:
     void onLanguageSelectionChanged(int index);
     void scanPlugins();
     void onPluginToggled(bool enabled);
-    void disablePlugin();
-    void onDisableBack();
+    void onBackClicked();
+    void onNextClicked();
     void showMain();
     void onThemeNames(ReqId req_id, const QStringList &themes);
     void onThemePalette(ReqId req_id, theme::Palette palette);
     void onHostSettingsSectionsChanged();
     void onOpenSectionClicked();
-    void closeSection();
     void onHostInstanceChanged(const QString &id);
     void rebuildPluginRows();
 
 protected:
+    // The view on display: Back and the primary action act on it.
+    enum class View { Main, Disable, Section };
+
     void init();
     void initMain();
     void initDisable();
@@ -79,6 +81,8 @@ protected:
     [[nodiscard]] auto sectionModuleName(Host::SectionId section) const -> QString;
     void showDisable(const QString &id);
     void showSection(const QString &title);
+    void disablePlugin();
+    void closeSection();
     void setScanning(bool scanning);
     void refreshThemeProviders();
     void requestThemeList();
@@ -90,6 +94,7 @@ protected:
     void retranslateUi();
 
 private:
+    View m_view = View::Main;
     catalog::ScrollArea *m_main = nullptr;
     QWidget *m_disable = nullptr;
     catalog::ScrollArea *m_section = nullptr;

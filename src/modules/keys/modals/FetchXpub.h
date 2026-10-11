@@ -43,12 +43,15 @@ public slots:
     void onPurposeChanged();
     void onAccountEdited();
     void onInputChanged();
-    void onFetchClicked();
+    void onNextClicked();
     void onDeviceXpub(ReqId req_id, const QString &xpub);
     void onDeviceError(std::optional<ReqId> req_id, const QString &message);
     void onInstanceRemoved(const QString &id);
 
 protected:
+    // The view on display: the primary action acts on it.
+    enum class View { Fetch, Fetching };
+
     void init();
     void initFetch();
     void initFetching();
@@ -64,12 +67,14 @@ protected:
     [[nodiscard]] auto freeAccount(const QString &purpose) const -> int;
     [[nodiscard]] auto reason() const -> QString;
     void refresh();
+    void fetch();
     void stopFetch();
     void showError(const QString &error);
 
 private:
     KeysModule *m_module = nullptr;
     QString m_fingerprint;
+    View m_view = View::Fetch;
     // Paths already cached for the key, written m/...
     QStringList m_cached;
     // The account index was typed, so a purpose change keeps it.

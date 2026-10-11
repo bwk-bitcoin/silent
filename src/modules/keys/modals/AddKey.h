@@ -54,29 +54,22 @@ public:
 public slots:
     void done(int result) override;
     void onModeClicked();
+    void onBackClicked();
+    void onNextClicked();
     void showModes();
-    void onQrNext();
-    void onCameraBack();
     void onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub);
     void onQrScanFailed(QrErrorKind kind, const QString &message);
     void onQrFailed(const QString &message);
-    void onReviewBack();
     void updateReview();
-    void addReviewed();
     void openFile();
     void updatePaste();
-    void addPasted();
     void onHotKindClicked();
     void showHotChoose();
     void onWordCountPicked();
     void updateHotChoose();
-    void continueHot();
     void onMnemonicGenerated(ReqId req_id, const MnemonicResult &result);
     void updateBackup();
-    void showHotPassword();
-    void onHotPasswordBack();
     void updateHotPassword();
-    void sealKey();
     void onHotKeyImported(ReqId req_id, const KeyInfoResult &result);
     void onFailureRetry();
 
@@ -86,6 +79,19 @@ protected:
     enum class Source { Qr, File };
     enum class HotKind { Generate12, Generate24, Import };
     enum class Failure { Qr, Seal };
+    // The view on display: Back and the primary action act on it.
+    enum class View {
+        Modes,
+        QrDisplay,
+        Camera,
+        Review,
+        Paste,
+        HotChoose,
+        Backup,
+        HotPassword,
+        Sealing,
+        Result
+    };
 
     struct PastedKey {
         QString fingerprint;
@@ -120,6 +126,11 @@ protected:
     [[nodiscard]] auto viewBackup() -> QWidget *;
     [[nodiscard]] auto viewHotPassword() -> QWidget *;
     void showQr();
+    void showHotPassword();
+    void addReviewed();
+    void addPasted();
+    void continueHot();
+    void sealKey();
     void showQrDisplay();
     void showCamera();
     void showFile();
@@ -144,6 +155,7 @@ protected:
 
 private:
     KeysModule *m_module = nullptr;
+    View m_view = View::Modes;
     QWidget *m_header = nullptr;
 
     QList<catalog::SelectRow *> m_mode_rows;

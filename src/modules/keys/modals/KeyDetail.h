@@ -74,15 +74,17 @@ public slots:
     void onRegistrationError(std::optional<ReqId> req_id, const QString &message);
     void showPassword();
     void onPasswordEdited();
-    void onPasswordProceed();
     void onMnemonicRevealed(ReqId req_id, const MnemonicResult &result);
     void showReveal();
     void toggleWords();
-    void closeWords();
     void showRemove();
-    void removeKey();
+    void onBackClicked();
+    void onNextClicked();
 
 protected:
+    // The view on display: Back and the primary action act on it.
+    enum class View { Detail, Password, Reveal, Remove };
+
     void init();
     void initDetail();
     void initPassword();
@@ -101,6 +103,9 @@ protected:
     [[nodiscard]] auto viewRemove() -> QWidget *;
     // The title on the left, the fingerprint and the key status on the right.
     void showHeader(const QString &title);
+    void proceedPassword();
+    void closeWords();
+    void removeKey();
     void refreshDevices();
     void refreshRoutes(const KeyInfo &info);
     void refreshXpubs();
@@ -120,6 +125,7 @@ protected:
 
 private:
     KeysModule *m_module = nullptr;
+    View m_view = View::Detail;
     QString m_fingerprint;
     QString m_alias;
 
@@ -141,6 +147,7 @@ private:
     catalog::Label *m_accounts_empty = nullptr;
     catalog::Notice *m_register_error = nullptr;
     catalog::Button *m_reveal = nullptr;
+    catalog::Button *m_remove = nullptr;
     catalog::ModalActions *m_detail_actions = nullptr;
     catalog::ScrollArea *m_detail = nullptr;
     QWidget *m_header = nullptr;
@@ -167,6 +174,7 @@ private:
     catalog::WordGrid *m_words = nullptr;
     catalog::Button *m_hide_words = nullptr;
     catalog::Button *m_show_words = nullptr;
+    catalog::Button *m_words_done = nullptr;
     catalog::ModalActions *m_reveal_actions = nullptr;
     QWidget *m_reveal_body = nullptr;
 
@@ -174,6 +182,7 @@ private:
     catalog::Notice *m_remove_accounts = nullptr;
     catalog::Notice *m_remove_hot = nullptr;
     catalog::Notice *m_remove_error = nullptr;
+    catalog::Button *m_remove_confirm = nullptr;
     catalog::ModalActions *m_remove_actions = nullptr;
     QWidget *m_remove_body = nullptr;
 };

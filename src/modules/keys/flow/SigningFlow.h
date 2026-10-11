@@ -102,6 +102,17 @@ public:
 
     enum class UsbError : std::uint8_t { Rejected, Disconnected, Failed };
     enum class VerifyResult : std::uint8_t { Matched, Mismatch, Error };
+    // The view on display: Back and the primary action act on it.
+    enum class View : std::uint8_t {
+        Picker,
+        Usb,
+        Password,
+        Busy,
+        Sd,
+        QrDisplay,
+        Camera,
+        VerifyResult
+    };
 
     SigningFlow(KeysModule *module, Request request);
     ~SigningFlow() override;
@@ -121,31 +132,25 @@ signals:
 
 public slots:
     void done(int result) override;
+    void onBackClicked();
+    void onNextClicked();
     void onRowClicked();
-    void onUsbBack();
-    void onUsbRetry();
     void onDeviceSigned(ReqId req_id, const QString &psbt_base64);
     void onDeviceAddressDisplayed(ReqId req_id, const QString &address);
     void onDeviceError(std::optional<ReqId> req_id, const QString &message);
     void onInstanceRemoved(const QString &id);
     void onPasswordEdited();
-    void onPasswordProceed();
     void onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex, const QString &error,
                      bool wrong_password);
     void onHotDescriptorFetched(ReqId req_id, bool is_ok, const QString &descriptor,
                                 const QString &error, bool wrong_password);
-    void onSdSaveClicked();
-    void onSdLoadClicked();
     void onSdSaved(ReqId req_id, bool is_ok, const QString &error);
     void onSdLoaded(ReqId req_id, bool is_ok, const QString &psbt_hex, const QString &error);
-    void onQrNext();
-    void onCameraBack();
     void onQrSigned(const QString &psbt_v2_hex);
     void onQrVerified(bool matched);
     void onQrDescriptor(const QString &descriptor);
     void onQrScanFailed(QrErrorKind kind, const QString &message);
     void onQrFailed(const QString &message);
-    void onVerifyRetry();
 
 protected:
     void init();
@@ -188,6 +193,9 @@ protected:
     void showCamera();
     void showVerifyResult(VerifyResult result);
     void refreshSd();
+    void proceedPassword();
+    void saveSd();
+    void loadSd();
     void startRoute();
     void startUsb();
     void startHot();
@@ -211,6 +219,7 @@ private:
     std::optional<FlowRow> m_current;
     std::optional<VerifyResult> m_verify_result;
     bool m_answered = false;
+    View m_view = View::Picker;
 
     QPointer<ISigner> m_device;
     QString m_device_instance;
