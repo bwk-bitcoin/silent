@@ -91,6 +91,8 @@ const int COMBO = 8;
 const int ICON = 4;
 const int TAB = 4;
 const int CHECKBOX = 4;
+// The design's 6px on a 10px thumb, held to half its width as the browser does.
+const int SCROLLBAR = 5;
 const int QR_CARD = 12;
 
 } // namespace radius

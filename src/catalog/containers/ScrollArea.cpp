@@ -133,34 +133,29 @@ auto ScrollArea::qss(const Palette &p) -> QString {
     // No background on the scroll area itself: a transparent one becomes its palette,
     // and the style draws the scrollbar from it as a dark track. Only the viewport
     // (and the content in it) is made transparent, to show what lies behind.
-    // A left margin on the vertical bar (top margin on the horizontal bar) keeps
-    // a small gap between the scrolled content and the scrollbar.
+    // The bar is the design's: a thumb its whole width on a transparent track, the
+    // gap to the content being the area's padding.
     return QString(
                "QScrollArea[class=\"scroll-area\"] { border: none; }"
                "QScrollArea[class=\"scroll-area\"] > QWidget#qt_scrollarea_viewport { background: "
                "transparent; }"
                "QScrollArea[class=\"scroll-area\"] > QWidget > QWidget { background: transparent; }"
-               "QScrollBar:vertical { background: transparent; width: %1px; margin: 0 0 0 %6px; }"
+               "QScrollBar:vertical { background: transparent; width: %1px; margin: 0; }"
                "QScrollBar::handle:vertical { background: %2; border-radius: %3px; min-height: "
                "%4px; }"
-               "QScrollBar::handle:vertical:hover { background: %5; }"
                "QScrollBar::handle:vertical:disabled { background: transparent; }"
                "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
                "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
-               "QScrollBar:horizontal { background: transparent; height: %1px; margin: %6px 0 0 0; "
-               "}"
+               "QScrollBar:horizontal { background: transparent; height: %1px; margin: 0; }"
                "QScrollBar::handle:horizontal { background: %2; border-radius: %3px; min-width: "
                "%4px; }"
-               "QScrollBar::handle:horizontal:hover { background: %5; }"
                "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }"
                "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: "
                "none; }")
         .arg(scrollBarWidth())
-        .arg(p.borderLight.name())
-        .arg(radius::CHECKBOX)
-        .arg(resolve(Spacing::L))
         .arg(p.border.name())
-        .arg(scrollBarGap());
+        .arg(radius::SCROLLBAR)
+        .arg(resolve(Spacing::L));
 }
 
 } // namespace catalog

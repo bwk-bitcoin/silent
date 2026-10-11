@@ -25,15 +25,9 @@ public:
 
     static constexpr int EDGE_LINE = 1;
 
-    // Width of the scrollbar, its gap included: the width of each gutter.
+    // Width of the scrollbar, the design's 10px: the width of each gutter.
     static constexpr auto scrollBarWidth() -> int {
         return resolve(Spacing::S);
-    }
-
-    // Gap kept between the scrolled content and the scrollbar so rows do not sit
-    // flush against it.
-    static constexpr auto scrollBarGap() -> int {
-        return resolve(Spacing::XS);
     }
 
     // Space between the area's edge and its content. Across the scroll axis, a
