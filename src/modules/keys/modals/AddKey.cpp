@@ -3,6 +3,8 @@
 #include "modules/keys/BwkQrEngine.h"
 #include "modules/keys/KeysView.h"
 #include "modules/keys/flow/CameraStep.h"
+#include "modules/keys/modals/addkey/KeyChecks.h"
+#include "modules/keys/modals/addkey/KeyFields.h"
 #include "qr/QrCameraEngine.h"
 #include "qr/QrDisplay.h"
 #include "qr/QrDisplayEngine.h"
@@ -122,25 +124,6 @@ auto hotRow(int kind, IconFn icon, const QString &title, const QString &sub)
     row->setSub(sub);
     row->setProperty(K_HOT_KIND, kind);
     return row;
-}
-
-auto aliasInput() -> catalog::Input * {
-    auto *input = new catalog::Input;
-    input->setPlaceholderText(TR("keys-alias-name"));
-    return input;
-}
-
-auto duplicateNotice() -> catalog::Notice * {
-    auto *notice = new catalog::Notice(catalog::Notice::Tone::Error);
-    notice->setTitle(TR("keys-duplicate-title"));
-    notice->setVisible(false);
-    return notice;
-}
-
-auto errorNotice() -> catalog::Notice * {
-    auto *notice = new catalog::Notice(catalog::Notice::Tone::Error);
-    notice->setVisible(false);
-    return notice;
 }
 
 } // namespace
@@ -433,8 +416,15 @@ void AddKey::hideReview() {
 }
 
 void AddKey::addReviewed() {
-    addKey(m_review_fingerprint, m_review_alias->text().trimmed(), m_review_routes, m_review_xpubs,
-           m_review_error);
+    QString error = addKey(m_module, m_review_fingerprint, m_review_alias->text().trimmed(),
+                           m_review_routes, m_review_xpubs);
+    if (!error.isEmpty()) {
+        m_review_error->setText(error);
+        m_review_error->setVisible(true);
+        adjustSize();
+        return;
+    }
+    accept();
 }
 
 void AddKey::dragEnterEvent(QDragEnterEvent *event) {
@@ -598,8 +588,15 @@ void AddKey::addPasted() {
         return;
     }
     // A pasted xpub comes from an airgapped device, which signs over its SD card.
-    addKey(key->fingerprint, m_paste_alias->text().trimmed(), {KeyRouteKind::SdCard}, {key->xpub},
-           m_paste_error);
+    QString error = addKey(m_module, key->fingerprint, m_paste_alias->text().trimmed(),
+                           {KeyRouteKind::SdCard}, {key->xpub});
+    if (!error.isEmpty()) {
+        m_paste_error->setText(error);
+        m_paste_error->setVisible(true);
+        adjustSize();
+        return;
+    }
+    accept();
 }
 
 // ===== Hot key choice view =====
@@ -863,44 +860,6 @@ void AddKey::clearSecrets() {
     m_confirm->clear();
 }
 
-auto AddKey::aliasReason(const QString &alias) const -> QString {
-    if (alias.isEmpty()) {
-        return TR("keys-alias-empty");
-    }
-    for (const auto &info : m_module->keys()) {
-        if (KeysModule::toQt(info.alias) == alias) {
-            return TR("keys-alias-taken-reason");
-        }
-    }
-    return QString();
-}
-
-auto AddKey::registeredAlias(const QString &fingerprint) const -> QString {
-    if (fingerprint.isEmpty()) {
-        return QString();
-    }
-    for (const auto &info : m_module->keys()) {
-        if (QString::compare(KeysModule::toQt(info.fingerprint), fingerprint,
-                             Qt::CaseInsensitive) == 0) {
-            return KeysModule::toQt(info.alias);
-        }
-    }
-    return QString();
-}
-
-void AddKey::addKey(const QString &fingerprint, const QString &alias,
-                    const QList<KeyRouteKind> &routes, const QList<PathXpub> &xpubs,
-                    catalog::Notice *error) {
-    auto result = m_module->addKey(fingerprint, alias, routes, xpubs);
-    if (!result.is_ok) {
-        error->setText(TR("keys-add-failed").arg(KeysModule::toQt(result.error)));
-        error->setVisible(true);
-        adjustSize();
-        return;
-    }
-    accept();
-}
-
 // ===== Slots =====
 
 void AddKey::onBackClicked() {
@@ -1021,12 +980,12 @@ void AddKey::onReviewChanged() {
     m_open_file->setVisible(!loaded);
     m_add_reviewed->setVisible(loaded);
 
-    QString duplicate = registeredAlias(m_review_fingerprint);
+    QString duplicate = registeredAlias(m_module, m_review_fingerprint);
     m_review_duplicate->setText(TR("keys-duplicate-body").arg(m_review_fingerprint, duplicate));
     m_review_duplicate->setVisible(loaded && !duplicate.isEmpty());
     QString reason;
     if (loaded) {
-        reason = duplicate.isEmpty() ? aliasReason(m_review_alias->text().trimmed())
+        reason = duplicate.isEmpty() ? aliasReason(m_module, m_review_alias->text().trimmed())
                                      : TR("keys-duplicate-reason");
     }
     m_add_reviewed->setEnabled(loaded && reason.isEmpty());
@@ -1052,13 +1011,13 @@ void AddKey::onPasteChanged() {
                                           : catalog::ValidationMark::State::Invalid);
     }
     m_paste_note->setVisible(!text.isEmpty() && !key.has_value());
-    QString duplicate = key.has_value() ? registeredAlias(key->fingerprint) : QString();
+    QString duplicate = key.has_value() ? registeredAlias(m_module, key->fingerprint) : QString();
     m_paste_duplicate->setText(
         TR("keys-duplicate-body").arg(key.has_value() ? key->fingerprint : QString(), duplicate));
     m_paste_duplicate->setVisible(!duplicate.isEmpty());
     QString reason;
     if (key.has_value()) {
-        reason = duplicate.isEmpty() ? aliasReason(m_paste_alias->text().trimmed())
+        reason = duplicate.isEmpty() ? aliasReason(m_module, m_paste_alias->text().trimmed())
                                      : TR("keys-duplicate-reason");
     }
     m_add_pasted->setEnabled(key.has_value() && reason.isEmpty());
@@ -1141,7 +1100,7 @@ void AddKey::onHotPasswordChanged() {
     m_password_short->setVisible(tooShort);
     m_password_mismatch->setVisible(mismatch);
 
-    QString reason = aliasReason(m_hot_alias->text().trimmed());
+    QString reason = aliasReason(m_module, m_hot_alias->text().trimmed());
     if (reason.isEmpty() && password.isEmpty()) {
         reason = TR("keys-password-choose");
     } else if (reason.isEmpty() && tooShort) {

@@ -179,12 +179,6 @@ protected:
 
     // Shared
     void clearSecrets();
-    // Why `alias` cannot name a new key, empty when it can.
-    [[nodiscard]] auto aliasReason(const QString &alias) const -> QString;
-    // The alias of the key already registered with `fingerprint`, empty when none is.
-    [[nodiscard]] auto registeredAlias(const QString &fingerprint) const -> QString;
-    void addKey(const QString &fingerprint, const QString &alias, const QList<KeyRouteKind> &routes,
-                const QList<PathXpub> &xpubs, catalog::Notice *error);
 
 private:
     KeysModule *m_module = nullptr;
