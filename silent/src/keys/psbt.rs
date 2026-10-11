@@ -6,9 +6,14 @@ use bitcoin::{
     Psbt, ScriptBuf,
 };
 use bwk_sp::{
+    account::bip375,
     bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor,
     bwk_tx::bwk_psbt::{
-        sp::{sp_input_tweak, sp_v0_output, PSBT_IN_SP_SPEND_BIP32_DERIVATION, PSBT_IN_SP_TWEAK},
+        sp::{
+            sp_input_tweak, sp_v0_output, PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE,
+            PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE, PSBT_IN_SP_SPEND_BIP32_DERIVATION,
+            PSBT_IN_SP_TWEAK, PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL,
+        },
         Error as PsbtV2Error, PsbtV2,
     },
 };
@@ -394,46 +399,159 @@ pub fn merge_signatures(original: &mut PsbtV2, signed: &Psbt) -> Result<usize, E
 
     let mut touched = 0;
     for (input, signed_input) in original.inputs.iter_mut().zip(&signed.inputs) {
-        let before = input.psbt.partial_sigs.len()
-            + usize::from(input.psbt.tap_key_sig.is_some())
-            + input.psbt.tap_script_sigs.len();
-
-        input
-            .psbt
-            .partial_sigs
-            .extend(signed_input.partial_sigs.clone());
-        if input.psbt.tap_key_sig.is_none() {
-            input.psbt.tap_key_sig = signed_input.tap_key_sig;
-        }
-        input
-            .psbt
-            .tap_script_sigs
-            .extend(signed_input.tap_script_sigs.clone());
-
-        let after = input.psbt.partial_sigs.len()
-            + usize::from(input.psbt.tap_key_sig.is_some())
-            + input.psbt.tap_script_sigs.len();
-        if after > before {
+        if copy_signatures(&mut input.psbt, signed_input) {
             touched += 1;
         }
     }
     Ok(touched)
 }
 
+/// Takes the sp() signer's answer to an `original` whose silent payment outputs
+/// have no script yet: the signer derived those scripts, so the txid to check the
+/// answer against only exists in the answer. The answer must pass the BIP375 checks
+/// (scripts against shares, DLEQ proofs, a share per scan key, tx frozen) and be the
+/// original transaction, only the SP output scripts being new. Then the scripts,
+/// the ECDH shares and proofs, `tx_modifiable` and the signatures are copied into
+/// `original`, which passes the same checks afterwards. Returns how many inputs
+/// gained at least one signature.
+pub fn merge_sp_signed(original: &mut PsbtV2, signed: &PsbtV2) -> Result<usize, Error> {
+    bip375::verify_signed(signed).map_err(|e| Error::SpSignedInvalid(e.to_string()))?;
+    check_same_transaction(original, signed)?;
+
+    for (output, signed_output) in original.outputs.iter_mut().zip(&signed.outputs) {
+        if output.script_pubkey.is_none() {
+            output
+                .script_pubkey
+                .clone_from(&signed_output.script_pubkey);
+        }
+    }
+    copy_unknown(
+        &mut original.unknown,
+        &signed.unknown,
+        &[PSBT_GLOBAL_SP_ECDH_SHARE, PSBT_GLOBAL_SP_DLEQ],
+    );
+    original.tx_modifiable = signed.tx_modifiable;
+
+    let mut touched = 0;
+    for (input, signed_input) in original.inputs.iter_mut().zip(&signed.inputs) {
+        copy_unknown(
+            &mut input.psbt.unknown,
+            &signed_input.psbt.unknown,
+            &[PSBT_IN_SP_ECDH_SHARE, PSBT_IN_SP_DLEQ],
+        );
+        if copy_signatures(&mut input.psbt, &signed_input.psbt) {
+            touched += 1;
+        }
+    }
+
+    bip375::verify_signed(original).map_err(|e| Error::SpSignedInvalid(e.to_string()))?;
+    Ok(touched)
+}
+
+/// The fields that make the transaction, compared one by one since `original` has
+/// no txid yet: only an SP output's script may be absent from `original`.
+fn check_same_transaction(original: &PsbtV2, signed: &PsbtV2) -> Result<(), Error> {
+    if original.tx_version != signed.tx_version
+        || original.fallback_lock_time != signed.fallback_lock_time
+    {
+        return Err(Error::SignedPsbtDiffers("version or locktime"));
+    }
+    if original.inputs.len() != signed.inputs.len() {
+        return Err(Error::SignedPsbtDiffers("inputs"));
+    }
+    for (input, signed_input) in original.inputs.iter().zip(&signed.inputs) {
+        if input.previous_output != signed_input.previous_output
+            || input.sequence != signed_input.sequence
+            || input.required_time_lock_time != signed_input.required_time_lock_time
+            || input.required_height_lock_time != signed_input.required_height_lock_time
+        {
+            return Err(Error::SignedPsbtDiffers("inputs"));
+        }
+    }
+    if original.outputs.len() != signed.outputs.len() {
+        return Err(Error::SignedPsbtDiffers("outputs"));
+    }
+    for (output, signed_output) in original.outputs.iter().zip(&signed.outputs) {
+        if output.amount != signed_output.amount {
+            return Err(Error::SignedPsbtDiffers("output amounts"));
+        }
+        let sp_info = |out: &bwk_sp::bwk_tx::bwk_psbt::Output| {
+            unknown_of(
+                &out.psbt.unknown,
+                &[PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL],
+            )
+        };
+        if sp_info(output) != sp_info(signed_output) {
+            return Err(Error::SignedPsbtDiffers("silent payment outputs"));
+        }
+        match &output.script_pubkey {
+            Some(script) if signed_output.script_pubkey.as_ref() != Some(script) => {
+                return Err(Error::SignedPsbtDiffers("output scripts"));
+            }
+            None if sp_info(output).is_empty() => {
+                return Err(Error::SignedPsbtDiffers("output scripts"));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+type UnknownMap = std::collections::BTreeMap<bitcoin::psbt::raw::Key, Vec<u8>>;
+
+/// The entries of `map` with one of `types`, in key order.
+fn unknown_of(map: &UnknownMap, types: &[u8]) -> Vec<(bitcoin::psbt::raw::Key, Vec<u8>)> {
+    map.iter()
+        .filter(|(key, _)| types.contains(&key.type_value))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// Adds `from`'s entries with one of `types` to `into`, keeping `into`'s own.
+fn copy_unknown(into: &mut UnknownMap, from: &UnknownMap, types: &[u8]) {
+    for (key, value) in unknown_of(from, types) {
+        into.entry(key).or_insert(value);
+    }
+}
+
+/// Adds `signed`'s signatures to `input`, keeping the ones it has. Whether any
+/// signature was added.
+fn copy_signatures(input: &mut bitcoin::psbt::Input, signed: &bitcoin::psbt::Input) -> bool {
+    let count = |input: &bitcoin::psbt::Input| {
+        input.partial_sigs.len()
+            + usize::from(input.tap_key_sig.is_some())
+            + input.tap_script_sigs.len()
+    };
+    let before = count(input);
+    input.partial_sigs.extend(signed.partial_sigs.clone());
+    if input.tap_key_sig.is_none() {
+        input.tap_key_sig = signed.tap_key_sig;
+    }
+    input.tap_script_sigs.extend(signed.tap_script_sigs.clone());
+    count(input) > before
+}
+
 /// `merge_signatures` over serialized bytes: `signed` is accepted as either a v0 or
 /// a v2 serialized PSBT, and the result is `original_v2`'s v2 serialization with the
-/// signatures merged in. `Error::NothingSigned` when no input gained a signature.
+/// signatures merged in. While `original_v2` still has silent payment outputs to
+/// derive, `signed` is the sp() signer's answer and must be v2, merged by
+/// `merge_sp_signed`. `Error::NothingSigned` when no input gained a signature.
 pub fn merge_signatures_bytes(original_v2: &[u8], signed: &[u8]) -> Result<Vec<u8>, Error> {
     let mut original = parse_v2(original_v2)?;
-    let signed_psbt = match Psbt::deserialize(signed) {
-        Ok(psbt) => psbt,
-        Err(_) => PsbtV2::deserialize(signed)
-            .map_err(|_| Error::InvalidSignedPsbt)?
-            .into_bitcoin_psbt()
-            .map_err(|_| Error::InvalidSignedPsbt)?,
+    let touched = if scan(&original)?.sp_outputs_pending {
+        // A v0 PSBT cannot carry the scripts, shares and proofs the signer derived.
+        let signed_v2 = PsbtV2::deserialize(signed).map_err(|_| Error::InvalidSignedPsbt)?;
+        merge_sp_signed(&mut original, &signed_v2)?
+    } else {
+        let signed_psbt = match Psbt::deserialize(signed) {
+            Ok(psbt) => psbt,
+            Err(_) => PsbtV2::deserialize(signed)
+                .map_err(|_| Error::InvalidSignedPsbt)?
+                .into_bitcoin_psbt()
+                .map_err(|_| Error::InvalidSignedPsbt)?,
+        };
+        merge_signatures(&mut original, &signed_psbt)?
     };
-
-    let touched = merge_signatures(&mut original, &signed_psbt)?;
     if touched == 0 {
         return Err(Error::NothingSigned);
     }
@@ -458,6 +576,8 @@ mod tests {
         sp::{set_sp_input_spend_bip32_derivation, set_sp_input_tweak, set_sp_v0_output},
         Input as PsbtInput, Output as PsbtOutput, PsbtV2,
     };
+
+    use bitcoin::hex::FromHex;
 
     use super::*;
 
@@ -898,5 +1018,115 @@ mod tests {
             artifacts.sp_fingerprint, None,
             "expected no sp fingerprint to resolve without any sp input data"
         );
+    }
+
+    /// Kern's answer to the bwk-sp fixture PSBT (pythcoiner/silent#39): SP output
+    /// scripts derived, global ECDH shares and DLEQ proofs, the input key-path
+    /// signed, tx frozen.
+    const KERN_SP_SIGNED: &str = "70736274ff0102040200000001030400000000010401010105010201fb040200000022070220bcfac5b99e04ad1a06ddfb016ee13582609d60b6291e98d01a9bc9a16c96d42103828fd168088f316588c4f7523fa8e438160d9db9273b27d720762b02b4ce0b7322080220bcfac5b99e04ad1a06ddfb016ee13582609d60b6291e98d01a9bc9a16c96d440310e5048750b1c7a36689c1de6dcdd815112dd485821bb58a0fdc15c4c5483789638284811e9b00e3af6aadf308ee9e1aa7adeeddb0e53128879c1cd6c4e31942207024139b0f81042e243a90478e43990c6a27be0e3346f0c71adbbcdd511beaea1e321030899d7c63650b59990c011ca08c1893f75b62aa9a2038f0125506fbb633a93c92208024139b0f81042e243a90478e43990c6a27be0e3346f0c71adbbcdd511beaea1e3400c2f27b26d92589af6819cdb225c231780c1375658f7d8854ef413f99d398d3603e0f74711ae86208ed249f4274283de159aae9da781a22b888040dcf6e7cd1c010601000001012ba086010000000000225120cba15611f961103c8738f27fefa7b774bc6b242f17b55dae832a3ae2efe332ed010e202222222222222222222222222222222222222222222222222222222222222222010f0400000000011340e3a02ce19eb5a94a10331cede6754f1456351b85b41f0d87b2214000a319d7069e027cb9c3e744e1b232bdd3d800ffa0f67be63bbbe32baf987b60b9c6b9c9650001030860ea0000000000000104225120a5675fd49d557606b5b541b345b3b0f83733e6bf21d3442884f9949872b658820109420220bcfac5b99e04ad1a06ddfb016ee13582609d60b6291e98d01a9bc9a16c96d4025cc9856d6f8375350e123978daac200c260cb5b5ae83106cab90484dcd8fcf3600010308589800000000000001042251206608dcdf249f25bbb94eda8f31ab3c05f6fd3e762a3c9e41152342eb4b38a546010942024139b0f81042e243a90478e43990c6a27be0e3346f0c71adbbcdd511beaea1e3031ec096b3e9917a43e81c6d014acab0dfa32151ea7dcdfa56a1dc89f0aec04ef8010a040000000000";
+
+    fn kern_signed() -> PsbtV2 {
+        let bytes = Vec::<u8>::from_hex(KERN_SP_SIGNED).unwrap();
+        PsbtV2::deserialize(&bytes).unwrap()
+    }
+
+    /// The PSBT Silent sent for that answer: the same transaction with its SP
+    /// outputs underived, no share, proof or signature, and the tx still modifiable.
+    fn kern_original() -> PsbtV2 {
+        let mut psbt = kern_signed();
+        for output in &mut psbt.outputs {
+            if sp_v0_output(&output.psbt).unwrap().is_some() {
+                output.script_pubkey = None;
+            }
+        }
+        psbt.unknown.retain(|key, _| {
+            key.type_value != PSBT_GLOBAL_SP_ECDH_SHARE && key.type_value != PSBT_GLOBAL_SP_DLEQ
+        });
+        for input in &mut psbt.inputs {
+            input.psbt.tap_key_sig = None;
+            input.psbt.partial_sigs.clear();
+            input.psbt.tap_script_sigs.clear();
+            input.psbt.unknown.retain(|key, _| {
+                key.type_value != PSBT_IN_SP_ECDH_SHARE && key.type_value != PSBT_IN_SP_DLEQ
+            });
+        }
+        psbt.tx_modifiable = None;
+        psbt
+    }
+
+    #[test]
+    fn merges_the_sp_signers_answer_into_the_scriptless_original() {
+        let original = kern_original();
+        assert!(scan(&original).unwrap().sp_outputs_pending);
+        let original_bytes = original.serialize().unwrap();
+        let signed_bytes = Vec::<u8>::from_hex(KERN_SP_SIGNED).unwrap();
+
+        let merged =
+            parse_v2(&merge_signatures_bytes(&original_bytes, &signed_bytes).unwrap()).unwrap();
+
+        let signed = kern_signed();
+        for (output, signed_output) in merged.outputs.iter().zip(&signed.outputs) {
+            assert_eq!(output.script_pubkey, signed_output.script_pubkey);
+            assert!(output.script_pubkey.is_some());
+        }
+        assert_eq!(
+            unknown_of(
+                &merged.unknown,
+                &[PSBT_GLOBAL_SP_ECDH_SHARE, PSBT_GLOBAL_SP_DLEQ]
+            ),
+            unknown_of(
+                &signed.unknown,
+                &[PSBT_GLOBAL_SP_ECDH_SHARE, PSBT_GLOBAL_SP_DLEQ]
+            )
+        );
+        assert!(!unknown_of(&merged.unknown, &[PSBT_GLOBAL_SP_ECDH_SHARE]).is_empty());
+        assert!(bip375::verify_signed(&merged).is_ok());
+        assert!(!scan(&merged).unwrap().sp_outputs_pending);
+
+        // Finalizable: the key-path signature is the whole witness.
+        let mut finalized = merged.into_bitcoin_psbt().unwrap();
+        for input in &mut finalized.inputs {
+            let sig = input.tap_key_sig.expect("every input is signed");
+            input.final_script_witness = Some(bitcoin::Witness::p2tr_key_spend(&sig));
+        }
+        let tx = finalized.extract_tx_unchecked_fee_rate();
+        assert_eq!(
+            tx.compute_txid(),
+            signed.unsigned_tx().unwrap().compute_txid()
+        );
+    }
+
+    #[test]
+    fn refuses_an_sp_answer_for_another_transaction() {
+        let original_bytes = kern_original().serialize().unwrap();
+        let mut original = kern_original();
+        original.outputs[0].amount = bitcoin::Amount::from_sat(1);
+        let other_bytes = original.serialize().unwrap();
+        let signed_bytes = Vec::<u8>::from_hex(KERN_SP_SIGNED).unwrap();
+        assert!(matches!(
+            merge_signatures_bytes(&other_bytes, &signed_bytes),
+            Err(Error::SignedPsbtDiffers(_))
+        ));
+        // The genuine original still merges.
+        assert!(merge_signatures_bytes(&original_bytes, &signed_bytes).is_ok());
+    }
+
+    #[test]
+    fn refuses_an_sp_answer_that_leaves_outputs_scriptless() {
+        let original_bytes = kern_original().serialize().unwrap();
+        assert!(matches!(
+            merge_signatures_bytes(&original_bytes, &original_bytes),
+            Err(Error::SpSignedInvalid(_))
+        ));
+    }
+
+    #[test]
+    fn refuses_a_v0_answer_to_pending_sp_outputs() {
+        let original_bytes = kern_original().serialize().unwrap();
+        let v0 = kern_signed().into_bitcoin_psbt().unwrap().serialize();
+        assert!(matches!(
+            merge_signatures_bytes(&original_bytes, &v0),
+            Err(Error::InvalidSignedPsbt)
+        ));
     }
 }

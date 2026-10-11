@@ -125,6 +125,10 @@ pub enum Error {
     SpOutputsPending,
     #[error("signed psbt is for a different transaction: expected {expected}, got {got}")]
     SignedPsbtMismatch { expected: Txid, got: Txid },
+    #[error("signed psbt is not the original transaction: its {0} differ")]
+    SignedPsbtDiffers(&'static str),
+    #[error("signed psbt fails the silent payment checks: {0}")]
+    SpSignedInvalid(String),
     #[error("no input was signed with this key")]
     NothingSigned,
     #[error("get_xpubs requires at least one derivation path")]
