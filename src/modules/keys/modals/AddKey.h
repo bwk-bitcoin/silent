@@ -50,26 +50,24 @@ class AddKey final : public catalog::Modal {
 public:
     explicit AddKey(KeysModule *module);
     ~AddKey() override;
+    void done(int result) override;
 
 public slots:
-    void done(int result) override;
-    void onModeClicked();
     void onBackClicked();
     void onNextClicked();
-    void showModes();
+    void onModeClicked();
     void onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub);
     void onQrScanFailed(QrErrorKind kind, const QString &message);
     void onQrFailed(const QString &message);
-    void updateReview();
-    void openFile();
-    void updatePaste();
+    void onReviewChanged();
+    void onOpenFileClicked();
+    void onPasteChanged();
     void onHotKindClicked();
-    void showHotChoose();
     void onWordCountPicked();
-    void updateHotChoose();
+    void onHotChooseChanged();
     void onMnemonicGenerated(ReqId req_id, const MnemonicResult &result);
-    void updateBackup();
-    void updateHotPassword();
+    void onBackupChanged();
+    void onHotPasswordChanged();
     void onHotKeyImported(ReqId req_id, const KeyInfoResult &result);
     void onFailureRetry();
 
@@ -99,57 +97,77 @@ protected:
     };
 
     void init();
-    void initModes();
-    void initQr();
-    void initReview();
-    void initPaste();
-    void initHotChoose();
-    void initBackup();
-    void initHotPassword();
-    void initStatus();
     void doConnect();
-    void connectModes();
-    void connectQr();
-    void connectReview();
-    void connectPaste();
-    void connectHotChoose();
-    void connectBackup();
-    void connectHotPassword();
-    void connectStatus();
     void view();
-    void dragEnterEvent(QDragEnterEvent *event) override;
-    void dropEvent(QDropEvent *event) override;
+
+    // Modes view
+    void initModes();
+    void connectModes();
     [[nodiscard]] auto viewModes() -> QWidget *;
-    [[nodiscard]] auto viewReview() -> catalog::ScrollArea *;
-    [[nodiscard]] auto viewPaste() -> QWidget *;
-    [[nodiscard]] auto viewHotChoose() -> QWidget *;
-    [[nodiscard]] auto viewBackup() -> QWidget *;
-    [[nodiscard]] auto viewHotPassword() -> QWidget *;
+    void showModes();
+
+    // QR code and camera views
+    void initQr();
+    void connectQr();
     void showQr();
-    void showHotPassword();
-    void addReviewed();
-    void addPasted();
-    void continueHot();
-    void sealKey();
     void showQrDisplay();
     void showCamera();
+    void stopQr();
+
+    // Review view
+    void initReview();
+    void connectReview();
+    [[nodiscard]] auto viewReview() -> catalog::ScrollArea *;
     void showFile();
     void showReview(Source source);
-    void showPaste();
-    void showBackup();
-    void showSealing();
-    void showResult();
+    void addReviewed();
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
     void loadFile(const QString &path);
     void showFileError(const QString &error);
+
+    // Paste view
+    void initPaste();
+    void connectPaste();
+    [[nodiscard]] auto viewPaste() -> QWidget *;
+    void showPaste();
+    [[nodiscard]] auto pastedKey() const -> std::optional<PastedKey>;
+    void addPasted();
+
+    // Hot key choice view
+    void initHotChoose();
+    void connectHotChoose();
+    [[nodiscard]] auto viewHotChoose() -> QWidget *;
+    void showHotChoose();
+    [[nodiscard]] auto typedMnemonic() const -> QString;
+    void continueHot();
+
+    // Backup view
+    void initBackup();
+    void connectBackup();
+    [[nodiscard]] auto viewBackup() -> QWidget *;
+    void showBackup();
+
+    // Hot key password view
+    void initHotPassword();
+    void connectHotPassword();
+    [[nodiscard]] auto viewHotPassword() -> QWidget *;
+    void showHotPassword();
+    void sealKey();
+
+    // Status view
+    void initStatus();
+    void connectStatus();
+    void showSealing();
+    void showResult();
     void showFailure(Failure failure, const QString &title, const QString &message);
-    void stopQr();
+
+    // Shared
     void clearSecrets();
     // Why `alias` cannot name a new key, empty when it can.
     [[nodiscard]] auto aliasReason(const QString &alias) const -> QString;
     // The alias of the key already registered with `fingerprint`, empty when none is.
     [[nodiscard]] auto registeredAlias(const QString &fingerprint) const -> QString;
-    [[nodiscard]] auto pastedKey() const -> std::optional<PastedKey>;
-    [[nodiscard]] auto typedMnemonic() const -> QString;
     void addKey(const QString &fingerprint, const QString &alias, const QList<KeyRouteKind> &routes,
                 const QList<PathXpub> &xpubs, catalog::Notice *error);
 

@@ -40,10 +40,10 @@ public:
     FetchXpub(KeysModule *module, const QString &fingerprint);
 
 public slots:
+    void onNextClicked();
     void onPurposeChanged();
     void onAccountEdited();
     void onInputChanged();
-    void onNextClicked();
     void onDeviceXpub(ReqId req_id, const QString &xpub);
     void onDeviceError(std::optional<ReqId> req_id, const QString &message);
     void onInstanceRemoved(const QString &id);
@@ -53,23 +53,27 @@ protected:
     enum class View { Fetch, Fetching };
 
     void init();
-    void initFetch();
-    void initFetching();
     void doConnect();
-    void connectFetch();
     void view();
+
+    // Fetch view
+    void initFetch();
+    void connectFetch();
     [[nodiscard]] auto viewFetch() -> QWidget *;
     void showFetch();
-    void showFetching();
     [[nodiscard]] auto purpose() const -> QString;
-    [[nodiscard]] auto path() const -> QString;
     [[nodiscard]] auto pathFor(const QString &purpose, int account) const -> QString;
+    [[nodiscard]] auto path() const -> QString;
     [[nodiscard]] auto freeAccount(const QString &purpose) const -> int;
     [[nodiscard]] auto reason() const -> QString;
     void refresh();
-    void fetch();
-    void stopFetch();
     void showError(const QString &error);
+    void fetch();
+
+    // Fetching view
+    void initFetching();
+    void showFetching();
+    void stopFetch();
 
 private:
     KeysModule *m_module = nullptr;

@@ -182,210 +182,6 @@ SigningFlow::~SigningFlow() {
     m_password_input->clear();
 }
 
-void SigningFlow::init() {
-    initPicker();
-    initUsb();
-    initSd();
-    initPassword();
-    initBusy();
-    initQr();
-    initVerifyResult();
-}
-
-void SigningFlow::initPicker() {
-    m_picker_column = new qontrol::Column;
-}
-
-void SigningFlow::initUsb() {
-    m_usb_status = new catalog::ModalStatus;
-    m_usb_status->setPadding(resolve(Spacing::M), 0);
-    m_usb_address = new catalog::ChunkedAddress;
-    m_usb_address_card = new catalog::Card(catalog::Card::Role::Inset);
-    m_usb_address_card->setPad(catalog::Card::Pad::M);
-    m_usb_address_card->setContent(m_usb_address);
-    m_usb_address_card->setVisible(false);
-    m_usb_retry = catalog::btnTryAgain();
-    m_usb_actions = new catalog::ModalActions;
-    m_usb_actions->setBack(hasPicker() ? catalog::ModalActions::Back::OtherSigner
-                                       : catalog::ModalActions::Back::None);
-    m_usb_actions->addAction(m_usb_retry);
-}
-
-void SigningFlow::initSd() {
-    m_sd_save_row = new catalog::SelectRow;
-    m_sd_save_row->setTitle(TR("flow-sd-save-title"));
-    m_sd_save_row->setSub(
-        TR("flow-sd-save-body").arg(monoFileName(m_request.wallet_name + UNSIGNED_SUFFIX)));
-    m_sd_save_row->setClickable(false);
-    m_sd_load_row = new catalog::SelectRow;
-    m_sd_load_row->setTitle(TR("flow-sd-load-title"));
-    m_sd_load_row->setSub(
-        TR("flow-sd-load-body").arg(monoFileName(m_request.wallet_name + SIGNED_SUFFIX)));
-    m_sd_load_row->setClickable(false);
-    m_sd_write_error = new catalog::Notice(catalog::Notice::Tone::Error);
-    m_sd_write_error->setTitle(TR("flow-sd-write-error-title"));
-    m_sd_write_error->setText(TR("flow-sd-write-error-body"));
-    m_sd_read_error = new catalog::Notice(catalog::Notice::Tone::Error);
-    m_sd_read_error->setTitle(TR("flow-sd-read-error-title"));
-    m_sd_read_error->setText(TR("flow-sd-read-error-body"));
-    m_sd_save = catalog::btnSaveUnsignedPsbt();
-    m_sd_save_retry = catalog::btnTryAgain();
-    m_sd_load = catalog::btnLoadSignedPsbt();
-    m_sd_load_retry = catalog::btnPickAnotherFile();
-    m_sd_actions = new catalog::ModalActions;
-    m_sd_actions->addAction(m_sd_save);
-    m_sd_actions->addAction(m_sd_save_retry);
-    m_sd_actions->addAction(m_sd_load);
-    m_sd_actions->addAction(m_sd_load_retry);
-}
-
-void SigningFlow::initPassword() {
-    m_password_prompt = new catalog::Label(catalog::LabelRole::Body);
-    m_password_prompt->setTone(catalog::LabelTone::Secondary);
-    m_password_prompt->setWordWrap(true);
-    m_password_input = new catalog::Input;
-    m_password_input->setEchoMode(QLineEdit::Password);
-    m_password_input->setFixedWidth(metric::PASSWORD_INPUT_WIDTH);
-    m_password_error = new catalog::Notice(catalog::Notice::Tone::Error);
-    m_password_error->setVisible(false);
-    m_password_proceed = hotProceedButton(m_request.context);
-    m_password_actions = new catalog::ModalActions;
-    m_password_actions->addAction(m_password_proceed);
-}
-
-void SigningFlow::initBusy() {
-    m_busy_step = new catalog::ModalStatus;
-    m_busy_step->setSpinner();
-    m_busy_step->setPadding(resolve(Spacing::M), resolve(Spacing::M));
-}
-
-void SigningFlow::initQr() {
-    m_qr = new QrDisplayStep;
-    m_qr->setHint(m_copy.qrHint);
-    m_camera = new CameraStep(m_module);
-    m_camera->setHint(m_copy.scanHint);
-}
-
-void SigningFlow::initVerifyResult() {
-    m_result_status = new catalog::ModalStatus;
-    m_result_status->setPadding(resolve(Spacing::S), 0);
-    m_result_address = new catalog::ChunkedAddress;
-    m_result_address->setAddress(m_request.address);
-    m_result_retry = catalog::btnTryAgain();
-    m_result_actions = new catalog::ModalActions;
-    m_result_actions->addAction(m_result_retry);
-}
-
-void SigningFlow::doConnect() {
-    connectUsb();
-    connectSd();
-    connectPassword();
-    connectQr();
-    connectVerifyResult();
-}
-
-void SigningFlow::connectUsb() {
-    connect(m_usb_actions, &catalog::ModalActions::backClicked, this, &SigningFlow::onBackClicked,
-            qontrol::UNIQUE);
-    connect(m_usb_retry, &QPushButton::clicked, this, &SigningFlow::onNextClicked, qontrol::UNIQUE);
-    connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
-            &SigningFlow::onInstanceRemoved, qontrol::UNIQUE);
-}
-
-void SigningFlow::connectSd() {
-    connect(m_sd_save, &QPushButton::clicked, this, &SigningFlow::onNextClicked, qontrol::UNIQUE);
-    connect(m_sd_save_retry, &QPushButton::clicked, this, &SigningFlow::onNextClicked,
-            qontrol::UNIQUE);
-    connect(m_sd_load, &QPushButton::clicked, this, &SigningFlow::onNextClicked, qontrol::UNIQUE);
-    connect(m_sd_load_retry, &QPushButton::clicked, this, &SigningFlow::onNextClicked,
-            qontrol::UNIQUE);
-    connect(m_module, &KeysModule::sdSaved, this, &SigningFlow::onSdSaved, qontrol::UNIQUE);
-    connect(m_module, &KeysModule::sdLoaded, this, &SigningFlow::onSdLoaded, qontrol::UNIQUE);
-}
-
-void SigningFlow::connectPassword() {
-    connect(m_password_input, &QLineEdit::textEdited, this, &SigningFlow::onPasswordEdited,
-            qontrol::UNIQUE);
-    connect(m_password_input, &QLineEdit::returnPressed, this, &SigningFlow::onNextClicked,
-            qontrol::UNIQUE);
-    connect(m_password_proceed, &QPushButton::clicked, this, &SigningFlow::onNextClicked,
-            qontrol::UNIQUE);
-    connect(m_module, &KeysModule::hotSigned, this, &SigningFlow::onHotSigned, qontrol::UNIQUE);
-    connect(m_module, &KeysModule::hotSpDescriptorFetched, this,
-            &SigningFlow::onHotDescriptorFetched, qontrol::UNIQUE);
-}
-
-void SigningFlow::connectQr() {
-    connect(m_qr, &QrDisplayStep::nextClicked, this, &SigningFlow::onNextClicked, qontrol::UNIQUE);
-    connect(m_camera, &CameraStep::backClicked, this, &SigningFlow::onBackClicked, qontrol::UNIQUE);
-    auto *qrRoute = m_module->qrRoute();
-    connect(qrRoute, &QrRoute::psbtSigned, this, &SigningFlow::onQrSigned, qontrol::UNIQUE);
-    connect(qrRoute, &QrRoute::addressVerified, this, &SigningFlow::onQrVerified, qontrol::UNIQUE);
-    connect(qrRoute, &QrRoute::descriptorDecoded, this, &SigningFlow::onQrDescriptor,
-            qontrol::UNIQUE);
-    connect(qrRoute, &QrRoute::scanFailed, this, &SigningFlow::onQrScanFailed, qontrol::UNIQUE);
-    connect(qrRoute, &QrRoute::failed, this, &SigningFlow::onQrFailed, qontrol::UNIQUE);
-}
-
-void SigningFlow::connectVerifyResult() {
-    connect(m_result_retry, &QPushButton::clicked, this, &SigningFlow::onNextClicked,
-            qontrol::UNIQUE);
-}
-
-void SigningFlow::view() {
-    m_picker_step = viewPicker();
-    m_usb_step = viewUsb();
-    m_sd_step = viewSd();
-    m_password_step = viewPassword();
-    m_result_step = viewVerifyResult();
-
-    // Owned by the modal, hidden until their view shows them.
-    QList<QWidget *> views = {m_picker_step,      m_usb_step,      m_usb_actions,
-                              m_sd_step,          m_sd_actions,    m_password_step,
-                              m_password_actions, m_busy_step,     m_qr,
-                              m_qr->actions(),    m_camera,        m_camera->actions(),
-                              m_result_step,      m_result_actions};
-    for (auto *widget : views) {
-        widget->hide();
-        widget->setParent(this);
-    }
-}
-
-auto SigningFlow::viewPicker() -> QWidget * {
-    return (new qontrol::Column)->push(m_picker_column);
-}
-
-auto SigningFlow::viewUsb() -> QWidget * {
-    return (new qontrol::Column)
-        ->spacing(resolve(Spacing::M))
-        ->push(m_usb_status)
-        ->push(m_usb_address_card);
-}
-
-auto SigningFlow::viewSd() -> QWidget * {
-    return (new qontrol::Column)
-        ->spacing(resolve(Spacing::M))
-        ->push(m_sd_save_row)
-        ->push(m_sd_load_row)
-        ->push(m_sd_write_error)
-        ->push(m_sd_read_error);
-}
-
-auto SigningFlow::viewPassword() -> QWidget * {
-    return (new qontrol::Column)
-        ->spacing(resolve(Spacing::M))
-        ->push(m_password_prompt)
-        ->push(new catalog::Field(TR("flow-password"), m_password_input))
-        ->push(m_password_error);
-}
-
-auto SigningFlow::viewVerifyResult() -> QWidget * {
-    auto *card = new catalog::Card(catalog::Card::Role::Inset);
-    card->setPad(catalog::Card::Pad::M);
-    card->setContent(m_result_address);
-    return (new qontrol::Column)->spacing(resolve(Spacing::M))->push(m_result_status)->push(card);
-}
-
 void SigningFlow::begin() {
     switch (m_request.context) {
     case Context::Sign: {
@@ -477,6 +273,280 @@ void SigningFlow::onNextClicked() {
     case View::Camera:
         return;
     }
+}
+
+void SigningFlow::onRowClicked() {
+    auto *row = sender();
+    if (row == nullptr) {
+        return;
+    }
+    int index = row->property(ROW_INDEX).toInt();
+    if (index < 0 || index >= m_rows.size() || !m_rows.at(index).usable()) {
+        return;
+    }
+    m_current = m_rows.at(index);
+    startRoute();
+}
+
+void SigningFlow::onDeviceSigned(ReqId req_id, const QString &psbt_base64) {
+    if (m_device_req == 0 || req_id != m_device_req) {
+        return;
+    }
+    releaseDevice();
+    auto merged = ::usb_merge_signed(rust::String(m_psbt.toStdString()),
+                                     rust::String(psbt_base64.toStdString()));
+    if (!merged.is_ok) {
+        fail(KeysModule::toQt(merged.error));
+        return;
+    }
+    rowSigned(KeysModule::toQt(merged.psbt_v2_hex));
+}
+
+void SigningFlow::onDeviceAddressDisplayed(ReqId req_id, [[maybe_unused]] const QString &address) {
+    if (m_device_req == 0 || req_id != m_device_req) {
+        return;
+    }
+    releaseDevice();
+    showVerifyResult(VerifyResult::Matched);
+}
+
+void SigningFlow::onDeviceError(std::optional<ReqId> req_id, const QString &message) {
+    if (m_device_req == 0 || !req_id.has_value() || req_id.value() != m_device_req) {
+        return;
+    }
+    releaseDevice();
+    qWarning() << "keys: device:" << message;
+    auto error = usbErrorFor(message);
+    // Refusing to confirm an address is the device's answer that it does not match.
+    if (m_request.context == Context::Verify && error == UsbError::Rejected) {
+        showVerifyResult(VerifyResult::Mismatch);
+        return;
+    }
+    showUsbError(error);
+}
+
+void SigningFlow::onInstanceRemoved(const QString &id) {
+    if (m_device_req == 0 || id != m_device_instance) {
+        return;
+    }
+    releaseDevice();
+    showUsbError(UsbError::Disconnected);
+}
+
+void SigningFlow::onPasswordEdited() {
+    bool empty = m_password_input->text().isEmpty();
+    if (!empty) {
+        m_password_error->setVisible(false);
+    }
+    m_password_proceed->setEnabled(!empty);
+    m_password_actions->setReason(empty ? TR("flow-password-reason") : QString());
+}
+
+void SigningFlow::onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex,
+                              const QString &error, bool wrong_password) {
+    if (m_hot_req == 0 || req_id != m_hot_req) {
+        return;
+    }
+    m_hot_req = 0;
+    if (is_ok) {
+        rowSigned(psbt_v2_hex);
+        return;
+    }
+    if (wrong_password) {
+        m_password_error->setText(TR("flow-password-wrong"));
+        m_password_error->setVisible(true);
+        showPassword();
+        return;
+    }
+    fail(error);
+}
+
+void SigningFlow::onHotDescriptorFetched(ReqId req_id, bool is_ok, const QString &descriptor,
+                                         const QString &error, bool wrong_password) {
+    if (m_hot_req == 0 || req_id != m_hot_req) {
+        return;
+    }
+    m_hot_req = 0;
+    if (is_ok) {
+        deliverDescriptor(descriptor);
+        return;
+    }
+    if (wrong_password) {
+        m_password_error->setText(TR("flow-password-wrong"));
+        m_password_error->setVisible(true);
+        showPassword();
+        return;
+    }
+    fail(error);
+}
+
+void SigningFlow::onSdSaved(ReqId req_id, bool is_ok, const QString &error) {
+    if (m_sd_req == 0 || req_id != m_sd_req) {
+        return;
+    }
+    m_sd_req = 0;
+    if (!is_ok) {
+        qWarning() << "keys: sd save:" << error;
+        m_sd_failure = SdFailure::Write;
+        showSd();
+        return;
+    }
+    m_sd_phase = SdPhase::Load;
+    m_sd_failure = SdFailure::None;
+    showSd();
+}
+
+void SigningFlow::onSdLoaded(ReqId req_id, bool is_ok, const QString &psbt_hex,
+                             const QString &error) {
+    if (m_sd_req == 0 || req_id != m_sd_req) {
+        return;
+    }
+    m_sd_req = 0;
+    // The unsigned file read back, or a file this wallet cannot plan, is not the
+    // answer the device wrote.
+    bool readable = is_ok && psbt_hex != m_psbt &&
+                    m_module->rust()->signing_plan(rust::String(psbt_hex.toStdString())).is_ok;
+    if (!readable) {
+        qWarning() << "keys: sd load:" << error;
+        m_sd_failure = SdFailure::Read;
+        showSd();
+        return;
+    }
+    rowSigned(psbt_hex);
+}
+
+void SigningFlow::onQrSigned(const QString &psbt_v2_hex) {
+    m_camera->stop();
+    rowSigned(psbt_v2_hex);
+}
+
+void SigningFlow::onQrVerified(bool matched) {
+    m_camera->stop();
+    showVerifyResult(matched ? VerifyResult::Matched : VerifyResult::Mismatch);
+}
+
+void SigningFlow::onQrDescriptor(const QString &descriptor) {
+    m_camera->stop();
+    deliverDescriptor(descriptor);
+}
+
+void SigningFlow::onQrScanFailed(QrErrorKind kind, const QString &message) {
+    m_camera->showScanError(kind, message);
+    adjustSize();
+}
+
+void SigningFlow::onQrFailed(const QString &message) {
+    m_camera->stop();
+    if (m_request.context == Context::Verify) {
+        qWarning() << "keys: qr request:" << message;
+        showVerifyResult(VerifyResult::Error);
+        return;
+    }
+    fail(message);
+}
+
+void SigningFlow::init() {
+    initPicker();
+    initUsb();
+    initSd();
+    initPassword();
+    initBusy();
+    initQr();
+    initVerifyResult();
+}
+
+void SigningFlow::doConnect() {
+    connectUsb();
+    connectSd();
+    connectPassword();
+    connectQr();
+    connectVerifyResult();
+}
+
+void SigningFlow::view() {
+    m_picker_step = viewPicker();
+    m_usb_step = viewUsb();
+    m_sd_step = viewSd();
+    m_password_step = viewPassword();
+    m_result_step = viewVerifyResult();
+
+    // Owned by the modal, hidden until their view shows them.
+    QList<QWidget *> views = {m_picker_step,      m_usb_step,      m_usb_actions,
+                              m_sd_step,          m_sd_actions,    m_password_step,
+                              m_password_actions, m_busy_step,     m_qr,
+                              m_qr->actions(),    m_camera,        m_camera->actions(),
+                              m_result_step,      m_result_actions};
+    for (auto *widget : views) {
+        widget->hide();
+        widget->setParent(this);
+    }
+}
+
+// ===== Picker view =====
+
+void SigningFlow::initPicker() {
+    m_picker_column = new qontrol::Column;
+}
+
+auto SigningFlow::viewPicker() -> QWidget * {
+    return (new qontrol::Column)->push(m_picker_column);
+}
+
+void SigningFlow::showPicker() {
+    m_view = View::Picker;
+    stopRoute();
+    m_current.reset();
+    bool verify = m_request.context == Context::Verify;
+
+    // clear() also resets the layout spacing
+    m_picker_column->clear();
+    m_picker_column->spacing(resolve(Spacing::M));
+    // Each part added to the shown step is shown at once, or the step would be measured
+    // without it until the next event loop pass.
+    if (m_rows.isEmpty()) {
+        auto *emptyState = new catalog::EmptyState(icon::key, TR("flow-no-signer-title"),
+                                                   verify ? TR("flow-no-signer-verify")
+                                                          : TR("flow-no-signer-sign"));
+        m_picker_column->push(emptyState);
+        emptyState->show();
+    } else {
+        if (!m_copy.pickerLead.isEmpty()) {
+            auto *leadLabel = new catalog::Label(m_copy.pickerLead, catalog::LabelRole::Body);
+            leadLabel->setTone(catalog::LabelTone::Secondary);
+            leadLabel->setWordWrap(true);
+            m_picker_column->push(leadLabel);
+            leadLabel->show();
+        }
+        auto *rowsColumn = (new qontrol::Column)->spacing(resolve(Spacing::S));
+        for (int index = 0; index < m_rows.size(); ++index) {
+            rowsColumn->push(buildRow(m_rows.at(index), index));
+        }
+        m_picker_column->push(rowsColumn);
+        rowsColumn->show();
+    }
+    auto others = otherDevices();
+    if (!others.isEmpty()) {
+        QString otherSub = verify ? TR("flow-other-device-other") : TR("flow-other-device-sign");
+        auto *othersColumn =
+            (new qontrol::Column)
+                ->spacing(resolve(Spacing::S))
+                ->push(new catalog::Label(TR("flow-other-devices"), catalog::LabelRole::Eyebrow));
+        for (const auto &device : others) {
+            othersColumn->push(otherRow(device, otherSub));
+        }
+        m_picker_column->push(othersColumn);
+        othersColumn->show();
+    }
+
+    setWindowTitle(m_copy.title);
+    setHeader(nullptr);
+    setBody(m_picker_step);
+    setFooter(nullptr);
+    setWidth(ModalWidth::M);
+}
+
+auto SigningFlow::hasPicker() const -> bool {
+    return m_request.context != Context::Fetch;
 }
 
 auto SigningFlow::signRows() const -> std::optional<QList<FlowRow>> {
@@ -596,20 +666,6 @@ auto SigningFlow::rememberedDevice(const QString &fingerprint) const -> QString 
                       KeysModule::toQt(devices.front().model));
 }
 
-auto SigningFlow::currentDeviceLabel() const -> QString {
-    if (!m_current->device.isEmpty()) {
-        return m_current->device;
-    }
-    if (!m_current->alias.isEmpty()) {
-        return m_current->alias;
-    }
-    return TR("flow-the-device");
-}
-
-auto SigningFlow::hasPicker() const -> bool {
-    return m_request.context != Context::Fetch;
-}
-
 auto SigningFlow::buildRow(const FlowRow &row, int index) const -> catalog::SelectRow * {
     auto *selectRow = new catalog::SelectRow;
     selectRow->setIcon(row.route != KeyRouteKind::Unknown ? catalog::routeIcon(row.route)
@@ -630,105 +686,37 @@ auto SigningFlow::buildRow(const FlowRow &row, int index) const -> catalog::Sele
     return selectRow;
 }
 
-void SigningFlow::showPicker() {
-    m_view = View::Picker;
-    stopRoute();
-    m_current.reset();
-    bool verify = m_request.context == Context::Verify;
+// ===== USB view =====
 
-    // clear() also resets the layout spacing
-    m_picker_column->clear();
-    m_picker_column->spacing(resolve(Spacing::M));
-    // Each part added to the shown step is shown at once, or the step would be measured
-    // without it until the next event loop pass.
-    if (m_rows.isEmpty()) {
-        auto *emptyState = new catalog::EmptyState(icon::key, TR("flow-no-signer-title"),
-                                                   verify ? TR("flow-no-signer-verify")
-                                                          : TR("flow-no-signer-sign"));
-        m_picker_column->push(emptyState);
-        emptyState->show();
-    } else {
-        if (!m_copy.pickerLead.isEmpty()) {
-            auto *leadLabel = new catalog::Label(m_copy.pickerLead, catalog::LabelRole::Body);
-            leadLabel->setTone(catalog::LabelTone::Secondary);
-            leadLabel->setWordWrap(true);
-            m_picker_column->push(leadLabel);
-            leadLabel->show();
-        }
-        auto *rowsColumn = (new qontrol::Column)->spacing(resolve(Spacing::S));
-        for (int index = 0; index < m_rows.size(); ++index) {
-            rowsColumn->push(buildRow(m_rows.at(index), index));
-        }
-        m_picker_column->push(rowsColumn);
-        rowsColumn->show();
-    }
-    auto others = otherDevices();
-    if (!others.isEmpty()) {
-        QString otherSub = verify ? TR("flow-other-device-other") : TR("flow-other-device-sign");
-        auto *othersColumn =
-            (new qontrol::Column)
-                ->spacing(resolve(Spacing::S))
-                ->push(new catalog::Label(TR("flow-other-devices"), catalog::LabelRole::Eyebrow));
-        for (const auto &device : others) {
-            othersColumn->push(otherRow(device, otherSub));
-        }
-        m_picker_column->push(othersColumn);
-        othersColumn->show();
-    }
-
-    setWindowTitle(m_copy.title);
-    setHeader(nullptr);
-    setBody(m_picker_step);
-    setFooter(nullptr);
-    setWidth(ModalWidth::M);
+void SigningFlow::initUsb() {
+    m_usb_status = new catalog::ModalStatus;
+    m_usb_status->setPadding(resolve(Spacing::M), 0);
+    m_usb_address = new catalog::ChunkedAddress;
+    m_usb_address_card = new catalog::Card(catalog::Card::Role::Inset);
+    m_usb_address_card->setPad(catalog::Card::Pad::M);
+    m_usb_address_card->setContent(m_usb_address);
+    m_usb_address_card->setVisible(false);
+    m_usb_retry = catalog::btnTryAgain();
+    m_usb_actions = new catalog::ModalActions;
+    m_usb_actions->setBack(hasPicker() ? catalog::ModalActions::Back::OtherSigner
+                                       : catalog::ModalActions::Back::None);
+    m_usb_actions->addAction(m_usb_retry);
 }
 
-void SigningFlow::onRowClicked() {
-    auto *row = sender();
-    if (row == nullptr) {
-        return;
-    }
-    int index = row->property(ROW_INDEX).toInt();
-    if (index < 0 || index >= m_rows.size() || !m_rows.at(index).usable()) {
-        return;
-    }
-    m_current = m_rows.at(index);
-    startRoute();
+void SigningFlow::connectUsb() {
+    connect(m_usb_actions, &catalog::ModalActions::backClicked, this, &SigningFlow::onBackClicked,
+            qontrol::UNIQUE);
+    connect(m_usb_retry, &QPushButton::clicked, this, &SigningFlow::onNextClicked, qontrol::UNIQUE);
+    connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
+            &SigningFlow::onInstanceRemoved, qontrol::UNIQUE);
 }
 
-void SigningFlow::startRoute() {
-    stopRoute();
-    m_verify_result.reset();
-    switch (m_current->route) {
-    case KeyRouteKind::Usb:
-        startUsb();
-        return;
-    case KeyRouteKind::Hot:
-        startHot();
-        return;
-    case KeyRouteKind::SdCard:
-        startSd();
-        return;
-    case KeyRouteKind::Qr:
-        startQr();
-        return;
-    case KeyRouteKind::Unknown:
-    default:
-        fail(TR("keys-route-unavailable"));
-        return;
-    }
+auto SigningFlow::viewUsb() -> QWidget * {
+    return (new qontrol::Column)
+        ->spacing(resolve(Spacing::M))
+        ->push(m_usb_status)
+        ->push(m_usb_address_card);
 }
-
-void SigningFlow::stopRoute() {
-    releaseDevice();
-    m_hot_req = 0;
-    m_sd_req = 0;
-    m_module->qrRoute()->stop();
-    m_qr->stop();
-    m_camera->stop();
-}
-
-// ===== USB =====
 
 void SigningFlow::showUsb() {
     m_view = View::Usb;
@@ -823,59 +811,40 @@ void SigningFlow::releaseDevice() {
     m_device_req = 0;
 }
 
-void SigningFlow::onDeviceSigned(ReqId req_id, const QString &psbt_base64) {
-    if (m_device_req == 0 || req_id != m_device_req) {
-        return;
-    }
-    releaseDevice();
-    auto merged = ::usb_merge_signed(rust::String(m_psbt.toStdString()),
-                                     rust::String(psbt_base64.toStdString()));
-    if (!merged.is_ok) {
-        fail(KeysModule::toQt(merged.error));
-        return;
-    }
-    rowSigned(KeysModule::toQt(merged.psbt_v2_hex));
-}
+// ===== Hot key password view =====
 
-void SigningFlow::onDeviceAddressDisplayed(ReqId req_id, [[maybe_unused]] const QString &address) {
-    if (m_device_req == 0 || req_id != m_device_req) {
-        return;
-    }
-    releaseDevice();
-    showVerifyResult(VerifyResult::Matched);
-}
-
-void SigningFlow::onDeviceError(std::optional<ReqId> req_id, const QString &message) {
-    if (m_device_req == 0 || !req_id.has_value() || req_id.value() != m_device_req) {
-        return;
-    }
-    releaseDevice();
-    qWarning() << "keys: device:" << message;
-    auto error = usbErrorFor(message);
-    // Refusing to confirm an address is the device's answer that it does not match.
-    if (m_request.context == Context::Verify && error == UsbError::Rejected) {
-        showVerifyResult(VerifyResult::Mismatch);
-        return;
-    }
-    showUsbError(error);
-}
-
-void SigningFlow::onInstanceRemoved(const QString &id) {
-    if (m_device_req == 0 || id != m_device_instance) {
-        return;
-    }
-    releaseDevice();
-    showUsbError(UsbError::Disconnected);
-}
-
-// ===== Hot key =====
-
-void SigningFlow::startHot() {
-    QString prompt = m_copy.hotPrompt.arg(m_current->alias);
-    m_password_prompt->setText(prompt);
-    m_password_prompt->setVisible(!prompt.isEmpty());
+void SigningFlow::initPassword() {
+    m_password_prompt = new catalog::Label(catalog::LabelRole::Body);
+    m_password_prompt->setTone(catalog::LabelTone::Secondary);
+    m_password_prompt->setWordWrap(true);
+    m_password_input = new catalog::Input;
+    m_password_input->setEchoMode(QLineEdit::Password);
+    m_password_input->setFixedWidth(metric::PASSWORD_INPUT_WIDTH);
+    m_password_error = new catalog::Notice(catalog::Notice::Tone::Error);
     m_password_error->setVisible(false);
-    showPassword();
+    m_password_proceed = hotProceedButton(m_request.context);
+    m_password_actions = new catalog::ModalActions;
+    m_password_actions->addAction(m_password_proceed);
+}
+
+void SigningFlow::connectPassword() {
+    connect(m_password_input, &QLineEdit::textEdited, this, &SigningFlow::onPasswordEdited,
+            qontrol::UNIQUE);
+    connect(m_password_input, &QLineEdit::returnPressed, this, &SigningFlow::onNextClicked,
+            qontrol::UNIQUE);
+    connect(m_password_proceed, &QPushButton::clicked, this, &SigningFlow::onNextClicked,
+            qontrol::UNIQUE);
+    connect(m_module, &KeysModule::hotSigned, this, &SigningFlow::onHotSigned, qontrol::UNIQUE);
+    connect(m_module, &KeysModule::hotSpDescriptorFetched, this,
+            &SigningFlow::onHotDescriptorFetched, qontrol::UNIQUE);
+}
+
+auto SigningFlow::viewPassword() -> QWidget * {
+    return (new qontrol::Column)
+        ->spacing(resolve(Spacing::M))
+        ->push(m_password_prompt)
+        ->push(new catalog::Field(TR("flow-password"), m_password_input))
+        ->push(m_password_error);
 }
 
 // An empty field with the focus in it, and the error kept if one was just shown.
@@ -891,22 +860,12 @@ void SigningFlow::showPassword() {
     m_password_input->setFocus();
 }
 
-void SigningFlow::onPasswordEdited() {
-    bool empty = m_password_input->text().isEmpty();
-    if (!empty) {
-        m_password_error->setVisible(false);
-    }
-    m_password_proceed->setEnabled(!empty);
-    m_password_actions->setReason(empty ? TR("flow-password-reason") : QString());
-}
-
-void SigningFlow::showBusy() {
-    m_view = View::Busy;
-    setWindowTitle(m_copy.title);
-    setHeader(nullptr);
-    setBody(m_busy_step);
-    setFooter(nullptr);
-    setWidth(ModalWidth::S);
+void SigningFlow::startHot() {
+    QString prompt = m_copy.hotPrompt.arg(m_current->alias);
+    m_password_prompt->setText(prompt);
+    m_password_prompt->setVisible(!prompt.isEmpty());
+    m_password_error->setVisible(false);
+    showPassword();
 }
 
 void SigningFlow::proceedPassword() {
@@ -935,50 +894,71 @@ void SigningFlow::proceedPassword() {
     password.clear();
 }
 
-void SigningFlow::onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex,
-                              const QString &error, bool wrong_password) {
-    if (m_hot_req == 0 || req_id != m_hot_req) {
-        return;
-    }
-    m_hot_req = 0;
-    if (is_ok) {
-        rowSigned(psbt_v2_hex);
-        return;
-    }
-    if (wrong_password) {
-        m_password_error->setText(TR("flow-password-wrong"));
-        m_password_error->setVisible(true);
-        showPassword();
-        return;
-    }
-    fail(error);
+// ===== Busy view =====
+
+void SigningFlow::initBusy() {
+    m_busy_step = new catalog::ModalStatus;
+    m_busy_step->setSpinner();
+    m_busy_step->setPadding(resolve(Spacing::M), resolve(Spacing::M));
 }
 
-void SigningFlow::onHotDescriptorFetched(ReqId req_id, bool is_ok, const QString &descriptor,
-                                         const QString &error, bool wrong_password) {
-    if (m_hot_req == 0 || req_id != m_hot_req) {
-        return;
-    }
-    m_hot_req = 0;
-    if (is_ok) {
-        deliverDescriptor(descriptor);
-        return;
-    }
-    if (wrong_password) {
-        m_password_error->setText(TR("flow-password-wrong"));
-        m_password_error->setVisible(true);
-        showPassword();
-        return;
-    }
-    fail(error);
+void SigningFlow::showBusy() {
+    m_view = View::Busy;
+    setWindowTitle(m_copy.title);
+    setHeader(nullptr);
+    setBody(m_busy_step);
+    setFooter(nullptr);
+    setWidth(ModalWidth::S);
 }
 
-// ===== SD card =====
+// ===== SD card view =====
 
-void SigningFlow::startSd() {
-    m_sd_phase = SdPhase::Save;
-    m_sd_failure = SdFailure::None;
-    showSd();
+void SigningFlow::initSd() {
+    m_sd_save_row = new catalog::SelectRow;
+    m_sd_save_row->setTitle(TR("flow-sd-save-title"));
+    m_sd_save_row->setSub(
+        TR("flow-sd-save-body").arg(monoFileName(m_request.wallet_name + UNSIGNED_SUFFIX)));
+    m_sd_save_row->setClickable(false);
+    m_sd_load_row = new catalog::SelectRow;
+    m_sd_load_row->setTitle(TR("flow-sd-load-title"));
+    m_sd_load_row->setSub(
+        TR("flow-sd-load-body").arg(monoFileName(m_request.wallet_name + SIGNED_SUFFIX)));
+    m_sd_load_row->setClickable(false);
+    m_sd_write_error = new catalog::Notice(catalog::Notice::Tone::Error);
+    m_sd_write_error->setTitle(TR("flow-sd-write-error-title"));
+    m_sd_write_error->setText(TR("flow-sd-write-error-body"));
+    m_sd_read_error = new catalog::Notice(catalog::Notice::Tone::Error);
+    m_sd_read_error->setTitle(TR("flow-sd-read-error-title"));
+    m_sd_read_error->setText(TR("flow-sd-read-error-body"));
+    m_sd_save = catalog::btnSaveUnsignedPsbt();
+    m_sd_save_retry = catalog::btnTryAgain();
+    m_sd_load = catalog::btnLoadSignedPsbt();
+    m_sd_load_retry = catalog::btnPickAnotherFile();
+    m_sd_actions = new catalog::ModalActions;
+    m_sd_actions->addAction(m_sd_save);
+    m_sd_actions->addAction(m_sd_save_retry);
+    m_sd_actions->addAction(m_sd_load);
+    m_sd_actions->addAction(m_sd_load_retry);
+}
+
+void SigningFlow::connectSd() {
+    connect(m_sd_save, &QPushButton::clicked, this, &SigningFlow::onNextClicked, qontrol::UNIQUE);
+    connect(m_sd_save_retry, &QPushButton::clicked, this, &SigningFlow::onNextClicked,
+            qontrol::UNIQUE);
+    connect(m_sd_load, &QPushButton::clicked, this, &SigningFlow::onNextClicked, qontrol::UNIQUE);
+    connect(m_sd_load_retry, &QPushButton::clicked, this, &SigningFlow::onNextClicked,
+            qontrol::UNIQUE);
+    connect(m_module, &KeysModule::sdSaved, this, &SigningFlow::onSdSaved, qontrol::UNIQUE);
+    connect(m_module, &KeysModule::sdLoaded, this, &SigningFlow::onSdLoaded, qontrol::UNIQUE);
+}
+
+auto SigningFlow::viewSd() -> QWidget * {
+    return (new qontrol::Column)
+        ->spacing(resolve(Spacing::M))
+        ->push(m_sd_save_row)
+        ->push(m_sd_load_row)
+        ->push(m_sd_write_error)
+        ->push(m_sd_read_error);
 }
 
 void SigningFlow::showSd() {
@@ -989,6 +969,12 @@ void SigningFlow::showSd() {
     setBody(m_sd_step);
     setFooter(m_sd_actions);
     setWidth(ModalWidth::M);
+}
+
+void SigningFlow::startSd() {
+    m_sd_phase = SdPhase::Save;
+    m_sd_failure = SdFailure::None;
+    showSd();
 }
 
 void SigningFlow::refreshSd() {
@@ -1026,22 +1012,6 @@ void SigningFlow::saveSd() {
     m_module->saveSdPsbt(m_sd_req, path, m_psbt);
 }
 
-void SigningFlow::onSdSaved(ReqId req_id, bool is_ok, const QString &error) {
-    if (m_sd_req == 0 || req_id != m_sd_req) {
-        return;
-    }
-    m_sd_req = 0;
-    if (!is_ok) {
-        qWarning() << "keys: sd save:" << error;
-        m_sd_failure = SdFailure::Write;
-        showSd();
-        return;
-    }
-    m_sd_phase = SdPhase::Load;
-    m_sd_failure = SdFailure::None;
-    showSd();
-}
-
 void SigningFlow::loadSd() {
     QDir folder(m_sd_dir.isEmpty() ? QDir::homePath() : m_sd_dir);
     QString path = QFileDialog::getOpenFileName(
@@ -1055,41 +1025,25 @@ void SigningFlow::loadSd() {
     m_module->loadSdPsbt(m_sd_req, path);
 }
 
-void SigningFlow::onSdLoaded(ReqId req_id, bool is_ok, const QString &psbt_hex,
-                             const QString &error) {
-    if (m_sd_req == 0 || req_id != m_sd_req) {
-        return;
-    }
-    m_sd_req = 0;
-    // The unsigned file read back, or a file this wallet cannot plan, is not the
-    // answer the device wrote.
-    bool readable = is_ok && psbt_hex != m_psbt &&
-                    m_module->rust()->signing_plan(rust::String(psbt_hex.toStdString())).is_ok;
-    if (!readable) {
-        qWarning() << "keys: sd load:" << error;
-        m_sd_failure = SdFailure::Read;
-        showSd();
-        return;
-    }
-    rowSigned(psbt_hex);
+// ===== QR code and camera views =====
+
+void SigningFlow::initQr() {
+    m_qr = new QrDisplayStep;
+    m_qr->setHint(m_copy.qrHint);
+    m_camera = new CameraStep(m_module);
+    m_camera->setHint(m_copy.scanHint);
 }
 
-// ===== QR code =====
-
-void SigningFlow::startQr() {
-    showQrDisplay();
+void SigningFlow::connectQr() {
+    connect(m_qr, &QrDisplayStep::nextClicked, this, &SigningFlow::onNextClicked, qontrol::UNIQUE);
+    connect(m_camera, &CameraStep::backClicked, this, &SigningFlow::onBackClicked, qontrol::UNIQUE);
     auto *qrRoute = m_module->qrRoute();
-    switch (m_request.context) {
-    case Context::Sign:
-        qrRoute->startSign(m_qr, m_psbt, m_request.descriptor);
-        return;
-    case Context::Verify:
-        qrRoute->startVerify(m_qr, m_request.descriptor, m_request.path, m_request.address);
-        return;
-    case Context::Fetch:
-        qrRoute->startSpDescriptor(m_qr);
-        return;
-    }
+    connect(qrRoute, &QrRoute::psbtSigned, this, &SigningFlow::onQrSigned, qontrol::UNIQUE);
+    connect(qrRoute, &QrRoute::addressVerified, this, &SigningFlow::onQrVerified, qontrol::UNIQUE);
+    connect(qrRoute, &QrRoute::descriptorDecoded, this, &SigningFlow::onQrDescriptor,
+            qontrol::UNIQUE);
+    connect(qrRoute, &QrRoute::scanFailed, this, &SigningFlow::onQrScanFailed, qontrol::UNIQUE);
+    connect(qrRoute, &QrRoute::failed, this, &SigningFlow::onQrFailed, qontrol::UNIQUE);
 }
 
 void SigningFlow::showQrDisplay() {
@@ -1110,57 +1064,44 @@ void SigningFlow::showCamera() {
     setWidth(ModalWidth::XXL);
 }
 
-void SigningFlow::onQrSigned(const QString &psbt_v2_hex) {
-    m_camera->stop();
-    rowSigned(psbt_v2_hex);
-}
-
-void SigningFlow::onQrVerified(bool matched) {
-    m_camera->stop();
-    showVerifyResult(matched ? VerifyResult::Matched : VerifyResult::Mismatch);
-}
-
-void SigningFlow::onQrDescriptor(const QString &descriptor) {
-    m_camera->stop();
-    deliverDescriptor(descriptor);
-}
-
-void SigningFlow::onQrScanFailed(QrErrorKind kind, const QString &message) {
-    m_camera->showScanError(kind, message);
-    adjustSize();
-}
-
-void SigningFlow::onQrFailed(const QString &message) {
-    m_camera->stop();
-    if (m_request.context == Context::Verify) {
-        qWarning() << "keys: qr request:" << message;
-        showVerifyResult(VerifyResult::Error);
+void SigningFlow::startQr() {
+    showQrDisplay();
+    auto *qrRoute = m_module->qrRoute();
+    switch (m_request.context) {
+    case Context::Sign:
+        qrRoute->startSign(m_qr, m_psbt, m_request.descriptor);
+        return;
+    case Context::Verify:
+        qrRoute->startVerify(m_qr, m_request.descriptor, m_request.path, m_request.address);
+        return;
+    case Context::Fetch:
+        qrRoute->startSpDescriptor(m_qr);
         return;
     }
-    fail(message);
 }
 
-// ===== Endings =====
+// ===== Verify result view =====
 
-void SigningFlow::rowSigned(const QString &psbt_v2_hex) {
-    m_psbt = psbt_v2_hex;
-    m_signed.insert(m_current->fingerprint);
-    auto rows = signRows();
-    if (!rows.has_value()) {
-        fail(TR("flow-plan-failed"));
-        return;
-    }
-    m_rows = rows.value();
-    bool pending = std::ranges::any_of(m_rows, [](const FlowRow &row) {
-        return row.usable() || row.status == SignerStatus::Waiting;
-    });
-    if (pending) {
-        showPicker();
-        return;
-    }
-    m_answered = true;
-    emit psbtSigned(m_request.req_id, m_psbt);
-    accept();
+void SigningFlow::initVerifyResult() {
+    m_result_status = new catalog::ModalStatus;
+    m_result_status->setPadding(resolve(Spacing::S), 0);
+    m_result_address = new catalog::ChunkedAddress;
+    m_result_address->setAddress(m_request.address);
+    m_result_retry = catalog::btnTryAgain();
+    m_result_actions = new catalog::ModalActions;
+    m_result_actions->addAction(m_result_retry);
+}
+
+void SigningFlow::connectVerifyResult() {
+    connect(m_result_retry, &QPushButton::clicked, this, &SigningFlow::onNextClicked,
+            qontrol::UNIQUE);
+}
+
+auto SigningFlow::viewVerifyResult() -> QWidget * {
+    auto *card = new catalog::Card(catalog::Card::Role::Inset);
+    card->setPad(catalog::Card::Pad::M);
+    card->setContent(m_result_address);
+    return (new qontrol::Column)->spacing(resolve(Spacing::M))->push(m_result_status)->push(card);
 }
 
 void SigningFlow::showVerifyResult(VerifyResult result) {
@@ -1190,6 +1131,71 @@ void SigningFlow::showVerifyResult(VerifyResult result) {
     // A match needs no Try Again.
     setFooter(result == VerifyResult::Matched ? nullptr : m_result_actions);
     setWidth(ModalWidth::S);
+}
+
+// ===== Shared =====
+
+auto SigningFlow::currentDeviceLabel() const -> QString {
+    if (!m_current->device.isEmpty()) {
+        return m_current->device;
+    }
+    if (!m_current->alias.isEmpty()) {
+        return m_current->alias;
+    }
+    return TR("flow-the-device");
+}
+
+void SigningFlow::startRoute() {
+    stopRoute();
+    m_verify_result.reset();
+    switch (m_current->route) {
+    case KeyRouteKind::Usb:
+        startUsb();
+        return;
+    case KeyRouteKind::Hot:
+        startHot();
+        return;
+    case KeyRouteKind::SdCard:
+        startSd();
+        return;
+    case KeyRouteKind::Qr:
+        startQr();
+        return;
+    case KeyRouteKind::Unknown:
+    default:
+        fail(TR("keys-route-unavailable"));
+        return;
+    }
+}
+
+void SigningFlow::stopRoute() {
+    releaseDevice();
+    m_hot_req = 0;
+    m_sd_req = 0;
+    m_module->qrRoute()->stop();
+    m_qr->stop();
+    m_camera->stop();
+}
+
+void SigningFlow::rowSigned(const QString &psbt_v2_hex) {
+    m_psbt = psbt_v2_hex;
+    m_signed.insert(m_current->fingerprint);
+    auto rows = signRows();
+    if (!rows.has_value()) {
+        fail(TR("flow-plan-failed"));
+        return;
+    }
+    m_rows = rows.value();
+    bool pending = std::ranges::any_of(m_rows, [](const FlowRow &row) {
+        return row.usable() || row.status == SignerStatus::Waiting;
+    });
+    if (pending) {
+        showPicker();
+        return;
+    }
+    m_answered = true;
+    emit psbtSigned(m_request.req_id, m_psbt);
+    accept();
 }
 
 void SigningFlow::deliverDescriptor(const QString &descriptor) {

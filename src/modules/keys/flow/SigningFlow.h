@@ -120,6 +120,7 @@ public:
     // fails at once answers before the window opens (see answered()).
     void begin();
     [[nodiscard]] auto answered() const -> bool;
+    void done(int result) override;
 
 signals:
     void psbtSigned(ReqId req_id, QString psbt_v2_hex);
@@ -131,7 +132,6 @@ signals:
     void cancelled(ReqId req_id);
 
 public slots:
-    void done(int result) override;
     void onBackClicked();
     void onNextClicked();
     void onRowClicked();
@@ -154,25 +154,14 @@ public slots:
 
 protected:
     void init();
-    void initPicker();
-    void initUsb();
-    void initSd();
-    void initPassword();
-    void initBusy();
-    void initQr();
-    void initVerifyResult();
     void doConnect();
-    void connectUsb();
-    void connectSd();
-    void connectPassword();
-    void connectQr();
-    void connectVerifyResult();
     void view();
+
+    // Picker view
+    void initPicker();
     [[nodiscard]] auto viewPicker() -> QWidget *;
-    [[nodiscard]] auto viewUsb() -> QWidget *;
-    [[nodiscard]] auto viewSd() -> QWidget *;
-    [[nodiscard]] auto viewPassword() -> QWidget *;
-    [[nodiscard]] auto viewVerifyResult() -> QWidget *;
+    void showPicker();
+    [[nodiscard]] auto hasPicker() const -> bool;
     [[nodiscard]] auto signRows() const -> std::optional<QList<FlowRow>>;
     [[nodiscard]] auto signRow(const SigningCandidate &candidate) const -> FlowRow;
     [[nodiscard]] auto verifyRows() const -> QList<FlowRow>;
@@ -180,29 +169,56 @@ protected:
     [[nodiscard]] auto otherDevices() const -> QList<OtherDevice>;
     // The name of a device remembered for `fingerprint`, for a key whose device is away.
     [[nodiscard]] auto rememberedDevice(const QString &fingerprint) const -> QString;
-    [[nodiscard]] auto currentDeviceLabel() const -> QString;
-    [[nodiscard]] auto hasPicker() const -> bool;
     [[nodiscard]] auto buildRow(const FlowRow &row, int index) const -> catalog::SelectRow *;
-    void showPicker();
+
+    // USB view
+    void initUsb();
+    void connectUsb();
+    [[nodiscard]] auto viewUsb() -> QWidget *;
     void showUsb();
     void showUsbError(UsbError error);
+    void startUsb();
+    void releaseDevice();
+
+    // Hot key password view
+    void initPassword();
+    void connectPassword();
+    [[nodiscard]] auto viewPassword() -> QWidget *;
     void showPassword();
-    void showBusy();
-    void showSd();
-    void showQrDisplay();
-    void showCamera();
-    void showVerifyResult(VerifyResult result);
-    void refreshSd();
+    void startHot();
     void proceedPassword();
+
+    // Busy view
+    void initBusy();
+    void showBusy();
+
+    // SD card view
+    void initSd();
+    void connectSd();
+    [[nodiscard]] auto viewSd() -> QWidget *;
+    void showSd();
+    void startSd();
+    void refreshSd();
     void saveSd();
     void loadSd();
-    void startRoute();
-    void startUsb();
-    void startHot();
-    void startSd();
+
+    // QR code and camera views
+    void initQr();
+    void connectQr();
+    void showQrDisplay();
+    void showCamera();
     void startQr();
+
+    // Verify result view
+    void initVerifyResult();
+    void connectVerifyResult();
+    [[nodiscard]] auto viewVerifyResult() -> QWidget *;
+    void showVerifyResult(VerifyResult result);
+
+    // Shared
+    [[nodiscard]] auto currentDeviceLabel() const -> QString;
+    void startRoute();
     void stopRoute();
-    void releaseDevice();
     void rowSigned(const QString &psbt_v2_hex);
     void deliverDescriptor(const QString &descriptor);
     void fail(const QString &message);

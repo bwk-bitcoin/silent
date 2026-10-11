@@ -49,110 +49,14 @@ FetchXpub::FetchXpub(KeysModule *module, const QString &fingerprint)
     view();
 }
 
-void FetchXpub::init() {
-    for (const auto &entry :
-         m_module->rust()->key_xpubs(rust::String(m_fingerprint.toStdString()))) {
-        m_cached.append(xpubPath(KeysModule::toQt(entry.path)));
+void FetchXpub::onNextClicked() {
+    switch (m_view) {
+    case View::Fetch:
+        fetch();
+        return;
+    case View::Fetching:
+        return;
     }
-    initFetch();
-    initFetching();
-}
-
-void FetchXpub::initFetch() {
-    m_purpose = new catalog::ComboBox;
-    m_purpose->addItem(TR("keys-purpose-84"), QStringLiteral("84"));
-    m_purpose->addItem(TR("keys-purpose-86"), QStringLiteral("86"));
-    m_purpose->addItem(TR("keys-purpose-49"), QStringLiteral("49"));
-    m_purpose->addItem(TR("keys-purpose-48"), PURPOSE_MULTISIG);
-    m_purpose->addItem(TR("keys-purpose-87"), QStringLiteral("87"));
-    m_purpose->addItem(TR("keys-purpose-custom"), PURPOSE_CUSTOM);
-    m_purpose->setWidth(Size::L);
-
-    m_prefix = new catalog::Label(catalog::LabelRole::Mono);
-    m_account = new catalog::Input(catalog::InputRole::Mono);
-    m_account->setFixedWidth(metric::ACCOUNT_INDEX_INPUT_WIDTH);
-    m_account->setMaxLength(2);
-    m_account->setValidator(new QIntValidator(0, MAX_ACCOUNT, m_account));
-    m_account->setToolTip(TR("keys-account-index-tip"));
-    m_suffix = new catalog::Label(QStringLiteral("'"), catalog::LabelRole::Mono);
-    m_script = new catalog::ComboBox;
-    m_script->addItem(TR("keys-script-p2wsh"), SCRIPT_P2WSH);
-    m_script->addItem(TR("keys-script-p2sh-p2wsh"), SCRIPT_P2SH_P2WSH);
-    m_script->addItem(TR("keys-script-p2tr"), SCRIPT_P2TR);
-    m_script->setWidth(Size::S);
-
-    m_custom = new catalog::Input(catalog::InputRole::Mono);
-    m_custom->setWidth(Size::L);
-    m_custom->setPlaceholderText(QStringLiteral("m/84'/%1'/0'").arg(KeysModule::coinType()));
-
-    m_error = new catalog::Notice(catalog::Notice::Tone::Error);
-    m_error->setTitle(TR("keys-fetch-failed-title"));
-    m_error->setVisible(false);
-
-    m_fetch = catalog::btnFetchThisXpub();
-    m_actions = new catalog::ModalActions;
-    m_actions->addAction(m_fetch);
-}
-
-void FetchXpub::initFetching() {
-    m_fetching_step = new catalog::ModalStatus;
-    m_fetching_step->setSpinner();
-    m_fetching_step->setTitle(TR("keys-fetching-title"));
-    m_fetching_step->setPadding(resolve(Spacing::M), resolve(Spacing::M));
-}
-
-void FetchXpub::doConnect() {
-    connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
-            &FetchXpub::onInstanceRemoved, qontrol::UNIQUE);
-    connectFetch();
-}
-
-void FetchXpub::connectFetch() {
-    connect(m_purpose, &QComboBox::activated, this, &FetchXpub::onPurposeChanged, qontrol::UNIQUE);
-    connect(m_account, &QLineEdit::textEdited, this, &FetchXpub::onAccountEdited, qontrol::UNIQUE);
-    connect(m_script, &QComboBox::activated, this, &FetchXpub::onInputChanged, qontrol::UNIQUE);
-    connect(m_custom, &QLineEdit::textEdited, this, &FetchXpub::onInputChanged, qontrol::UNIQUE);
-    connect(m_fetch, &QPushButton::clicked, this, &FetchXpub::onNextClicked, qontrol::UNIQUE);
-}
-
-void FetchXpub::view() {
-    m_fetch_step = viewFetch();
-    m_account->setText(QString::number(freeAccount(purpose())));
-    refresh();
-    showFetch();
-}
-
-auto FetchXpub::viewFetch() -> QWidget * {
-    m_template = (new qontrol::Row)
-                     ->spacing(resolve(Spacing::XXS))
-                     ->push(m_prefix)
-                     ->push(m_account)
-                     ->push(m_suffix)
-                     ->push(m_script)
-                     ->pushSpacer();
-    m_fields = new catalog::FieldGroup;
-    m_fields->addField(TR("keys-path-type"), m_purpose)
-        ->addField(TR("keys-path"), m_template)
-        ->addField(TR("keys-path"), m_custom);
-    return (new qontrol::Column)->spacing(resolve(Spacing::M))->push(m_fields)->push(m_error);
-}
-
-void FetchXpub::showFetch() {
-    m_view = View::Fetch;
-    setWindowTitle(TR("keys-fetch-title"));
-    setHeader(nullptr);
-    setBody(m_fetch_step);
-    setFooter(m_actions);
-    setWidth(ModalWidth::L);
-}
-
-void FetchXpub::showFetching() {
-    m_view = View::Fetching;
-    setWindowTitle(TR("keys-fetch-title"));
-    setHeader(nullptr);
-    setBody(m_fetching_step);
-    setFooter(nullptr);
-    setWidth(ModalWidth::L);
 }
 
 void FetchXpub::onPurposeChanged() {
@@ -170,36 +74,6 @@ void FetchXpub::onAccountEdited() {
 void FetchXpub::onInputChanged() {
     m_error->setVisible(false);
     refresh();
-}
-
-void FetchXpub::onNextClicked() {
-    switch (m_view) {
-    case View::Fetch:
-        fetch();
-        return;
-    case View::Fetching:
-        return;
-    }
-}
-
-void FetchXpub::fetch() {
-    if (!reason().isEmpty()) {
-        return;
-    }
-    auto device = readyDevice(m_fingerprint);
-    if (!device.has_value()) {
-        showError(TR("keys-fetch-xpub-connect"));
-        return;
-    }
-    m_error->setVisible(false);
-    m_signer = device->signer;
-    m_instance = device->instanceId;
-    m_path = path();
-    connect(device->signer, &ISigner::xpub, this, &FetchXpub::onDeviceXpub, qontrol::UNIQUE);
-    connect(device->signer, &ISigner::error, this, &FetchXpub::onDeviceError, qontrol::UNIQUE);
-    m_req = device->signer->getXpub(m_path);
-    m_fetching_step->setSubtitle(TR("keys-fetching-sub").arg(deviceName(*device->signer)));
-    showFetching();
 }
 
 void FetchXpub::onDeviceXpub(ReqId req_id, const QString &xpub) {
@@ -239,6 +113,98 @@ void FetchXpub::onInstanceRemoved(const QString &id) {
     }
     stopFetch();
     showError(TR("keys-register-disconnected"));
+}
+
+void FetchXpub::init() {
+    for (const auto &entry :
+         m_module->rust()->key_xpubs(rust::String(m_fingerprint.toStdString()))) {
+        m_cached.append(xpubPath(KeysModule::toQt(entry.path)));
+    }
+    initFetch();
+    initFetching();
+}
+
+void FetchXpub::doConnect() {
+    connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
+            &FetchXpub::onInstanceRemoved, qontrol::UNIQUE);
+    connectFetch();
+}
+
+void FetchXpub::view() {
+    m_fetch_step = viewFetch();
+    m_account->setText(QString::number(freeAccount(purpose())));
+    refresh();
+    showFetch();
+}
+
+// ===== Fetch view =====
+
+void FetchXpub::initFetch() {
+    m_purpose = new catalog::ComboBox;
+    m_purpose->addItem(TR("keys-purpose-84"), QStringLiteral("84"));
+    m_purpose->addItem(TR("keys-purpose-86"), QStringLiteral("86"));
+    m_purpose->addItem(TR("keys-purpose-49"), QStringLiteral("49"));
+    m_purpose->addItem(TR("keys-purpose-48"), PURPOSE_MULTISIG);
+    m_purpose->addItem(TR("keys-purpose-87"), QStringLiteral("87"));
+    m_purpose->addItem(TR("keys-purpose-custom"), PURPOSE_CUSTOM);
+    m_purpose->setWidth(Size::L);
+
+    m_prefix = new catalog::Label(catalog::LabelRole::Mono);
+    m_account = new catalog::Input(catalog::InputRole::Mono);
+    m_account->setFixedWidth(metric::ACCOUNT_INDEX_INPUT_WIDTH);
+    m_account->setMaxLength(2);
+    m_account->setValidator(new QIntValidator(0, MAX_ACCOUNT, m_account));
+    m_account->setToolTip(TR("keys-account-index-tip"));
+    m_suffix = new catalog::Label(QStringLiteral("'"), catalog::LabelRole::Mono);
+    m_script = new catalog::ComboBox;
+    m_script->addItem(TR("keys-script-p2wsh"), SCRIPT_P2WSH);
+    m_script->addItem(TR("keys-script-p2sh-p2wsh"), SCRIPT_P2SH_P2WSH);
+    m_script->addItem(TR("keys-script-p2tr"), SCRIPT_P2TR);
+    m_script->setWidth(Size::S);
+
+    m_custom = new catalog::Input(catalog::InputRole::Mono);
+    m_custom->setWidth(Size::L);
+    m_custom->setPlaceholderText(QStringLiteral("m/84'/%1'/0'").arg(KeysModule::coinType()));
+
+    m_error = new catalog::Notice(catalog::Notice::Tone::Error);
+    m_error->setTitle(TR("keys-fetch-failed-title"));
+    m_error->setVisible(false);
+
+    m_fetch = catalog::btnFetchThisXpub();
+    m_actions = new catalog::ModalActions;
+    m_actions->addAction(m_fetch);
+}
+
+void FetchXpub::connectFetch() {
+    connect(m_purpose, &QComboBox::activated, this, &FetchXpub::onPurposeChanged, qontrol::UNIQUE);
+    connect(m_account, &QLineEdit::textEdited, this, &FetchXpub::onAccountEdited, qontrol::UNIQUE);
+    connect(m_script, &QComboBox::activated, this, &FetchXpub::onInputChanged, qontrol::UNIQUE);
+    connect(m_custom, &QLineEdit::textEdited, this, &FetchXpub::onInputChanged, qontrol::UNIQUE);
+    connect(m_fetch, &QPushButton::clicked, this, &FetchXpub::onNextClicked, qontrol::UNIQUE);
+}
+
+auto FetchXpub::viewFetch() -> QWidget * {
+    m_template = (new qontrol::Row)
+                     ->spacing(resolve(Spacing::XXS))
+                     ->push(m_prefix)
+                     ->push(m_account)
+                     ->push(m_suffix)
+                     ->push(m_script)
+                     ->pushSpacer();
+    m_fields = new catalog::FieldGroup;
+    m_fields->addField(TR("keys-path-type"), m_purpose)
+        ->addField(TR("keys-path"), m_template)
+        ->addField(TR("keys-path"), m_custom);
+    return (new qontrol::Column)->spacing(resolve(Spacing::M))->push(m_fields)->push(m_error);
+}
+
+void FetchXpub::showFetch() {
+    m_view = View::Fetch;
+    setWindowTitle(TR("keys-fetch-title"));
+    setHeader(nullptr);
+    setBody(m_fetch_step);
+    setFooter(m_actions);
+    setWidth(ModalWidth::L);
 }
 
 auto FetchXpub::purpose() const -> QString {
@@ -306,6 +272,51 @@ void FetchXpub::refresh() {
     m_actions->setReason(why);
 }
 
+void FetchXpub::showError(const QString &error) {
+    m_error->setText(error);
+    m_error->setVisible(true);
+    // Shown again so the window fits the error it now holds.
+    showFetch();
+}
+
+void FetchXpub::fetch() {
+    if (!reason().isEmpty()) {
+        return;
+    }
+    auto device = readyDevice(m_fingerprint);
+    if (!device.has_value()) {
+        showError(TR("keys-fetch-xpub-connect"));
+        return;
+    }
+    m_error->setVisible(false);
+    m_signer = device->signer;
+    m_instance = device->instanceId;
+    m_path = path();
+    connect(device->signer, &ISigner::xpub, this, &FetchXpub::onDeviceXpub, qontrol::UNIQUE);
+    connect(device->signer, &ISigner::error, this, &FetchXpub::onDeviceError, qontrol::UNIQUE);
+    m_req = device->signer->getXpub(m_path);
+    m_fetching_step->setSubtitle(TR("keys-fetching-sub").arg(deviceName(*device->signer)));
+    showFetching();
+}
+
+// ===== Fetching view =====
+
+void FetchXpub::initFetching() {
+    m_fetching_step = new catalog::ModalStatus;
+    m_fetching_step->setSpinner();
+    m_fetching_step->setTitle(TR("keys-fetching-title"));
+    m_fetching_step->setPadding(resolve(Spacing::M), resolve(Spacing::M));
+}
+
+void FetchXpub::showFetching() {
+    m_view = View::Fetching;
+    setWindowTitle(TR("keys-fetch-title"));
+    setHeader(nullptr);
+    setBody(m_fetching_step);
+    setFooter(nullptr);
+    setWidth(ModalWidth::L);
+}
+
 void FetchXpub::stopFetch() {
     // Only this fetch's own connections: the device keeps serving the key detail.
     if (!m_signer.isNull()) {
@@ -314,13 +325,6 @@ void FetchXpub::stopFetch() {
     }
     m_signer = nullptr;
     m_req = 0;
-}
-
-void FetchXpub::showError(const QString &error) {
-    m_error->setText(error);
-    m_error->setVisible(true);
-    // Shown again so the window fits the error it now holds.
-    showFetch();
 }
 
 } // namespace keys::modal

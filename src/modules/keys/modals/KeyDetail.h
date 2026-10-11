@@ -57,59 +57,49 @@ public:
     ~KeyDetail() override;
 
 public slots:
-    void refresh();
+    void onBackClicked();
+    void onNextClicked();
+    void onKeyChanged();
     void onAliasEdited();
-    void saveAlias();
+    void onSaveAliasClicked();
     void onMoveUpClicked();
     void onMoveDownClicked();
     void onRemoveRouteClicked();
-    void startAddingRoute();
-    void confirmAddRoute();
-    void cancelAddingRoute();
-    void showDetail();
-    void showFetch();
+    void onAddRouteClicked();
+    void onConfirmRouteClicked();
+    void onCancelRouteClicked();
+    void onFetchXpubClicked();
     void onRegisterClicked();
     void onDescriptorIsRegistered(ReqId req_id, bool registered);
     void onDescriptorRegistered(ReqId req_id, bool registered);
     void onRegistrationError(std::optional<ReqId> req_id, const QString &message);
-    void showPassword();
+    void onRevealClicked();
+    void onRemoveClicked();
     void onPasswordEdited();
     void onMnemonicRevealed(ReqId req_id, const MnemonicResult &result);
-    void showReveal();
-    void toggleWords();
-    void showRemove();
-    void onBackClicked();
-    void onNextClicked();
+    void onToggleWordsClicked();
 
 protected:
     // The view on display: Back and the primary action act on it.
     enum class View { Detail, Password, Reveal, Remove };
 
     void init();
-    void initDetail();
-    void initPassword();
-    void initReveal();
-    void initRemove();
     void doConnect();
-    void connectDetail();
-    void connectPassword();
-    void connectReveal();
-    void connectRemove();
     void view();
-    [[nodiscard]] auto info() const -> std::optional<KeyInfo>;
+
+    // Detail view
+    void initDetail();
+    void connectDetail();
     [[nodiscard]] auto viewDetail() -> catalog::ScrollArea *;
-    [[nodiscard]] auto viewPassword() -> QWidget *;
-    [[nodiscard]] auto viewReveal() -> QWidget *;
-    [[nodiscard]] auto viewRemove() -> QWidget *;
-    // The title on the left, the fingerprint and the key status on the right.
-    void showHeader(const QString &title);
-    void proceedPassword();
-    void closeWords();
-    void removeKey();
+    void showDetail();
+    void refresh();
     void refreshDevices();
     void refreshRoutes(const KeyInfo &info);
+    void moveRoute(int from_index, int to_index);
+    void showRouteResult(const KeyOpResult &result);
     void refreshXpubs();
     void refreshAccounts(const KeyInfo &info);
+    [[nodiscard]] auto accounts() const -> QList<KeyAccount>;
     [[nodiscard]] auto registrationCell(const KeyAccount &account, bool applies) -> QWidget *;
     // Follows the key's ready device: a new one is asked about every account, and
     // accounts added since are asked about on the same one.
@@ -119,9 +109,32 @@ protected:
     void finishRegistrationRequest(Registration state);
     void stopRegistrations();
     void showRegistrationError(const QString &message);
-    void moveRoute(int from_index, int to_index);
-    void showRouteResult(const KeyOpResult &result);
-    [[nodiscard]] auto accounts() const -> QList<KeyAccount>;
+
+    // Password view
+    void initPassword();
+    void connectPassword();
+    [[nodiscard]] auto viewPassword() -> QWidget *;
+    void showPassword();
+    void proceedPassword();
+
+    // Reveal view
+    void initReveal();
+    void connectReveal();
+    [[nodiscard]] auto viewReveal() -> QWidget *;
+    void showReveal();
+    void closeWords();
+
+    // Remove view
+    void initRemove();
+    void connectRemove();
+    [[nodiscard]] auto viewRemove() -> QWidget *;
+    void showRemove();
+    void removeKey();
+
+    // Shared
+    [[nodiscard]] auto info() const -> std::optional<KeyInfo>;
+    // The title on the left, the fingerprint and the key status on the right.
+    void showHeader(const QString &title);
 
 private:
     KeysModule *m_module = nullptr;

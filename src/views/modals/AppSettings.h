@@ -44,52 +44,61 @@ public:
     ~AppSettings() override;
 
 public slots:
-    void onThemeSelectionChanged(int index);
-    void onLanguageSelectionChanged(int index);
-    void scanPlugins();
-    void onPluginToggled(bool enabled);
     void onBackClicked();
     void onNextClicked();
-    void showMain();
+    void onThemeSelectionChanged(int index);
+    void onLanguageSelectionChanged(int index);
+    void onScanClicked();
+    void onPluginToggled(bool enabled);
+    void onPluginsChanged();
+    void onOpenSectionClicked();
+    void onHostSettingsSectionsChanged();
+    void onHostInstanceChanged(const QString &id);
     void onThemeNames(ReqId req_id, const QStringList &themes);
     void onThemePalette(ReqId req_id, theme::Palette palette);
-    void onHostSettingsSectionsChanged();
-    void onOpenSectionClicked();
-    void onHostInstanceChanged(const QString &id);
-    void rebuildPluginRows();
 
 protected:
     // The view on display: Back and the primary action act on it.
     enum class View { Main, Disable, Section };
 
     void init();
-    void initMain();
-    void initDisable();
-    void initSection();
     void doConnect();
-    void connectMain();
-    void connectDisable();
-    void connectSection();
     void view();
+
+    // Main view
+    void initMain();
+    void connectMain();
     auto viewMain() -> catalog::ScrollArea *;
     auto buildGeneral() -> QWidget *;
     auto buildPlugins() -> QWidget *;
-    auto viewDisable() -> QWidget *;
-    auto viewSection() -> catalog::ScrollArea *;
+    void showMain();
+    void rebuildPluginRows();
     auto pluginRow(const QString &id, const QString &meta) -> catalog::SelectRow *;
+    void setScanning(bool scanning);
     void rebuildSettingSectionRows();
     [[nodiscard]] auto sectionModuleName(Host::SectionId section) const -> QString;
-    void showDisable(const QString &id);
-    void showSection(const QString &title);
-    void disablePlugin();
-    void closeSection();
-    void setScanning(bool scanning);
     void refreshThemeProviders();
     void requestThemeList();
     void applyPersistedTheme();
     void setThemePickerIndexSilently(int index);
     void updateThemeNote();
     void switchToLightTheme();
+
+    // Disable view
+    void initDisable();
+    void connectDisable();
+    auto viewDisable() -> QWidget *;
+    void showDisable(const QString &id);
+    void disablePlugin();
+
+    // Section view
+    void initSection();
+    void connectSection();
+    auto viewSection() -> catalog::ScrollArea *;
+    void showSection(const QString &title);
+    void closeSection();
+
+    // Shared
     void changeEvent(QEvent *event) override;
     void retranslateUi();
 
