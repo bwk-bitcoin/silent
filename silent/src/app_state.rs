@@ -28,6 +28,9 @@ pub struct AppState {
     pub qr_contrast: u8,
     #[serde(default = "default_qr_level")]
     pub qr_speed: u8,
+    /// The camera contrast picked last in Camera Settings, as its stepper's level.
+    #[serde(default = "default_qr_level")]
+    pub qr_camera_contrast: u8,
 }
 
 fn default_qr_level() -> u8 {
@@ -47,6 +50,7 @@ impl Default for AppState {
             qr_density: DEFAULT_QR_LEVEL,
             qr_contrast: DEFAULT_QR_LEVEL,
             qr_speed: DEFAULT_QR_LEVEL,
+            qr_camera_contrast: DEFAULT_QR_LEVEL,
         }
     }
 }
@@ -167,6 +171,16 @@ pub fn app_set_qr_display_levels(levels: QrDisplayLevels) {
     state.save();
 }
 
+pub fn app_qr_camera_contrast_level() -> u8 {
+    AppState::load().qr_camera_contrast
+}
+
+pub fn app_set_qr_camera_contrast_level(level: u8) {
+    let mut state = AppState::load();
+    state.qr_camera_contrast = level;
+    state.save();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +256,22 @@ mod tests {
                 app_qr_display_levels(),
                 picked,
                 "the levels picked should be loaded back"
+            );
+            assert_eq!(
+                app_qr_camera_contrast_level(),
+                3,
+                "the camera contrast should start at the middle level"
+            );
+            app_set_qr_camera_contrast_level(4);
+            assert_eq!(
+                app_qr_camera_contrast_level(),
+                4,
+                "the camera contrast picked should be loaded back"
+            );
+            assert_eq!(
+                app_qr_display_levels(),
+                picked,
+                "saving the camera contrast should leave the display levels alone"
             );
             assert!(
                 AppState::load().language.is_empty(),

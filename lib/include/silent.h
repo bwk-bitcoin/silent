@@ -2444,6 +2444,12 @@ void app_set_language(::rust::String locale) noexcept;
 // Remember the QR display tuning for every account.
 void app_set_qr_display_levels(::QrDisplayLevels levels) noexcept;
 
+// The camera contrast level picked last, the middle level until one is.
+::std::uint8_t app_qr_camera_contrast_level() noexcept;
+
+// Remember the camera contrast level for every account.
+void app_set_qr_camera_contrast_level(::std::uint8_t level) noexcept;
+
 // Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
 ::PsbtFileResult sd_save_psbt(::rust::Str path, ::rust::Str psbt_hex) noexcept;
 

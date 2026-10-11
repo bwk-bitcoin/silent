@@ -732,6 +732,12 @@ mod ffi {
         /// Remember the QR display tuning for every account.
         fn app_set_qr_display_levels(levels: QrDisplayLevels);
 
+        /// The camera contrast level picked last, the middle level until one is.
+        fn app_qr_camera_contrast_level() -> u8;
+
+        /// Remember the camera contrast level for every account.
+        fn app_set_qr_camera_contrast_level(level: u8);
+
         /// Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
         fn sd_save_psbt(path: &str, psbt_hex: &str) -> PsbtFileResult;
         fn sd_load_psbt(path: &str) -> PsbtFileResult;
@@ -1668,8 +1674,9 @@ fn failed_psbt_file(error: String) -> ffi::PsbtFileResult {
 // Re-export main types
 pub use account::{new_account, Account, NotificationReceiver, Poll, PsbtResult};
 pub use app_state::{
-    app_active_theme, app_enabled_plugins, app_language, app_qr_display_levels,
-    app_set_active_theme, app_set_language, app_set_plugin_enabled, app_set_qr_display_levels,
+    app_active_theme, app_enabled_plugins, app_language, app_qr_camera_contrast_level,
+    app_qr_display_levels, app_set_active_theme, app_set_language, app_set_plugin_enabled,
+    app_set_qr_camera_contrast_level, app_set_qr_display_levels,
 };
 pub use bbqr::{bbqr_frames, bbqr_scanner_new, BbqrFrames, BbqrScanner};
 pub use camera::{camera_list, camera_open, CameraHandle};

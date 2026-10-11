@@ -64,6 +64,7 @@ void CameraSettings::view() {
 
 void CameraSettings::onContrastPicked(int level) {
     m_engine->setContrast(qr::cameraContrastFromLevel(level));
+    ::app_set_qr_camera_contrast_level(static_cast<std::uint8_t>(level));
 }
 
 } // namespace keys::flow

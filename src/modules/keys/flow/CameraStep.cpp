@@ -32,6 +32,8 @@ CameraStep::CameraStep(QWidget *parent) : QWidget(parent) {
 void CameraStep::init() {
     m_camera = new qr::QrCamera(this);
     m_engine = new qr::BbqrCameraEngine(this);
+    // The contrast picked last in Camera Settings, for any account.
+    m_engine->setContrast(qr::cameraContrastFromLevel(::app_qr_camera_contrast_level()));
 
     m_hint = new Label(LabelRole::Body);
     m_hint->setTone(LabelTone::Secondary);
