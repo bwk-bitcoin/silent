@@ -138,13 +138,9 @@ void KeyDetail::view() {
     m_reveal_body = viewReveal();
     m_remove_body = viewRemove();
 
-    // Owned by the modal, hidden until their view shows them.
-    QList<QWidget *> views = {m_password_body,  m_password_actions, m_reveal_body,
-                              m_reveal_actions, m_remove_body,      m_remove_actions};
-    for (auto *widget : views) {
-        widget->hide();
-        widget->setParent(this);
-    }
+    hidePassword();
+    hideReveal();
+    hideRemove();
 }
 
 // ===== Detail view =====
@@ -589,6 +585,11 @@ void KeyDetail::showPassword() {
     m_password_input->setFocus();
 }
 
+void KeyDetail::hidePassword() {
+    keep(m_password_body);
+    keep(m_password_actions);
+}
+
 void KeyDetail::proceedPassword() {
     if (m_reveal_req != 0 || m_password_input->text().isEmpty()) {
         return;
@@ -645,6 +646,11 @@ void KeyDetail::showReveal() {
     setBody(m_reveal_body);
     setFooter(m_reveal_actions);
     setWidth(ModalWidth::L);
+}
+
+void KeyDetail::hideReveal() {
+    keep(m_reveal_body);
+    keep(m_reveal_actions);
 }
 
 void KeyDetail::closeWords() {
@@ -706,6 +712,11 @@ void KeyDetail::showRemove() {
     setBody(m_remove_body);
     setFooter(m_remove_actions);
     setWidth(ModalWidth::L);
+}
+
+void KeyDetail::hideRemove() {
+    keep(m_remove_body);
+    keep(m_remove_actions);
 }
 
 void KeyDetail::removeKey() {

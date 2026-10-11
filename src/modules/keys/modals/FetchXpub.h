@@ -73,6 +73,7 @@ protected:
     // Fetching view
     void initFetching();
     void showFetching();
+    void hideFetching();
     void stopFetch();
 
 private:

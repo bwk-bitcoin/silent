@@ -66,6 +66,7 @@ void FetchXpub::doConnect() {
 
 void FetchXpub::view() {
     m_fetch_step = viewFetch();
+    hideFetching();
     m_account->setText(QString::number(freeAccount(purpose())));
     refresh();
     showFetch();
@@ -249,6 +250,10 @@ void FetchXpub::showFetching() {
     setBody(m_fetching_step);
     setFooter(nullptr);
     setWidth(ModalWidth::L);
+}
+
+void FetchXpub::hideFetching() {
+    keep(m_fetching_step);
 }
 
 void FetchXpub::stopFetch() {

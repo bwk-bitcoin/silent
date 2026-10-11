@@ -189,20 +189,13 @@ void AddKey::view() {
     m_choose_body = viewHotChoose();
     m_backup_body = viewBackup();
     m_password_body = viewHotPassword();
-    // Owned by the modal, hidden until their view shows them.
-    QList<QWidget *> views = {m_modes_body,        m_qr,
-                              m_qr->actions(),     m_camera,
-                              m_camera->actions(), m_review_body,
-                              m_review_actions,    m_paste_body,
-                              m_paste_actions,     m_choose_body,
-                              m_choose_actions,    m_backup_body,
-                              m_backup_actions,    m_password_body,
-                              m_password_actions,  m_status,
-                              m_status_actions};
-    for (auto *widget : views) {
-        widget->hide();
-        widget->setParent(this);
-    }
+    hideQr();
+    hideReview();
+    hidePaste();
+    hideHotChoose();
+    hideBackup();
+    hideHotPassword();
+    hideStatus();
 }
 
 // ===== Modes view =====
@@ -291,6 +284,13 @@ void AddKey::stopQr() {
     m_module->qrRoute()->stop();
     m_qr->stop();
     m_camera->stop();
+}
+
+void AddKey::hideQr() {
+    keep(m_qr);
+    keep(m_qr->actions());
+    keep(m_camera);
+    keep(m_camera->actions());
 }
 
 // ===== Review view =====
@@ -396,6 +396,11 @@ void AddKey::showReview(Source source) {
     setBody(m_review_body);
     setFooter(m_review_actions);
     setWidth(ModalWidth::L);
+}
+
+void AddKey::hideReview() {
+    keep(m_review_body);
+    keep(m_review_actions);
 }
 
 void AddKey::addReviewed() {
@@ -539,6 +544,11 @@ void AddKey::showPaste() {
     setWidth(ModalWidth::L);
 }
 
+void AddKey::hidePaste() {
+    keep(m_paste_body);
+    keep(m_paste_actions);
+}
+
 auto AddKey::pastedKey() const -> std::optional<PastedKey> {
     auto match = PASTED_KEY_RE.match(m_paste->input()->text().trimmed());
     if (!match.hasMatch()) {
@@ -625,6 +635,11 @@ void AddKey::showHotChoose() {
     setWidth(ModalWidth::L);
 }
 
+void AddKey::hideHotChoose() {
+    keep(m_choose_body);
+    keep(m_choose_actions);
+}
+
 auto AddKey::typedMnemonic() const -> QString {
     return m_words_input->words().join(QLatin1Char(' ')).trimmed().toLower();
 }
@@ -684,6 +699,11 @@ void AddKey::showBackup() {
     setWidth(ModalWidth::L);
 }
 
+void AddKey::hideBackup() {
+    keep(m_backup_body);
+    keep(m_backup_actions);
+}
+
 // ===== Hot key password view =====
 
 void AddKey::initHotPassword() {
@@ -737,6 +757,11 @@ void AddKey::showHotPassword() {
     setWidth(ModalWidth::L);
 }
 
+void AddKey::hideHotPassword() {
+    keep(m_password_body);
+    keep(m_password_actions);
+}
+
 void AddKey::sealKey() {
     m_status->setSpinner();
     m_status->setTitle(TR("keys-sealing-title"));
@@ -780,6 +805,11 @@ void AddKey::showResult() {
     setBody(m_status);
     setFooter(m_status_actions);
     setWidth(ModalWidth::L);
+}
+
+void AddKey::hideStatus() {
+    keep(m_status);
+    keep(m_status_actions);
 }
 
 void AddKey::showFailure(Failure failure, const QString &title, const QString &message) {

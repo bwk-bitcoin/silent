@@ -131,12 +131,8 @@ void AppSettings::view() {
     m_main = viewMain();
     m_disable = viewDisable();
     m_section = viewSection();
-    // Owned by the modal, hidden until their view shows them.
-    QList<QWidget *> views = {m_disable, m_disable_actions, m_section, m_section_actions};
-    for (auto *widget : views) {
-        widget->hide();
-        widget->setParent(this);
-    }
+    hideDisable();
+    hideSection();
     retranslateUi();
 }
 
@@ -526,6 +522,11 @@ void AppSettings::showDisable(const QString &id) {
     setWidth(ModalWidth::Wide);
 }
 
+void AppSettings::hideDisable() {
+    keep(m_disable);
+    keep(m_disable_actions);
+}
+
 void AppSettings::disablePlugin() {
     QString id = m_disabling_id;
     QString activeTheme = m_theme_picker->currentData().toString();
@@ -587,6 +588,11 @@ void AppSettings::showSection(const QString &title) {
     setBody(m_section);
     setFooter(m_section_actions);
     setWidth(ModalWidth::Wide);
+}
+
+void AppSettings::hideSection() {
+    keep(m_section);
+    keep(m_section_actions);
 }
 
 void AppSettings::closeSection() {

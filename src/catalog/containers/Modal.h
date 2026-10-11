@@ -24,6 +24,8 @@ public:
     void setWidth(ModalWidth width);
 
 protected:
+    // Hides `widget` and gives it to the modal, kept until a view shows it.
+    void keep(QWidget *widget);
     auto event(QEvent *event) -> bool override;
 
 private:

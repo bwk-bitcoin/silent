@@ -114,6 +114,7 @@ protected:
     void connectPassword();
     [[nodiscard]] auto viewPassword() -> QWidget *;
     void showPassword();
+    void hidePassword();
     void proceedPassword();
 
     // Reveal view
@@ -122,6 +123,7 @@ protected:
     void connectReveal();
     [[nodiscard]] auto viewReveal() -> QWidget *;
     void showReveal();
+    void hideReveal();
     void closeWords();
 
     // Remove view
@@ -130,6 +132,7 @@ protected:
     void connectRemove();
     [[nodiscard]] auto viewRemove() -> QWidget *;
     void showRemove();
+    void hideRemove();
     void removeKey();
 
     // Shared

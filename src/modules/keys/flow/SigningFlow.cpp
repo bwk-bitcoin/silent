@@ -250,16 +250,13 @@ void SigningFlow::view() {
     m_password_step = viewPassword();
     m_result_step = viewVerifyResult();
 
-    // Owned by the modal, hidden until their view shows them.
-    QList<QWidget *> views = {m_picker_step,      m_usb_step,      m_usb_actions,
-                              m_sd_step,          m_sd_actions,    m_password_step,
-                              m_password_actions, m_busy_step,     m_qr,
-                              m_qr->actions(),    m_camera,        m_camera->actions(),
-                              m_result_step,      m_result_actions};
-    for (auto *widget : views) {
-        widget->hide();
-        widget->setParent(this);
-    }
+    hidePicker();
+    hideUsb();
+    hidePassword();
+    hideBusy();
+    hideSd();
+    hideQr();
+    hideVerifyResult();
 }
 
 // ===== Picker view =====
@@ -323,6 +320,10 @@ void SigningFlow::showPicker() {
     setBody(m_picker_step);
     setFooter(nullptr);
     setWidth(ModalWidth::M);
+}
+
+void SigningFlow::hidePicker() {
+    keep(m_picker_step);
 }
 
 auto SigningFlow::hasPicker() const -> bool {
@@ -534,6 +535,11 @@ void SigningFlow::showUsbError(UsbError error) {
     setWidth(ModalWidth::S);
 }
 
+void SigningFlow::hideUsb() {
+    keep(m_usb_step);
+    keep(m_usb_actions);
+}
+
 void SigningFlow::startUsb() {
     // A device that came back after an unplug has a new instance id.
     auto device = liveDeviceById(m_current->device_id);
@@ -640,6 +646,11 @@ void SigningFlow::showPassword() {
     m_password_input->setFocus();
 }
 
+void SigningFlow::hidePassword() {
+    keep(m_password_step);
+    keep(m_password_actions);
+}
+
 void SigningFlow::startHot() {
     QString prompt = m_copy.hotPrompt.arg(m_current->alias);
     m_password_prompt->setText(prompt);
@@ -689,6 +700,10 @@ void SigningFlow::showBusy() {
     setBody(m_busy_step);
     setFooter(nullptr);
     setWidth(ModalWidth::S);
+}
+
+void SigningFlow::hideBusy() {
+    keep(m_busy_step);
 }
 
 // ===== SD card view =====
@@ -749,6 +764,11 @@ void SigningFlow::showSd() {
     setBody(m_sd_step);
     setFooter(m_sd_actions);
     setWidth(ModalWidth::M);
+}
+
+void SigningFlow::hideSd() {
+    keep(m_sd_step);
+    keep(m_sd_actions);
 }
 
 void SigningFlow::startSd() {
@@ -844,6 +864,13 @@ void SigningFlow::showCamera() {
     setWidth(ModalWidth::XXL);
 }
 
+void SigningFlow::hideQr() {
+    keep(m_qr);
+    keep(m_qr->actions());
+    keep(m_camera);
+    keep(m_camera->actions());
+}
+
 void SigningFlow::startQr() {
     showQrDisplay();
     auto *qrRoute = m_module->qrRoute();
@@ -911,6 +938,11 @@ void SigningFlow::showVerifyResult(VerifyResult result) {
     // A match needs no Try Again.
     setFooter(result == VerifyResult::Matched ? nullptr : m_result_actions);
     setWidth(ModalWidth::S);
+}
+
+void SigningFlow::hideVerifyResult() {
+    keep(m_result_step);
+    keep(m_result_actions);
 }
 
 // ===== Shared =====

@@ -45,14 +45,18 @@ auto Modal::event(QEvent *event) -> bool {
     return handled;
 }
 
+void Modal::keep(QWidget *widget) {
+    widget->hide();
+    widget->setParent(this);
+}
+
 void Modal::replace(qontrol::Row *slot, QWidget *&current, QWidget *widget) {
     if (current != nullptr) {
         slot->take(current);
         // Spacers only: the widget was taken out first.
         slot->clear();
-        current->hide();
         // Kept alive with the modal, so the consumer can put it back later.
-        current->setParent(this);
+        keep(current);
     }
     current = widget;
     if (widget != nullptr) {

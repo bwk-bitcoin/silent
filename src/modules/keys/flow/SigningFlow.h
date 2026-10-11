@@ -161,6 +161,7 @@ protected:
     void initPicker();
     [[nodiscard]] auto viewPicker() -> QWidget *;
     void showPicker();
+    void hidePicker();
     [[nodiscard]] auto hasPicker() const -> bool;
     [[nodiscard]] auto signRows() const -> std::optional<QList<FlowRow>>;
     [[nodiscard]] auto signRow(const SigningCandidate &candidate) const -> FlowRow;
@@ -177,6 +178,7 @@ protected:
     [[nodiscard]] auto viewUsb() -> QWidget *;
     void showUsb();
     void showUsbError(UsbError error);
+    void hideUsb();
     void startUsb();
     void releaseDevice();
 
@@ -185,18 +187,21 @@ protected:
     void connectPassword();
     [[nodiscard]] auto viewPassword() -> QWidget *;
     void showPassword();
+    void hidePassword();
     void startHot();
     void proceedPassword();
 
     // Busy view
     void initBusy();
     void showBusy();
+    void hideBusy();
 
     // SD card view
     void initSd();
     void connectSd();
     [[nodiscard]] auto viewSd() -> QWidget *;
     void showSd();
+    void hideSd();
     void startSd();
     void refreshSd();
     void saveSd();
@@ -207,6 +212,7 @@ protected:
     void connectQr();
     void showQrDisplay();
     void showCamera();
+    void hideQr();
     void startQr();
 
     // Verify result view
@@ -214,6 +220,7 @@ protected:
     void connectVerifyResult();
     [[nodiscard]] auto viewVerifyResult() -> QWidget *;
     void showVerifyResult(VerifyResult result);
+    void hideVerifyResult();
 
     // Shared
     [[nodiscard]] auto currentDeviceLabel() const -> QString;

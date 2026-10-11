@@ -90,6 +90,7 @@ protected:
     void connectDisable();
     auto viewDisable() -> QWidget *;
     void showDisable(const QString &id);
+    void hideDisable();
     void disablePlugin();
 
     // Section view
@@ -98,6 +99,7 @@ protected:
     void connectSection();
     auto viewSection() -> catalog::ScrollArea *;
     void showSection(const QString &title);
+    void hideSection();
     void closeSection();
 
     // Shared

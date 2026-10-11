@@ -113,6 +113,7 @@ protected:
     void showQrDisplay();
     void showCamera();
     void stopQr();
+    void hideQr();
 
     // Review view
     void initReview();
@@ -120,6 +121,7 @@ protected:
     [[nodiscard]] auto viewReview() -> catalog::ScrollArea *;
     void showFile();
     void showReview(Source source);
+    void hideReview();
     void addReviewed();
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
@@ -131,6 +133,7 @@ protected:
     void connectPaste();
     [[nodiscard]] auto viewPaste() -> QWidget *;
     void showPaste();
+    void hidePaste();
     [[nodiscard]] auto pastedKey() const -> std::optional<PastedKey>;
     void addPasted();
 
@@ -139,6 +142,7 @@ protected:
     void connectHotChoose();
     [[nodiscard]] auto viewHotChoose() -> QWidget *;
     void showHotChoose();
+    void hideHotChoose();
     [[nodiscard]] auto typedMnemonic() const -> QString;
     void continueHot();
 
@@ -147,12 +151,14 @@ protected:
     void connectBackup();
     [[nodiscard]] auto viewBackup() -> QWidget *;
     void showBackup();
+    void hideBackup();
 
     // Hot key password view
     void initHotPassword();
     void connectHotPassword();
     [[nodiscard]] auto viewHotPassword() -> QWidget *;
     void showHotPassword();
+    void hideHotPassword();
     void sealKey();
 
     // Status view
@@ -160,6 +166,7 @@ protected:
     void connectStatus();
     void showSealing();
     void showResult();
+    void hideStatus();
     void showFailure(Failure failure, const QString &title, const QString &message);
 
     // Shared
