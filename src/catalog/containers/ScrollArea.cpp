@@ -18,7 +18,8 @@ ScrollArea::ScrollArea(QWidget *parent) : QScrollArea(parent) {
     setFrameShape(QFrame::NoFrame);
     setWidgetResizable(true);
     // Its own bar: the style and Qt version paint no track under the handle.
-    setVerticalScrollBar(new ScrollBar(Qt::Vertical));
+    // EXPERIMENT: the style's own scrollbar.
+    // setVerticalScrollBar(new ScrollBar(Qt::Vertical));
     connect(verticalScrollBar(), &QScrollBar::rangeChanged, this, &ScrollArea::onRangeChanged,
             qontrol::UNIQUE);
     // Always there, so the right gutter is the bar's whether the content overflows or
@@ -133,33 +134,11 @@ void ScrollArea::onRangeChanged(int minimum, int maximum) {
     update();
 }
 
-auto ScrollArea::qss(const Palette &p) -> QString {
-    // A left margin on the vertical bar (top margin on the horizontal bar) keeps
-    // a small gap between the scrolled content and the scrollbar.
-    return QString(
-               "QScrollArea[class=\"scroll-area\"] { border: none; background: transparent; }"
-               "QScrollArea[class=\"scroll-area\"] > QWidget > QWidget { background: transparent; }"
-               "QScrollBar:vertical { background: transparent; width: %1px; margin: 0 0 0 %6px; }"
-               "QScrollBar::handle:vertical { background: %2; border-radius: %3px; min-height: "
-               "%4px; }"
-               "QScrollBar::handle:vertical:hover { background: %5; }"
-               "QScrollBar::handle:vertical:disabled { background: transparent; }"
-               "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-               "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
-               "QScrollBar:horizontal { background: transparent; height: %1px; margin: %6px 0 0 0; "
-               "}"
-               "QScrollBar::handle:horizontal { background: %2; border-radius: %3px; min-width: "
-               "%4px; }"
-               "QScrollBar::handle:horizontal:hover { background: %5; }"
-               "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }"
-               "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: "
-               "none; }")
-        .arg(scrollBarWidth())
-        .arg(p.borderLight.name())
-        .arg(radius::CHECKBOX)
-        .arg(resolve(Spacing::L))
-        .arg(p.border.name())
-        .arg(scrollBarGap());
+auto ScrollArea::qss(const Palette & /*p*/) -> QString {
+    // EXPERIMENT: no scrollbar rules, the style's own scrollbar.
+    return QString("QScrollArea[class=\"scroll-area\"] { border: none; background: transparent; }"
+                   "QScrollArea[class=\"scroll-area\"] > QWidget > QWidget { background: "
+                   "transparent; }");
 }
 
 } // namespace catalog
