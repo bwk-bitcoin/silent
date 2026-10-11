@@ -13,6 +13,7 @@
 #include "theme/Palette.h"
 
 #include <QLineEdit>
+#include <QTimer>
 #include <Qontrol>
 
 #include <utility>
@@ -20,6 +21,13 @@
 #include <common.h>
 
 namespace keys::flow {
+
+namespace {
+
+// A hot key answers at once: the spinner shows at least this long, not as a flash.
+constexpr int BUSY_MIN_MS = 500;
+
+} // namespace
 
 HotRouteFlow::HotRouteFlow(KeysModule *module, SigningFlow::Request request, FlowRow row,
                            QString psbt)
@@ -48,6 +56,7 @@ void HotRouteFlow::init() {
 
 void HotRouteFlow::doConnect() {
     connectPassword();
+    connect(m_busy_hold, &QTimer::timeout, this, &HotRouteFlow::onBusyHeld, qontrol::UNIQUE);
 }
 
 void HotRouteFlow::view() {
@@ -140,6 +149,8 @@ void HotRouteFlow::initBusy() {
     m_busy_step = new catalog::ModalStatus;
     m_busy_step->setSpinner();
     m_busy_step->setPadding(resolve(Spacing::M), resolve(Spacing::M));
+    m_busy_hold = new QTimer(this);
+    m_busy_hold->setSingleShot(true);
 }
 
 void HotRouteFlow::showBusy() {
@@ -148,10 +159,45 @@ void HotRouteFlow::showBusy() {
     viewSlots()->setBody(m_busy_step);
     viewSlots()->setFooter(nullptr);
     emit viewChanged(copy().title, ModalWidth::S);
+    m_busy_shown.start();
 }
 
 void HotRouteFlow::hideBusy() {
     viewSlots()->keep(m_busy_step);
+}
+
+void HotRouteFlow::hold(Answer answer) {
+    qint64 remaining = BUSY_MIN_MS - m_busy_shown.elapsed();
+    if (remaining <= 0) {
+        deliver(answer);
+        return;
+    }
+    m_held = std::move(answer);
+    m_busy_hold->start(static_cast<int>(remaining));
+}
+
+void HotRouteFlow::deliver(const Answer &answer) {
+    if (answer.is_ok) {
+        switch (answer.kind) {
+        case AnswerKind::Signed:
+            emit psbtSigned(answer.value);
+            return;
+        case AnswerKind::Descriptor:
+            emit descriptorFetched(answer.value);
+            return;
+        case AnswerKind::Xpub:
+            emit xpubFetched(answer.value);
+            return;
+        }
+        return;
+    }
+    if (answer.wrong_password) {
+        m_password_error->setText(TR("flow-password-wrong"));
+        m_password_error->setVisible(true);
+        showPassword();
+        return;
+    }
+    emit failed(answer.error);
 }
 
 // ===== Slots =====
@@ -175,23 +221,26 @@ void HotRouteFlow::onPasswordEdited() {
     m_password_actions->setReason(empty ? TR("flow-password-reason") : QString());
 }
 
+void HotRouteFlow::onBusyHeld() {
+    if (!m_held.has_value()) {
+        return;
+    }
+    Answer answer = std::move(m_held.value());
+    m_held.reset();
+    deliver(answer);
+}
+
 void HotRouteFlow::onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex,
                                const QString &error, bool wrong_password) {
     if (m_hot_req == 0 || req_id != m_hot_req) {
         return;
     }
     m_hot_req = 0;
-    if (is_ok) {
-        emit psbtSigned(psbt_v2_hex);
-        return;
-    }
-    if (wrong_password) {
-        m_password_error->setText(TR("flow-password-wrong"));
-        m_password_error->setVisible(true);
-        showPassword();
-        return;
-    }
-    emit failed(error);
+    hold({.kind = AnswerKind::Signed,
+          .is_ok = is_ok,
+          .value = psbt_v2_hex,
+          .error = error,
+          .wrong_password = wrong_password});
 }
 
 void HotRouteFlow::onHotDescriptorFetched(ReqId req_id, bool is_ok, const QString &descriptor,
@@ -200,17 +249,11 @@ void HotRouteFlow::onHotDescriptorFetched(ReqId req_id, bool is_ok, const QStrin
         return;
     }
     m_hot_req = 0;
-    if (is_ok) {
-        emit descriptorFetched(descriptor);
-        return;
-    }
-    if (wrong_password) {
-        m_password_error->setText(TR("flow-password-wrong"));
-        m_password_error->setVisible(true);
-        showPassword();
-        return;
-    }
-    emit failed(error);
+    hold({.kind = AnswerKind::Descriptor,
+          .is_ok = is_ok,
+          .value = descriptor,
+          .error = error,
+          .wrong_password = wrong_password});
 }
 
 void HotRouteFlow::onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpub,
@@ -219,17 +262,11 @@ void HotRouteFlow::onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpu
         return;
     }
     m_hot_req = 0;
-    if (is_ok) {
-        emit xpubFetched(xpub);
-        return;
-    }
-    if (wrong_password) {
-        m_password_error->setText(TR("flow-password-wrong"));
-        m_password_error->setVisible(true);
-        showPassword();
-        return;
-    }
-    emit failed(error);
+    hold({.kind = AnswerKind::Xpub,
+          .is_ok = is_ok,
+          .value = xpub,
+          .error = error,
+          .wrong_password = wrong_password});
 }
 
 } // namespace keys::flow

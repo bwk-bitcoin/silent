@@ -1,8 +1,10 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QString>
 
 #include <cstdint>
+#include <optional>
 
 #include "modules/keys/flow/SigningFlow.h"
 
@@ -16,6 +18,8 @@ class ModalActions;
 class ModalStatus;
 class Notice;
 } // namespace catalog
+
+class QTimer;
 
 namespace keys::flow {
 
@@ -39,10 +43,22 @@ public slots:
                                 const QString &error, bool wrong_password);
     void onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpub, const QString &error,
                           bool wrong_password);
+    void onBusyHeld();
 
 protected:
     // The view on display: the primary action acts on it.
     enum class View : std::uint8_t { Password, Busy };
+
+    // The key's answer, held until the spinner has shown long enough to be seen.
+    enum class AnswerKind : std::uint8_t { Signed, Descriptor, Xpub };
+
+    struct Answer {
+        AnswerKind kind;
+        bool is_ok;
+        QString value;
+        QString error;
+        bool wrong_password;
+    };
 
     void init();
     void doConnect();
@@ -59,6 +75,8 @@ protected:
     void initBusy();
     void showBusy();
     void hideBusy();
+    void hold(Answer answer);
+    void deliver(const Answer &answer);
 
 private:
     View m_view = View::Password;
@@ -74,6 +92,9 @@ private:
     catalog::Button *m_password_proceed = nullptr;
 
     catalog::ModalStatus *m_busy_step = nullptr;
+    QElapsedTimer m_busy_shown;
+    QTimer *m_busy_hold = nullptr;
+    std::optional<Answer> m_held;
 };
 
 } // namespace keys::flow
