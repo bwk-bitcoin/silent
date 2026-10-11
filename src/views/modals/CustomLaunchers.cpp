@@ -2,6 +2,7 @@
 #include "../utils.h"
 #include "AppController.h"
 #include "catalog/Button.h"
+#include "catalog/containers/Modal.h"
 #include "host/PluginRegistry.h"
 #include "i18n/Tr.h"
 #include "interfaces/module.h"
@@ -15,6 +16,7 @@ using catalog::Button;
 using catalog::ButtonRole;
 
 CustomLaunchers::CustomLaunchers([[maybe_unused]] QWidget *parent) {
+    catalog::closeOnlyTitlebar(this);
     setWindowTitle(TR("menu-custom"));
     resize(360, 240);
     init();

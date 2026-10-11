@@ -4,6 +4,7 @@
 #include <QString>
 #include <Qontrol>
 
+class QDialog;
 class QEvent;
 
 namespace catalog {
@@ -39,6 +40,10 @@ protected:
 private:
     ViewSlots *m_slots = nullptr;
 };
+
+// Keeps only Close in the window manager titlebar of `dialog`: a modal is neither
+// minimized nor maximized.
+void closeOnlyTitlebar(QDialog *dialog);
 
 // The title on the left of a modal header, with an optional widget on its right (a
 // fingerprint and a status pill).

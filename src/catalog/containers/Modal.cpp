@@ -33,6 +33,7 @@ auto openOver(const QWidget *modal) -> QWidget * {
 } // namespace
 
 Modal::Modal() {
+    closeOnlyTitlebar(this);
     m_slots = new ViewSlots;
     setMainWidget((new qontrol::Column)->margins(resolve(Padding::L))->push(m_slots));
 }
@@ -77,12 +78,19 @@ void Modal::setWidth(ModalWidth width) {
 }
 
 void Modal::refit() {
+    // Free the height pinned by the last refit, so the content sets it again.
+    setMinimumHeight(0);
+    setMaximumHeight(QWIDGETSIZE_MAX);
     adjustSize();
+    int height = this->height();
     // adjustSize() sizes wrapped text for the content's preferred width, narrower than
     // the modal's fixed one, so it leaves the height of lines that no longer wrap.
     if (layout()->hasHeightForWidth()) {
-        resize(width(), layout()->totalHeightForWidth(width()));
+        height = layout()->totalHeightForWidth(width());
     }
+    // Pinned: a window that cannot be resized gets no maximize button from KWin, which
+    // ignores the titlebar hints.
+    setFixedHeight(height);
 }
 
 auto Modal::event(QEvent *event) -> bool {
@@ -97,6 +105,11 @@ auto Modal::event(QEvent *event) -> bool {
 
 void Modal::keep(QWidget *widget) {
     m_slots->keep(widget);
+}
+
+void closeOnlyTitlebar(QDialog *dialog) {
+    dialog->setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
+                           Qt::WindowCloseButtonHint);
 }
 
 auto modalHeader(const QString &title, QWidget *end) -> QWidget * {

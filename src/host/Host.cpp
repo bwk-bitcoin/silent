@@ -2,6 +2,7 @@
 
 #include "AppController.h"
 #include "MainWindow.h"
+#include "catalog/containers/Modal.h"
 #include "i18n/I18nManager.h"
 #include "interfaces/instance.h"
 #include "interfaces/keys.h"
@@ -30,6 +31,7 @@ void assertGuiThread() {
 class HostedWizardModal final : public qontrol::Modal {
 public:
     explicit HostedWizardModal(QWidget *content) {
+        catalog::closeOnlyTitlebar(this);
         setMainWidget(content);
     }
 };

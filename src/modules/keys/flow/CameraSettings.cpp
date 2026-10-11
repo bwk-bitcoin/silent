@@ -1,5 +1,6 @@
 #include "CameraSettings.h"
 
+#include "catalog/containers/Modal.h"
 #include "catalog/form/FieldGroup.h"
 #include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Stepper.h"
@@ -16,6 +17,7 @@ namespace keys::flow {
 CameraSettings::CameraSettings(qr::QrCamera *camera, qr::QrCameraEngine *engine)
     : m_camera(camera),
       m_engine(engine) {
+    catalog::closeOnlyTitlebar(this);
     setWindowTitle(TR("flow-camera-settings-title"));
     setFixedWidth(resolve(ModalWidth::XS));
     init();
