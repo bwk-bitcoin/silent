@@ -7,6 +7,9 @@
 #include <QEvent>
 #include <QLayout>
 #include <QLoggingCategory>
+#include <QScreen>
+#include <QStyle>
+#include <algorithm>
 
 namespace catalog {
 
@@ -87,6 +90,15 @@ void Modal::refit() {
     // the modal's fixed one, so it leaves the height of lines that no longer wrap.
     if (layout()->hasHeightForWidth()) {
         height = layout()->totalHeightForWidth(width());
+    }
+    // No taller than the screen: the window manager would shrink it back, the resize
+    // would refit it, and the two would fight. Capped, a fitting body scrolls instead.
+    if (QScreen *on = screen(); on != nullptr) {
+        int titlebar = frameGeometry().height() - this->height();
+        if (titlebar <= 0) {
+            titlebar = style()->pixelMetric(QStyle::PM_TitleBarHeight);
+        }
+        height = std::min(height, on->availableGeometry().height() - titlebar);
     }
     // Pinned: a window that cannot be resized gets no maximize button from KWin, which
     // ignores the titlebar hints.
