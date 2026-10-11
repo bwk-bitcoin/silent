@@ -1010,6 +1010,7 @@ struct HotSpDescriptorResult;
 struct PsbtPayloadResult;
 struct CameraListResult;
 struct CameraFrameResult;
+struct QrDisplayLevels;
 struct PsbtFileResult;
 struct Config;
 struct Account;
@@ -1750,6 +1751,20 @@ struct CameraFrameResult final {
 };
 #endif // CXXBRIDGE1_STRUCT_CameraFrameResult
 
+#ifndef CXXBRIDGE1_STRUCT_QrDisplayLevels
+#define CXXBRIDGE1_STRUCT_QrDisplayLevels
+// The QR display steppers' levels, 1 lowest to 5 highest.
+struct QrDisplayLevels final {
+  ::std::uint8_t density CXX_DEFAULT_VALUE(0);
+  ::std::uint8_t contrast CXX_DEFAULT_VALUE(0);
+  ::std::uint8_t speed CXX_DEFAULT_VALUE(0);
+
+  bool operator==(QrDisplayLevels const &) const noexcept;
+  bool operator!=(QrDisplayLevels const &) const noexcept;
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_QrDisplayLevels
+
 #ifndef CXXBRIDGE1_STRUCT_PsbtFileResult
 #define CXXBRIDGE1_STRUCT_PsbtFileResult
 struct PsbtFileResult final {
@@ -2422,6 +2437,12 @@ void app_set_active_theme(::rust::String name) noexcept;
 
 // Set the app language.
 void app_set_language(::rust::String locale) noexcept;
+
+// The QR display tuning picked last, the middle level until one is.
+::QrDisplayLevels app_qr_display_levels() noexcept;
+
+// Remember the QR display tuning for every account.
+void app_set_qr_display_levels(::QrDisplayLevels levels) noexcept;
 
 // Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
 ::PsbtFileResult sd_save_psbt(::rust::Str path, ::rust::Str psbt_hex) noexcept;

@@ -6,8 +6,11 @@ use serde::{Deserialize, Serialize};
 use crate::config::datadir;
 #[cfg(test)]
 use crate::config::set_datadir;
+use crate::ffi::QrDisplayLevels;
 
 const DEFAULT_THEME: &str = "light";
+/// The QR display steppers' middle level, as the C++ side's `qr::DEFAULT_LEVEL`.
+const DEFAULT_QR_LEVEL: u8 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppState {
@@ -18,6 +21,17 @@ pub struct AppState {
     /// The locale picked in Global Settings, empty until one is.
     #[serde(default)]
     pub language: String,
+    /// The QR display tuning picked last, as the steppers' levels, for every account.
+    #[serde(default = "default_qr_level")]
+    pub qr_density: u8,
+    #[serde(default = "default_qr_level")]
+    pub qr_contrast: u8,
+    #[serde(default = "default_qr_level")]
+    pub qr_speed: u8,
+}
+
+fn default_qr_level() -> u8 {
+    DEFAULT_QR_LEVEL
 }
 
 fn default_active_theme() -> String {
@@ -30,6 +44,9 @@ impl Default for AppState {
             enabled_plugins: Vec::new(),
             active_theme: default_active_theme(),
             language: String::new(),
+            qr_density: DEFAULT_QR_LEVEL,
+            qr_contrast: DEFAULT_QR_LEVEL,
+            qr_speed: DEFAULT_QR_LEVEL,
         }
     }
 }
@@ -133,6 +150,23 @@ pub fn app_set_language(locale: String) {
     state.save();
 }
 
+pub fn app_qr_display_levels() -> QrDisplayLevels {
+    let state = AppState::load();
+    QrDisplayLevels {
+        density: state.qr_density,
+        contrast: state.qr_contrast,
+        speed: state.qr_speed,
+    }
+}
+
+pub fn app_set_qr_display_levels(levels: QrDisplayLevels) {
+    let mut state = AppState::load();
+    state.qr_density = levels.density;
+    state.qr_contrast = levels.contrast;
+    state.qr_speed = levels.speed;
+    state.save();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,6 +214,38 @@ mod tests {
                 state.language.is_empty(),
                 "missing file should pick no language, got {:?}",
                 state.language
+            );
+        });
+    }
+
+    #[test]
+    fn qr_display_levels_default_then_persist() {
+        with_isolated_datadir(|_base| {
+            let middle = QrDisplayLevels {
+                density: 3,
+                contrast: 3,
+                speed: 3,
+            };
+            assert_eq!(
+                app_qr_display_levels(),
+                middle,
+                "a missing file should give the middle level for every setting"
+            );
+
+            let picked = QrDisplayLevels {
+                density: 1,
+                contrast: 5,
+                speed: 2,
+            };
+            app_set_qr_display_levels(picked);
+            assert_eq!(
+                app_qr_display_levels(),
+                picked,
+                "the levels picked should be loaded back"
+            );
+            assert!(
+                AppState::load().language.is_empty(),
+                "saving the QR levels should leave the other settings alone"
             );
         });
     }

@@ -581,6 +581,14 @@ mod ffi {
         pub seq: u64,
     }
 
+    /// The QR display steppers' levels, 1 lowest to 5 highest.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct QrDisplayLevels {
+        pub density: u8,
+        pub contrast: u8,
+        pub speed: u8,
+    }
+
     #[derive(Debug, Clone)]
     pub struct PsbtFileResult {
         pub is_ok: bool,
@@ -717,6 +725,12 @@ mod ffi {
 
         /// Set the app language.
         fn app_set_language(locale: String);
+
+        /// The QR display tuning picked last, the middle level until one is.
+        fn app_qr_display_levels() -> QrDisplayLevels;
+
+        /// Remember the QR display tuning for every account.
+        fn app_set_qr_display_levels(levels: QrDisplayLevels);
 
         /// Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
         fn sd_save_psbt(path: &str, psbt_hex: &str) -> PsbtFileResult;
@@ -1654,8 +1668,8 @@ fn failed_psbt_file(error: String) -> ffi::PsbtFileResult {
 // Re-export main types
 pub use account::{new_account, Account, NotificationReceiver, Poll, PsbtResult};
 pub use app_state::{
-    app_active_theme, app_enabled_plugins, app_language, app_set_active_theme, app_set_language,
-    app_set_plugin_enabled,
+    app_active_theme, app_enabled_plugins, app_language, app_qr_display_levels,
+    app_set_active_theme, app_set_language, app_set_plugin_enabled, app_set_qr_display_levels,
 };
 pub use bbqr::{bbqr_frames, bbqr_scanner_new, BbqrFrames, BbqrScanner};
 pub use camera::{camera_list, camera_open, CameraHandle};

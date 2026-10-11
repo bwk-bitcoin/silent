@@ -61,6 +61,8 @@ protected:
     void connectDisplay();
     [[nodiscard]] auto viewDisplay() -> QWidget *;
     void showDisplay();
+    // The steppers' levels to the engine.
+    void applyQrSettings();
 
     // Camera view
     void initCamera();

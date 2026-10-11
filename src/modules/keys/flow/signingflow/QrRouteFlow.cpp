@@ -112,6 +112,12 @@ void QrRouteFlow::initDisplay() {
     m_qr_contrast = levelStepper(TR("keys-qr-contrast"));
     m_qr_density = levelStepper(TR("keys-qr-density"));
     m_qr_speed = levelStepper(TR("flow-qr-speed"));
+    // The tuning picked last, for any account, before the steppers are connected.
+    auto levels = ::app_qr_display_levels();
+    m_qr_contrast->setValue(levels.contrast);
+    m_qr_density->setValue(levels.density);
+    m_qr_speed->setValue(levels.speed);
+    applyQrSettings();
     m_qr_next = catalog::btnNextScanTheAnswer();
     m_qr_actions = new catalog::ModalActions;
     m_qr_actions->addAction(m_qr_next);
@@ -154,6 +160,12 @@ void QrRouteFlow::showDisplay() {
     viewSlots()->setBody(m_qr_step);
     viewSlots()->setFooter(m_qr_actions);
     emit viewChanged(copy().qrTitle, ModalWidth::XXL);
+}
+
+void QrRouteFlow::applyQrSettings() {
+    m_qr_display_engine->setDensity(qr::densityFromLevel(m_qr_density->value()));
+    m_qr_display_engine->setContrast(qr::contrastFromLevel(m_qr_contrast->value()));
+    m_qr_display_engine->setSpeed(qr::speedFromLevel(m_qr_speed->value()));
 }
 
 // ===== Camera view =====
@@ -289,9 +301,12 @@ void QrRouteFlow::onQrError(qr::QrError kind, const QString &message) {
 }
 
 void QrRouteFlow::onQrSettingsChanged() {
-    m_qr_display_engine->setDensity(qr::densityFromLevel(m_qr_density->value()));
-    m_qr_display_engine->setContrast(qr::contrastFromLevel(m_qr_contrast->value()));
-    m_qr_display_engine->setSpeed(qr::speedFromLevel(m_qr_speed->value()));
+    applyQrSettings();
+    ::app_set_qr_display_levels(QrDisplayLevels{
+        .density = static_cast<std::uint8_t>(m_qr_density->value()),
+        .contrast = static_cast<std::uint8_t>(m_qr_contrast->value()),
+        .speed = static_cast<std::uint8_t>(m_qr_speed->value()),
+    });
 }
 
 void QrRouteFlow::onQrFrame(const qr::QrFrame &frame) {
