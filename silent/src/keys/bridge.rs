@@ -1316,8 +1316,11 @@ fn decoded_to_event(
 ) -> Option<ffi::KeyEvent> {
     let response = match decoded {
         bwk_qr::decoder::Decoded::Response(response) => response,
-        // Requests and plain text carry nothing this module has a use for.
-        bwk_qr::decoder::Decoded::Text(_) | bwk_qr::decoder::Decoded::Request(_) => return None,
+        // Requests and plain text carry nothing this module has a use for, and
+        // `process` decodes every joined payload, so a raw one never shows up here.
+        bwk_qr::decoder::Decoded::Text(_)
+        | bwk_qr::decoder::Decoded::Request(_)
+        | bwk_qr::decoder::Decoded::Bytes(_) => return None,
     };
     let Some(session) = session else {
         return Some(ffi::KeyEvent {

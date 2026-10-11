@@ -49,3 +49,12 @@ temp-dir = "0.1"
 
 [build-dependencies]
 cxx-build = "1.0"
+
+# Builds bwk from the local signing_rework checkout until its commits are pushed: drop
+# this section and bump `rev` above once they are.
+[patch."https://github.com/pythcoiner/bwk.git"]
+bwk-sp = { path = "../../bwk-signing/sp" }
+bwk-hwi = { path = "../../bwk-signing/hwi" }
+bwk-qr = { path = "../../bwk-signing/qr" }
+bwk-qr-protocol = { path = "../../bwk-signing/qr-protocol" }
+bwk-utils = { path = "../../bwk-signing/utils" }
