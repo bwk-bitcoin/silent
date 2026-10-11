@@ -149,6 +149,13 @@ public slots:
 
 protected:
     void init();
+    void initPicker();
+    void initUsb();
+    void initSd();
+    void initPassword();
+    void initBusy();
+    void initQr();
+    void initVerifyResult();
     void doConnect();
     void view();
     [[nodiscard]] auto signRows() const -> std::optional<QList<FlowRow>>;

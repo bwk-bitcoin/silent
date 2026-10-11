@@ -116,6 +116,13 @@ KeyDetail::~KeyDetail() {
 void KeyDetail::init() {
     auto current = info();
     m_alias = current.has_value() ? KeysModule::toQt(current->alias) : QString();
+    initDetail();
+    initPassword();
+    initReveal();
+    initRemove();
+}
+
+void KeyDetail::initDetail() {
     m_alias_input = new catalog::Input(m_alias);
     m_save_alias = catalog::btnSaveAlias();
     m_save_alias->setVisible(false);
@@ -155,7 +162,9 @@ void KeyDetail::init() {
     m_reveal = catalog::btnRevealMnemonic();
     m_detail_actions = new catalog::ModalActions;
     m_detail_actions->addAction(m_reveal);
+}
 
+void KeyDetail::initPassword() {
     m_password_input = new catalog::Input;
     m_password_input->setEchoMode(QLineEdit::Password);
     m_password_input->setFixedWidth(metric::PASSWORD_INPUT_WIDTH);
@@ -169,12 +178,16 @@ void KeyDetail::init() {
     m_password_actions->setBack(catalog::ModalActions::Back::Back);
     m_password_actions->addAction(m_password_unlocking);
     m_password_actions->addAction(m_password_proceed);
+}
 
+void KeyDetail::initReveal() {
     m_words = new catalog::WordGrid;
     m_hide_words = catalog::btnHideWords();
     m_show_words = catalog::btnShowWords();
     m_reveal_actions = new catalog::ModalActions;
+}
 
+void KeyDetail::initRemove() {
     m_remove_question = new Label(LabelRole::Body);
     m_remove_question->setWordWrap(true);
     m_remove_accounts = new catalog::Notice(catalog::Notice::Tone::Warning);

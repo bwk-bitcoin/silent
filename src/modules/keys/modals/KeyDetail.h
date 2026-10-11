@@ -83,6 +83,10 @@ public slots:
 
 protected:
     void init();
+    void initDetail();
+    void initPassword();
+    void initReveal();
+    void initRemove();
     void doConnect();
     void view();
     [[nodiscard]] auto info() const -> std::optional<KeyInfo>;

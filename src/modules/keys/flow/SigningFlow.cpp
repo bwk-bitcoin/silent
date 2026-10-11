@@ -183,8 +183,20 @@ SigningFlow::~SigningFlow() {
 }
 
 void SigningFlow::init() {
-    m_picker_column = new qontrol::Column;
+    initPicker();
+    initUsb();
+    initSd();
+    initPassword();
+    initBusy();
+    initQr();
+    initVerifyResult();
+}
 
+void SigningFlow::initPicker() {
+    m_picker_column = new qontrol::Column;
+}
+
+void SigningFlow::initUsb() {
     m_usb_status = new catalog::ModalStatus;
     m_usb_status->setPadding(resolve(Spacing::M), 0);
     m_usb_address = new catalog::ChunkedAddress;
@@ -197,7 +209,9 @@ void SigningFlow::init() {
     m_usb_actions->setBack(hasPicker() ? catalog::ModalActions::Back::OtherSigner
                                        : catalog::ModalActions::Back::None);
     m_usb_actions->addAction(m_usb_retry);
+}
 
+void SigningFlow::initSd() {
     m_sd_save_row = new catalog::SelectRow;
     m_sd_save_row->setTitle(TR("flow-sd-save-title"));
     m_sd_save_row->setSub(
@@ -223,7 +237,9 @@ void SigningFlow::init() {
     m_sd_actions->addAction(m_sd_save_retry);
     m_sd_actions->addAction(m_sd_load);
     m_sd_actions->addAction(m_sd_load_retry);
+}
 
+void SigningFlow::initPassword() {
     m_password_prompt = new catalog::Label(catalog::LabelRole::Body);
     m_password_prompt->setTone(catalog::LabelTone::Secondary);
     m_password_prompt->setWordWrap(true);
@@ -235,16 +251,22 @@ void SigningFlow::init() {
     m_password_proceed = hotProceedButton(m_request.context);
     m_password_actions = new catalog::ModalActions;
     m_password_actions->addAction(m_password_proceed);
+}
 
+void SigningFlow::initBusy() {
     m_busy_step = new catalog::ModalStatus;
     m_busy_step->setSpinner();
     m_busy_step->setPadding(resolve(Spacing::M), resolve(Spacing::M));
+}
 
+void SigningFlow::initQr() {
     m_qr = new QrDisplayStep;
     m_qr->setHint(m_copy.qrHint);
     m_camera = new CameraStep(m_module);
     m_camera->setHint(m_copy.scanHint);
+}
 
+void SigningFlow::initVerifyResult() {
     m_result_status = new catalog::ModalStatus;
     m_result_status->setPadding(resolve(Spacing::S), 0);
     m_result_address = new catalog::ChunkedAddress;
