@@ -93,6 +93,14 @@ protected:
     };
 
     void init();
+    void initModes();
+    void initQr();
+    void initReview();
+    void initPaste();
+    void initHotChoose();
+    void initBackup();
+    void initHotPassword();
+    void initStatus();
     void doConnect();
     void view();
     void dragEnterEvent(QDragEnterEvent *event) override;

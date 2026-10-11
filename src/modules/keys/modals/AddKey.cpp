@@ -155,7 +155,17 @@ AddKey::~AddKey() {
 
 void AddKey::init() {
     setAcceptDrops(true);
+    initModes();
+    initQr();
+    initReview();
+    initPaste();
+    initHotChoose();
+    initBackup();
+    initHotPassword();
+    initStatus();
+}
 
+void AddKey::initModes() {
     m_mode_rows = {
         modeRow(Mode::Qr, icon::qr, TR("keys-add-mode-qr"), TR("keys-add-mode-qr-sub")),
         modeRow(Mode::File, icon::folder, TR("keys-add-mode-file"), TR("keys-add-mode-file-sub")),
@@ -163,13 +173,17 @@ void AddKey::init() {
                 TR("keys-add-mode-paste-sub")),
         modeRow(Mode::Hot, icon::key, TR("keys-add-mode-hot"), TR("keys-add-mode-hot-sub")),
     };
+}
 
+void AddKey::initQr() {
     m_qr = new flow::QrDisplayStep;
     m_qr->setHint(TR("keys-add-qr-hint"));
     m_qr->actions()->setBack(catalog::ModalActions::Back::Back);
     m_camera = new flow::CameraStep(m_module);
     m_camera->setHint(TR("keys-add-scan-hint"));
+}
 
+void AddKey::initReview() {
     m_drop = new catalog::Card(catalog::Card::Role::Inset);
     m_drop->setPad(catalog::Card::Pad::M);
     auto *folder = new QLabel;
@@ -201,7 +215,9 @@ void AddKey::init() {
     m_review_actions->setBack(catalog::ModalActions::Back::Back);
     m_review_actions->addAction(m_open_file);
     m_review_actions->addAction(m_add_reviewed);
+}
 
+void AddKey::initPaste() {
     m_paste = new catalog::ValidatedInput(catalog::InputRole::Mono);
     m_paste->input()->setPlaceholderText(TR("keys-paste-placeholder")
                                              .arg(KeysModule::network() == Network::Bitcoin
@@ -217,7 +233,9 @@ void AddKey::init() {
     m_paste_actions = new catalog::ModalActions;
     m_paste_actions->setBack(catalog::ModalActions::Back::Back);
     m_paste_actions->addAction(m_add_pasted);
+}
 
+void AddKey::initHotChoose() {
     m_generate12 = hotRow(static_cast<int>(HotKind::Generate12), icon::refresh,
                           TR("keys-hot-generate-12"), TR("keys-hot-generate-12-sub"));
     m_generate24 = hotRow(static_cast<int>(HotKind::Generate24), icon::refresh,
@@ -238,14 +256,18 @@ void AddKey::init() {
     m_choose_actions = new catalog::ModalActions;
     m_choose_actions->setBack(catalog::ModalActions::Back::Back);
     m_choose_actions->addAction(m_choose_continue);
+}
 
+void AddKey::initBackup() {
     m_backup_words = new catalog::WordGrid;
     m_backup_check = new catalog::Checkbox(TR("keys-backup-wrote"));
     m_backup_continue = catalog::btnContinue();
     m_backup_actions = new catalog::ModalActions;
     m_backup_actions->setBack(catalog::ModalActions::Back::Back);
     m_backup_actions->addAction(m_backup_continue);
+}
 
+void AddKey::initHotPassword() {
     m_hot_alias = aliasInput();
     m_password = new catalog::Input;
     m_password->setEchoMode(QLineEdit::Password);
@@ -259,7 +281,9 @@ void AddKey::init() {
     m_password_actions = new catalog::ModalActions;
     m_password_actions->setBack(catalog::ModalActions::Back::Back);
     m_password_actions->addAction(m_seal);
+}
 
+void AddKey::initStatus() {
     m_status = new catalog::ModalStatus;
     m_status->setPadding(resolve(Spacing::M), resolve(Spacing::M));
     m_done = catalog::btnDone();
