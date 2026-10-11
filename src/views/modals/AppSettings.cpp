@@ -101,7 +101,7 @@ void AppSettings::onBackClicked() {
     switch (m_view) {
     case View::Disable:
         // A Back from the disable view leaves the plugin enabled: its toggle shows it again.
-        rebuildPluginRows();
+        onPluginsChanged();
         showMain();
         return;
     case View::Section:
@@ -204,8 +204,45 @@ void AppSettings::onPluginToggled(bool enabled) {
     // A plugin that fails to load gets its error row; a loaded one rebuilds the rows
     // through enabledPluginsChanged.
     if (!m_plugin_registry->setEnabled(id, true)) {
-        rebuildPluginRows();
+        onPluginsChanged();
     }
+}
+
+void AppSettings::onPluginsChanged() {
+    m_plugins_column->clear();
+    m_plugin_meta.clear();
+
+    bool available = m_plugin_registry != nullptr && m_plugin_registry->isAvailable();
+    m_registry_notice->setVisible(!available);
+    m_scan_btn->setEnabled(available);
+    int count = 0;
+    if (available) {
+        for (auto *plugin : m_plugin_registry->plugins()) {
+            if (plugin == nullptr) {
+                continue;
+            }
+            auto meta = plugin->meta();
+            QString id = meta.value(QStringLiteral("id")).trimmed();
+            // Built-in modules are not user-managed: only external plugins are listed.
+            if (id.isEmpty() || m_plugin_registry->pluginHasBuiltinModules(id)) {
+                continue;
+            }
+            QString version = meta.value(QStringLiteral("version")).trimmed();
+            QString line = version.isEmpty() ? id : QStringLiteral("%1  v%2").arg(id, version);
+            m_plugin_meta.insert(id, line);
+            auto *row = pluginRow(id, line);
+            m_plugins_column->push(row);
+            // A row added to a shown column stays hidden until the event loop shows it,
+            // so the step would be measured without it.
+            row->show();
+            ++count;
+        }
+    }
+    m_plugins->header()->setCount(count > 0 ? QString::number(count) : QString());
+    m_plugins_column->setVisible(count > 0);
+    m_plugins_empty->setVisible(available && count == 0 && !m_scanning_plugins);
+    m_scanning->setVisible(m_scanning_plugins && count == 0);
+    adjustSize();
 }
 
 void AppSettings::onOpenSectionClicked() {
@@ -406,7 +443,7 @@ void AppSettings::connectMain() {
     connect(m_scan_btn, &QPushButton::clicked, this, &AppSettings::onScanClicked, qontrol::UNIQUE);
     if (m_plugin_registry != nullptr) {
         connect(m_plugin_registry, &PluginRegistry::enabledPluginsChanged, this,
-                &AppSettings::rebuildPluginRows, qontrol::UNIQUE);
+                &AppSettings::onPluginsChanged, qontrol::UNIQUE);
     }
     if (m_host_events != nullptr) {
         connect(m_host_events, &HostEvents::settingSectionsChanged, this,
@@ -472,43 +509,6 @@ void AppSettings::showMain() {
     setWidth(ModalWidth::Wide);
 }
 
-void AppSettings::rebuildPluginRows() {
-    m_plugins_column->clear();
-    m_plugin_meta.clear();
-
-    bool available = m_plugin_registry != nullptr && m_plugin_registry->isAvailable();
-    m_registry_notice->setVisible(!available);
-    m_scan_btn->setEnabled(available);
-    int count = 0;
-    if (available) {
-        for (auto *plugin : m_plugin_registry->plugins()) {
-            if (plugin == nullptr) {
-                continue;
-            }
-            auto meta = plugin->meta();
-            QString id = meta.value(QStringLiteral("id")).trimmed();
-            // Built-in modules are not user-managed: only external plugins are listed.
-            if (id.isEmpty() || m_plugin_registry->pluginHasBuiltinModules(id)) {
-                continue;
-            }
-            QString version = meta.value(QStringLiteral("version")).trimmed();
-            QString line = version.isEmpty() ? id : QStringLiteral("%1  v%2").arg(id, version);
-            m_plugin_meta.insert(id, line);
-            auto *row = pluginRow(id, line);
-            m_plugins_column->push(row);
-            // A row added to a shown column stays hidden until the event loop shows it,
-            // so the step would be measured without it.
-            row->show();
-            ++count;
-        }
-    }
-    m_plugins->header()->setCount(count > 0 ? QString::number(count) : QString());
-    m_plugins_column->setVisible(count > 0);
-    m_plugins_empty->setVisible(available && count == 0 && !m_scanning_plugins);
-    m_scanning->setVisible(m_scanning_plugins && count == 0);
-    adjustSize();
-}
-
 auto AppSettings::pluginRow(const QString &id, const QString &meta) -> catalog::SelectRow * {
     QString error = m_plugin_registry->pluginLoadError(id);
     bool failed = !error.isEmpty();
@@ -543,7 +543,7 @@ void AppSettings::setScanning(bool scanning) {
     m_scanning_plugins = scanning;
     m_scan_btn->setVisible(!scanning);
     m_scanning_btn->setVisible(scanning);
-    rebuildPluginRows();
+    onPluginsChanged();
 }
 
 void AppSettings::rebuildSettingSectionRows() {
@@ -783,7 +783,7 @@ void AppSettings::disablePlugin() {
     bool themeGoes = !id.isEmpty() && m_theme_plugin.value(activeTheme) == id;
 
     m_unloading_id = id;
-    rebuildPluginRows();
+    onPluginsChanged();
     showMain();
     // Unloading runs on this thread: paint the Unloading row before it starts.
     repaint();
@@ -798,7 +798,7 @@ void AppSettings::disablePlugin() {
     } else if (themeGoes) {
         switchToLightTheme();
     }
-    rebuildPluginRows();
+    onPluginsChanged();
 }
 
 // ===== Section view =====
@@ -892,7 +892,7 @@ void AppSettings::retranslateUi() {
     m_section_actions->setBack(catalog::ModalActions::Back::AllSettings);
     m_done_btn->setText(TR("btn-done"));
 
-    rebuildPluginRows();
+    onPluginsChanged();
     rebuildSettingSectionRows();
 }
 

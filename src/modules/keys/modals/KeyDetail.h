@@ -59,6 +59,7 @@ public:
 public slots:
     void onBackClicked();
     void onNextClicked();
+    void onKeyChanged();
     void onAliasEdited();
     void onSaveAliasClicked();
     void onMoveUpClicked();
@@ -85,11 +86,11 @@ protected:
     void view();
 
     // Detail view
+    // Detail view
     void initDetail();
     void connectDetail();
     [[nodiscard]] auto viewDetail() -> catalog::ScrollArea *;
     void showDetail();
-    void refresh();
     void refreshDevices();
     void refreshRoutes(const KeyInfo &info);
     void moveRoute(int from_index, int to_index);
@@ -108,12 +109,14 @@ protected:
     void showRegistrationError(const QString &message);
 
     // Password view
+    // Password view
     void initPassword();
     void connectPassword();
     [[nodiscard]] auto viewPassword() -> QWidget *;
     void showPassword();
     void proceedPassword();
 
+    // Reveal view
     // Reveal view
     void initReveal();
     void connectReveal();
@@ -122,12 +125,14 @@ protected:
     void closeWords();
 
     // Remove view
+    // Remove view
     void initRemove();
     void connectRemove();
     [[nodiscard]] auto viewRemove() -> QWidget *;
     void showRemove();
     void removeKey();
 
+    // Shared
     // Shared
     [[nodiscard]] auto info() const -> std::optional<KeyInfo>;
     // The title on the left, the fingerprint and the key status on the right.

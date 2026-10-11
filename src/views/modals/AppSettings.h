@@ -50,6 +50,7 @@ public slots:
     void onLanguageSelectionChanged(int index);
     void onScanClicked();
     void onPluginToggled(bool enabled);
+    void onPluginsChanged();
     void onOpenSectionClicked();
     void onHostSettingsSectionsChanged();
     void onHostInstanceChanged(const QString &id);
@@ -65,13 +66,13 @@ protected:
     void view();
 
     // Main view
+    // Main view
     void initMain();
     void connectMain();
     auto viewMain() -> catalog::ScrollArea *;
     auto buildGeneral() -> QWidget *;
     auto buildPlugins() -> QWidget *;
     void showMain();
-    void rebuildPluginRows();
     auto pluginRow(const QString &id, const QString &meta) -> catalog::SelectRow *;
     void setScanning(bool scanning);
     void rebuildSettingSectionRows();
@@ -84,6 +85,7 @@ protected:
     void switchToLightTheme();
 
     // Disable view
+    // Disable view
     void initDisable();
     void connectDisable();
     auto viewDisable() -> QWidget *;
@@ -91,12 +93,14 @@ protected:
     void disablePlugin();
 
     // Section view
+    // Section view
     void initSection();
     void connectSection();
     auto viewSection() -> catalog::ScrollArea *;
     void showSection(const QString &title);
     void closeSection();
 
+    // Shared
     // Shared
     void changeEvent(QEvent *event) override;
     void retranslateUi();

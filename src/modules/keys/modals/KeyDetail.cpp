@@ -104,7 +104,7 @@ KeyDetail::KeyDetail(KeysModule *module, const QString &fingerprint)
     init();
     doConnect();
     view();
-    refresh();
+    onKeyChanged();
     showDetail();
 }
 
@@ -139,6 +139,23 @@ void KeyDetail::onNextClicked() {
     case View::Detail:
         return;
     }
+}
+
+void KeyDetail::onKeyChanged() {
+    auto current = info();
+    if (!current.has_value()) {
+        // Removed: the window is closing.
+        return;
+    }
+    m_alias = KeysModule::toQt(current->alias);
+    // The detail's title is the alias, which may have just changed.
+    showHeader(m_detail->isVisibleTo(this) ? m_alias : windowTitle());
+    onAliasEdited();
+    refreshDevices();
+    refreshRoutes(current.value());
+    refreshXpubs();
+    refreshAccounts(current.value());
+    m_reveal->setVisible(current->has_hot_secret);
 }
 
 void KeyDetail::onAliasEdited() {
@@ -199,7 +216,7 @@ void KeyDetail::onRemoveRouteClicked() {
 
 void KeyDetail::onAddRouteClicked() {
     m_adding_route = true;
-    refresh();
+    onKeyChanged();
 }
 
 void KeyDetail::onConfirmRouteClicked() {
@@ -214,7 +231,7 @@ void KeyDetail::onConfirmRouteClicked() {
 
 void KeyDetail::onCancelRouteClicked() {
     m_adding_route = false;
-    refresh();
+    onKeyChanged();
 }
 
 void KeyDetail::onFetchXpubClicked() {
@@ -227,7 +244,7 @@ void KeyDetail::onRegisterClicked() {
     m_registrations.insert(descriptor, Registration::Registering);
     m_register_queue.append(descriptor);
     m_register_error->setVisible(false);
-    refresh();
+    onKeyChanged();
 }
 
 void KeyDetail::onDescriptorIsRegistered(ReqId req_id, bool registered) {
@@ -303,8 +320,9 @@ void KeyDetail::init() {
 }
 
 void KeyDetail::doConnect() {
-    connect(m_module, &KeysModule::keysChanged, this, &KeyDetail::refresh, qontrol::UNIQUE);
-    connect(m_module, &KeysModule::liveDevicesChanged, this, &KeyDetail::refresh, qontrol::UNIQUE);
+    connect(m_module, &KeysModule::keysChanged, this, &KeyDetail::onKeyChanged, qontrol::UNIQUE);
+    connect(m_module, &KeysModule::liveDevicesChanged, this, &KeyDetail::onKeyChanged,
+            qontrol::UNIQUE);
     connectDetail();
     connectPassword();
     connectReveal();
@@ -439,23 +457,6 @@ void KeyDetail::showDetail() {
     setWidth(ModalWidth::L);
 }
 
-void KeyDetail::refresh() {
-    auto current = info();
-    if (!current.has_value()) {
-        // Removed: the window is closing.
-        return;
-    }
-    m_alias = KeysModule::toQt(current->alias);
-    // The detail's title is the alias, which may have just changed.
-    showHeader(m_detail->isVisibleTo(this) ? m_alias : windowTitle());
-    onAliasEdited();
-    refreshDevices();
-    refreshRoutes(current.value());
-    refreshXpubs();
-    refreshAccounts(current.value());
-    m_reveal->setVisible(current->has_hot_secret);
-}
-
 void KeyDetail::refreshDevices() {
     auto devices = m_module->rust()->key_devices(rust::String(m_fingerprint.toStdString()));
     m_devices_table->clearRows();
@@ -556,7 +557,7 @@ void KeyDetail::showRouteResult(const KeyOpResult &result) {
     if (!result.is_ok) {
         m_route_error->setText(TR("keys-route-failed").arg(KeysModule::toQt(result.error)));
         // A failed change leaves the record as it was: show it as it is.
-        refresh();
+        onKeyChanged();
     }
 }
 
@@ -704,7 +705,7 @@ void KeyDetail::finishRegistrationRequest(Registration state) {
     m_register_descriptor.clear();
     m_register_req = 0;
     // Rebuilds the rows, which sends the next queued request.
-    refresh();
+    onKeyChanged();
 }
 
 void KeyDetail::stopRegistrations() {
