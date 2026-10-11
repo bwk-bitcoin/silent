@@ -1,8 +1,6 @@
 #include "CameraStep.h"
 
 #include "CameraSettings.h"
-#include "CameraViewport.h"
-#include "QrDisplayStep.h"
 
 #include "AppController.h"
 #include "catalog/Button.h"
@@ -12,16 +10,9 @@
 #include "catalog/feedback/Notice.h"
 #include "catalog/feedback/ScanProgress.h"
 #include "i18n/Tr.h"
-#include "modules/keys/KeysModule.h"
+#include "qr/QrCameraDisplay.h"
+#include "qr/bbqr/BbqrCameraEngine.h"
 #include "theme/Palette.h"
-
-#include <QDebug>
-#include <QImage>
-#include <QTimer>
-
-#include <algorithm>
-#include <cmath>
-#include <string>
 
 #include <Qontrol>
 #include <common.h>
@@ -32,39 +23,21 @@ using catalog::Label;
 using catalog::LabelRole;
 using catalog::LabelTone;
 
-namespace {
-
-// The preview contrast scales each channel around mid grey (the design's CSS
-// contrast(0.55 + level * 0.28)).
-constexpr double CONTRAST_BASE = 0.55;
-constexpr double CONTRAST_STEP = 0.28;
-constexpr double MID_GREY = 128.0;
-constexpr int CHANNEL_LEVELS = 256;
-constexpr int MAX_CHANNEL = 255;
-constexpr int RGB_CHANNELS = 3;
-
-} // namespace
-
-CameraStep::CameraStep(KeysModule *module, QWidget *parent)
-    : QWidget(parent),
-      m_module(module),
-      m_contrast(QrDisplayStep::DEFAULT_LEVEL) {
+CameraStep::CameraStep(QWidget *parent) : QWidget(parent) {
     init();
     doConnect();
     view();
-    rebuildContrastTable();
-}
-
-CameraStep::~CameraStep() {
-    stop();
 }
 
 void CameraStep::init() {
+    m_camera = new qr::QrCamera(this);
+    m_engine = new qr::BbqrCameraEngine(qr::QrCameraSettings{}, this);
+
     m_hint = new Label(LabelRole::Body);
     m_hint->setTone(LabelTone::Secondary);
     m_hint->setWordWrap(true);
 
-    m_viewport = new CameraViewport;
+    m_display = new qr::QrCameraDisplay;
     m_progress = new catalog::ScanProgress;
     m_progress->setVisible(false);
 
@@ -77,14 +50,15 @@ void CameraStep::init() {
     m_actions = new catalog::ModalActions;
     m_actions->setBack(catalog::ModalActions::Back::Back);
     m_actions->addAction(m_settings);
-
-    m_preview_timer = new QTimer(this);
-    m_preview_timer->setInterval(PREVIEW_INTERVAL_MS);
 }
 
 void CameraStep::doConnect() {
-    connect(m_preview_timer, &QTimer::timeout, this, &CameraStep::onPreviewTick, qontrol::UNIQUE);
-    connect(m_module, &KeysModule::cameraOpened, this, &CameraStep::onCameraOpened,
+    connect(m_camera, &qr::QrCamera::frame, m_engine, &qr::QrCameraEngine::frame, qontrol::UNIQUE);
+    connect(m_engine, &qr::QrCameraEngine::broadcast, m_display, &qr::QrCameraDisplay::frame,
+            qontrol::UNIQUE);
+    connect(m_camera, &qr::QrCamera::stateChanged, this, &CameraStep::onCameraState,
+            qontrol::UNIQUE);
+    connect(m_engine, &qr::QrCameraEngine::progress, this, &CameraStep::onProgress,
             qontrol::UNIQUE);
     connect(m_scan_again, &QPushButton::clicked, this, &CameraStep::onScanAgainClicked,
             qontrol::UNIQUE);
@@ -98,7 +72,7 @@ void CameraStep::view() {
     (new qontrol::Column)
         ->spacing(resolve(Spacing::M))
         ->push(m_hint)
-        ->push(m_viewport)
+        ->push(m_display)
         ->push(m_progress)
         ->push(m_scan_error)
         ->into(this);
@@ -112,63 +86,27 @@ void CameraStep::start() {
     m_scan_error->setVisible(false);
     m_progress->setProgress(0, 0);
     m_progress->setVisible(false);
-    m_camera_names.clear();
-    m_camera_indexes.clear();
-    if (m_module->rust() == nullptr) {
-        setViewportState(CameraViewport::State::Denied);
-        return;
-    }
-    auto list = m_module->rust()->camera_list();
-    if (!list.is_ok) {
-        qWarning() << "keys: camera list:" << KeysModule::toQt(list.error);
-        setViewportState(CameraViewport::State::Denied);
-        return;
-    }
-    if (list.names.empty()) {
-        setViewportState(CameraViewport::State::None);
-        return;
-    }
-    for (std::size_t i = 0; i < list.names.size(); ++i) {
-        m_camera_names.append(KeysModule::toQt(list.names[i]));
-        m_camera_indexes.append(list.indexes[i]);
-    }
-    m_camera = std::clamp(m_camera, 0, static_cast<int>(m_camera_indexes.size()) - 1);
-    openCamera(m_camera);
+    m_engine->reset();
+    m_camera->start();
+    onCameraState(m_camera->state());
 }
 
 void CameraStep::stop() {
-    m_preview_timer->stop();
-    m_req_id = 0;
-    m_module->cancelCamera();
+    m_camera->stop();
 }
 
-void CameraStep::openCamera(int camera) {
-    m_preview_timer->stop();
-    m_camera = camera;
-    setViewportState(CameraViewport::State::Starting);
-    m_progress->setVisible(false);
-    m_module->cancelCamera();
-    m_req_id = m_module->nextReqId();
-    m_module->openCamera(m_req_id, m_camera_indexes.at(camera));
-}
-
-void CameraStep::showScanError(QrErrorKind kind, const QString &message) {
+void CameraStep::showScanError(qr::QrError kind, const QString &message) {
     switch (kind) {
-    case QrErrorKind::CameraFailed:
-        qWarning() << "keys: camera failed:" << message;
-        m_preview_timer->stop();
-        m_progress->setVisible(false);
-        setViewportState(CameraViewport::State::Failed);
-        return;
-    case QrErrorKind::RequestIdMismatch:
+    case qr::QrError::WrongRequest:
         m_scan_error->setTitle(TR("flow-scan-wrong-request-title"));
         m_scan_error->setText(TR("flow-scan-wrong-request-body"));
         break;
-    case QrErrorKind::SignaturesUnsupported:
+    case qr::QrError::Unsupported:
         m_scan_error->setTitle(TR("flow-scan-bare-sigs-title"));
         m_scan_error->setText(TR("flow-scan-bare-sigs-body"));
         break;
-    case QrErrorKind::Other:
+    case qr::QrError::RequestFailed:
+    case qr::QrError::Refused:
     default:
         m_scan_error->setTitle(TR("flow-scan-other-title"));
         m_scan_error->setText(message);
@@ -177,103 +115,31 @@ void CameraStep::showScanError(QrErrorKind kind, const QString &message) {
     m_scan_error->setVisible(true);
 }
 
+auto CameraStep::engine() const -> qr::QrCameraEngine * {
+    return m_engine;
+}
+
 auto CameraStep::actions() const -> catalog::ModalActions * {
     return m_actions;
 }
 
-void CameraStep::onCameraOpened(ReqId req_id, bool is_ok, const QString &error) {
-    if (req_id != m_req_id) {
-        return;
-    }
-    if (!is_ok) {
-        qWarning() << "keys: camera open:" << error;
-        setViewportState(CameraViewport::State::Failed);
-        return;
-    }
-    m_last_seq = 0;
-    setViewportState(CameraViewport::State::Live);
-    m_progress->setVisible(true);
-    m_preview_timer->start();
+void CameraStep::onCameraState(qr::QrCamera::State state) {
+    m_display->setState(state);
+    m_progress->setVisible(state == qr::QrCamera::State::Live);
 }
 
-void CameraStep::onPreviewTick() {
-    if (m_module->rust() == nullptr) {
-        return;
-    }
-    auto frame = m_module->rust()->camera_frame();
-    if (frame.is_ok && frame.seq != m_last_seq) {
-        m_last_seq = frame.seq;
-        QImage image = previewImage(frame);
-        m_viewport->setFrame(image);
-        if (!m_open_settings.isNull()) {
-            m_open_settings->setFrame(image);
-        }
-    }
-    auto progress = m_module->rust()->camera_progress();
-    if (progress.is_ok) {
-        m_progress->setProgress(static_cast<int>(progress.seen), static_cast<int>(progress.total));
-    }
+void CameraStep::onProgress(int seen, int total) {
+    m_progress->setProgress(seen, total);
 }
 
 void CameraStep::onSettingsClicked() {
-    auto *settings = new CameraSettings(m_camera_names, m_camera, m_contrast, m_viewport_state);
-    m_open_settings = settings;
-    connect(settings, &CameraSettings::cameraPicked, this, &CameraStep::onCameraPicked,
-            qontrol::UNIQUE);
-    connect(settings, &CameraSettings::contrastPicked, this, &CameraStep::onContrastPicked,
-            qontrol::UNIQUE);
-    AppController::execModal(settings);
-}
-
-void CameraStep::onCameraPicked(int camera) {
-    if (camera < 0 || camera >= m_camera_indexes.size()) {
-        return;
-    }
-    openCamera(camera);
-}
-
-void CameraStep::onContrastPicked(int contrast) {
-    m_contrast = contrast;
-    rebuildContrastTable();
+    AppController::execModal(new CameraSettings(m_camera, m_engine));
 }
 
 void CameraStep::onScanAgainClicked() {
     m_scan_error->setVisible(false);
     m_progress->setProgress(0, 0);
-    if (m_module->rust() != nullptr) {
-        m_module->rust()->camera_reset();
-    }
-}
-
-void CameraStep::setViewportState(CameraViewport::State state) {
-    m_viewport_state = state;
-    m_viewport->setState(state);
-    if (!m_open_settings.isNull()) {
-        m_open_settings->setState(state);
-    }
-}
-
-void CameraStep::rebuildContrastTable() {
-    double factor = CONTRAST_BASE + m_contrast * CONTRAST_STEP;
-    m_contrast_table.resize(CHANNEL_LEVELS);
-    for (int level = 0; level < CHANNEL_LEVELS; ++level) {
-        auto value = static_cast<int>(std::lround((level - MID_GREY) * factor + MID_GREY));
-        m_contrast_table[level] = static_cast<std::uint8_t>(std::clamp(value, 0, MAX_CHANNEL));
-    }
-}
-
-auto CameraStep::previewImage(const CameraFrameResult &frame) const -> QImage {
-    auto width = static_cast<int>(frame.width);
-    QImage image = QImage(frame.data.data(), width, static_cast<int>(frame.height),
-                          width * RGB_CHANNELS, QImage::Format_RGB888)
-                       .copy();
-    for (int row = 0; row < image.height(); ++row) {
-        std::uint8_t *line = image.scanLine(row);
-        for (int byte = 0; byte < width * RGB_CHANNELS; ++byte) {
-            line[byte] = m_contrast_table.at(line[byte]);
-        }
-    }
-    return image;
+    m_engine->reset();
 }
 
 } // namespace keys::flow

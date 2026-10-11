@@ -61,15 +61,23 @@ impl Scanner {
         })
     }
 
-    pub fn scan(&mut self, rgb: &[u8], width: u32, height: u32) -> Result<ScanOutcome, Error> {
+    /// A frame that holds no readable part, or an unreadable one, completes nothing:
+    /// a camera frame routinely does.
+    pub fn scan(&mut self, rgb: &[u8], width: u32, height: u32) -> ScanOutcome {
         // The scanner refuses a frame above its pixel limit as a bad frame.
         let factor = downscale_factor(width, height, Config::default().max_image_pixels);
         let luma = box_downscale(&rgb_to_luma(rgb), width, height, 1, factor);
-        let decoded = self.decoder.process_raw(&Image {
-            data: luma.data,
-            width: luma.width,
-            height: luma.height,
-        })?;
+        let decoded = self
+            .decoder
+            .process_raw(&Image {
+                data: luma.data,
+                width: luma.width,
+                height: luma.height,
+            })
+            .unwrap_or_else(|e| {
+                log::debug!("bbqr: unreadable frame: {e}");
+                Vec::new()
+            });
         let payloads = decoded
             .into_iter()
             .filter_map(|decoded| match decoded {
@@ -82,11 +90,11 @@ impl Scanner {
             .decoder
             .progress()
             .map_or((0, 0), |progress| (progress.seen, progress.total));
-        Ok(ScanOutcome {
+        ScanOutcome {
             payloads,
             seen,
             total,
-        })
+        }
     }
 
     pub fn reset(&mut self) {
@@ -154,8 +162,7 @@ impl BbqrScanner {
         self.inner.as_ref().err().cloned().unwrap_or_default()
     }
 
-    /// `rgb` is RGB888, `width * height * 3` bytes. A frame that holds no readable
-    /// code is no error: it simply completes nothing.
+    /// `rgb` is RGB888, `width * height * 3` bytes.
     pub fn scan(&mut self, rgb: &[u8], width: u32, height: u32) -> ffi::BbqrScanResult {
         let scanner = match self.inner.as_mut() {
             Ok(scanner) => scanner,
@@ -167,19 +174,17 @@ impl BbqrScanner {
                 rgb.len()
             ));
         }
-        match scanner.scan(rgb, width, height) {
-            Ok(outcome) => ffi::BbqrScanResult {
-                is_ok: true,
-                error: String::new(),
-                payloads: outcome
-                    .payloads
-                    .into_iter()
-                    .map(|data| ffi::QrPayload { data })
-                    .collect(),
-                seen: outcome.seen as u32,
-                total: outcome.total as u32,
-            },
-            Err(e) => failed_scan(&e.to_string()),
+        let outcome = scanner.scan(rgb, width, height);
+        ffi::BbqrScanResult {
+            is_ok: true,
+            error: String::new(),
+            payloads: outcome
+                .payloads
+                .into_iter()
+                .map(|data| ffi::QrPayload { data })
+                .collect(),
+            seen: outcome.seen as u32,
+            total: outcome.total as u32,
         }
     }
 
@@ -242,9 +247,7 @@ mod tests {
         let mut scanner = Scanner::new().expect("scanner");
         let mut payloads = Vec::new();
         for (index, frame) in frames.iter().enumerate() {
-            let outcome = scanner
-                .scan(&to_rgb(frame), frame.width, frame.height)
-                .expect("scan frame");
+            let outcome = scanner.scan(&to_rgb(frame), frame.width, frame.height);
             if outcome.payloads.is_empty() {
                 assert_eq!(
                     (outcome.seen, outcome.total),
@@ -266,16 +269,12 @@ mod tests {
         let frames = frames(&payload(), 50).expect("payload frames");
         let mut scanner = Scanner::new().expect("scanner");
         let first = &frames[0];
-        let outcome = scanner
-            .scan(&to_rgb(first), first.width, first.height)
-            .expect("scan frame");
+        let outcome = scanner.scan(&to_rgb(first), first.width, first.height);
         assert_eq!(outcome.seen, 1, "one part seen before the reset");
 
         scanner.reset();
         let second = &frames[1];
-        let outcome = scanner
-            .scan(&to_rgb(second), second.width, second.height)
-            .expect("scan frame");
+        let outcome = scanner.scan(&to_rgb(second), second.width, second.height);
         assert_eq!(outcome.seen, 1, "the reset forgot the first part");
     }
 }

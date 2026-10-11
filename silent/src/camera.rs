@@ -1,21 +1,18 @@
-//! Background camera capture and QR decode.
+//! Background camera capture, nothing more.
 //!
-//! One dedicated thread per [`Camera`] opens the device, pulls frames, feeds them to a
-//! `bwk_qr::decoder::Decoder`, and publishes a preview plus the reassembly progress
-//! behind a mutex. Decoded messages go out on the caller-supplied channel. Rust owns
-//! capture and decoding; the caller (eventually the CXX bridge) only paints what it is
-//! handed.
+//! One dedicated thread per [`Camera`] opens the device, pulls frames and publishes
+//! the latest one behind a mutex, as RGB888 at most `MAX_FRAME_PIXELS`, the size a QR
+//! scan reads. What the frames hold is the caller's business.
 
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
-use std::thread::JoinHandle;
-
-use crossbeam::channel;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, LazyLock, Mutex,
+};
+use std::{collections::HashSet, thread::JoinHandle};
 
 use crate::{
-    image::{box_downscale, downscale_factor, rgb_to_luma, RGB_CHANNELS},
-    keys::error::Error,
+    ffi,
+    image::{box_downscale, downscale_factor, RGB_CHANNELS},
 };
 
 #[cfg(target_os = "linux")]
@@ -31,40 +28,34 @@ use nokhwa::Camera as NokhwaCamera;
 const MIN_CAPTURE_WIDTH: u32 = 1280;
 const MIN_CAPTURE_HEIGHT: u32 = 720;
 const MIN_CAPTURE_FPS: u32 = 10;
-/// Handed to C++ for painting. Decoding still runs at capture resolution.
-const PREVIEW_WIDTH: u32 = 640;
-const PREVIEW_HEIGHT: u32 = 360;
-/// bwk_qr::Config::default().max_image_pixels. A 1080p frame is 2073600 and is
-/// refused as BadFrame, hence the downscale below.
+/// bwk_qr::Config::default().max_image_pixels: a larger frame is downscaled before it
+/// is published, as a scan would refuse it.
 const MAX_FRAME_PIXELS: usize = 1024 * 1024;
 
-/// What the capture thread publishes. `seq` is monotonic so C++ repaints only
-/// when the frame actually changed. `data` is RGB888: 3 interleaved bytes
-/// (red, green, blue) per pixel.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CameraError {
+    #[error("camera capture is only available on Linux")]
+    Unsupported,
+    #[error("failed to open camera {index}: {message}")]
+    Open { index: u32, message: String },
+    #[error("camera capture error: {0}")]
+    Capture(String),
+    #[error("no camera was found")]
+    NoCamera,
+    #[error("no camera format meets the minimum resolution and frame rate; offered: {0}")]
+    NoSuitableFormat(String),
+    #[error("camera {0} is already in use")]
+    Busy(u32),
+}
+
+/// One captured picture. `seq` is monotonic so a reader repaints only when the frame
+/// actually changed. `data` is RGB888: 3 interleaved bytes per pixel.
 #[derive(Clone)]
-pub struct Preview {
+pub struct Frame {
     pub data: Vec<u8>,
     pub width: u32,
     pub height: u32,
     pub seq: u64,
-}
-
-#[derive(Clone)]
-pub struct ScanProgress {
-    pub seen: usize,
-    pub total: usize,
-    pub seq: u64,
-}
-
-/// Pushed on the channel the caller supplies, so this file stays free of any
-/// bridge type.
-pub enum CameraMessage {
-    Decoded(bwk_qr::decoder::Decoded),
-    /// The BBQR reassembly progress changed. Carries no data itself: the
-    /// receiver reads the new values from `Camera::progress()`.
-    Progress,
-    Failed(String),
-    Stopped,
 }
 
 pub struct CameraInfo {
@@ -72,54 +63,49 @@ pub struct CameraInfo {
     pub name: String,
 }
 
+#[derive(Default)]
 struct Shared {
-    preview: Option<Preview>,
-    progress: ScanProgress,
+    frame: Option<Frame>,
+    /// Why the capture thread stopped on its own, once it has.
+    failure: Option<String>,
     seq: u64,
-}
-
-impl Default for Shared {
-    fn default() -> Self {
-        Shared {
-            preview: None,
-            progress: ScanProgress {
-                seen: 0,
-                total: 0,
-                seq: 0,
-            },
-            seq: 0,
-        }
-    }
 }
 
 pub struct Camera {
     shared: Arc<Mutex<Shared>>,
     stop_flag: Arc<AtomicBool>,
-    reset_flag: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
 impl Camera {
+    /// Only blocks to spawn the capture thread: the device opens inside it, and a
+    /// failure there shows up later through `failure()`.
     #[cfg(target_os = "linux")]
-    pub fn start(index: u32, sender: channel::Sender<CameraMessage>) -> Result<Camera, Error> {
+    pub fn start(index: u32) -> Result<Camera, CameraError> {
         if !reserve_camera(index) {
-            return Err(Error::CameraBusy(index));
+            return Err(CameraError::Busy(index));
         }
 
         let shared = Arc::new(Mutex::new(Shared::default()));
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let reset_flag = Arc::new(AtomicBool::new(false));
 
         let thread_shared = Arc::clone(&shared);
         let thread_stop = Arc::clone(&stop_flag);
-        let thread_reset = Arc::clone(&reset_flag);
 
         let handle = std::thread::Builder::new()
             .name("camera-capture".to_string())
-            .spawn(move || capture_loop(index, thread_shared, thread_stop, thread_reset, sender))
+            .spawn(move || {
+                let _lease = CameraLease(index);
+                if let Err(e) = capture_loop(index, &thread_shared, &thread_stop) {
+                    match thread_shared.lock() {
+                        Ok(mut shared) => shared.failure = Some(e.to_string()),
+                        Err(_) => log::error!("camera: shared state poisoned"),
+                    }
+                }
+            })
             .map_err(|e| {
                 release_camera(index);
-                Error::CameraOpen {
+                CameraError::Open {
                     index,
                     message: e.to_string(),
                 }
@@ -128,50 +114,38 @@ impl Camera {
         Ok(Camera {
             shared,
             stop_flag,
-            reset_flag,
             handle: Some(handle),
         })
     }
 
     #[cfg(not(target_os = "linux"))]
-    pub fn start(_index: u32, _sender: channel::Sender<CameraMessage>) -> Result<Camera, Error> {
-        Err(Error::CameraUnsupported)
+    pub fn start(_index: u32) -> Result<Camera, CameraError> {
+        Err(CameraError::Unsupported)
     }
 
     /// Does not join. A v4l2 read has no timeout, so the capture thread can be
     /// blocked in `camera.frame()` when this is called from the GUI thread
     /// (modal close, camera switch). Dropping the join handle detaches the
     /// thread: it keeps running, notices the stop flag or a failed `frame()`
-    /// on its own, releases the device and reports `CameraMessage::Stopped`.
+    /// on its own and releases the device.
     pub fn stop(&mut self) {
         self.stop_flag.store(true, Ordering::Relaxed);
         self.handle.take();
     }
 
-    pub fn preview(&self) -> Option<Preview> {
+    pub fn frame(&self) -> Option<Frame> {
         let Ok(shared) = self.shared.lock() else {
             log::error!("camera: shared state poisoned");
             return None;
         };
-        shared.preview.clone()
+        shared.frame.clone()
     }
 
-    pub fn progress(&self) -> ScanProgress {
+    pub fn failure(&self) -> Option<String> {
         let Ok(shared) = self.shared.lock() else {
-            log::error!("camera: shared state poisoned");
-            return ScanProgress {
-                seen: 0,
-                total: 0,
-                seq: 0,
-            };
+            return Some("camera: shared state poisoned".to_string());
         };
-        shared.progress.clone()
-    }
-
-    /// Drops the partial BBQR reassembly. Sets a flag the capture thread acts on,
-    /// because the Decoder lives on that thread and is never shared.
-    pub fn reset(&self) {
-        self.reset_flag.store(true, Ordering::Relaxed);
+        shared.failure.clone()
     }
 }
 
@@ -182,18 +156,18 @@ impl Drop for Camera {
 }
 
 #[cfg(target_os = "linux")]
-pub fn list_cameras() -> Result<Vec<CameraInfo>, Error> {
+pub fn list_cameras() -> Result<Vec<CameraInfo>, CameraError> {
     let infos =
-        nokhwa::query(ApiBackend::Video4Linux).map_err(|e| Error::CameraCapture(e.to_string()))?;
+        nokhwa::query(ApiBackend::Video4Linux).map_err(|e| CameraError::Capture(e.to_string()))?;
     if infos.is_empty() {
-        return Err(Error::NoCamera);
+        return Err(CameraError::NoCamera);
     }
     let mut cameras = Vec::with_capacity(infos.len());
     for info in infos {
         let index = info
             .index()
             .as_index()
-            .map_err(|e| Error::CameraCapture(e.to_string()))?;
+            .map_err(|e| CameraError::Capture(e.to_string()))?;
         cameras.push(CameraInfo {
             index,
             name: info.human_name(),
@@ -203,8 +177,8 @@ pub fn list_cameras() -> Result<Vec<CameraInfo>, Error> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn list_cameras() -> Result<Vec<CameraInfo>, Error> {
-    Err(Error::CameraUnsupported)
+pub fn list_cameras() -> Result<Vec<CameraInfo>, CameraError> {
+    Err(CameraError::Unsupported)
 }
 
 /// Camera devices are a process-wide resource: v4l2 refuses a second open of the
@@ -243,14 +217,6 @@ impl Drop for CameraLease {
     fn drop(&mut self) {
         release_camera(self.0);
     }
-}
-
-/// Sends the failure and the stop sentinel together, since every capture-thread exit
-/// on error reports both.
-#[cfg(target_os = "linux")]
-fn fail(sender: &channel::Sender<CameraMessage>, error: Error) {
-    let _ = sender.send(CameraMessage::Failed(error.to_string()));
-    let _ = sender.send(CameraMessage::Stopped);
 }
 
 /// Modes with a frame rate below `MIN_CAPTURE_FPS` or a resolution smaller than
@@ -312,37 +278,19 @@ fn format_offered(offered: &[CameraFormat]) -> String {
 #[cfg(target_os = "linux")]
 fn capture_loop(
     index: u32,
-    shared: Arc<Mutex<Shared>>,
-    stop_flag: Arc<AtomicBool>,
-    reset_flag: Arc<AtomicBool>,
-    sender: channel::Sender<CameraMessage>,
-) {
-    let _lease = CameraLease(index);
-
-    let mut camera = match NokhwaCamera::new(
+    shared: &Mutex<Shared>,
+    stop_flag: &AtomicBool,
+) -> Result<(), CameraError> {
+    let open_error = |message: String| CameraError::Open { index, message };
+    let mut camera = NokhwaCamera::new(
         CameraIndex::Index(index),
         RequestedFormat::new::<RgbFormat>(RequestedFormatType::None),
-    ) {
-        Ok(camera) => camera,
-        Err(e) => {
-            fail(
-                &sender,
-                Error::CameraOpen {
-                    index,
-                    message: e.to_string(),
-                },
-            );
-            return;
-        }
-    };
+    )
+    .map_err(|e| open_error(e.to_string()))?;
 
-    let offered = match camera.compatible_camera_formats() {
-        Ok(formats) => formats,
-        Err(e) => {
-            fail(&sender, Error::CameraCapture(e.to_string()));
-            return;
-        }
-    };
+    let offered = camera
+        .compatible_camera_formats()
+        .map_err(|e| CameraError::Capture(e.to_string()))?;
     for mode in &offered {
         log::debug!(
             "camera {index}: offered {}x{}@{} {}",
@@ -352,13 +300,8 @@ fn capture_loop(
             mode.format()
         );
     }
-
     let Some(chosen) = select_format(&offered) else {
-        fail(
-            &sender,
-            Error::CameraNoSuitableFormat(format_offered(&offered)),
-        );
-        return;
+        return Err(CameraError::NoSuitableFormat(format_offered(&offered)));
     };
     log::info!(
         "camera {index}: selected {}x{}@{} {}",
@@ -367,132 +310,117 @@ fn capture_loop(
         chosen.frame_rate(),
         chosen.format()
     );
-
-    if let Err(e) = camera.set_camera_requset(RequestedFormat::new::<RgbFormat>(
-        RequestedFormatType::Exact(chosen),
-    )) {
-        fail(
-            &sender,
-            Error::CameraOpen {
-                index,
-                message: e.to_string(),
-            },
-        );
-        return;
-    }
-
-    if let Err(e) = camera.open_stream() {
-        fail(
-            &sender,
-            Error::CameraOpen {
-                index,
-                message: e.to_string(),
-            },
-        );
-        return;
-    }
-
-    let mut decoder = match bwk_qr::decoder::Decoder::new(bwk_qr::config::Config::default()) {
-        Ok(decoder) => decoder,
-        Err(e) => {
-            fail(&sender, Error::from(e));
-            return;
-        }
-    };
-    // Matches `Shared::default().progress`, so the first frame does not push a
-    // spurious progress event when nothing has been scanned yet.
-    let mut last_progress = (0usize, 0usize);
+    camera
+        .set_camera_requset(RequestedFormat::new::<RgbFormat>(
+            RequestedFormatType::Exact(chosen),
+        ))
+        .map_err(|e| open_error(e.to_string()))?;
+    camera
+        .open_stream()
+        .map_err(|e| open_error(e.to_string()))?;
 
     while !stop_flag.load(Ordering::Relaxed) {
-        if reset_flag.swap(false, Ordering::Relaxed) {
-            decoder.reset();
-        }
-
-        let buffer = match camera.frame() {
-            Ok(buffer) => buffer,
-            Err(e) => {
-                fail(&sender, Error::CameraCapture(e.to_string()));
-                return;
-            }
-        };
-        let rgb = match buffer.decode_image::<RgbFormat>() {
-            Ok(rgb) => rgb,
-            Err(e) => {
-                fail(&sender, Error::CameraCapture(e.to_string()));
-                return;
-            }
-        };
-
+        let rgb = camera
+            .frame()
+            .and_then(|buffer| buffer.decode_image::<RgbFormat>())
+            .map_err(|e| CameraError::Capture(e.to_string()))?;
         let width = rgb.width();
         let height = rgb.height();
-        let rgb_data = rgb.into_raw();
         let factor = downscale_factor(width, height, MAX_FRAME_PIXELS);
-        let luma = box_downscale(&rgb_to_luma(&rgb_data), width, height, 1, factor);
-        // a camera frame routinely holds unreadable candidates
-        let process_result = decoder.process(&bwk_qr::image::Image {
-            data: luma.data,
-            width: luma.width,
-            height: luma.height,
-        });
-        match process_result {
-            Ok(messages) => {
-                for message in messages {
-                    if sender.send(CameraMessage::Decoded(message)).is_err() {
-                        return;
-                    }
-                }
-            }
-            Err(e) => log::debug!("camera: bad frame: {e}"),
-        }
+        let frame = box_downscale(&rgb.into_raw(), width, height, RGB_CHANNELS, factor);
 
-        let preview = box_downscale(
-            &rgb_data,
-            width,
-            height,
-            RGB_CHANNELS,
-            preview_factor(width, height),
-        );
-        let progress = decoder.progress();
-        let (seen, total) = match progress {
-            Some(p) => (p.seen, p.total),
-            None => (0, 0),
+        let Ok(mut state) = shared.lock() else {
+            return Err(CameraError::Capture("shared state poisoned".to_string()));
         };
+        state.seq += 1;
+        state.frame = Some(Frame {
+            data: frame.data,
+            width: frame.width,
+            height: frame.height,
+            seq: state.seq,
+        });
+    }
+    Ok(())
+}
 
-        {
-            let Ok(mut state) = shared.lock() else {
-                log::error!("camera: shared state poisoned");
-                return;
-            };
-            state.seq += 1;
-            let seq = state.seq;
-            state.preview = Some(Preview {
-                data: preview.data,
-                width: preview.width,
-                height: preview.height,
-                seq,
-            });
-            state.progress = ScanProgress { seen, total, seq };
-        }
+// ===== Bridge =====
 
-        if (seen, total) != last_progress {
-            last_progress = (seen, total);
-            if sender.send(CameraMessage::Progress).is_err() {
-                return;
-            }
+pub fn camera_list() -> ffi::CameraListResult {
+    match list_cameras() {
+        Ok(infos) => ffi::CameraListResult {
+            is_ok: true,
+            error: String::new(),
+            names: infos.iter().map(|info| info.name.clone()).collect(),
+            indexes: infos.iter().map(|info| info.index).collect(),
+        },
+        Err(e) => ffi::CameraListResult {
+            is_ok: false,
+            error: e.to_string(),
+            names: Vec::new(),
+            indexes: Vec::new(),
+        },
+    }
+}
+
+/// A running camera, or why it could not start. Dropping it stops the capture.
+pub struct CameraHandle {
+    inner: Result<Camera, String>,
+}
+
+impl CameraHandle {
+    pub fn is_ok(&self) -> bool {
+        self.inner.is_ok()
+    }
+
+    pub fn get_error(&self) -> String {
+        self.inner.as_ref().err().cloned().unwrap_or_default()
+    }
+
+    /// The latest frame, is_ok false until the first one is captured.
+    pub fn frame(&self) -> ffi::CameraFrameResult {
+        let frame = match self.inner.as_ref() {
+            Ok(camera) => camera.frame(),
+            Err(e) => return failed_frame(e),
+        };
+        match frame {
+            Some(frame) => ffi::CameraFrameResult {
+                is_ok: true,
+                error: String::new(),
+                data: frame.data,
+                width: frame.width,
+                height: frame.height,
+                seq: frame.seq,
+            },
+            None => failed_frame("no frame captured yet"),
         }
     }
 
-    let _ = sender.send(CameraMessage::Stopped);
+    /// Why the capture stopped on its own, empty while it runs.
+    pub fn failure(&self) -> String {
+        match self.inner.as_ref() {
+            Ok(camera) => camera.failure().unwrap_or_default(),
+            Err(e) => e.clone(),
+        }
+    }
 }
 
-/// Smallest integer factor that brings the real capture frame within
-/// `PREVIEW_WIDTH` x `PREVIEW_HEIGHT`. The capture size is no longer fixed, so this
-/// is computed per frame rather than assumed.
-fn preview_factor(width: u32, height: u32) -> u32 {
-    width
-        .div_ceil(PREVIEW_WIDTH)
-        .max(height.div_ceil(PREVIEW_HEIGHT))
-        .max(1)
+/// Spawns the capture thread for camera `index`; the device opens inside it. Call
+/// from a worker thread, not the GUI thread.
+pub fn camera_open(index: u32) -> Box<CameraHandle> {
+    Box::new(CameraHandle {
+        inner: Camera::start(index).map_err(|e| e.to_string()),
+    })
+}
+
+fn failed_frame(error: &str) -> ffi::CameraFrameResult {
+    ffi::CameraFrameResult {
+        is_ok: false,
+        error: error.to_string(),
+        data: Vec::new(),
+        width: 0,
+        height: 0,
+        seq: 0,
+    }
 }
 
 #[cfg(test)]
@@ -501,7 +429,7 @@ mod tests {
     use nokhwa::utils::{CameraFormat, FrameFormat, Resolution};
 
     #[cfg(target_os = "linux")]
-    use crate::keys::camera::{format_offered, select_format};
+    use crate::camera::{format_offered, select_format};
 
     #[cfg(target_os = "linux")]
     fn mode(width: u32, height: u32, fps: u32, format: FrameFormat) -> CameraFormat {

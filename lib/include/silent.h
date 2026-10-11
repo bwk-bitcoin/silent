@@ -973,7 +973,6 @@ enum class HwiEventFlag : ::std::uint8_t;
 enum class KeyRouteKind : ::std::uint8_t;
 enum class KeyUnusableReason : ::std::uint8_t;
 enum class QrResponseKind : ::std::uint8_t;
-enum class KeyEventFlag : ::std::uint8_t;
 enum class QrErrorKind : ::std::uint8_t;
 struct Notification;
 struct RustCoin;
@@ -1000,7 +999,7 @@ struct KeyXpub;
 struct AddressVerifyInfo;
 struct KeyDescriptor;
 struct KeyOpResult;
-struct QrReserveResult;
+struct QrMessageResult;
 struct KeyInfoResult;
 struct SigningCandidate;
 struct SigningPlan;
@@ -1009,10 +1008,8 @@ struct MnemonicResult;
 struct SignResult;
 struct HotSpDescriptorResult;
 struct PsbtPayloadResult;
-struct KeyEvent;
 struct CameraListResult;
 struct CameraFrameResult;
-struct ScanProgress;
 struct PsbtFileResult;
 struct Config;
 struct Account;
@@ -1024,10 +1021,7 @@ struct HwiService;
 struct HwiReceiver;
 struct HwiPoll;
 struct KeysModule;
-struct QrRequest;
 struct QrResponse;
-struct KeysReceiver;
-struct KeysPoll;
 struct HotMaterial;
 struct SealedHotKey;
 struct CameraHandle;
@@ -1150,29 +1144,14 @@ enum class QrResponseKind : ::std::uint8_t {
 };
 #endif // CXXBRIDGE1_ENUM_QrResponseKind
 
-#ifndef CXXBRIDGE1_ENUM_KeyEventFlag
-#define CXXBRIDGE1_ENUM_KeyEventFlag
-// Kind of notification coming from the keys module. `ScanProgress` is a
-// push-only signal to go read the current values from the polled
-// `camera_progress()` accessor; it carries no progress data itself.
-enum class KeyEventFlag : ::std::uint8_t {
-  QrDecoded = 0,
-  ScanProgress = 1,
-  CameraStopped = 2,
-  Error = 3,
-};
-#endif // CXXBRIDGE1_ENUM_KeyEventFlag
-
 #ifndef CXXBRIDGE1_ENUM_QrErrorKind
 #define CXXBRIDGE1_ENUM_QrErrorKind
-// Discriminant for a `KeyEvent::Error`, distinguishing the two QR response
-// validation failures and a camera that failed from every other camera-sourced
-// error, which only ever surfaces `error` as free text.
+// Why a QR response was refused: the two failures the UI words on their own,
+// and every other one, which only surfaces as free text.
 enum class QrErrorKind : ::std::uint8_t {
   Other = 0,
   RequestIdMismatch = 1,
   SignaturesUnsupported = 2,
-  CameraFailed = 3,
 };
 #endif // CXXBRIDGE1_ENUM_QrErrorKind
 
@@ -1584,20 +1563,18 @@ struct KeyOpResult final {
 };
 #endif // CXXBRIDGE1_STRUCT_KeyOpResult
 
-#ifndef CXXBRIDGE1_STRUCT_QrReserveResult
-#define CXXBRIDGE1_STRUCT_QrReserveResult
-// Result of `qr_reserve_sign`. `id` is meaningless when `is_ok` is false: unlike
-// the plain `u64` this replaces, failure never overlaps a real reserved id (`0`
-// is reserved for "no outstanding request" and is never issued by `reserve_id`).
-struct QrReserveResult final {
+#ifndef CXXBRIDGE1_STRUCT_QrMessageResult
+#define CXXBRIDGE1_STRUCT_QrMessageResult
+// A QR protocol message, as the bytes a transport frames.
+struct QrMessageResult final {
   bool is_ok CXX_DEFAULT_VALUE(false);
   // Error message (empty if is_ok is true).
   ::rust::String error;
-  ::std::uint64_t id CXX_DEFAULT_VALUE(0);
+  ::rust::Vec<::std::uint8_t> payload;
 
   using IsRelocatable = ::std::true_type;
 };
-#endif // CXXBRIDGE1_STRUCT_QrReserveResult
+#endif // CXXBRIDGE1_STRUCT_QrMessageResult
 
 #ifndef CXXBRIDGE1_STRUCT_KeyInfoResult
 #define CXXBRIDGE1_STRUCT_KeyInfoResult
@@ -1736,31 +1713,13 @@ struct PsbtPayloadResult final {
 };
 #endif // CXXBRIDGE1_STRUCT_PsbtPayloadResult
 
-#ifndef CXXBRIDGE1_STRUCT_KeyEvent
-#define CXXBRIDGE1_STRUCT_KeyEvent
-// A notification from the keys module. `req_id` is the QR request id the event
-// answers, and 0 for an unsolicited push.
-struct KeyEvent final {
-  ::KeyEventFlag flag;
-  ::std::uint64_t req_id CXX_DEFAULT_VALUE(0);
-  ::rust::String fingerprint;
-  ::rust::String payload;
-  ::rust::String error;
-  // Only meaningful when `flag` is `Error`; `Other` otherwise.
-  ::QrErrorKind error_kind;
-  bool ok CXX_DEFAULT_VALUE(false);
-
-  using IsRelocatable = ::std::true_type;
-};
-#endif // CXXBRIDGE1_STRUCT_KeyEvent
-
 #ifndef CXXBRIDGE1_STRUCT_CameraListResult
 #define CXXBRIDGE1_STRUCT_CameraListResult
 struct CameraListResult final {
   bool is_ok CXX_DEFAULT_VALUE(false);
   ::rust::String error;
   ::rust::Vec<::rust::String> names;
-  // Parallel to `names`: the index to pass to camera_start.
+  // Parallel to `names`: the index to pass to camera_open.
   ::rust::Vec<::std::uint32_t> indexes;
 
   using IsRelocatable = ::std::true_type;
@@ -1782,19 +1741,6 @@ struct CameraFrameResult final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_CameraFrameResult
-
-#ifndef CXXBRIDGE1_STRUCT_ScanProgress
-#define CXXBRIDGE1_STRUCT_ScanProgress
-struct ScanProgress final {
-  bool is_ok CXX_DEFAULT_VALUE(false);
-  ::rust::String error;
-  ::std::uint32_t seen CXX_DEFAULT_VALUE(0);
-  ::std::uint32_t total CXX_DEFAULT_VALUE(0);
-  ::std::uint64_t seq CXX_DEFAULT_VALUE(0);
-
-  using IsRelocatable = ::std::true_type;
-};
-#endif // CXXBRIDGE1_STRUCT_ScanProgress
 
 #ifndef CXXBRIDGE1_STRUCT_PsbtFileResult
 #define CXXBRIDGE1_STRUCT_PsbtFileResult
@@ -2177,12 +2123,6 @@ struct KeysModule final : public ::rust::Opaque {
   // Callers MUST check `is_ok()` before trusting this value.
   ::Network network() const noexcept;
 
-  // Stop the camera for good and end the notification stream.
-  void shutdown() noexcept;
-
-  // Take the receiver for a dedicated notification thread. Call once.
-  ::rust::Box<::KeysReceiver> take_receiver() noexcept;
-
   ::rust::Vec<::KeyInfo> keys() const noexcept;
   ::KeyInfoResult key(::rust::Str fingerprint) const noexcept;
   ::KeyInfoResult add_key(::rust::Str fingerprint, ::rust::Str alias) noexcept;
@@ -2232,39 +2172,15 @@ struct KeysModule final : public ::rust::Opaque {
   // manager's.
   ::KeyInfoResult commit_hot_key(::SealedHotKey const &sealed, ::rust::Str alias) noexcept;
 
-  ::rust::Box<::QrRequest> qr_request_get_xpubs(::rust::Vec<::rust::String> paths, ::std::uint32_t part_bytes) noexcept;
-  ::rust::Box<::QrRequest> qr_request_register_descriptor(::rust::Str descriptor, ::std::uint32_t part_bytes) noexcept;
-  ::rust::Box<::QrRequest> qr_request_verify_address(::rust::Str descriptor, ::rust::Str path, ::rust::Str address, ::std::uint32_t part_bytes) noexcept;
+  ::QrMessageResult qr_request_get_xpubs(::rust::Vec<::rust::String> paths) noexcept;
+  ::QrMessageResult qr_request_register_descriptor(::rust::Str descriptor) noexcept;
+  ::QrMessageResult qr_request_verify_address(::rust::Str descriptor, ::rust::Str path, ::rust::Str address) noexcept;
+  ::QrMessageResult qr_request_sign(::rust::Vec<::rust::String> descriptors, ::rust::Str psbt_v2_hex) noexcept;
+  ::QrMessageResult qr_request_get_sp_descriptor() noexcept;
 
-  // Reserves the id a signing QR request will be built under. The build itself
-  // runs on a background thread through `qr_build_sign`, committed back with
-  // `qr_commit_request` once done.
-  ::QrReserveResult qr_reserve_sign() noexcept;
-
-  // Commits a request `qr_build_sign` built back into the session, on the GUI
-  // thread. Errors if a newer id has been reserved since (a superseded density
-  // rebuild) instead of silently dropping it.
-  ::KeyOpResult qr_commit_request(::QrRequest const &request) noexcept;
-
-  ::rust::Box<::QrRequest> qr_request_get_sp_descriptor(::std::uint32_t part_bytes) noexcept;
-
-  // Validates a pasted payload against the outstanding request id.
-  ::rust::Box<::QrResponse> qr_decode_response(::rust::Str payload) noexcept;
-
-  ::CameraListResult camera_list() const noexcept;
-
-  // Stops the current camera, if any, and stores the one `camera_open`
-  // built.
-  ::KeyOpResult camera_install(::rust::Box<::CameraHandle> handle) noexcept;
-
-  // Idempotent.
-  void camera_stop() noexcept;
-
-  ::CameraFrameResult camera_frame() const noexcept;
-  ::ScanProgress camera_progress() const noexcept;
-
-  // Drops the partial BBQR reassembly, for a rescan.
-  void camera_reset() noexcept;
+  // Decodes a response's bytes and validates them against the outstanding
+  // request.
+  ::rust::Box<::QrResponse> qr_decode_response(::rust::Slice<::std::uint8_t const> payload) noexcept;
 
   ~KeysModule() = delete;
 
@@ -2277,39 +2193,15 @@ private:
 };
 #endif // CXXBRIDGE1_STRUCT_KeysModule
 
-#ifndef CXXBRIDGE1_STRUCT_QrRequest
-#define CXXBRIDGE1_STRUCT_QrRequest
-// One encoded QR request the C++ modal pulls animation frames from.
-struct QrRequest final : public ::rust::Opaque {
-  bool is_ok() const noexcept;
-  ::rust::String get_error() const noexcept;
-  ::std::uint64_t req_id() const noexcept;
-  ::std::uint32_t frame_count() const noexcept;
-
-  // Frame `index` of the animated request. An index past the end answers with
-  // is_ok false, never with frame 0.
-  ::QrImageResult frame(::std::uint32_t index) const noexcept;
-
-  // The whole encoded request, base64, for the paste box.
-  ::rust::String base64() const noexcept;
-
-  ~QrRequest() = delete;
-
-private:
-  friend ::rust::layout;
-  struct layout {
-    static ::std::size_t size() noexcept;
-    static ::std::size_t align() noexcept;
-  };
-};
-#endif // CXXBRIDGE1_STRUCT_QrRequest
-
 #ifndef CXXBRIDGE1_STRUCT_QrResponse
 #define CXXBRIDGE1_STRUCT_QrResponse
 // A decoded and validated QR response.
 struct QrResponse final : public ::rust::Opaque {
   bool is_ok() const noexcept;
   ::rust::String get_error() const noexcept;
+
+  // Only meaningful when !is_ok().
+  ::QrErrorKind error_kind() const noexcept;
 
   // Only meaningful when is_ok().
   ::QrResponseKind kind() const noexcept;
@@ -2340,41 +2232,6 @@ private:
   };
 };
 #endif // CXXBRIDGE1_STRUCT_QrResponse
-
-#ifndef CXXBRIDGE1_STRUCT_KeysReceiver
-#define CXXBRIDGE1_STRUCT_KeysReceiver
-// Notification receiver for the keys module's camera/QR event channel.
-struct KeysReceiver final : public ::rust::Opaque {
-  // Blocking receive. Returns a poll with is_some()=false once shut down.
-  ::rust::Box<::KeysPoll> recv() const noexcept;
-
-  ~KeysReceiver() = delete;
-
-private:
-  friend ::rust::layout;
-  struct layout {
-    static ::std::size_t size() noexcept;
-    static ::std::size_t align() noexcept;
-  };
-};
-#endif // CXXBRIDGE1_STRUCT_KeysReceiver
-
-#ifndef CXXBRIDGE1_STRUCT_KeysPoll
-#define CXXBRIDGE1_STRUCT_KeysPoll
-// Poll result for keys module notifications.
-struct KeysPoll final : public ::rust::Opaque {
-  bool is_some() const noexcept;
-  ::KeyEvent get_event() const noexcept;
-  ~KeysPoll() = delete;
-
-private:
-  friend ::rust::layout;
-  struct layout {
-    static ::std::size_t size() noexcept;
-    static ::std::size_t align() noexcept;
-  };
-};
-#endif // CXXBRIDGE1_STRUCT_KeysPoll
 
 #ifndef CXXBRIDGE1_STRUCT_HotMaterial
 #define CXXBRIDGE1_STRUCT_HotMaterial
@@ -2417,10 +2274,17 @@ private:
 
 #ifndef CXXBRIDGE1_STRUCT_CameraHandle
 #define CXXBRIDGE1_STRUCT_CameraHandle
-// A camera opened by `camera_open`, installed by `KeysModule::camera_install`.
+// A running camera, opened by `camera_open`. Dropping it stops the capture.
 struct CameraHandle final : public ::rust::Opaque {
   bool is_ok() const noexcept;
   ::rust::String get_error() const noexcept;
+
+  // The latest frame, is_ok false until the first one is captured.
+  ::CameraFrameResult frame() const noexcept;
+
+  // Why the capture stopped on its own, empty while it runs.
+  ::rust::String failure() const noexcept;
+
   ~CameraHandle() = delete;
 
 private:
@@ -2613,17 +2477,11 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 // fields are copied. Cheap; safe to call from the GUI thread.
 ::SignResult usb_merge_signed(::rust::Str original_v2_hex, ::rust::Str signed_v0_base64) noexcept;
 
-// Builds the signing QR request `qr_reserve_sign` reserved. Touches no
-// `KeysModule` state: the one QR builder meant to run off the GUI thread,
-// inside a `QThread::create` lambda.
-::rust::Box<::QrRequest> qr_build_sign(::std::uint64_t req_id, ::rust::Vec<::rust::String> descriptors, ::rust::Str psbt_v2_hex, ::std::uint32_t part_bytes) noexcept;
+::CameraListResult camera_list() noexcept;
 
-// Opens camera `index` on a fresh channel, touching no `KeysModule` state.
-// Only blocks briefly to spawn the capture thread: the device itself opens
-// asynchronously inside `capture_loop`, with success or failure reported
-// later over the channel as a `CameraMessage`. Still call from a QThread,
-// never from the GUI thread, for consistency with the other worker
-// functions.
+// Spawns the capture thread for camera `index`; the device opens inside it,
+// and a failure there shows up later through `failure()`. Call from a
+// worker thread, never the GUI thread.
 ::rust::Box<::CameraHandle> camera_open(::std::uint32_t index) noexcept;
 
 // Create a new SyncEstimator with default EMA alpha.

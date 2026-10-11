@@ -1,9 +1,5 @@
 #pragma once
 
-#include <QStringList>
-
-#include "CameraViewport.h"
-
 #include <Qontrol>
 
 namespace catalog {
@@ -11,31 +7,36 @@ class ComboBox;
 class Stepper;
 } // namespace catalog
 
+namespace qr {
+class QrCamera;
+class QrCameraDisplay;
+class QrCameraEngine;
+} // namespace qr
+
 namespace keys::flow {
 
-// The one small modal allowed over a flow: picks the camera and the preview contrast,
-// applied at once while the scan keeps running behind it, with the camera's picture
-// so the change is seen here. The scan step feeds it the frames and states it shows.
+// The one small modal allowed over a flow: picks the camera and the scan contrast,
+// applied at once while the scan keeps running behind it, with the frames the scan
+// reads so the change is seen here.
 class CameraSettings final : public qontrol::Modal {
     Q_OBJECT
 
 public:
-    CameraSettings(const QStringList &cameras, int camera, int contrast,
-                   CameraViewport::State state);
-    void setState(CameraViewport::State state);
-    void setFrame(const QImage &frame);
+    // Non-owning: both belong to the scan step this opens over.
+    CameraSettings(qr::QrCamera *camera, qr::QrCameraEngine *engine);
 
-signals:
-    void cameraPicked(int camera);
-    void contrastPicked(int contrast);
+public slots:
+    void onContrastPicked(int contrast);
 
 protected:
-    void init(const QStringList &cameras, int camera, int contrast);
+    void init();
     void doConnect();
     void view();
 
 private:
-    CameraViewport *m_viewport = nullptr;
+    qr::QrCamera *m_camera = nullptr;
+    qr::QrCameraEngine *m_engine = nullptr;
+    qr::QrCameraDisplay *m_display = nullptr;
     catalog::ComboBox *m_camera_combo = nullptr;
     catalog::Stepper *m_contrast_stepper = nullptr;
 };

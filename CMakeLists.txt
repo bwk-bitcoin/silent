@@ -105,8 +105,8 @@ set(SILENT_APP_SOURCES
     src/modules/keys/KeysModule.cpp
     src/modules/keys/KeysTab.h
     src/modules/keys/KeysTab.cpp
-    src/modules/keys/QrRoute.h
-    src/modules/keys/QrRoute.cpp
+    src/modules/keys/BwkQrEngine.h
+    src/modules/keys/BwkQrEngine.cpp
     src/modules/keys/DeviceName.h
     src/modules/keys/DeviceName.cpp
     src/modules/keys/KeysView.h
@@ -115,8 +115,6 @@ set(SILENT_APP_SOURCES
     src/modules/keys/flow/FlowCopy.cpp
     src/modules/keys/flow/QrDisplayStep.h
     src/modules/keys/flow/QrDisplayStep.cpp
-    src/modules/keys/flow/CameraViewport.h
-    src/modules/keys/flow/CameraViewport.cpp
     src/modules/keys/flow/CameraSettings.h
     src/modules/keys/flow/CameraSettings.cpp
     src/modules/keys/flow/CameraStep.h
@@ -240,6 +238,23 @@ set(SILENT_APP_SOURCES
     src/catalog/SelectRow.cpp
     src/catalog/inputs/Stepper.h
     src/catalog/inputs/Stepper.cpp
+    src/qr/QrTypes.h
+    src/qr/QrEngine.h
+    src/qr/QrEngine.cpp
+    src/qr/QrDisplayEngine.h
+    src/qr/QrDisplayEngine.cpp
+    src/qr/QrDisplay.h
+    src/qr/QrDisplay.cpp
+    src/qr/QrCamera.h
+    src/qr/QrCamera.cpp
+    src/qr/QrCameraEngine.h
+    src/qr/QrCameraEngine.cpp
+    src/qr/QrCameraDisplay.h
+    src/qr/QrCameraDisplay.cpp
+    src/qr/bbqr/BbqrDisplayEngine.h
+    src/qr/bbqr/BbqrDisplayEngine.cpp
+    src/qr/bbqr/BbqrCameraEngine.h
+    src/qr/bbqr/BbqrCameraEngine.cpp
     src/catalog/feedback/MessageModal.h
     src/catalog/feedback/MessageModal.cpp
     src/catalog/feedback/ModalStatus.h

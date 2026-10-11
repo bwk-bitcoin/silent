@@ -1,19 +1,11 @@
 #pragma once
 
-#include <cstdint>
-
-#include <QList>
 #include <QPointer>
 #include <QString>
-#include <QStringList>
 #include <QWidget>
 
-#include <interfaces/types.h>
-#include <silent.h>
-
-#include "CameraViewport.h"
-
-class QTimer;
+#include "qr/QrCamera.h"
+#include "qr/QrTypes.h"
 
 namespace catalog {
 class Button;
@@ -23,77 +15,56 @@ class Notice;
 class ScanProgress;
 } // namespace catalog
 
-namespace keys {
-class KeysModule;
-} // namespace keys
+namespace qr {
+class QrCameraDisplay;
+class QrCameraEngine;
+} // namespace qr
 
 namespace keys::flow {
 
 class CameraSettings;
 
-// Reads an animated QR answer back off a device's screen. Rust owns capture,
-// decoding and reassembly; this step picks the camera, paints the preview, counts
-// the parts and shows why a scanned code was refused. The decoded answer arrives on
-// the module's event channel, not here.
+// Reads an animated QR answer back off a device's screen: a camera's frames go through
+// the scan engine, which shows them here and hands the payloads it joins to whoever
+// connects to engine(). Shows the camera's state, the parts counted, and why a scanned
+// answer was refused.
 class CameraStep : public QWidget {
     Q_OBJECT
 
 public:
-    static constexpr int PREVIEW_INTERVAL_MS = 33;
-
-    explicit CameraStep(KeysModule *module, QWidget *parent = nullptr);
-    ~CameraStep() override;
+    explicit CameraStep(QWidget *parent = nullptr);
     void setHint(const QString &hint);
     // Opens the camera picked last, from a clean scan.
     void start();
     void stop();
-    void showScanError(QrErrorKind kind, const QString &message);
+    void showScanError(qr::QrError kind, const QString &message);
+    [[nodiscard]] auto engine() const -> qr::QrCameraEngine *;
     [[nodiscard]] auto actions() const -> catalog::ModalActions *;
 
 signals:
     void backClicked();
 
 public slots:
-    void onPreviewTick();
-    void onCameraOpened(ReqId req_id, bool is_ok, const QString &error);
+    void onCameraState(qr::QrCamera::State state);
+    void onProgress(int seen, int total);
     void onSettingsClicked();
-    void onCameraPicked(int camera);
-    void onContrastPicked(int contrast);
     void onScanAgainClicked();
 
 protected:
     void init();
     void doConnect();
     void view();
-    void openCamera(int camera);
-    // The preview's state, on the step and in Camera Settings while it is open.
-    void setViewportState(CameraViewport::State state);
-    void rebuildContrastTable();
-    [[nodiscard]] auto previewImage(const CameraFrameResult &frame) const -> QImage;
 
 private:
-    // Non-owning: the keys module outlives every flow it opens.
-    KeysModule *m_module = nullptr;
+    qr::QrCamera *m_camera = nullptr;
+    qr::QrCameraEngine *m_engine = nullptr;
     catalog::Label *m_hint = nullptr;
-    CameraViewport *m_viewport = nullptr;
-    CameraViewport::State m_viewport_state = CameraViewport::State::Starting;
-    // Camera Settings while it is open, fed the same frames as the step.
-    QPointer<CameraSettings> m_open_settings;
+    qr::QrCameraDisplay *m_display = nullptr;
     catalog::ScanProgress *m_progress = nullptr;
     catalog::Notice *m_scan_error = nullptr;
     catalog::Button *m_scan_again = nullptr;
     catalog::Button *m_settings = nullptr;
     catalog::ModalActions *m_actions = nullptr;
-    QTimer *m_preview_timer = nullptr;
-    QStringList m_camera_names;
-    QList<std::uint32_t> m_camera_indexes;
-    int m_camera = 0;
-    int m_contrast;
-    // Per channel value after the preview contrast, rebuilt only when it changes.
-    QList<std::uint8_t> m_contrast_table;
-    // The camera request openCamera() made last; an older answer is ignored.
-    ReqId m_req_id = 0;
-    std::uint64_t m_last_seq = 0;
 };
 
 } // namespace keys::flow

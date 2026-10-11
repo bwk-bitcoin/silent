@@ -7,6 +7,7 @@
 #include "modules/hwi/HwiPlugin.h"
 #include "modules/keys/KeysModule.h"
 #include "modules/sp/SpPlugin.h"
+#include "qr/QrTypes.h"
 #include "resources/font/noto_sans.h"
 #include "resources/font/noto_sans_bold.h"
 #include "resources/font/noto_sans_mono.h"
@@ -52,7 +53,8 @@ auto main(int argc, char *argv[]) -> int {
     qRegisterMetaType<Notification>();
     qRegisterMetaType<HwiEvent>();
     qRegisterMetaType<HwiDevice>();
-    qRegisterMetaType<KeyEvent>();
+    qRegisterMetaType<qr::QrRender>();
+    qRegisterMetaType<qr::QrScan>();
     qRegisterMetaType<MnemonicResult>();
     qRegisterMetaType<KeyInfoResult>();
     qRegisterMetaType<std::optional<ReqId>>();

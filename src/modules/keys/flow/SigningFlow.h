@@ -11,6 +11,7 @@
 
 #include "FlowCopy.h"
 #include "catalog/containers/Modal.h"
+#include "qr/QrTypes.h"
 
 #include <interfaces/types.h>
 #include <silent.h>
@@ -36,6 +37,10 @@ class Column;
 namespace keys {
 class KeysModule;
 } // namespace keys
+
+namespace qr {
+class QrEngine;
+} // namespace qr
 
 namespace keys::flow {
 
@@ -149,8 +154,7 @@ public slots:
     void onQrSigned(const QString &psbt_v2_hex);
     void onQrVerified(bool matched);
     void onQrDescriptor(const QString &descriptor);
-    void onQrScanFailed(QrErrorKind kind, const QString &message);
-    void onQrFailed(const QString &message);
+    void onQrError(qr::QrError kind, const QString &message);
 
 protected:
     void init();
@@ -293,6 +297,7 @@ private:
 
     catalog::ModalStatus *m_busy_step = nullptr;
 
+    qr::QrEngine *m_qr_engine = nullptr;
     QrDisplayStep *m_qr = nullptr;
     CameraStep *m_camera = nullptr;
 

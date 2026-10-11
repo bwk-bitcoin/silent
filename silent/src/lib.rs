@@ -5,6 +5,7 @@
 pub mod account;
 pub mod app_state;
 pub mod bbqr;
+pub mod camera;
 pub mod config;
 pub mod hwi;
 pub mod hwi_config;
@@ -118,26 +119,13 @@ mod ffi {
         SpDescriptor,
     }
 
-    /// Kind of notification coming from the keys module. `ScanProgress` is a
-    /// push-only signal to go read the current values from the polled
-    /// `camera_progress()` accessor; it carries no progress data itself.
-    #[derive(Debug, Clone, Copy)]
-    pub enum KeyEventFlag {
-        QrDecoded,
-        ScanProgress,
-        CameraStopped,
-        Error,
-    }
-
-    /// Discriminant for a `KeyEvent::Error`, distinguishing the two QR response
-    /// validation failures and a camera that failed from every other camera-sourced
-    /// error, which only ever surfaces `error` as free text.
+    /// Why a QR response was refused: the two failures the UI words on their own,
+    /// and every other one, which only surfaces as free text.
     #[derive(Debug, Clone, Copy)]
     pub enum QrErrorKind {
         Other,
         RequestIdMismatch,
         SignaturesUnsupported,
-        CameraFailed,
     }
 
     // ===== Shared Structs =====
@@ -450,15 +438,13 @@ mod ffi {
         pub error: String,
     }
 
-    /// Result of `qr_reserve_sign`. `id` is meaningless when `is_ok` is false: unlike
-    /// the plain `u64` this replaces, failure never overlaps a real reserved id (`0`
-    /// is reserved for "no outstanding request" and is never issued by `reserve_id`).
+    /// A QR protocol message, as the bytes a transport frames.
     #[derive(Debug, Clone)]
-    pub struct QrReserveResult {
+    pub struct QrMessageResult {
         pub is_ok: bool,
         /// Error message (empty if is_ok is true).
         pub error: String,
-        pub id: u64,
+        pub payload: Vec<u8>,
     }
 
     /// Result of a keys module operation carrying a `KeyInfo`.
@@ -566,26 +552,12 @@ mod ffi {
         pub psbt_base64: String,
     }
 
-    /// A notification from the keys module. `req_id` is the QR request id the event
-    /// answers, and 0 for an unsolicited push.
-    #[derive(Debug, Clone)]
-    pub struct KeyEvent {
-        pub flag: KeyEventFlag,
-        pub req_id: u64,
-        pub fingerprint: String,
-        pub payload: String,
-        pub error: String,
-        /// Only meaningful when `flag` is `Error`; `Other` otherwise.
-        pub error_kind: QrErrorKind,
-        pub ok: bool,
-    }
-
     #[derive(Debug, Clone)]
     pub struct CameraListResult {
         pub is_ok: bool,
         pub error: String,
         pub names: Vec<String>,
-        /// Parallel to `names`: the index to pass to camera_start.
+        /// Parallel to `names`: the index to pass to camera_open.
         pub indexes: Vec<u32>,
     }
 
@@ -598,15 +570,6 @@ mod ffi {
         pub width: u32,
         pub height: u32,
         /// Monotonic. C++ repaints only when it changes.
-        pub seq: u64,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct ScanProgress {
-        pub is_ok: bool,
-        pub error: String,
-        pub seen: u32,
-        pub total: u32,
         pub seq: u64,
     }
 
@@ -652,17 +615,8 @@ mod ffi {
         /// cache and registered descriptors.
         type KeysModule;
 
-        /// One encoded QR request the C++ modal pulls animation frames from.
-        type QrRequest;
-
         /// A decoded and validated QR response.
         type QrResponse;
-
-        /// Notification receiver for the keys module's camera/QR event channel.
-        type KeysReceiver;
-
-        /// Poll result for keys module notifications.
-        type KeysPoll;
 
         /// GUI-thread copy of one key's record and the manager's network, for the
         /// free hot-key worker functions to sign/reveal/derive from off-thread.
@@ -671,7 +625,7 @@ mod ffi {
         /// A mnemonic sealed by `hot_seal`, committed by `KeysModule::commit_hot_key`.
         type SealedHotKey;
 
-        /// A camera opened by `camera_open`, installed by `KeysModule::camera_install`.
+        /// A running camera, opened by `camera_open`. Dropping it stops the capture.
         type CameraHandle;
 
         /// The BBQR frames of one payload.
@@ -1055,12 +1009,6 @@ mod ffi {
         /// Callers MUST check `is_ok()` before trusting this value.
         fn network(self: &KeysModule) -> Network;
 
-        /// Stop the camera for good and end the notification stream.
-        fn shutdown(self: &mut KeysModule);
-
-        /// Take the receiver for a dedicated notification thread. Call once.
-        fn take_receiver(self: &mut KeysModule) -> Box<KeysReceiver>;
-
         fn keys(self: &KeysModule) -> Vec<KeyInfo>;
         fn key(self: &KeysModule, fingerprint: &str) -> KeyInfoResult;
         fn add_key(self: &mut KeysModule, fingerprint: &str, alias: &str) -> KeyInfoResult;
@@ -1181,57 +1129,34 @@ mod ffi {
     // ===== Keys QR Methods =====
 
     extern "Rust" {
-        fn qr_request_get_xpubs(
-            self: &mut KeysModule,
-            paths: Vec<String>,
-            part_bytes: u32,
-        ) -> Box<QrRequest>;
+        // Each builder makes its request the outstanding one a response is checked
+        // against.
+        fn qr_request_get_xpubs(self: &mut KeysModule, paths: Vec<String>) -> QrMessageResult;
         fn qr_request_register_descriptor(
             self: &mut KeysModule,
             descriptor: &str,
-            part_bytes: u32,
-        ) -> Box<QrRequest>;
+        ) -> QrMessageResult;
         fn qr_request_verify_address(
             self: &mut KeysModule,
             descriptor: &str,
             path: &str,
             address: &str,
-            part_bytes: u32,
-        ) -> Box<QrRequest>;
-        /// Reserves the id a signing QR request will be built under. The build itself
-        /// runs on a background thread through `qr_build_sign`, committed back with
-        /// `qr_commit_request` once done.
-        fn qr_reserve_sign(self: &mut KeysModule) -> QrReserveResult;
-        /// Builds the signing QR request `qr_reserve_sign` reserved. Touches no
-        /// `KeysModule` state: the one QR builder meant to run off the GUI thread,
-        /// inside a `QThread::create` lambda.
-        fn qr_build_sign(
-            req_id: u64,
+        ) -> QrMessageResult;
+        fn qr_request_sign(
+            self: &mut KeysModule,
             descriptors: Vec<String>,
             psbt_v2_hex: &str,
-            part_bytes: u32,
-        ) -> Box<QrRequest>;
-        /// Commits a request `qr_build_sign` built back into the session, on the GUI
-        /// thread. Errors if a newer id has been reserved since (a superseded density
-        /// rebuild) instead of silently dropping it.
-        fn qr_commit_request(self: &mut KeysModule, request: &QrRequest) -> KeyOpResult;
-        fn qr_request_get_sp_descriptor(self: &mut KeysModule, part_bytes: u32) -> Box<QrRequest>;
+        ) -> QrMessageResult;
+        fn qr_request_get_sp_descriptor(self: &mut KeysModule) -> QrMessageResult;
 
-        fn is_ok(self: &QrRequest) -> bool;
-        fn get_error(self: &QrRequest) -> String;
-        fn req_id(self: &QrRequest) -> u64;
-        fn frame_count(self: &QrRequest) -> u32;
-        /// Frame `index` of the animated request. An index past the end answers with
-        /// is_ok false, never with frame 0.
-        fn frame(self: &QrRequest, index: u32) -> QrImageResult;
-        /// The whole encoded request, base64, for the paste box.
-        fn base64(self: &QrRequest) -> String;
-
-        /// Validates a pasted payload against the outstanding request id.
-        fn qr_decode_response(self: &mut KeysModule, payload: &str) -> Box<QrResponse>;
+        /// Decodes a response's bytes and validates them against the outstanding
+        /// request.
+        fn qr_decode_response(self: &mut KeysModule, payload: &[u8]) -> Box<QrResponse>;
 
         fn is_ok(self: &QrResponse) -> bool;
         fn get_error(self: &QrResponse) -> String;
+        /// Only meaningful when !is_ok().
+        fn error_kind(self: &QrResponse) -> QrErrorKind;
         /// Only meaningful when is_ok().
         fn kind(self: &QrResponse) -> QrResponseKind;
         /// The signer's fingerprint when kind() is Xpubs or SpDescriptor, else empty.
@@ -1247,38 +1172,20 @@ mod ffi {
         fn registered(self: &QrResponse) -> bool;
     }
 
-    // ===== Keys Camera Methods =====
+    // ===== Camera Methods =====
 
     extern "Rust" {
-        fn camera_list(self: &KeysModule) -> CameraListResult;
-        /// Opens camera `index` on a fresh channel, touching no `KeysModule` state.
-        /// Only blocks briefly to spawn the capture thread: the device itself opens
-        /// asynchronously inside `capture_loop`, with success or failure reported
-        /// later over the channel as a `CameraMessage`. Still call from a QThread,
-        /// never from the GUI thread, for consistency with the other worker
-        /// functions.
+        fn camera_list() -> CameraListResult;
+        /// Spawns the capture thread for camera `index`; the device opens inside it,
+        /// and a failure there shows up later through `failure()`. Call from a
+        /// worker thread, never the GUI thread.
         fn camera_open(index: u32) -> Box<CameraHandle>;
         fn is_ok(self: &CameraHandle) -> bool;
         fn get_error(self: &CameraHandle) -> String;
-        /// Stops the current camera, if any, and stores the one `camera_open`
-        /// built.
-        fn camera_install(self: &mut KeysModule, handle: Box<CameraHandle>) -> KeyOpResult;
-        /// Idempotent.
-        fn camera_stop(self: &mut KeysModule);
-        fn camera_frame(self: &KeysModule) -> CameraFrameResult;
-        fn camera_progress(self: &KeysModule) -> ScanProgress;
-        /// Drops the partial BBQR reassembly, for a rescan.
-        fn camera_reset(self: &mut KeysModule);
-    }
-
-    // ===== KeysReceiver / KeysPoll Methods =====
-
-    extern "Rust" {
-        /// Blocking receive. Returns a poll with is_some()=false once shut down.
-        fn recv(self: &KeysReceiver) -> Box<KeysPoll>;
-
-        fn is_some(self: &KeysPoll) -> bool;
-        fn get_event(self: &KeysPoll) -> KeyEvent;
+        /// The latest frame, is_ok false until the first one is captured.
+        fn frame(self: &CameraHandle) -> CameraFrameResult;
+        /// Why the capture stopped on its own, empty while it runs.
+        fn failure(self: &CameraHandle) -> String;
     }
 
     // ===== PsbtResult Methods =====
@@ -1735,14 +1642,14 @@ pub use app_state::{
     app_set_plugin_enabled,
 };
 pub use bbqr::{bbqr_frames, bbqr_scanner_new, BbqrFrames, BbqrScanner};
+pub use camera::{camera_list, camera_open, CameraHandle};
 pub use config::{config_from_file, delete_config, list_configs, new_config, set_datadir, Config};
 pub use ffi::{
     BackendInfo, CameraFrameResult, CameraListResult, FingerprintsResult, KeyDescriptor, KeyDevice,
-    KeyEvent, KeyEventFlag, KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind, KeyUnusableReason,
-    KeyXpub, LiveDevice, LogLevel, MnemonicResult, Network, Notification, NotificationFlag, Output,
-    PsbtFileResult, PsbtPayloadResult, PsbtValidation, QrResponseKind, RegtestDefaults,
-    ScanProgress, SignResult, SigningCandidate, SigningPlan, TransactionSimulation,
-    TransactionTemplate,
+    KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice,
+    LogLevel, MnemonicResult, Network, Notification, NotificationFlag, Output, PsbtFileResult,
+    PsbtPayloadResult, PsbtValidation, QrMessageResult, QrResponseKind, RegtestDefaults,
+    SignResult, SigningCandidate, SigningPlan, TransactionSimulation, TransactionTemplate,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{
@@ -1750,9 +1657,8 @@ pub use hwi_config::{
     NoiseConfigData, PersistedBitboxNoiseConfig,
 };
 pub use keys::bridge::{
-    camera_open, hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, new_keys_module, qr_build_sign,
-    usb_merge_signed, usb_sign_payload, CameraHandle, HotMaterial, KeysModule, KeysPoll,
-    KeysReceiver, QrRequest, QrResponse, SealedHotKey,
+    hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, new_keys_module, usb_merge_signed,
+    usb_sign_payload, HotMaterial, KeysModule, QrResponse, SealedHotKey,
 };
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};
 

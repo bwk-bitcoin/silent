@@ -20,9 +20,11 @@
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/signer.h"
+#include "modules/keys/BwkQrEngine.h"
 #include "modules/keys/DeviceName.h"
 #include "modules/keys/KeysModule.h"
-#include "modules/keys/QrRoute.h"
+#include "qr/QrCameraEngine.h"
+#include "qr/QrDisplayEngine.h"
 #include "theme/Icon.h"
 #include "theme/Palette.h"
 
@@ -828,22 +830,27 @@ void SigningFlow::loadSd() {
 // ===== QR code and camera views =====
 
 void SigningFlow::initQr() {
+    m_qr_engine = new BwkQrEngine(m_module, this);
     m_qr = new QrDisplayStep;
     m_qr->setHint(m_copy.qrHint);
-    m_camera = new CameraStep(m_module);
+    m_camera = new CameraStep;
     m_camera->setHint(m_copy.scanHint);
 }
 
 void SigningFlow::connectQr() {
     connect(m_qr, &QrDisplayStep::nextClicked, this, &SigningFlow::onNextClicked, qontrol::UNIQUE);
     connect(m_camera, &CameraStep::backClicked, this, &SigningFlow::onBackClicked, qontrol::UNIQUE);
-    auto *qrRoute = m_module->qrRoute();
-    connect(qrRoute, &QrRoute::psbtSigned, this, &SigningFlow::onQrSigned, qontrol::UNIQUE);
-    connect(qrRoute, &QrRoute::addressVerified, this, &SigningFlow::onQrVerified, qontrol::UNIQUE);
-    connect(qrRoute, &QrRoute::descriptorDecoded, this, &SigningFlow::onQrDescriptor,
+    connect(m_qr_engine, &qr::QrEngine::request, m_qr->engine(), &qr::QrDisplayEngine::request,
             qontrol::UNIQUE);
-    connect(qrRoute, &QrRoute::scanFailed, this, &SigningFlow::onQrScanFailed, qontrol::UNIQUE);
-    connect(qrRoute, &QrRoute::failed, this, &SigningFlow::onQrFailed, qontrol::UNIQUE);
+    connect(m_camera->engine(), &qr::QrCameraEngine::response, m_qr_engine, &qr::QrEngine::response,
+            qontrol::UNIQUE);
+    connect(m_qr_engine, &qr::QrEngine::signedPsbt, this, &SigningFlow::onQrSigned,
+            qontrol::UNIQUE);
+    connect(m_qr_engine, &qr::QrEngine::addressVerified, this, &SigningFlow::onQrVerified,
+            qontrol::UNIQUE);
+    connect(m_qr_engine, &qr::QrEngine::spDescriptor, this, &SigningFlow::onQrDescriptor,
+            qontrol::UNIQUE);
+    connect(m_qr_engine, &qr::QrEngine::error, this, &SigningFlow::onQrError, qontrol::UNIQUE);
 }
 
 void SigningFlow::showQrDisplay() {
@@ -873,16 +880,15 @@ void SigningFlow::hideQr() {
 
 void SigningFlow::startQr() {
     showQrDisplay();
-    auto *qrRoute = m_module->qrRoute();
     switch (m_request.context) {
     case Context::Sign:
-        qrRoute->startSign(m_qr, m_psbt, m_request.descriptor);
+        m_qr_engine->sign(m_psbt, m_request.descriptor);
         return;
     case Context::Verify:
-        qrRoute->startVerify(m_qr, m_request.descriptor, m_request.path, m_request.address);
+        m_qr_engine->verifyAddress(m_request.descriptor, m_request.path, m_request.address);
         return;
     case Context::Fetch:
-        qrRoute->startSpDescriptor(m_qr);
+        m_qr_engine->getSpDescriptor();
         return;
     }
 }
@@ -984,7 +990,7 @@ void SigningFlow::stopRoute() {
     releaseDevice();
     m_hot_req = 0;
     m_sd_req = 0;
-    m_module->qrRoute()->stop();
+    m_qr_engine->stop();
     m_qr->stop();
     m_camera->stop();
 }
@@ -1238,12 +1244,13 @@ void SigningFlow::onQrDescriptor(const QString &descriptor) {
     deliverDescriptor(descriptor);
 }
 
-void SigningFlow::onQrScanFailed(QrErrorKind kind, const QString &message) {
-    m_camera->showScanError(kind, message);
-    adjustSize();
-}
-
-void SigningFlow::onQrFailed(const QString &message) {
+void SigningFlow::onQrError(qr::QrError kind, const QString &message) {
+    if (kind != qr::QrError::RequestFailed) {
+        // A refused answer: the scan goes on.
+        m_camera->showScanError(kind, message);
+        adjustSize();
+        return;
+    }
     m_camera->stop();
     if (m_request.context == Context::Verify) {
         qWarning() << "keys: qr request:" << message;

@@ -1,4 +1,4 @@
-#include "CameraViewport.h"
+#include "qr/QrCameraDisplay.h"
 
 #include "catalog/display/Label.h"
 #include "catalog/feedback/Spinner.h"
@@ -13,7 +13,7 @@
 
 #include <Qontrol>
 
-namespace keys::flow {
+namespace qr {
 
 using catalog::Label;
 using catalog::LabelRole;
@@ -26,7 +26,7 @@ constexpr int ASPECT_HEIGHT = 3;
 
 } // namespace
 
-CameraViewport::CameraViewport(QWidget *parent) : QWidget(parent) {
+QrCameraDisplay::QrCameraDisplay(QWidget *parent) : QWidget(parent) {
     QSizePolicy policy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     policy.setHeightForWidth(true);
     setSizePolicy(policy);
@@ -55,10 +55,11 @@ CameraViewport::CameraViewport(QWidget *parent) : QWidget(parent) {
     // the overlay text instead of its 4:3 ratio.
     m_overlay->setParent(this);
 
-    setState(State::Starting);
+    setState(QrCamera::State::Starting);
 }
 
-void CameraViewport::setState(State state) {
+void QrCameraDisplay::setState(QrCamera::State state) {
+    using State = QrCamera::State;
     IconFn glyph = nullptr;
     QString title;
     QString body;
@@ -100,25 +101,25 @@ void CameraViewport::setState(State state) {
     update();
 }
 
-void CameraViewport::setFrame(const QImage &frame) {
-    m_frame = frame;
+void QrCameraDisplay::frame(const CameraFrame &frame) {
+    m_frame = frame.image;
     update();
 }
 
-auto CameraViewport::hasHeightForWidth() const -> bool {
+auto QrCameraDisplay::hasHeightForWidth() const -> bool {
     return true;
 }
 
-auto CameraViewport::heightForWidth(int width) const -> int {
+auto QrCameraDisplay::heightForWidth(int width) const -> int {
     return width * ASPECT_HEIGHT / ASPECT_WIDTH;
 }
 
-void CameraViewport::resizeEvent(QResizeEvent *event) {
+void QrCameraDisplay::resizeEvent(QResizeEvent *event) {
     m_overlay->setGeometry(rect());
     QWidget::resizeEvent(event);
 }
 
-void CameraViewport::paintEvent([[maybe_unused]] QPaintEvent *event) {
+void QrCameraDisplay::paintEvent([[maybe_unused]] QPaintEvent *event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -143,4 +144,4 @@ void CameraViewport::paintEvent([[maybe_unused]] QPaintEvent *event) {
     painter.drawPath(outline);
 }
 
-} // namespace keys::flow
+} // namespace qr

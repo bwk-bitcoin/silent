@@ -1,54 +1,52 @@
 #include "CameraSettings.h"
 
-#include "QrDisplayStep.h"
-
 #include "catalog/form/FieldGroup.h"
 #include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Stepper.h"
 #include "i18n/Tr.h"
+#include "qr/QrCamera.h"
+#include "qr/QrCameraDisplay.h"
+#include "qr/QrCameraEngine.h"
 #include "theme/Palette.h"
 
 #include <common.h>
 
 namespace keys::flow {
 
-CameraSettings::CameraSettings(const QStringList &cameras, int camera, int contrast,
-                               CameraViewport::State state) {
+CameraSettings::CameraSettings(qr::QrCamera *camera, qr::QrCameraEngine *engine)
+    : m_camera(camera),
+      m_engine(engine) {
     setWindowTitle(TR("flow-camera-settings-title"));
     setFixedWidth(resolve(ModalWidth::XS));
-    init(cameras, camera, contrast);
+    init();
     doConnect();
     view();
-    setState(state);
 }
 
-void CameraSettings::setState(CameraViewport::State state) {
-    m_viewport->setState(state);
-}
-
-void CameraSettings::setFrame(const QImage &frame) {
-    m_viewport->setFrame(frame);
-}
-
-void CameraSettings::init(const QStringList &cameras, int camera, int contrast) {
-    m_viewport = new CameraViewport;
+void CameraSettings::init() {
+    m_display = new qr::QrCameraDisplay;
+    m_display->setState(m_camera->state());
 
     m_camera_combo = new catalog::ComboBox;
-    m_camera_combo->addItems(cameras);
-    m_camera_combo->setCurrentIndex(camera);
-    m_camera_combo->setEnabled(!cameras.isEmpty());
+    m_camera_combo->addItems(m_camera->cameras());
+    m_camera_combo->setCurrentIndex(m_camera->camera());
+    m_camera_combo->setEnabled(!m_camera->cameras().isEmpty());
     m_camera_combo->setFixedWidth(metric::CAMERA_SOURCE_WIDTH);
 
     m_contrast_stepper = new catalog::Stepper;
-    m_contrast_stepper->setRange(QrDisplayStep::MIN_LEVEL, QrDisplayStep::MAX_LEVEL);
-    m_contrast_stepper->setValue(contrast);
+    m_contrast_stepper->setRange(qr::MIN_LEVEL, qr::MAX_LEVEL);
+    m_contrast_stepper->setValue(m_engine->settings().contrast);
 }
 
 void CameraSettings::doConnect() {
-    connect(m_camera_combo, &QComboBox::currentIndexChanged, this, &CameraSettings::cameraPicked,
+    connect(m_engine, &qr::QrCameraEngine::broadcast, m_display, &qr::QrCameraDisplay::frame,
+            qontrol::UNIQUE);
+    connect(m_camera, &qr::QrCamera::stateChanged, m_display, &qr::QrCameraDisplay::setState,
+            qontrol::UNIQUE);
+    connect(m_camera_combo, &QComboBox::currentIndexChanged, m_camera, &qr::QrCamera::open,
             qontrol::UNIQUE);
     connect(m_contrast_stepper, &catalog::Stepper::valueChanged, this,
-            &CameraSettings::contrastPicked, qontrol::UNIQUE);
+            &CameraSettings::onContrastPicked, qontrol::UNIQUE);
 }
 
 void CameraSettings::view() {
@@ -56,12 +54,16 @@ void CameraSettings::view() {
                        ->addField(TR("flow-camera-source"), m_camera_combo)
                        ->addField(TR("flow-camera-contrast"), m_contrast_stepper);
     // As wide as the fields under it, as the design's preview takes their width.
-    m_viewport->setFixedWidth(fields->sizeHint().width());
+    m_display->setFixedWidth(fields->sizeHint().width());
     setMainWidget((new qontrol::Column)
                       ->margins(resolve(Padding::L))
                       ->spacing(resolve(Spacing::M))
-                      ->pushAligned(m_viewport, Qt::AlignHCenter)
+                      ->pushAligned(m_display, Qt::AlignHCenter)
                       ->pushAligned(fields, Qt::AlignHCenter));
+}
+
+void CameraSettings::onContrastPicked(int contrast) {
+    m_engine->setSettings(qr::QrCameraSettings{.contrast = contrast});
 }
 
 } // namespace keys::flow

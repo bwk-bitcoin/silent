@@ -33,7 +33,6 @@ using RustKeys = ::KeysModule;
 
 class KeysModule;
 class KeysTab;
-class QrRoute;
 
 // An xpub and the path it was derived at, as a key caches it.
 struct PathXpub {
@@ -136,7 +135,6 @@ public:
     // The hwi module, once one has been seen on the bus. Null before that.
     [[nodiscard]] HwiModule *hwi() const;
     [[nodiscard]] KeysBus *bus() const;
-    [[nodiscard]] auto qrRoute() const -> QrRoute *;
     ReqId nextReqId();
     // The Keys tab widget. Built on first call and reused afterwards; a QPointer
     // leaves this null again if the host that owns the widget deletes it.
@@ -170,18 +168,10 @@ public:
     void fetchHotSpDescriptor(ReqId req_id, const QString &fingerprint, const QString &password);
     void saveSdPsbt(ReqId req_id, const QString &path, const QString &psbt_v2_hex);
     void loadSdPsbt(ReqId req_id, const QString &path);
-    // Stores `req_id` as the current camera request; onCameraOpenFinished() installs
-    // the opened handle only if it is still current by the time the worker answers,
-    // dropping (and thereby releasing) any other handle.
-    void openCamera(ReqId req_id, std::uint32_t index);
-    // Clears the current camera request and stops the installed camera, if any.
-    void cancelCamera();
 
     [[nodiscard]] static auto toQt(const rust::String &value) -> QString;
 
 signals:
-    // Emitted from the receiver thread, handled on the GUI thread.
-    void keyEventReceived(KeyEvent event);
     // The key records changed; the tab rebuilds on it.
     void keysChanged();
     // The live device set changed and the Rust handle already has it.
@@ -210,13 +200,8 @@ signals:
     // Emitted from the worker thread; queued to the GUI thread receivers.
     void sdSaved(ReqId req_id, bool is_ok, QString error);
     void sdLoaded(ReqId req_id, bool is_ok, QString psbt_hex, QString error);
-    // The opened camera's raw pointer, re-owned by onCameraOpenFinished(), which
-    // drops it instead of installing it if `req_id` is no longer current.
-    void cameraOpenFinished(ReqId req_id, CameraHandle *handle);
-    void cameraOpened(ReqId req_id, bool is_ok, QString error);
 
 private slots:
-    void onKeyEventReceived(const KeyEvent &event);
     void onInstanceRegistered(const QString &id);
     void onInstanceRemoved(const QString &id);
     void onDevicesChanged();
@@ -227,7 +212,6 @@ private slots:
                            bool wrong_password);
     void onHotSpDescriptorFinished(ReqId req_id, bool is_ok, QString descriptor, QString error,
                                    bool wrong_password);
-    void onCameraOpenFinished(ReqId req_id, CameraHandle *handle);
 
 protected:
     void createModule();
@@ -254,7 +238,6 @@ private:
     // Box's constness gates the pointee's constness through operator->(), so this is
     // mutable to let the const rust() accessor hand callers a mutable handle.
     mutable std::optional<rust::Box<RustKeys>> m_rust;
-    QThread *m_notif_thread = nullptr;
     std::unique_ptr<KeysBus> m_bus;
     HwiModule *m_hwi = nullptr;
     QPointer<KeysTab> m_tab;
@@ -267,15 +250,6 @@ private:
     // deleted with it. Reused while a fingerprint's chosen route stays the same;
     // replaced, never mutated, when it changes.
     QHash<QString, ISigner *> m_signers;
-    // Builds and reads back every QR exchange the signing flows run.
-    QrRoute *m_qr_route = nullptr;
-    // The req_id openCamera() started most recently; cancelCamera() clears it back
-    // to 0. onCameraOpenFinished() installs its handle only while this still
-    // matches, so a late answer after cancel/switch is dropped, not installed.
-    ReqId m_camera_req_id = 0;
-    // Whether camera_install() last succeeded, so cancelCamera() knows whether to
-    // call camera_stop().
-    bool m_camera_installed = false;
 };
 
 } // namespace keys

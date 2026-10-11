@@ -1,5 +1,5 @@
-//! The five signing-flow QR requests, their frame geometry, and every response
-//! refusal `QrSession` enforces.
+//! The five signing-flow QR requests, their trip through BBQR frames, and every
+//! response refusal `QrSession` enforces.
 //!
 //! None of these cases touch a key record, so no datadir override is needed here.
 
@@ -11,7 +11,7 @@ use bitcoin::{
     hashes::Hash,
     transaction,
 };
-use bwk_qr_protocol::{request, response, Message, MessageType, Request, RequestId, Response};
+use bwk_qr_protocol::{response, Message, MessageType, RequestId, Response};
 use bwk_sp::bwk_sign::{
     bwk_descriptor::descriptor::{wpkh, wpkh_path, DescriptorDerivator},
     hot_signer::HotSigner,
@@ -212,30 +212,26 @@ fn expect_refused(session: &mut QrSession, bytes: &[u8]) -> String {
 
 #[test]
 fn test_five_requests_round_trip() {
-    let mut session = QrSession::new().expect("create session");
+    let mut session = QrSession::new();
 
     let xpubs = session
-        .get_xpubs(
-            vec![DerivationPath::from_str("m/84'/1'/0'").expect("path")],
-            0,
-        )
+        .get_xpubs(vec![DerivationPath::from_str("m/84'/1'/0'").expect("path")])
         .expect("get_xpubs request");
     let register = session
-        .register_descriptor("wpkh(desc)", 0)
+        .register_descriptor("wpkh(desc)")
         .expect("register_descriptor request");
     let verify = session
         .verify_address(
             "wpkh(desc)",
             DerivationPath::from_str("m/0/0").expect("path"),
             "address".to_string(),
-            0,
         )
         .expect("verify_address request");
     let sign = session
-        .sign(&["wpkh(desc)".to_string()], &sign_psbt_bytes(), 0)
+        .sign(&["wpkh(desc)".to_string()], &sign_psbt_bytes())
         .expect("sign request");
     let sp_descriptor = session
-        .get_sp_descriptor(0)
+        .get_sp_descriptor()
         .expect("get_sp_descriptor request");
 
     let ids = [
@@ -286,35 +282,32 @@ fn test_five_requests_round_trip() {
     }
 }
 
-// ===== Case 10: a multi-part sign request's frame geometry =====
+// ===== Case 10: a multi-part sign request trips through BBQR frames =====
 
 #[test]
-fn test_multi_frame_sign_request_geometry() {
-    let mut session = QrSession::new().expect("create session");
+fn test_sign_request_round_trips_through_bbqr_frames() {
+    let mut session = QrSession::new();
     let request = session
-        .sign(&["wpkh(desc)".to_string()], &big_sign_psbt_bytes(), 0)
+        .sign(&["wpkh(desc)".to_string()], &big_sign_psbt_bytes())
         .expect("sign request");
 
+    let frames = silent::bbqr::frames(request.message(), 200).expect("frame the request");
     assert!(
-        request.frame_count() > 1,
+        frames.len() > 1,
         "expected the oversized psbt to split into multiple frames, got {}",
-        request.frame_count()
+        frames.len()
     );
-    for index in 0..request.frame_count() {
-        let image = request.frame(index).expect("frame within range");
-        assert!(
-            image.validate_len(),
-            "frame {index} has data.len() != width * height ({} != {} * {})",
-            image.data.len(),
-            image.width,
-            image.height
-        );
+    let mut scanner = silent::bbqr::Scanner::new().expect("create scanner");
+    let mut payloads = Vec::new();
+    for frame in &frames {
+        let rgb: Vec<u8> = frame.data.iter().flat_map(|&luma| [luma; 3]).collect();
+        let outcome = scanner.scan(&rgb, frame.width, frame.height);
+        payloads.extend(outcome.payloads);
     }
-
-    let out_of_range = request.frame_count();
-    assert!(
-        request.frame(out_of_range).is_err(),
-        "expected frame({out_of_range}) past the end to error"
+    assert_eq!(
+        payloads,
+        vec![request.message().to_vec()],
+        "the joined payload must be the request message"
     );
 }
 
@@ -322,9 +315,9 @@ fn test_multi_frame_sign_request_geometry() {
 
 #[test]
 fn test_request_id_mismatch_is_refused() {
-    let mut session = QrSession::new().expect("create session");
+    let mut session = QrSession::new();
     let request = session
-        .get_sp_descriptor(0)
+        .get_sp_descriptor()
         .expect("get_sp_descriptor request");
     let outstanding_hex = format!("{:02x}{:02x}", request.id().0[0], request.id().0[1]);
 
@@ -348,15 +341,12 @@ fn test_request_id_mismatch_is_refused() {
 
 #[test]
 fn test_bad_xpub_count_is_refused() {
-    let mut session = QrSession::new().expect("create session");
+    let mut session = QrSession::new();
     session
-        .get_xpubs(
-            vec![
-                DerivationPath::from_str("m/84'/1'/0'").expect("path"),
-                DerivationPath::from_str("m/84'/1'/1'").expect("path"),
-            ],
-            0,
-        )
+        .get_xpubs(vec![
+            DerivationPath::from_str("m/84'/1'/0'").expect("path"),
+            DerivationPath::from_str("m/84'/1'/1'").expect("path"),
+        ])
         .expect("get_xpubs request");
 
     let response = Response {
@@ -387,9 +377,9 @@ fn test_bad_xpub_count_is_refused() {
 
 #[test]
 fn test_garbage_signed_psbt_is_refused() {
-    let mut session = QrSession::new().expect("create session");
+    let mut session = QrSession::new();
     session
-        .sign(&["wpkh(desc)".to_string()], &sign_psbt_bytes(), 0)
+        .sign(&["wpkh(desc)".to_string()], &sign_psbt_bytes())
         .expect("sign request");
 
     let response = Response {
@@ -409,9 +399,9 @@ fn test_garbage_signed_psbt_is_refused() {
 
 #[test]
 fn test_bare_signatures_are_refused() {
-    let mut session = QrSession::new().expect("create session");
+    let mut session = QrSession::new();
     session
-        .sign(&["wpkh(desc)".to_string()], &sign_psbt_bytes(), 0)
+        .sign(&["wpkh(desc)".to_string()], &sign_psbt_bytes())
         .expect("sign request");
 
     let response = Response {
@@ -431,9 +421,9 @@ fn test_bare_signatures_are_refused() {
 
 #[test]
 fn test_origin_less_sp_descriptor_response_is_refused() {
-    let mut session = QrSession::new().expect("create session");
+    let mut session = QrSession::new();
     session
-        .get_sp_descriptor(0)
+        .get_sp_descriptor()
         .expect("get_sp_descriptor request");
 
     let response = Response {
@@ -451,31 +441,6 @@ fn test_origin_less_sp_descriptor_response_is_refused() {
     );
 }
 
-// ===== Case 16: the encoder's own pixels decode back through a real decoder =====
-
-#[test]
-fn test_encoded_frame_decodes_back() {
-    let mut session = QrSession::new().expect("create session");
-    let request = session
-        .get_sp_descriptor(0)
-        .expect("get_sp_descriptor request");
-    let expected = Request {
-        id: request.id(),
-        body: request::Body::GetSpDescriptor(request::GetSpDescriptor {}),
-    };
-
-    let mut decoder =
-        bwk_qr::decoder::Decoder::new(bwk_qr::config::Config::default()).expect("create decoder");
-    let image = request.frame(0).expect("single frame request");
-    let decoded = decoder.process(image).expect("decode frame");
-
-    assert_eq!(
-        decoded,
-        vec![bwk_qr::decoder::Decoded::Request(expected)],
-        "expected the decoded request to match the one that was built"
-    );
-}
-
 // ===== Case 17: a v0 signed answer merges into the original v2 request =====
 
 #[test]
@@ -485,9 +450,9 @@ fn test_v0_signed_answer_merges_into_the_original_v2() {
     let original = non_sp_signable_psbt(network, &descriptor_string, &path);
     let original_bytes = original.serialize().expect("serialize original");
 
-    let mut session = QrSession::new().expect("create session");
+    let mut session = QrSession::new();
     session
-        .sign(&[descriptor_string.clone()], &original_bytes, 0)
+        .sign(&[descriptor_string.clone()], &original_bytes)
         .expect("sign request");
 
     let mut v0 = original.clone().into_bitcoin_psbt().expect("into v0");
@@ -542,9 +507,9 @@ fn test_v2_signed_answer_keeps_sp_fields_intact() {
     let original = sp_signable_psbt(network, &descriptor_string, &path);
     let original_bytes = original.serialize().expect("serialize original");
 
-    let mut session = QrSession::new().expect("create session");
+    let mut session = QrSession::new();
     session
-        .sign(&[descriptor_string.clone()], &original_bytes, 0)
+        .sign(&[descriptor_string.clone()], &original_bytes)
         .expect("sign request");
 
     let mut v0 = original.clone().into_bitcoin_psbt().expect("into v0");
@@ -605,9 +570,9 @@ fn test_signed_answer_for_a_different_transaction_is_refused_and_keeps_the_outst
     let original = non_sp_signable_psbt(network, &descriptor_string, &path);
     let original_bytes = original.serialize().expect("serialize original");
 
-    let mut session = QrSession::new().expect("create session");
+    let mut session = QrSession::new();
     session
-        .sign(&[descriptor_string], &original_bytes, 0)
+        .sign(&[descriptor_string], &original_bytes)
         .expect("sign request");
     let outstanding_id = session.outstanding_id().expect("outstanding request");
 
@@ -654,9 +619,9 @@ fn test_signed_answer_identical_to_the_request_is_refused_as_nothing_signed() {
     let original = non_sp_signable_psbt(network, &descriptor_string, &path);
     let original_bytes = original.serialize().expect("serialize original");
 
-    let mut session = QrSession::new().expect("create session");
+    let mut session = QrSession::new();
     session
-        .sign(&[descriptor_string], &original_bytes, 0)
+        .sign(&[descriptor_string], &original_bytes)
         .expect("sign request");
     let outstanding_id = session.outstanding_id().expect("outstanding request");
 

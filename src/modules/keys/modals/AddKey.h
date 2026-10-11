@@ -7,6 +7,7 @@
 
 #include "catalog/containers/Modal.h"
 #include "modules/keys/KeysModule.h"
+#include "qr/QrTypes.h"
 
 #include <interfaces/types.h>
 #include <silent.h>
@@ -39,6 +40,10 @@ class CameraStep;
 class QrDisplayStep;
 } // namespace keys::flow
 
+namespace qr {
+class QrEngine;
+} // namespace qr
+
 namespace keys::modal {
 
 // Adds a key no connected device registers: an airgap key over QR codes, a key file,
@@ -57,8 +62,7 @@ public slots:
     void onNextClicked();
     void onModeClicked();
     void onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub);
-    void onQrScanFailed(QrErrorKind kind, const QString &message);
-    void onQrFailed(const QString &message);
+    void onQrError(qr::QrError kind, const QString &message);
     void onReviewChanged();
     void onOpenFileClicked();
     void onPasteChanged();
@@ -186,6 +190,7 @@ private:
     QList<catalog::SelectRow *> m_mode_rows;
     QWidget *m_modes_body = nullptr;
 
+    qr::QrEngine *m_qr_engine = nullptr;
     flow::QrDisplayStep *m_qr = nullptr;
     flow::CameraStep *m_camera = nullptr;
 

@@ -5,7 +5,6 @@
 //! separate records.
 
 pub mod bridge;
-pub mod camera;
 pub mod crypto;
 pub mod error;
 pub mod hot;

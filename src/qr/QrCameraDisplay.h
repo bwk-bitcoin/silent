@@ -1,9 +1,10 @@
 #pragma once
 
+#include "qr/QrCamera.h"
+#include "qr/QrTypes.h"
+
 #include <QImage>
 #include <QWidget>
-
-#include <cstdint>
 
 class QLabel;
 class QPaintEvent;
@@ -14,21 +15,21 @@ class Label;
 class Spinner;
 } // namespace catalog
 
-namespace keys::flow {
+namespace qr {
 
-// The 4:3 camera preview on its fixed dark surface, with the camera's state drawn
-// over it while there is no live picture.
-class CameraViewport : public QWidget {
+// Shows bare camera frames: the 4:3 picture on its fixed dark surface, with the
+// camera's state drawn over it while there is no live picture.
+class QrCameraDisplay : public QWidget {
     Q_OBJECT
 
 public:
-    enum class State : std::uint8_t { Starting, None, Denied, Failed, Live };
-
-    explicit CameraViewport(QWidget *parent = nullptr);
-    void setState(State state);
-    void setFrame(const QImage &frame);
+    explicit QrCameraDisplay(QWidget *parent = nullptr);
     [[nodiscard]] auto hasHeightForWidth() const -> bool override;
     [[nodiscard]] auto heightForWidth(int width) const -> int override;
+
+public slots:
+    void frame(const qr::CameraFrame &frame);
+    void setState(qr::QrCamera::State state);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -43,4 +44,4 @@ private:
     catalog::Label *m_body = nullptr;
 };
 
-} // namespace keys::flow
+} // namespace qr

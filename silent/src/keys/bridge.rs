@@ -6,10 +6,7 @@
 //! and validating what the manager has no way to check on its own (an xpub or
 //! descriptor's own cryptographic identity).
 
-use std::{
-    str::FromStr,
-    sync::{Arc, Mutex},
-};
+use std::str::FromStr;
 
 use base64::{prelude::BASE64_STANDARD, Engine};
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
@@ -17,14 +14,12 @@ use bitcoin::Network as BtcNetwork;
 use bwk_sp::bwk_sign::bwk_descriptor::descriptor::Descriptor;
 use bwk_sp::bwk_sign::miniscript::{DescriptorPublicKey, ForEachKey};
 use bwk_sp::bwk_tx::bwk_psbt::Error as PsbtV2Error;
-use crossbeam::channel;
 use zeroize::Zeroizing;
 
 use crate::config::datadir;
 use crate::ffi;
 use crate::hwi::wallet_name;
 use crate::keys::{
-    camera::{list_cameras, Camera, CameraMessage},
     crypto::{open_mnemonic, Password},
     hot::{seal_mnemonic, sign_hot, sp_descriptor},
     manager::{KeyManager, KeyManagerImpl, LiveDevice, SigningCandidate},
@@ -34,18 +29,12 @@ use crate::keys::{
     Error, KEYS_DIR_NAME,
 };
 
-/// Owns the manager, the QR session, the camera and the event channel. The only
-/// file in `keys/` that names `cxx` or `crate::ffi`.
+/// Owns the manager and the QR session. The only file in `keys/` that names `cxx` or
+/// `crate::ffi`.
 pub struct KeysModule {
     inner: Option<KeyManager>,
     error: String,
-    /// Shared with every `KeysReceiver` taken from this module, so a response
-    /// scanned on the receiver's thread validates against the same outstanding
-    /// request as one pasted on the GUI thread.
-    session: Option<Arc<Mutex<qr::QrSession>>>,
-    camera: Option<Camera>,
-    sender: Option<channel::Sender<KeysMessage>>,
-    receiver: Option<channel::Receiver<KeysMessage>>,
+    session: qr::QrSession,
 }
 
 pub fn new_keys_module(network: ffi::Network) -> Box<KeysModule> {
@@ -59,28 +48,15 @@ fn open_manager(network: ffi::Network) -> Result<KeyManager, String> {
     KeyManager::new(store, network).map_err(|e| format!("failed to open key store: {e}"))
 }
 
-/// Opens the manager and QR session for `network`. Both must succeed or the whole
-/// module is unusable: nothing here works with only one of the two, so tracking
-/// two independent failure states would only add confusion.
-fn open(network: ffi::Network) -> Result<(KeyManager, Arc<Mutex<qr::QrSession>>), String> {
-    let manager = open_manager(network)?;
-    let session = qr::QrSession::new().map_err(|e| format!("failed to init QR session: {e}"))?;
-    Ok((manager, Arc::new(Mutex::new(session))))
-}
-
 fn build_module(network: ffi::Network) -> KeysModule {
-    let (sender, receiver) = channel::unbounded();
-    let (inner, session, error) = match open(network) {
-        Ok((manager, session)) => (Some(manager), Some(session), String::new()),
-        Err(error) => (None, None, error),
+    let (inner, error) = match open_manager(network) {
+        Ok(manager) => (Some(manager), String::new()),
+        Err(error) => (None, error),
     };
     KeysModule {
         inner,
         error,
-        session,
-        camera: None,
-        sender: Some(sender),
-        receiver: Some(receiver),
+        session: qr::QrSession::new(),
     }
 }
 
@@ -96,41 +72,14 @@ impl KeysModule {
     /// Reloads the manager for `network`. On failure the previously-loaded
     /// manager (and every key it held) is left untouched; only `self.error` is
     /// updated, so a failed switch never bricks keys that were already loaded.
-    /// Keeps the event channel and any running camera, same as
-    /// `HwiService::set_network`.
-    ///
-    /// The QR session is reset in place rather than replaced: a `KeysReceiver`
-    /// taken before the switch holds its own clone of the same `Arc`, so
-    /// swapping in a fresh `Arc` here would leave that receiver validating
-    /// scanned responses against a stale session nobody else can reach.
+    /// The QR session starts over: a request issued on the old network is void.
     pub fn set_network(&mut self, network: ffi::Network) -> ffi::KeyOpResult {
         match open_manager(network) {
             Ok(manager) => {
-                let reset = match self.session.as_ref() {
-                    Some(session) => match session.lock() {
-                        Ok(mut session) => session.reset().map_err(|e| e.to_string()),
-                        Err(_) => Err("QR session lock poisoned".to_string()),
-                    },
-                    None => match qr::QrSession::new() {
-                        Ok(session) => {
-                            self.session = Some(Arc::new(Mutex::new(session)));
-                            Ok(())
-                        }
-                        Err(e) => Err(e.to_string()),
-                    },
-                };
-                match reset {
-                    Ok(()) => {
-                        self.inner = Some(manager);
-                        self.error = String::new();
-                        ok_op()
-                    }
-                    Err(error) => {
-                        let error = format!("failed to reset QR session: {error}");
-                        self.error = error.clone();
-                        failed_op(&error)
-                    }
-                }
+                self.session.reset();
+                self.inner = Some(manager);
+                self.error = String::new();
+                ok_op()
             }
             Err(error) => {
                 self.error = error.clone();
@@ -581,48 +530,19 @@ impl KeysModule {
         }
     }
 
-    /// Stop the camera for good and end the notification stream.
-    pub fn shutdown(&mut self) {
-        self.camera_stop();
-        if let Some(sender) = self.sender.take() {
-            // Wake the receiver rather than waiting for it to notice a disconnect.
-            let _ = sender.send(KeysMessage::Shutdown);
-        }
-    }
-
-    /// Handed to a dedicated C++ thread that blocks on recv. Returns an empty
-    /// receiver if called twice.
-    pub fn take_receiver(&mut self) -> Box<KeysReceiver> {
-        Box::new(KeysReceiver {
-            receiver: self.receiver.take(),
-            session: self.session.clone(),
-        })
-    }
-
-    pub fn qr_request_get_xpubs(&mut self, paths: Vec<String>, part_bytes: u32) -> Box<QrRequest> {
+    pub fn qr_request_get_xpubs(&mut self, paths: Vec<String>) -> ffi::QrMessageResult {
         let mut parsed = Vec::with_capacity(paths.len());
         for path in &paths {
             match DerivationPath::from_str(path) {
                 Ok(path) => parsed.push(path),
-                Err(e) => {
-                    return Box::new(QrRequest {
-                        inner: Err(format!("invalid derivation path '{path}': {e}")),
-                    })
-                }
+                Err(e) => return failed_message(&format!("invalid derivation path '{path}': {e}")),
             }
         }
-        let inner = self.with_session(|session| session.get_xpubs(parsed, part_bytes as usize));
-        Box::new(QrRequest { inner })
+        to_message(self.session.get_xpubs(parsed))
     }
 
-    pub fn qr_request_register_descriptor(
-        &mut self,
-        descriptor: &str,
-        part_bytes: u32,
-    ) -> Box<QrRequest> {
-        let inner = self
-            .with_session(|session| session.register_descriptor(descriptor, part_bytes as usize));
-        Box::new(QrRequest { inner })
+    pub fn qr_request_register_descriptor(&mut self, descriptor: &str) -> ffi::QrMessageResult {
+        to_message(self.session.register_descriptor(descriptor))
     }
 
     pub fn qr_request_verify_address(
@@ -630,181 +550,38 @@ impl KeysModule {
         descriptor: &str,
         path: &str,
         address: &str,
-        part_bytes: u32,
-    ) -> Box<QrRequest> {
+    ) -> ffi::QrMessageResult {
         let path = match DerivationPath::from_str(path) {
             Ok(path) => path,
-            Err(e) => {
-                return Box::new(QrRequest {
-                    inner: Err(format!("invalid derivation path '{path}': {e}")),
-                })
-            }
+            Err(e) => return failed_message(&format!("invalid derivation path '{path}': {e}")),
         };
-        let inner = self.with_session(|session| {
-            session.verify_address(descriptor, path, address.to_string(), part_bytes as usize)
-        });
-        Box::new(QrRequest { inner })
+        to_message(
+            self.session
+                .verify_address(descriptor, path, address.to_string()),
+        )
     }
 
-    /// Reserves the id a signing QR request will be built under, without building it.
-    /// The build itself runs on a background thread through the free `qr_build_sign`,
-    /// which touches no `KeysModule` state; the result is committed back into the
-    /// session with `qr_commit_request` on the GUI thread. `is_ok` is false if the
-    /// module has no session or the session lock is poisoned; `id` is meaningless in
-    /// that case (never the reserved-id sentinel `0` a success could be confused
-    /// with).
-    pub fn qr_reserve_sign(&mut self) -> ffi::QrReserveResult {
-        let Some(session) = self.session.as_ref() else {
-            return failed_reserve(&self.error);
+    pub fn qr_request_sign(
+        &mut self,
+        descriptors: Vec<String>,
+        psbt_v2_hex: &str,
+    ) -> ffi::QrMessageResult {
+        let psbt = match hex::decode(psbt_v2_hex) {
+            Ok(psbt) => psbt,
+            Err(e) => return failed_message(&format!("invalid psbt hex: {e}")),
         };
-        let Ok(mut session) = session.lock() else {
-            return failed_reserve("QR session lock poisoned");
-        };
-        ffi::QrReserveResult {
-            is_ok: true,
-            error: String::new(),
-            id: request_id_to_u64(session.reserve_id()),
-        }
+        to_message(self.session.sign(&descriptors, &psbt))
     }
 
-    /// Commits a request built by `qr_build_sign` back into the session as the
-    /// outstanding request. Errors (rather than silently dropping) if a newer id has
-    /// been reserved since, so the C++ side can tell a superseded density rebuild
-    /// apart from a genuine session failure.
-    pub fn qr_commit_request(&mut self, request: &QrRequest) -> ffi::KeyOpResult {
-        let built = match request.inner.as_ref() {
-            Ok(built) => built,
-            Err(e) => return failed_op(e),
-        };
-        let Some(session) = self.session.as_ref() else {
-            return failed_op(&self.error);
-        };
-        let Ok(mut session) = session.lock() else {
-            return failed_op("QR session lock poisoned");
-        };
-        match session.commit(built) {
-            Ok(()) => ok_op(),
-            Err(e) => failed_op(&e.to_string()),
-        }
+    pub fn qr_request_get_sp_descriptor(&mut self) -> ffi::QrMessageResult {
+        to_message(self.session.get_sp_descriptor())
     }
 
-    pub fn qr_request_get_sp_descriptor(&mut self, part_bytes: u32) -> Box<QrRequest> {
-        let inner = self.with_session(|session| session.get_sp_descriptor(part_bytes as usize));
-        Box::new(QrRequest { inner })
-    }
-
-    /// Validates a pasted payload against the outstanding request id.
-    pub fn qr_decode_response(&mut self, payload: &str) -> Box<QrResponse> {
-        let bytes = match BASE64_STANDARD.decode(payload.trim()) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                return Box::new(QrResponse {
-                    inner: Err(format!("invalid base64: {e}")),
-                })
-            }
-        };
-        let inner = self.with_session(|session| session.decode_response(&bytes));
-        Box::new(QrResponse { inner })
-    }
-
-    /// Locks the session for one call, converting any `keys::Error` into the
-    /// bridge's flat string error. Errors with `self.error` when the module has
-    /// no session (it failed to build) and with a dedicated message if the lock
-    /// is poisoned.
-    fn with_session<T>(
-        &self,
-        f: impl FnOnce(&mut qr::QrSession) -> Result<T, Error>,
-    ) -> Result<T, String> {
-        let Some(session) = self.session.as_ref() else {
-            return Err(self.error.clone());
-        };
-        let Ok(mut session) = session.lock() else {
-            return Err("QR session lock poisoned".to_string());
-        };
-        f(&mut session).map_err(|e| e.to_string())
-    }
-
-    pub fn camera_list(&self) -> ffi::CameraListResult {
-        match list_cameras() {
-            Ok(infos) => ffi::CameraListResult {
-                is_ok: true,
-                error: String::new(),
-                names: infos.iter().map(|info| info.name.clone()).collect(),
-                indexes: infos.iter().map(|info| info.index).collect(),
-            },
-            Err(e) => ffi::CameraListResult {
-                is_ok: false,
-                error: e.to_string(),
-                names: Vec::new(),
-                indexes: Vec::new(),
-            },
-        }
-    }
-
-    /// Stops the current camera, if any, and stores the one `camera_open` built,
-    /// forwarding its messages over this module's own event channel.
-    // `handle` must stay boxed: it crosses the cxx bridge as an owned opaque type,
-    // which only `Box<T>` can represent.
-    #[allow(clippy::boxed_local)]
-    pub fn camera_install(&mut self, handle: Box<CameraHandle>) -> ffi::KeyOpResult {
-        self.camera_stop();
-        let (camera, camera_receiver) = match handle.inner {
-            Ok(pair) => pair,
-            Err(e) => return failed_op(&e),
-        };
-        let Some(sender) = self.sender.clone() else {
-            return failed_op("keys module event channel is not available");
-        };
-        if let Err(e) = forward_camera_messages(camera_receiver, sender) {
-            return failed_op(&format!(
-                "camera_install: failed to spawn forwarding thread: {e}"
-            ));
-        }
-        self.camera = Some(camera);
-        ok_op()
-    }
-
-    /// Idempotent: dropping `None` is a no-op, and `Camera::drop` stops capture.
-    pub fn camera_stop(&mut self) {
-        self.camera = None;
-    }
-
-    pub fn camera_frame(&self) -> ffi::CameraFrameResult {
-        let Some(camera) = self.camera.as_ref() else {
-            return failed_camera_frame("no camera running");
-        };
-        match camera.preview() {
-            Some(preview) => ffi::CameraFrameResult {
-                is_ok: true,
-                error: String::new(),
-                data: preview.data,
-                width: preview.width,
-                height: preview.height,
-                seq: preview.seq,
-            },
-            None => failed_camera_frame("no frame captured yet"),
-        }
-    }
-
-    pub fn camera_progress(&self) -> ffi::ScanProgress {
-        let Some(camera) = self.camera.as_ref() else {
-            return failed_scan_progress("no camera running");
-        };
-        let progress = camera.progress();
-        ffi::ScanProgress {
-            is_ok: true,
-            error: String::new(),
-            seen: progress.seen as u32,
-            total: progress.total as u32,
-            seq: progress.seq,
-        }
-    }
-
-    /// Drops the partial BBQR reassembly, for a rescan.
-    pub fn camera_reset(&mut self) {
-        if let Some(camera) = self.camera.as_ref() {
-            camera.reset();
-        }
+    /// Decodes a response's bytes and validates them against the outstanding request.
+    pub fn qr_decode_response(&mut self, payload: &[u8]) -> Box<QrResponse> {
+        Box::new(QrResponse {
+            inner: self.session.decode_response(payload),
+        })
     }
 }
 
@@ -985,124 +762,10 @@ pub fn usb_merge_signed(original_v2_hex: &str, signed_v0_base64: &str) -> ffi::S
     }
 }
 
-/// A camera opened by the free `camera_open`, or the error that refused it. Installed
-/// into a `KeysModule` by `camera_install` on the GUI thread.
-pub struct CameraHandle {
-    inner: Result<(Camera, channel::Receiver<CameraMessage>), String>,
-}
-
-impl CameraHandle {
-    pub fn is_ok(&self) -> bool {
-        self.inner.is_ok()
-    }
-
-    pub fn get_error(&self) -> String {
-        self.inner.as_ref().err().cloned().unwrap_or_default()
-    }
-}
-
-/// Opens camera `index` on a fresh channel, touching no `KeysModule` state. Only
-/// blocks briefly to spawn the capture thread: the device itself opens
-/// asynchronously inside `capture_loop`, with success or failure reported later
-/// over the channel as a `CameraMessage`. Still call from a QThread, never from
-/// the GUI thread, for consistency with the other worker functions.
-pub fn camera_open(index: u32) -> Box<CameraHandle> {
-    let (camera_sender, camera_receiver) = channel::unbounded();
-    let inner = Camera::start(index, camera_sender)
-        .map(|camera| (camera, camera_receiver))
-        .map_err(|e| format!("camera_open {index}: {e}"));
-    Box::new(CameraHandle { inner })
-}
-
-/// Wraps a built (or failed) QR request. A builder never returns a null box and
-/// never returns a request with no frames: `qr::QrSession`'s builders refuse
-/// those cases themselves.
-pub struct QrRequest {
-    inner: Result<qr::QrRequest, String>,
-}
-
-impl QrRequest {
-    pub fn is_ok(&self) -> bool {
-        self.inner.is_ok()
-    }
-
-    pub fn get_error(&self) -> String {
-        self.inner.as_ref().err().cloned().unwrap_or_default()
-    }
-
-    pub fn req_id(&self) -> u64 {
-        match self.inner.as_ref() {
-            Ok(request) => request_id_to_u64(request.id()),
-            Err(_) => 0,
-        }
-    }
-
-    pub fn frame_count(&self) -> u32 {
-        match self.inner.as_ref() {
-            Ok(request) => request.frame_count() as u32,
-            Err(_) => 0,
-        }
-    }
-
-    /// Frame `index` of the animated request. An index past the end answers with
-    /// is_ok false, never with frame 0.
-    pub fn frame(&self, index: u32) -> ffi::QrImageResult {
-        let Ok(request) = self.inner.as_ref() else {
-            return failed_image(&self.get_error());
-        };
-        match request.frame(index as usize) {
-            Ok(image) => ffi::QrImageResult {
-                is_ok: true,
-                error: String::new(),
-                data: image.data.clone(),
-                width: image.width,
-                height: image.height,
-            },
-            Err(e) => failed_image(&e.to_string()),
-        }
-    }
-
-    /// The whole encoded request, base64, for the paste box.
-    pub fn base64(&self) -> String {
-        match self.inner.as_ref() {
-            Ok(request) => BASE64_STANDARD.encode(request.message()),
-            Err(_) => String::new(),
-        }
-    }
-}
-
-/// Builds a signing QR request for the id `qr_reserve_sign` reserved. Touches no
-/// `KeysModule` state, so this is the one QR builder meant to run off the GUI thread,
-/// inside a `QThread::create` lambda; the C++ side commits the result back on the GUI
-/// thread with `qr_commit_request`.
-pub fn qr_build_sign(
-    req_id: u64,
-    descriptors: Vec<String>,
-    psbt_v2_hex: &str,
-    part_bytes: u32,
-) -> Box<QrRequest> {
-    let psbt_bytes = match hex::decode(psbt_v2_hex) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            return Box::new(QrRequest {
-                inner: Err(format!("invalid psbt hex: {e}")),
-            })
-        }
-    };
-    let inner = qr::build_sign_request(
-        u64_to_request_id(req_id),
-        &descriptors,
-        &psbt_bytes,
-        part_bytes as usize,
-    )
-    .map_err(|e| e.to_string());
-    Box::new(QrRequest { inner })
-}
-
 /// Wraps a decoded and validated QR response, or the error that rejected it. An
 /// accessor for a kind the response is not returns an empty value.
 pub struct QrResponse {
-    inner: Result<qr::QrResponse, String>,
+    inner: Result<qr::QrResponse, Error>,
 }
 
 impl QrResponse {
@@ -1111,7 +774,19 @@ impl QrResponse {
     }
 
     pub fn get_error(&self) -> String {
-        self.inner.as_ref().err().cloned().unwrap_or_default()
+        self.inner
+            .as_ref()
+            .err()
+            .map(ToString::to_string)
+            .unwrap_or_default()
+    }
+
+    /// Only meaningful when !is_ok(). `Other` is an arbitrary sentinel on success.
+    pub fn error_kind(&self) -> ffi::QrErrorKind {
+        self.inner
+            .as_ref()
+            .err()
+            .map_or(ffi::QrErrorKind::Other, ffi::QrErrorKind::from)
     }
 
     /// Only meaningful when is_ok(). `Xpubs` is an arbitrary sentinel on error.
@@ -1184,252 +859,22 @@ impl QrResponse {
     }
 }
 
-/// The service is generic over its message type; this is ours. `Shutdown` is ours
-/// alone: it wakes the blocking recv on the C++ side, which dropping the sender
-/// cannot do while the capture thread's forwarder holds a clone.
-enum KeysMessage {
-    Camera(CameraMessage),
-    Shutdown,
-}
-
-/// `Camera::start` needs a concrete `Sender<CameraMessage>`, not the module's
-/// `Sender<KeysMessage>`, so capture events are relayed on a small forwarding
-/// thread instead of being sent directly. The thread ends on its own once the
-/// capture thread's `Stopped` message drops the last `CameraMessage` sender.
-fn forward_camera_messages(
-    camera_receiver: channel::Receiver<CameraMessage>,
-    sender: channel::Sender<KeysMessage>,
-) -> Result<(), String> {
-    std::thread::Builder::new()
-        .name("keys-camera-forward".to_string())
-        .spawn(move || {
-            while let Ok(msg) = camera_receiver.recv() {
-                if sender.send(KeysMessage::Camera(msg)).is_err() {
-                    return;
-                }
-            }
-        })
-        .map(|_| ())
-        .map_err(|e| e.to_string())
-}
-
-pub struct KeysReceiver {
-    receiver: Option<channel::Receiver<KeysMessage>>,
-    session: Option<Arc<Mutex<qr::QrSession>>>,
-}
-
-impl KeysReceiver {
-    /// Blocks until the next usable notification. Returns an empty poll once the
-    /// module is shut down.
-    pub fn recv(&self) -> Box<KeysPoll> {
-        let Some(receiver) = self.receiver.as_ref() else {
-            return Box::new(KeysPoll::none());
-        };
-        loop {
-            match receiver.recv() {
-                Ok(KeysMessage::Camera(msg)) => {
-                    if let Some(event) = to_event(msg, self.session.as_ref()) {
-                        return Box::new(KeysPoll::ok(event));
-                    }
-                }
-                Ok(KeysMessage::Shutdown) | Err(_) => return Box::new(KeysPoll::none()),
-            }
-        }
-    }
-}
-
-pub struct KeysPoll {
-    is_some: bool,
-    event: ffi::KeyEvent,
-}
-
-impl KeysPoll {
-    fn ok(event: ffi::KeyEvent) -> Self {
-        KeysPoll {
-            is_some: true,
-            event,
-        }
-    }
-
-    fn none() -> Self {
-        KeysPoll {
-            is_some: false,
-            event: ffi::KeyEvent::default(),
-        }
-    }
-
-    pub fn is_some(&self) -> bool {
-        self.is_some
-    }
-
-    pub fn get_event(&self) -> ffi::KeyEvent {
-        self.event.clone()
-    }
-}
-
-impl Default for ffi::KeyEvent {
-    fn default() -> Self {
-        ffi::KeyEvent {
-            flag: ffi::KeyEventFlag::QrDecoded,
-            req_id: 0,
-            fingerprint: String::new(),
-            payload: String::new(),
+fn to_message(request: Result<qr::QrRequest, Error>) -> ffi::QrMessageResult {
+    match request {
+        Ok(request) => ffi::QrMessageResult {
+            is_ok: true,
             error: String::new(),
-            error_kind: ffi::QrErrorKind::Other,
-            ok: false,
-        }
+            payload: request.into_message(),
+        },
+        Err(e) => failed_message(&e.to_string()),
     }
 }
 
-/// A message the module has no use for yields None and the receiver waits for the
-/// next. Camera events carry no `req_id` to answer: a scan is unsolicited from the
-/// event channel's point of view, even when it happens to satisfy an outstanding
-/// QR request.
-fn to_event(
-    msg: CameraMessage,
-    session: Option<&Arc<Mutex<qr::QrSession>>>,
-) -> Option<ffi::KeyEvent> {
-    match msg {
-        CameraMessage::Decoded(decoded) => decoded_to_event(decoded, session),
-        CameraMessage::Progress => Some(ffi::KeyEvent {
-            flag: ffi::KeyEventFlag::ScanProgress,
-            ..ffi::KeyEvent::default()
-        }),
-        CameraMessage::Failed(error) => Some(ffi::KeyEvent {
-            flag: ffi::KeyEventFlag::Error,
-            error,
-            error_kind: ffi::QrErrorKind::CameraFailed,
-            ..ffi::KeyEvent::default()
-        }),
-        CameraMessage::Stopped => Some(ffi::KeyEvent {
-            flag: ffi::KeyEventFlag::CameraStopped,
-            ..ffi::KeyEvent::default()
-        }),
-    }
-}
-
-/// Runs a camera-decoded response through the same `validate_response` a pasted
-/// payload uses, so both get identical checks.
-fn decoded_to_event(
-    decoded: bwk_qr::decoder::Decoded,
-    session: Option<&Arc<Mutex<qr::QrSession>>>,
-) -> Option<ffi::KeyEvent> {
-    let response = match decoded {
-        bwk_qr::decoder::Decoded::Response(response) => response,
-        // Requests and plain text carry nothing this module has a use for, and
-        // `process` decodes every joined payload, so a raw one never shows up here.
-        bwk_qr::decoder::Decoded::Text(_)
-        | bwk_qr::decoder::Decoded::Request(_)
-        | bwk_qr::decoder::Decoded::Bytes(_) => return None,
-    };
-    let Some(session) = session else {
-        return Some(ffi::KeyEvent {
-            flag: ffi::KeyEventFlag::Error,
-            error: "QR session is not available".to_string(),
-            ..ffi::KeyEvent::default()
-        });
-    };
-    let Ok(mut session) = session.lock() else {
-        return Some(ffi::KeyEvent {
-            flag: ffi::KeyEventFlag::Error,
-            error: "QR session lock poisoned".to_string(),
-            ..ffi::KeyEvent::default()
-        });
-    };
-    Some(match session.validate_response(response) {
-        Ok(parsed) => qr_response_to_event(parsed),
-        Err(e) => ffi::KeyEvent {
-            flag: ffi::KeyEventFlag::Error,
-            error_kind: ffi::QrErrorKind::from(&e),
-            error: e.to_string(),
-            ..ffi::KeyEvent::default()
-        },
-    })
-}
-
-/// Flattens a decoded response into the event's generic fields. `Xpubs` has no
-/// field for a list, so its entries are joined as `path=xpub` pairs.
-fn qr_response_to_event(response: qr::QrResponse) -> ffi::KeyEvent {
-    match response {
-        qr::QrResponse::SpDescriptor {
-            descriptor,
-            fingerprint,
-        } => ffi::KeyEvent {
-            flag: ffi::KeyEventFlag::QrDecoded,
-            fingerprint: fingerprint.to_string(),
-            payload: descriptor,
-            ok: true,
-            ..ffi::KeyEvent::default()
-        },
-        qr::QrResponse::Registration { alias, registered } => ffi::KeyEvent {
-            flag: ffi::KeyEventFlag::QrDecoded,
-            payload: alias,
-            ok: registered,
-            ..ffi::KeyEvent::default()
-        },
-        qr::QrResponse::AddressVerified(matches) => ffi::KeyEvent {
-            flag: ffi::KeyEventFlag::QrDecoded,
-            ok: matches,
-            ..ffi::KeyEvent::default()
-        },
-        qr::QrResponse::SignedPsbt(bytes) => ffi::KeyEvent {
-            flag: ffi::KeyEventFlag::QrDecoded,
-            payload: hex::encode(bytes),
-            ok: true,
-            ..ffi::KeyEvent::default()
-        },
-        qr::QrResponse::Xpubs {
-            fingerprint, xpubs, ..
-        } => ffi::KeyEvent {
-            flag: ffi::KeyEventFlag::QrDecoded,
-            fingerprint: fingerprint.to_string(),
-            payload: xpubs
-                .iter()
-                .map(|(path, xpub)| format!("{path}={xpub}"))
-                .collect::<Vec<_>>()
-                .join(";"),
-            ok: true,
-            ..ffi::KeyEvent::default()
-        },
-    }
-}
-
-fn request_id_to_u64(id: bwk_qr_protocol::RequestId) -> u64 {
-    u64::from(u16::from_be_bytes(id.0))
-}
-
-fn u64_to_request_id(id: u64) -> bwk_qr_protocol::RequestId {
-    bwk_qr_protocol::RequestId((id as u16).to_be_bytes())
-}
-
-fn failed_image(error: &str) -> ffi::QrImageResult {
-    ffi::QrImageResult {
+fn failed_message(error: &str) -> ffi::QrMessageResult {
+    ffi::QrMessageResult {
         is_ok: false,
         error: error.to_string(),
-        data: Vec::new(),
-        width: 0,
-        height: 0,
-    }
-}
-
-fn failed_camera_frame(error: &str) -> ffi::CameraFrameResult {
-    ffi::CameraFrameResult {
-        is_ok: false,
-        error: error.to_string(),
-        data: Vec::new(),
-        width: 0,
-        height: 0,
-        seq: 0,
-    }
-}
-
-fn failed_scan_progress(error: &str) -> ffi::ScanProgress {
-    ffi::ScanProgress {
-        is_ok: false,
-        error: error.to_string(),
-        seen: 0,
-        total: 0,
-        seq: 0,
+        payload: Vec::new(),
     }
 }
 
@@ -1527,14 +972,6 @@ fn failed_op(error: &str) -> ffi::KeyOpResult {
     ffi::KeyOpResult {
         is_ok: false,
         error: error.to_string(),
-    }
-}
-
-fn failed_reserve(error: &str) -> ffi::QrReserveResult {
-    ffi::QrReserveResult {
-        is_ok: false,
-        error: error.to_string(),
-        id: 0,
     }
 }
 
@@ -1687,7 +1124,7 @@ impl From<Option<crate::keys::manager::UnusableReason>> for ffi::KeyUnusableReas
 
 /// The two QR response validation failures the GUI must show translated; every
 /// other `Error` variant (session, protocol, ...) stays `Other` and surfaces only as
-/// the free-text `error` field. A failed camera is tagged where it is reported.
+/// the free-text `error` field.
 impl From<&Error> for ffi::QrErrorKind {
     fn from(error: &Error) -> Self {
         match error {
@@ -1695,30 +1132,5 @@ impl From<&Error> for ffi::QrErrorKind {
             Error::SignaturesUnsupported => ffi::QrErrorKind::SignaturesUnsupported,
             _ => ffi::QrErrorKind::Other,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::ffi;
-    use crate::keys::{bridge::to_event, camera::CameraMessage};
-
-    #[test]
-    fn a_failed_camera_is_tagged_camera_failed() {
-        let event = to_event(CameraMessage::Failed("device busy".to_string()), None)
-            .expect("a failed camera must yield an event");
-        assert_eq!(
-            event.flag,
-            ffi::KeyEventFlag::Error,
-            "expected an error event, got {:?}",
-            event.flag
-        );
-        assert_eq!(
-            event.error_kind,
-            ffi::QrErrorKind::CameraFailed,
-            "expected CameraFailed, got {:?}",
-            event.error_kind
-        );
-        assert_eq!(event.error, "device busy", "expected the camera error text");
     }
 }

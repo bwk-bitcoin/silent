@@ -1,9 +1,11 @@
 #include "AddKey.h"
 
+#include "modules/keys/BwkQrEngine.h"
 #include "modules/keys/KeysView.h"
-#include "modules/keys/QrRoute.h"
 #include "modules/keys/flow/CameraStep.h"
 #include "modules/keys/flow/QrDisplayStep.h"
+#include "qr/QrCameraEngine.h"
+#include "qr/QrDisplayEngine.h"
 
 #include "catalog/Button.h"
 #include "catalog/SelectRow.h"
@@ -237,11 +239,12 @@ void AddKey::showModes() {
 // ===== QR code and camera views =====
 
 void AddKey::initQr() {
+    m_qr_engine = new BwkQrEngine(m_module, this);
     m_qr = new flow::QrDisplayStep;
     m_qr->setHint(TR("keys-add-qr-hint"));
     m_qr->setTunable(false);
     m_qr->actions()->setBack(catalog::ModalActions::Back::Back);
-    m_camera = new flow::CameraStep(m_module);
+    m_camera = new flow::CameraStep;
     m_camera->setHint(TR("keys-add-scan-hint"));
 }
 
@@ -251,15 +254,17 @@ void AddKey::connectQr() {
             qontrol::UNIQUE);
     connect(m_camera, &flow::CameraStep::backClicked, this, &AddKey::onBackClicked,
             qontrol::UNIQUE);
-    auto *qrRoute = m_module->qrRoute();
-    connect(qrRoute, &QrRoute::xpubDecoded, this, &AddKey::onQrXpub, qontrol::UNIQUE);
-    connect(qrRoute, &QrRoute::scanFailed, this, &AddKey::onQrScanFailed, qontrol::UNIQUE);
-    connect(qrRoute, &QrRoute::failed, this, &AddKey::onQrFailed, qontrol::UNIQUE);
+    connect(m_qr_engine, &qr::QrEngine::request, m_qr->engine(), &qr::QrDisplayEngine::request,
+            qontrol::UNIQUE);
+    connect(m_camera->engine(), &qr::QrCameraEngine::response, m_qr_engine, &qr::QrEngine::response,
+            qontrol::UNIQUE);
+    connect(m_qr_engine, &qr::QrEngine::xpub, this, &AddKey::onQrXpub, qontrol::UNIQUE);
+    connect(m_qr_engine, &qr::QrEngine::error, this, &AddKey::onQrError, qontrol::UNIQUE);
 }
 
 void AddKey::showQr() {
     showQrDisplay();
-    m_module->qrRoute()->startXpub(m_qr, KeysModule::defaultXpubPath());
+    m_qr_engine->getXpub(KeysModule::defaultXpubPath());
 }
 
 void AddKey::showQrDisplay() {
@@ -281,7 +286,7 @@ void AddKey::showCamera() {
 }
 
 void AddKey::stopQr() {
-    m_module->qrRoute()->stop();
+    m_qr_engine->stop();
     m_qr->stop();
     m_camera->stop();
 }
@@ -973,12 +978,13 @@ void AddKey::onQrXpub(const QString &fingerprint, const QString &path, const QSt
     showReview(Source::Qr);
 }
 
-void AddKey::onQrScanFailed(QrErrorKind kind, const QString &message) {
-    m_camera->showScanError(kind, message);
-    adjustSize();
-}
-
-void AddKey::onQrFailed(const QString &message) {
+void AddKey::onQrError(qr::QrError kind, const QString &message) {
+    if (kind != qr::QrError::RequestFailed) {
+        // A refused answer: the scan goes on.
+        m_camera->showScanError(kind, message);
+        adjustSize();
+        return;
+    }
     stopQr();
     showFailure(Failure::Qr, TR("keys-qr-failed-title"), message);
 }

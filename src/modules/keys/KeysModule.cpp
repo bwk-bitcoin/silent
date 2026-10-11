@@ -1,7 +1,6 @@
 #include "KeysModule.h"
 
 #include "KeysTab.h"
-#include "QrRoute.h"
 #include "modules/hwi/HwiModule.h"
 #include "modules/keys/flow/SigningFlow.h"
 #include "modules/keys/signers/OfflineSigner.h"
@@ -101,9 +100,6 @@ void KeysBus::deliverDescriptorRegistered(ReqId req_id, const QString &fingerpri
 }
 
 KeysModule::KeysModule(QObject *parent) : IModule(parent) {
-    m_qr_route = new QrRoute(this);
-    connect(this, &KeysModule::keyEventReceived, this, &KeysModule::onKeyEventReceived,
-            qontrol::UNIQUE);
     connect(Host::get()->events(), &HostEvents::instanceRegistered, this,
             &KeysModule::onInstanceRegistered, qontrol::UNIQUE);
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
@@ -117,8 +113,6 @@ KeysModule::KeysModule(QObject *parent) : IModule(parent) {
             qontrol::UNIQUE);
     connect(this, &KeysModule::hotSpDescriptorFinished, this,
             &KeysModule::onHotSpDescriptorFinished, qontrol::UNIQUE);
-    connect(this, &KeysModule::cameraOpenFinished, this, &KeysModule::onCameraOpenFinished,
-            qontrol::UNIQUE);
     createModule();
     m_bus = std::make_unique<KeysBus>(this);
     Host::get()->setKeys(m_bus.get(), this);
@@ -171,34 +165,9 @@ void KeysModule::createModule() {
     if (!m_rust.value()->is_ok()) {
         qWarning() << "keys:" << toQt(m_rust.value()->get_error());
     }
-
-    auto receiver = m_rust.value()->take_receiver();
-    // QThread::create plus a lambda is the endorsed way to sit on a blocking FFI call:
-    // the loop only emits, and the queued connection lands the work on the GUI thread.
-    m_notif_thread = QThread::create([this, recv = std::move(receiver)]() {
-        while (true) {
-            auto poll = recv->recv();
-            if (!poll->is_some()) {
-                break;
-            }
-            emit keyEventReceived(poll->get_event());
-        }
-    });
-    connect(m_notif_thread, &QThread::finished, m_notif_thread, &QThread::deleteLater,
-            qontrol::UNIQUE);
-    m_notif_thread->start();
 }
 
 void KeysModule::teardownModule() {
-    if (m_rust.has_value()) {
-        // Wakes the blocking recv with a sentinel; waiting for the sender to drop
-        // would hang here for as long as an in-flight operation takes.
-        m_rust.value()->shutdown();
-    }
-    if (m_notif_thread != nullptr) {
-        m_notif_thread->wait();
-        m_notif_thread = nullptr;
-    }
     m_rust.reset();
 }
 
@@ -585,49 +554,6 @@ void KeysModule::loadSdPsbt(ReqId req_id, const QString &path) {
     thread->start();
 }
 
-void KeysModule::openCamera(ReqId req_id, std::uint32_t index) {
-    m_camera_req_id = req_id;
-    auto *thread = QThread::create([this, req_id, index]() {
-        auto handle = ::camera_open(index);
-        emit cameraOpenFinished(req_id, handle.into_raw());
-    });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
-    thread->start();
-}
-
-void KeysModule::cancelCamera() {
-    m_camera_req_id = 0;
-    if (m_camera_installed && rust() != nullptr) {
-        rust()->camera_stop();
-        m_camera_installed = false;
-    }
-}
-
-void KeysModule::onCameraOpenFinished(ReqId req_id, CameraHandle *handle) {
-    auto box = rust::Box<CameraHandle>::from_raw(handle);
-    if (req_id != m_camera_req_id) {
-        // A newer openCamera() or a cancelCamera() call superseded this one;
-        // dropping `box` here releases the device instead of installing a stale
-        // handle.
-        return;
-    }
-    if (!box->is_ok()) {
-        emit cameraOpened(req_id, false, toQt(box->get_error()));
-        return;
-    }
-    if (rust() == nullptr) {
-        emit cameraOpened(req_id, false, TR("keys-module-not-ready"));
-        return;
-    }
-    auto result = rust()->camera_install(std::move(box));
-    if (!result.is_ok) {
-        emit cameraOpened(req_id, false, toQt(result.error));
-        return;
-    }
-    m_camera_installed = true;
-    emit cameraOpened(req_id, true, QString());
-}
-
 auto KeysModule::setAlias(const QString &fingerprint, const QString &alias) -> KeyOpResult {
     if (!m_rust.has_value()) {
         KeyOpResult result;
@@ -825,10 +751,6 @@ KeysBus *KeysModule::bus() const {
     return m_bus.get();
 }
 
-auto KeysModule::qrRoute() const -> QrRoute * {
-    return m_qr_route;
-}
-
 auto KeysModule::tab() -> QWidget * {
     if (m_tab.isNull()) {
         m_tab = new KeysTab(this);
@@ -874,10 +796,6 @@ void KeysModule::refreshLiveDevices() {
     }
     m_rust.value()->set_live_devices(std::move(devices));
     emit liveDevicesChanged();
-}
-
-void KeysModule::onKeyEventReceived(const KeyEvent &event) {
-    m_qr_route->onKeyEvent(event);
 }
 
 void KeysModule::onInstanceRegistered(const QString &id) {
