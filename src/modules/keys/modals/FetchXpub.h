@@ -29,6 +29,8 @@ class KeysModule;
 
 namespace keys::modal {
 
+class Unseal;
+
 // Fetches the xpub at a chosen path from the key's connected device, or derives it
 // from a hot key with its password, and caches it, opened over the key detail it
 // returns to: picking the path, then the device or password wait.
@@ -48,9 +50,9 @@ public slots:
     void onDeviceXpub(ReqId req_id, const QString &xpub);
     void onDeviceError(std::optional<ReqId> req_id, const QString &message);
     void onInstanceRemoved(const QString &id);
-    void onHotXpub(ReqId req_id, const QString &xpub);
-    void onHotError(std::optional<ReqId> req_id, const QString &message);
-    void onHotCancelled(ReqId req_id);
+    void onHotPassword(const QString &password);
+    void onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpub, const QString &error,
+                          bool wrong_password);
 
 protected:
     // The view on display: the primary action acts on it.
@@ -109,8 +111,10 @@ private:
     QString m_instance;
     QString m_path;
     ReqId m_req = 0;
-    // The hot key's request through the keys bus, its password asked over this modal.
+    // A hot key's derivation, its password asked in the unseal modal over this one.
+    QPointer<Unseal> m_unseal;
     ReqId m_hot_req = 0;
+    QString m_hot_error;
 };
 
 } // namespace keys::modal

@@ -37,6 +37,8 @@ class KeysModule;
 
 namespace keys::modal {
 
+class Unseal;
+
 class KeyDetailFlow;
 struct KeyAccount;
 
@@ -72,6 +74,8 @@ public slots:
     void onDescriptorRegistered(ReqId req_id, bool registered);
     void onRegistrationError(std::optional<ReqId> req_id, const QString &message);
     void onRevealClicked();
+    void onRevealPassword(const QString &password);
+    void onMnemonicRevealed(ReqId req_id, const MnemonicResult &result);
     void onRemoveClicked();
     void onFlowViewChanged(const QString &title, ModalWidth width);
     void onFlowBack();
@@ -148,6 +152,11 @@ private:
 
     // The flow picked off the detail, deleted once it goes back or the window closes.
     KeyDetailFlow *m_flow = nullptr;
+
+    // Reveal Mnemonic: the password prompt open over the detail, then the words.
+    QPointer<Unseal> m_unseal;
+    ReqId m_reveal_req = 0;
+    QStringList m_revealed;
 };
 
 // One step off a key's detail, embedded in KeyDetail in place of the detail: its views,

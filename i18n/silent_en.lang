@@ -294,8 +294,6 @@ btn-sign => "Sign"
 
 btn-try-again => "Try Again"
 
-btn-unlocking => "Unlocking…"
-
 btn-add-a-key => "+ Add a Key"
 
 btn-add-payment => "+ Add Payment"
@@ -732,6 +730,8 @@ keys-fetching-sub => "Confirm on %1 if it asks."
 keys-fetch-failed-title => "Could not fetch the xpub"
 
 keys-reveal-title => "Reveal Mnemonic"
+
+keys-reveal-busy => "Opening the key…"
 
 keys-reveal-warning-title => "Anyone with these words holds the coins"
 

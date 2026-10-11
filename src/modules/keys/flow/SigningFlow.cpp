@@ -413,6 +413,7 @@ void SigningFlow::startRoute() {
     connect(m_flow, &SigningRouteFlow::xpubFetched, this, &SigningFlow::onXpubFetched,
             qontrol::UNIQUE);
     connect(m_flow, &SigningRouteFlow::failed, this, &SigningFlow::onFailed, qontrol::UNIQUE);
+    connect(m_flow, &SigningRouteFlow::cancelled, this, &QDialog::reject, qontrol::UNIQUE);
     setPage(m_flow);
     m_flow->start();
 }

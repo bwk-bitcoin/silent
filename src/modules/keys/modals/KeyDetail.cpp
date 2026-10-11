@@ -1,9 +1,10 @@
 #include "KeyDetail.h"
 
 #include "FetchXpub.h"
+#include "RevealMnemonic.h"
+#include "Unseal.h"
 #include "keydetail/KeyRecord.h"
 #include "keydetail/RemoveFlow.h"
-#include "keydetail/RevealFlow.h"
 
 #include "modules/keys/DeviceName.h"
 #include "modules/keys/KeysModule.h"
@@ -126,6 +127,8 @@ void KeyDetail::init() {
 void KeyDetail::doConnect() {
     connect(m_module, &KeysModule::keysChanged, this, &KeyDetail::onKeyChanged, qontrol::UNIQUE);
     connect(m_module, &KeysModule::liveDevicesChanged, this, &KeyDetail::onKeyChanged,
+            qontrol::UNIQUE);
+    connect(m_module, &KeysModule::mnemonicRevealed, this, &KeyDetail::onMnemonicRevealed,
             qontrol::UNIQUE);
     connectDetail();
 }
@@ -692,8 +695,43 @@ void KeyDetail::onRegistrationError(std::optional<ReqId> req_id, const QString &
     finishRegistrationRequest(registering ? Registration::NotRegistered : Registration::Unknown);
 }
 
+// The password over the detail, then the words in a modal of their own.
 void KeyDetail::onRevealClicked() {
-    openFlow(new RevealFlow(m_module, m_fingerprint));
+    auto *unseal = new Unseal(TR("keys-reveal-title"), QString(), catalog::btnShowMnemonic());
+    unseal->setBusy(TR("keys-reveal-busy"), QString());
+    connect(unseal, &Unseal::passwordEntered, this, &KeyDetail::onRevealPassword, qontrol::UNIQUE);
+    m_unseal = unseal;
+    bool opened = unseal->exec() == QDialog::Accepted;
+    delete unseal;
+    m_reveal_req = 0;
+    QStringList words = m_revealed;
+    m_revealed.clear();
+    if (opened) {
+        AppController::execModal(new RevealMnemonic(words));
+    }
+}
+
+void KeyDetail::onRevealPassword(const QString &password) {
+    m_reveal_req = m_module->nextReqId();
+    m_module->revealMnemonic(m_reveal_req, m_fingerprint, password);
+}
+
+void KeyDetail::onMnemonicRevealed(ReqId req_id, const MnemonicResult &result) {
+    if (m_reveal_req == 0 || req_id != m_reveal_req || m_unseal.isNull()) {
+        return;
+    }
+    m_reveal_req = 0;
+    if (!result.is_ok) {
+        m_unseal->retry(result.wrong_password
+                            ? TR("flow-password-wrong")
+                            : TR("keys-reveal-failed").arg(KeysModule::toQt(result.error)));
+        return;
+    }
+    // A QString cannot be zeroized: Rust owns the real wiping of the phrase.
+    QString mnemonic = KeysModule::toQt(result.mnemonic);
+    m_revealed = mnemonic.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    mnemonic.fill(QChar());
+    m_unseal->finish(true);
 }
 
 void KeyDetail::onRemoveClicked() {

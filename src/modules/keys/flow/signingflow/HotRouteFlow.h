@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QElapsedTimer>
+#include <QPointer>
 #include <QString>
 
 #include <cstdint>
@@ -11,45 +11,39 @@
 #include <interfaces/types.h>
 
 namespace catalog {
-class Button;
-class Input;
-class Label;
-class ModalActions;
 class ModalStatus;
-class Notice;
 } // namespace catalog
 
-class QTimer;
+namespace keys::modal {
+class Unseal;
+} // namespace keys::modal
 
 namespace keys::flow {
 
-// Signs with a hot key, or fetches its descriptor: asks the key's password, then works
-// under a spinner. A wrong password asks again.
+// Signs with a hot key, or fetches its descriptor or an xpub: the key's password is
+// asked in the generic unseal modal opened over the flow, which works under its spinner
+// while this route waits behind it. A wrong password asks again; closing the prompt goes
+// back to the picker, or closes the flow when there is none.
 class HotRouteFlow final : public SigningRouteFlow {
     Q_OBJECT
 
 public:
     HotRouteFlow(KeysModule *module, SigningFlow::Request request, FlowRow row, QString psbt);
-    ~HotRouteFlow() override;
-    // Asks the password.
+    // Opens the password prompt over the flow.
     void start() override;
 
 public slots:
-    void onNextClicked();
-    void onPasswordEdited();
+    void onAskPassword();
+    void onPasswordEntered(const QString &password);
     void onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex, const QString &error,
                      bool wrong_password);
     void onHotDescriptorFetched(ReqId req_id, bool is_ok, const QString &descriptor,
                                 const QString &error, bool wrong_password);
     void onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpub, const QString &error,
                           bool wrong_password);
-    void onBusyHeld();
 
 protected:
-    // The view on display: the primary action acts on it.
-    enum class View : std::uint8_t { Password, Busy };
-
-    // The key's answer, held until the spinner has shown long enough to be seen.
+    // The key's answer, kept until the prompt has closed over it.
     enum class AnswerKind : std::uint8_t { Signed, Descriptor, Xpub };
 
     struct Answer {
@@ -57,44 +51,26 @@ protected:
         bool is_ok;
         QString value;
         QString error;
-        bool wrong_password;
     };
 
     void init();
     void doConnect();
     void view();
 
-    // Password view
-    void initPassword();
-    void connectPassword();
-    [[nodiscard]] auto viewPassword() -> QWidget *;
-    void showPassword();
-    void proceedPassword();
+    // Waiting view, behind the prompt
+    void initWaiting();
+    void showWaiting();
+    void hideWaiting();
 
-    // Busy view
-    void initBusy();
-    void showBusy();
-    void hideBusy();
-    void hold(Answer answer);
+    void answer(AnswerKind kind, bool is_ok, const QString &value, const QString &error,
+                bool wrong_password);
     void deliver(const Answer &answer);
 
 private:
-    View m_view = View::Password;
     ReqId m_hot_req = 0;
-
-    // The value is handed over once and cleared; a QString cannot be zeroized, so this
-    // is best effort.
-    QWidget *m_password_step = nullptr;
-    catalog::Label *m_password_prompt = nullptr;
-    catalog::Input *m_password_input = nullptr;
-    catalog::Notice *m_password_error = nullptr;
-    catalog::ModalActions *m_password_actions = nullptr;
-    catalog::Button *m_password_proceed = nullptr;
-
-    catalog::ModalStatus *m_busy_step = nullptr;
-    QElapsedTimer m_busy_shown;
-    QTimer *m_busy_hold = nullptr;
-    std::optional<Answer> m_held;
+    catalog::ModalStatus *m_waiting_step = nullptr;
+    QPointer<modal::Unseal> m_unseal;
+    std::optional<Answer> m_answer;
 };
 
 } // namespace keys::flow

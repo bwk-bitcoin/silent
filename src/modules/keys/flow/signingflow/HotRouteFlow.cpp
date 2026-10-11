@@ -1,18 +1,14 @@
 #include "HotRouteFlow.h"
 
 #include "catalog/Button.h"
-#include "catalog/containers/ModalActions.h"
 #include "catalog/containers/ViewSlots.h"
-#include "catalog/display/Label.h"
 #include "catalog/feedback/ModalStatus.h"
-#include "catalog/feedback/Notice.h"
-#include "catalog/form/Field.h"
-#include "catalog/inputs/Input.h"
 #include "i18n/Tr.h"
 #include "modules/keys/KeysModule.h"
+#include "modules/keys/modals/Unseal.h"
 #include "theme/Palette.h"
 
-#include <QLineEdit>
+#include <QDialog>
 #include <QTimer>
 #include <Qontrol>
 
@@ -22,13 +18,6 @@
 
 namespace keys::flow {
 
-namespace {
-
-// A hot key answers at once: the spinner shows at least this long, not as a flash.
-constexpr int BUSY_MIN_MS = 500;
-
-} // namespace
-
 HotRouteFlow::HotRouteFlow(KeysModule *module, SigningFlow::Request request, FlowRow row,
                            QString psbt)
     : SigningRouteFlow(module, std::move(request), std::move(row), std::move(psbt)) {
@@ -37,56 +26,17 @@ HotRouteFlow::HotRouteFlow(KeysModule *module, SigningFlow::Request request, Flo
     view();
 }
 
-HotRouteFlow::~HotRouteFlow() {
-    m_password_input->clear();
-}
-
 void HotRouteFlow::start() {
-    QString prompt = copy().hotPrompt.arg(row().alias);
-    m_password_prompt->setText(prompt);
-    m_password_prompt->setVisible(!prompt.isEmpty());
-    m_password_error->setVisible(false);
-    showPassword();
+    showWaiting();
+    // Once the flow is shown, so the prompt opens over it.
+    QTimer::singleShot(0, this, &HotRouteFlow::onAskPassword);
 }
 
 void HotRouteFlow::init() {
-    initPassword();
-    initBusy();
+    initWaiting();
 }
 
 void HotRouteFlow::doConnect() {
-    connectPassword();
-    connect(m_busy_hold, &QTimer::timeout, this, &HotRouteFlow::onBusyHeld, qontrol::UNIQUE);
-}
-
-void HotRouteFlow::view() {
-    m_password_step = viewPassword();
-    hideBusy();
-}
-
-// ===== Password view =====
-
-void HotRouteFlow::initPassword() {
-    m_password_prompt = new catalog::Label(catalog::LabelRole::Body);
-    m_password_prompt->setTone(catalog::LabelTone::Secondary);
-    m_password_prompt->setWordWrap(true);
-    m_password_input = new catalog::Input;
-    m_password_input->setEchoMode(QLineEdit::Password);
-    m_password_input->setFixedWidth(metric::PASSWORD_INPUT_WIDTH);
-    m_password_error = new catalog::Notice(catalog::Notice::Tone::Error);
-    m_password_error->setVisible(false);
-    m_password_proceed = hotProceedButton(request().context);
-    m_password_actions = new catalog::ModalActions;
-    m_password_actions->addAction(m_password_proceed);
-}
-
-void HotRouteFlow::connectPassword() {
-    connect(m_password_input, &QLineEdit::textEdited, this, &HotRouteFlow::onPasswordEdited,
-            qontrol::UNIQUE);
-    connect(m_password_input, &QLineEdit::returnPressed, this, &HotRouteFlow::onNextClicked,
-            qontrol::UNIQUE);
-    connect(m_password_proceed, &QPushButton::clicked, this, &HotRouteFlow::onNextClicked,
-            qontrol::UNIQUE);
     connect(module(), &KeysModule::hotSigned, this, &HotRouteFlow::onHotSigned, qontrol::UNIQUE);
     connect(module(), &KeysModule::hotSpDescriptorFetched, this,
             &HotRouteFlow::onHotDescriptorFetched, qontrol::UNIQUE);
@@ -94,37 +44,93 @@ void HotRouteFlow::connectPassword() {
             qontrol::UNIQUE);
 }
 
-auto HotRouteFlow::viewPassword() -> QWidget * {
-    return (new qontrol::Column)
-        ->spacing(resolve(Spacing::M))
-        ->push(m_password_prompt)
-        ->push(new catalog::Field(TR("flow-password"), m_password_input))
-        ->push(m_password_error);
+void HotRouteFlow::view() {
+    hideWaiting();
 }
 
-// An empty field with the focus in it, and the error kept if one was just shown.
-void HotRouteFlow::showPassword() {
-    m_view = View::Password;
-    m_password_input->clear();
-    onPasswordEdited();
+// ===== Waiting view =====
+
+void HotRouteFlow::initWaiting() {
+    m_waiting_step = new catalog::ModalStatus;
+    m_waiting_step->setSpinner();
+    m_waiting_step->setPadding(resolve(Spacing::M), resolve(Spacing::M));
+}
+
+void HotRouteFlow::showWaiting() {
+    m_waiting_step->setTitle(copy().hotBusy);
+    m_waiting_step->setSubtitle(TR("flow-hot-busy-with").arg(row().alias));
     viewSlots()->setHeader(nullptr);
-    viewSlots()->setBody(m_password_step);
-    viewSlots()->setFooter(m_password_actions);
+    viewSlots()->setBody(m_waiting_step);
+    viewSlots()->setFooter(nullptr);
     emit viewChanged(copy().title, ModalWidth::S);
-    m_password_input->setFocus();
 }
 
-void HotRouteFlow::proceedPassword() {
-    if (m_password_input->text().isEmpty()) {
+void HotRouteFlow::hideWaiting() {
+    viewSlots()->keep(m_waiting_step);
+}
+
+// The key's answer to the password: a wrong one asks again, any other one closes the
+// prompt, to be delivered once it has.
+void HotRouteFlow::answer(AnswerKind kind, bool is_ok, const QString &value, const QString &error,
+                          bool wrong_password) {
+    if (m_unseal.isNull()) {
         return;
     }
-    QString password = m_password_input->text();
-    m_password_input->clear();
-    m_password_error->setVisible(false);
+    if (wrong_password) {
+        m_unseal->retry(TR("flow-password-wrong"));
+        return;
+    }
+    m_answer = Answer{.kind = kind, .is_ok = is_ok, .value = value, .error = error};
+    m_unseal->finish(true);
+}
+
+void HotRouteFlow::deliver(const Answer &answer) {
+    if (!answer.is_ok) {
+        emit failed(answer.error);
+        return;
+    }
+    switch (answer.kind) {
+    case AnswerKind::Signed:
+        emit psbtSigned(answer.value);
+        return;
+    case AnswerKind::Descriptor:
+        emit descriptorFetched(answer.value);
+        return;
+    case AnswerKind::Xpub:
+        emit xpubFetched(answer.value);
+        return;
+    }
+}
+
+// ===== Slots =====
+
+void HotRouteFlow::onAskPassword() {
+    QString prompt = copy().hotPrompt.arg(row().alias);
+    auto *unseal = new modal::Unseal(copy().title, prompt, hotProceedButton(request().context));
+    unseal->setBusy(copy().hotBusy, TR("flow-hot-busy-with").arg(row().alias));
+    connect(unseal, &modal::Unseal::passwordEntered, this, &HotRouteFlow::onPasswordEntered,
+            qontrol::UNIQUE);
+    m_unseal = unseal;
+    m_answer.reset();
+    unseal->exec();
+    delete unseal;
+    m_hot_req = 0;
+    if (m_answer.has_value()) {
+        Answer held = std::move(m_answer.value());
+        m_answer.reset();
+        deliver(held);
+        return;
+    }
+    // Closed without an answer.
+    if (hasPicker()) {
+        emit back();
+    } else {
+        emit cancelled();
+    }
+}
+
+void HotRouteFlow::onPasswordEntered(const QString &password) {
     m_hot_req = module()->nextReqId();
-    m_busy_step->setTitle(copy().hotBusy);
-    m_busy_step->setSubtitle(TR("flow-hot-busy-with").arg(row().alias));
-    showBusy();
     switch (request().context) {
     case Context::Sign:
         module()->signHot(m_hot_req, row().fingerprint, password, psbt());
@@ -139,95 +145,6 @@ void HotRouteFlow::proceedPassword() {
         // A hot key has no screen: verify rows never pick it.
         break;
     }
-    password.fill(QChar());
-    password.clear();
-}
-
-// ===== Busy view =====
-
-void HotRouteFlow::initBusy() {
-    m_busy_step = new catalog::ModalStatus;
-    m_busy_step->setSpinner();
-    m_busy_step->setPadding(resolve(Spacing::M), resolve(Spacing::M));
-    m_busy_hold = new QTimer(this);
-    m_busy_hold->setSingleShot(true);
-}
-
-void HotRouteFlow::showBusy() {
-    m_view = View::Busy;
-    viewSlots()->setHeader(nullptr);
-    viewSlots()->setBody(m_busy_step);
-    viewSlots()->setFooter(nullptr);
-    emit viewChanged(copy().title, ModalWidth::S);
-    m_busy_shown.start();
-}
-
-void HotRouteFlow::hideBusy() {
-    viewSlots()->keep(m_busy_step);
-}
-
-void HotRouteFlow::hold(Answer answer) {
-    qint64 remaining = BUSY_MIN_MS - m_busy_shown.elapsed();
-    if (remaining <= 0) {
-        deliver(answer);
-        return;
-    }
-    m_held = std::move(answer);
-    m_busy_hold->start(static_cast<int>(remaining));
-}
-
-void HotRouteFlow::deliver(const Answer &answer) {
-    if (answer.is_ok) {
-        switch (answer.kind) {
-        case AnswerKind::Signed:
-            emit psbtSigned(answer.value);
-            return;
-        case AnswerKind::Descriptor:
-            emit descriptorFetched(answer.value);
-            return;
-        case AnswerKind::Xpub:
-            emit xpubFetched(answer.value);
-            return;
-        }
-        return;
-    }
-    if (answer.wrong_password) {
-        m_password_error->setText(TR("flow-password-wrong"));
-        m_password_error->setVisible(true);
-        showPassword();
-        return;
-    }
-    emit failed(answer.error);
-}
-
-// ===== Slots =====
-
-void HotRouteFlow::onNextClicked() {
-    switch (m_view) {
-    case View::Password:
-        proceedPassword();
-        return;
-    case View::Busy:
-        return;
-    }
-}
-
-void HotRouteFlow::onPasswordEdited() {
-    bool empty = m_password_input->text().isEmpty();
-    if (!empty) {
-        m_password_error->setVisible(false);
-    }
-    m_password_proceed->setEnabled(!empty);
-    m_password_actions->setReason(empty ? TR("flow-password-reason") : QString());
-}
-
-void HotRouteFlow::onBusyHeld() {
-    if (!m_held.has_value()) {
-        return;
-    }
-    Answer answer = std::move(m_held.value());
-    m_held.reset();
-    deliver(answer);
 }
 
 void HotRouteFlow::onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex,
@@ -236,11 +153,7 @@ void HotRouteFlow::onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_
         return;
     }
     m_hot_req = 0;
-    hold({.kind = AnswerKind::Signed,
-          .is_ok = is_ok,
-          .value = psbt_v2_hex,
-          .error = error,
-          .wrong_password = wrong_password});
+    answer(AnswerKind::Signed, is_ok, psbt_v2_hex, error, wrong_password);
 }
 
 void HotRouteFlow::onHotDescriptorFetched(ReqId req_id, bool is_ok, const QString &descriptor,
@@ -249,11 +162,7 @@ void HotRouteFlow::onHotDescriptorFetched(ReqId req_id, bool is_ok, const QStrin
         return;
     }
     m_hot_req = 0;
-    hold({.kind = AnswerKind::Descriptor,
-          .is_ok = is_ok,
-          .value = descriptor,
-          .error = error,
-          .wrong_password = wrong_password});
+    answer(AnswerKind::Descriptor, is_ok, descriptor, error, wrong_password);
 }
 
 void HotRouteFlow::onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpub,
@@ -262,11 +171,7 @@ void HotRouteFlow::onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpu
         return;
     }
     m_hot_req = 0;
-    hold({.kind = AnswerKind::Xpub,
-          .is_ok = is_ok,
-          .value = xpub,
-          .error = error,
-          .wrong_password = wrong_password});
+    answer(AnswerKind::Xpub, is_ok, xpub, error, wrong_password);
 }
 
 } // namespace keys::flow

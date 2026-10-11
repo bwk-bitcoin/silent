@@ -190,6 +190,8 @@ signals:
     void xpubFetched(const QString &xpub);
     // A failure the route cannot recover from: SigningFlow closes.
     void failed(const QString &message);
+    // Left with no picker to go back to: SigningFlow closes as cancelled.
+    void cancelled();
 
 protected:
     [[nodiscard]] auto viewSlots() const -> catalog::ViewSlots *;

@@ -287,10 +287,6 @@ auto btnTryAgain() -> Button * {
     return make({.role = ButtonRole::Primary, .label = TR("btn-try-again"), .width = BtnWidth::M});
 }
 
-auto btnUnlocking() -> Button * {
-    return make({.role = ButtonRole::Primary, .label = TR("btn-unlocking"), .width = BtnWidth::M});
-}
-
 auto btnAddAKey() -> Button * {
     return make({.role = ButtonRole::Default, .label = TR("btn-add-a-key"), .width = BtnWidth::M});
 }

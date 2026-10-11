@@ -3,6 +3,7 @@
 #include "modules/keys/DeviceName.h"
 #include "modules/keys/KeysModule.h"
 #include "modules/keys/KeysView.h"
+#include "modules/keys/modals/Unseal.h"
 #include "modules/keys/modals/keydetail/KeyRecord.h"
 
 #include "catalog/Button.h"
@@ -16,7 +17,6 @@
 #include "catalog/inputs/Input.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
-#include "interfaces/keys.h"
 #include "theme/Palette.h"
 
 #include <QDebug>
@@ -63,11 +63,8 @@ void FetchXpub::init() {
 void FetchXpub::doConnect() {
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
             &FetchXpub::onInstanceRemoved, qontrol::UNIQUE);
-    if (auto *bus = Host::get()->keys(); bus != nullptr) {
-        connect(bus, &IKeys::xpubReady, this, &FetchXpub::onHotXpub, qontrol::UNIQUE);
-        connect(bus, &IKeys::error, this, &FetchXpub::onHotError, qontrol::UNIQUE);
-        connect(bus, &IKeys::cancelled, this, &FetchXpub::onHotCancelled, qontrol::UNIQUE);
-    }
+    connect(m_module, &KeysModule::hotXpubFetched, this, &FetchXpub::onHotXpubFetched,
+            qontrol::UNIQUE);
     connectFetch();
 }
 
@@ -246,20 +243,26 @@ void FetchXpub::fetch() {
     showFetching();
 }
 
-// No device: the keys module asks the hot key's password over this modal, derives the
-// xpub and caches it.
+// No device: the hot key's password in the unseal modal over this one, which derives the
+// xpub under its spinner; cached, it closes this modal too.
 void FetchXpub::fetchHot() {
-    auto *bus = Host::get()->keys();
-    if (bus == nullptr) {
-        showError(TR("keys-module-not-ready"));
-        return;
-    }
     m_error->setVisible(false);
     m_path = path();
-    m_hot_req = bus->newRequest();
-    m_fetching_step->setSubtitle(QString());
-    showFetching();
-    m_module->fetchXpub(m_hot_req, m_fingerprint, m_path);
+    m_hot_error.clear();
+    auto *unseal = new Unseal(TR("keys-fetch-title"), QString(), catalog::btnGetXpubHot());
+    unseal->setBusy(TR("keys-fetching-title"), QString());
+    connect(unseal, &Unseal::passwordEntered, this, &FetchXpub::onHotPassword, qontrol::UNIQUE);
+    m_unseal = unseal;
+    bool fetched = unseal->exec() == QDialog::Accepted;
+    delete unseal;
+    m_hot_req = 0;
+    if (fetched) {
+        accept();
+        return;
+    }
+    if (!m_hot_error.isEmpty()) {
+        showError(m_hot_error);
+    }
 }
 
 // ===== Fetching view =====
@@ -354,31 +357,31 @@ void FetchXpub::onDeviceError(std::optional<ReqId> req_id, const QString &messag
     showError(message);
 }
 
-void FetchXpub::onHotXpub(ReqId req_id, const QString &xpub) {
-    Q_UNUSED(xpub);
-    if (m_hot_req == 0 || req_id != m_hot_req) {
-        return;
-    }
-    // The keys module cached it before answering.
-    m_hot_req = 0;
-    accept();
+void FetchXpub::onHotPassword(const QString &password) {
+    m_hot_req = m_module->nextReqId();
+    m_module->fetchHotXpub(m_hot_req, m_fingerprint, password, m_path);
 }
 
-void FetchXpub::onHotError(std::optional<ReqId> req_id, const QString &message) {
-    if (m_hot_req == 0 || !req_id.has_value() || req_id.value() != m_hot_req) {
+void FetchXpub::onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpub,
+                                 const QString &error, bool wrong_password) {
+    if (m_hot_req == 0 || req_id != m_hot_req || m_unseal.isNull()) {
         return;
     }
     m_hot_req = 0;
-    showError(message);
-}
-
-void FetchXpub::onHotCancelled(ReqId req_id) {
-    if (m_hot_req == 0 || req_id != m_hot_req) {
+    if (wrong_password) {
+        m_unseal->retry(TR("flow-password-wrong"));
         return;
     }
-    m_hot_req = 0;
-    m_error->setVisible(false);
-    showFetch();
+    if (is_ok) {
+        auto cached = m_module->cacheXpub(m_fingerprint, m_path, xpub);
+        if (!cached.is_ok) {
+            m_hot_error = KeysModule::toQt(cached.error);
+        }
+        m_unseal->finish(cached.is_ok);
+        return;
+    }
+    m_hot_error = error;
+    m_unseal->finish(false);
 }
 
 void FetchXpub::onInstanceRemoved(const QString &id) {

@@ -49,7 +49,6 @@ auto btnShowMnemonic() -> Button *;
 auto btnSign() -> Button *;
 auto btnSignHot() -> Button *;
 auto btnTryAgain() -> Button *;
-auto btnUnlocking() -> Button *;
 auto btnAddAKey() -> Button *;
 auto btnAddPayment() -> Button *;
 auto btnClear() -> Button *;
