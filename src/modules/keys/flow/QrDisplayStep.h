@@ -23,9 +23,9 @@ class Stepper;
 namespace keys::flow {
 
 // Shows a QR request to an airgapped device one frame at a time, with contrast,
-// density and speed controls. Ignorant of what the request asks: on a density change
-// it asks its owner (densityChanged) for a request rebuilt at that density, and shows
-// "Rebuilding" until setRequest() hands it over.
+// density and speed controls, or as a plain code without them (setTunable). Ignorant of what the
+// request asks: on a density change it asks its owner (densityChanged) for a request rebuilt at
+// that density, and shows "Rebuilding" until setRequest() hands it over.
 class QrDisplayStep : public QWidget {
     Q_OBJECT
 
@@ -38,6 +38,8 @@ public:
 
     explicit QrDisplayStep(QWidget *parent = nullptr);
     void setHint(const QString &hint);
+    // False shows the plain white code without the part count and the tuning controls.
+    void setTunable(bool tunable);
     // Called directly by the owner, not as a slot: rust::Box is move only.
     void setRequest(rust::Box<QrRequest> request);
     // Dims the code until the next setRequest().
@@ -78,6 +80,8 @@ private:
     catalog::QrCode *m_qr_code = nullptr;
     QWidget *m_rebuilding = nullptr;
     catalog::Label *m_part_label = nullptr;
+    QWidget *m_separator = nullptr;
+    QWidget *m_tuning = nullptr;
     catalog::Stepper *m_contrast_stepper = nullptr;
     catalog::Stepper *m_density_stepper = nullptr;
     catalog::Stepper *m_speed_stepper = nullptr;
@@ -89,6 +93,7 @@ private:
     int m_contrast = DEFAULT_LEVEL;
     int m_density = DEFAULT_LEVEL;
     int m_speed = DEFAULT_LEVEL;
+    bool m_tunable = true;
 };
 
 } // namespace keys::flow

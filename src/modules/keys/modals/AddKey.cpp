@@ -246,6 +246,7 @@ void AddKey::showModes() {
 void AddKey::initQr() {
     m_qr = new flow::QrDisplayStep;
     m_qr->setHint(TR("keys-add-qr-hint"));
+    m_qr->setTunable(false);
     m_qr->actions()->setBack(catalog::ModalActions::Back::Back);
     m_camera = new flow::CameraStep(m_module);
     m_camera->setHint(TR("keys-add-scan-hint"));

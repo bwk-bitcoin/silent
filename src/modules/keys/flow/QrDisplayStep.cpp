@@ -132,7 +132,8 @@ void QrDisplayStep::view() {
     grid->addWidget(m_qr_code, 0, 0, Qt::AlignCenter);
     grid->addWidget(m_rebuilding, 0, 0, Qt::AlignCenter);
 
-    auto *tuning =
+    m_separator = new catalog::Separator;
+    m_tuning =
         (new qontrol::Row)
             ->spacing(resolve(Spacing::L))
             ->pushSpacer()
@@ -146,13 +147,26 @@ void QrDisplayStep::view() {
         ->push(m_hint)
         ->pushAligned(codeCell, Qt::AlignHCenter)
         ->push(m_part_label)
-        ->push(new catalog::Separator)
-        ->push(tuning)
+        ->push(m_separator)
+        ->push(m_tuning)
         ->into(this);
 }
 
 void QrDisplayStep::setHint(const QString &hint) {
-    m_hint->setText(hint);
+    // On one line when it fits, as the design's text takes its natural width.
+    m_hint->setTextWrapped(hint, metric::QR_HINT_MAX_WIDTH);
+}
+
+void QrDisplayStep::setTunable(bool tunable) {
+    m_tunable = tunable;
+    int size = tunable ? metric::QR_DISPLAY_SIZE : metric::QR_REQUEST_SIZE;
+    m_qr_code->setFixedSize(size, size);
+    m_qr_code->setPadding(tunable ? metric::QR_DISPLAY_PADDING : metric::QR_REQUEST_PADDING);
+    m_qr_code->setRadius(tunable ? radius::QR_CARD : radius::BUTTON);
+    m_part_label->setVisible(tunable);
+    m_separator->setVisible(tunable);
+    m_tuning->setVisible(tunable);
+    rebuildColorTable();
 }
 
 void QrDisplayStep::setRequest(rust::Box<QrRequest> request) {
@@ -160,6 +174,7 @@ void QrDisplayStep::setRequest(rust::Box<QrRequest> request) {
     m_frame_index = 0;
     setRebuildingShown(false);
     if (!m_request.value()->is_ok()) {
+        m_part_label->setVisible(true);
         m_part_label->setText(
             TR("keys-qr-frame-failed")
                 .arg(QString::fromStdString(std::string(m_request.value()->get_error()))));
@@ -212,6 +227,7 @@ auto QrDisplayStep::showFrame(int index) -> bool {
     auto result = m_request.value()->frame(static_cast<std::uint32_t>(index));
     if (!result.is_ok) {
         m_frame_timer->stop();
+        m_part_label->setVisible(true);
         m_part_label->setText(
             TR("keys-qr-frame-failed").arg(QString::fromStdString(std::string(result.error))));
         return false;
@@ -230,6 +246,9 @@ auto QrDisplayStep::frameInterval() const -> int {
 }
 
 auto QrDisplayStep::background() const -> QColor {
+    if (!m_tunable) {
+        return Qt::white;
+    }
     int lightness = MIN_LIGHTNESS_PERCENT + (m_contrast - MIN_LEVEL) * LIGHTNESS_STEP_PERCENT;
     return QColor::fromHslF(BACKGROUND_HUE / FULL_CIRCLE, BACKGROUND_SATURATION,
                             lightness / PERCENT);
