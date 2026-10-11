@@ -105,6 +105,12 @@ struct QrScan {
     int total = 0;
 };
 
+// An xpub a device handed and the path it derived it at, written m/...
+struct QrXpub {
+    QString path;
+    QString xpub;
+};
+
 // What a device says about itself when it hands its xpubs.
 struct QrDevice {
     QString vendor;
@@ -127,5 +133,6 @@ Q_DECLARE_METATYPE(qr::QrFrame)
 Q_DECLARE_METATYPE(qr::CameraFrame)
 Q_DECLARE_METATYPE(qr::QrRender)
 Q_DECLARE_METATYPE(qr::QrScan)
+Q_DECLARE_METATYPE(qr::QrXpub)
 Q_DECLARE_METATYPE(qr::QrDevice)
 Q_DECLARE_METATYPE(qr::QrError)

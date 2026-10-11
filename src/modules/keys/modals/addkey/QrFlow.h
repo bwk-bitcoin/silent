@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QList>
 #include <QString>
 
 #include "AddKeyFlow.h"
@@ -44,8 +45,8 @@ public:
 public slots:
     void onBackClicked();
     void onNextClicked();
-    void onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub,
-                  const qr::QrDevice &device);
+    void onQrXpubs(const QString &fingerprint, const QList<qr::QrXpub> &xpubs,
+                   const qr::QrDevice &device);
     void onQrError(qr::QrError kind, const QString &message);
     void onQrFrame(const qr::QrFrame &frame);
 

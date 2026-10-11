@@ -32,14 +32,16 @@ BwkQrEngine::BwkQrEngine(KeysModule *module, QObject *parent)
       m_module(module) {
 }
 
-void BwkQrEngine::getXpub(const QString &path) {
+void BwkQrEngine::getXpubs(const QStringList &paths) {
     if (m_module->rust() == nullptr) {
         emit error(qr::QrError::RequestFailed, TR("keys-module-not-ready"));
         return;
     }
-    rust::Vec<rust::String> paths;
-    paths.push_back(rust::String(path.toStdString()));
-    issue(m_module->rust()->qr_request_get_xpubs(std::move(paths)));
+    rust::Vec<rust::String> rustPaths;
+    for (const auto &path : paths) {
+        rustPaths.push_back(rust::String(path.toStdString()));
+    }
+    issue(m_module->rust()->qr_request_get_xpubs(std::move(rustPaths)));
 }
 
 void BwkQrEngine::getSpDescriptor() {
@@ -106,17 +108,21 @@ void BwkQrEngine::response(const qr::QrResponse &response) {
 void BwkQrEngine::forwardResponse(const ::QrResponse &decoded) {
     switch (decoded.kind()) {
     case QrResponseKind::Xpubs: {
-        auto xpubs = decoded.xpubs();
-        if (xpubs.empty()) {
+        auto entries = decoded.xpubs();
+        if (entries.empty()) {
             emit error(qr::QrError::RequestFailed, TR("keys-qr-wrong-kind"));
             return;
+        }
+        QList<qr::QrXpub> xpubList;
+        for (const auto &entry : entries) {
+            xpubList.append({.path = xpubPath(KeysModule::toQt(entry.path)),
+                             .xpub = KeysModule::toQt(entry.xpub)});
         }
         qr::QrDevice device{.vendor = KeysModule::toQt(decoded.vendor()),
                             .model = KeysModule::toQt(decoded.model()),
                             .version = KeysModule::toQt(decoded.version()),
                             .capabilities = decoded.capabilities()};
-        emit xpub(KeysModule::toQt(xpubs[0].fingerprint), xpubPath(KeysModule::toQt(xpubs[0].path)),
-                  KeysModule::toQt(xpubs[0].xpub), device);
+        emit xpubs(KeysModule::toQt(decoded.fingerprint()), xpubList, device);
         return;
     }
     case QrResponseKind::SpDescriptor:

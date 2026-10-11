@@ -745,6 +745,12 @@ auto KeysModule::defaultXpubPath() -> QString {
     return QStringLiteral("m/84'/%1'/0'").arg(coinType());
 }
 
+auto KeysModule::accountXpubPaths() -> QStringList {
+    int coin = coinType();
+    return {defaultXpubPath(), QStringLiteral("m/86'/%1'/0'").arg(coin),
+            QStringLiteral("m/48'/%1'/0'/2'").arg(coin), QStringLiteral("m/87'/%1'/0'").arg(coin)};
+}
+
 auto KeysModule::toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice {
     LiveDevice device;
     device.device_id = rust::String(entry.instanceId.toStdString());

@@ -134,6 +134,9 @@ public:
     // The path a device exports an xpub at without asking: BIP84, account 0, the coin
     // type of the network.
     [[nodiscard]] static auto defaultXpubPath() -> QString;
+    // The paths a key added over QR has its xpubs fetched at: account 0 of BIP84,
+    // BIP86, BIP48 P2WSH and BIP87, at the coin type of the network.
+    [[nodiscard]] static auto accountXpubPaths() -> QStringList;
     // 0 on Bitcoin, 1 on every test network.
     [[nodiscard]] static auto coinType() -> int;
     // The Rust handle, for the tab and the modals of this module only. Null until the

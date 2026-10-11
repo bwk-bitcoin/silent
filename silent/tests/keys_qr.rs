@@ -703,3 +703,52 @@ fn test_xpubs_response_carries_the_device() {
     assert_eq!(version, "1.2.3", "unexpected version");
     assert_eq!(capabilities, 0x0000_000b, "unexpected capabilities");
 }
+
+// ===== Case 22: the four account xpubs of an added key come back in request order =====
+
+#[test]
+fn test_four_path_xpubs_response_keeps_the_request_order() {
+    let network = bitcoin::Network::Bitcoin;
+    let signer = HotSigner::new_from_mnemonics(network, TEST_MNEMONIC).expect("valid signer");
+    let paths: Vec<DerivationPath> = [
+        "m/84'/0'/0'",
+        "m/86'/0'/0'",
+        "m/48'/0'/0'/2'",
+        "m/87'/0'/0'",
+    ]
+    .iter()
+    .map(|path| DerivationPath::from_str(path).expect("path"))
+    .collect();
+    let expected: Vec<_> = paths
+        .iter()
+        .map(|path| (path.clone(), signer.xpub(path).xkey))
+        .collect();
+
+    let mut session = QrSession::new();
+    session.get_xpubs(paths).expect("get_xpubs request");
+    let response = Response {
+        id: session.outstanding_id().expect("outstanding request"),
+        body: response::Body::Xpubs(response::Xpubs {
+            xpubs: expected.iter().map(|(_, xpub)| xpub.into()).collect(),
+            fingerprint: bwk_qr_protocol::types::Fingerprint([0xde, 0xad, 0xbe, 0xef]),
+            vendor: "vendor".to_string(),
+            model: "model".to_string(),
+            version: response::FirmwareVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+                flag: response::ReleaseFlag::Stable,
+            },
+            capabilities: response::Capabilities(0),
+        }),
+    };
+    let encoded = bwk_qr_protocol::encode_response(&response).expect("encode response");
+
+    let Ok(QrResponse::Xpubs { xpubs, .. }) = session.decode_response(&encoded) else {
+        panic!("expected an accepted xpubs response");
+    };
+    assert_eq!(
+        xpubs, expected,
+        "expected the four xpubs paired with their paths in request order"
+    );
+}

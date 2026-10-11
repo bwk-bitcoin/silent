@@ -15,7 +15,7 @@ class BwkQrEngine final : public qr::QrEngine {
 
 public:
     explicit BwkQrEngine(KeysModule *module, QObject *parent = nullptr);
-    void getXpub(const QString &path) override;
+    void getXpubs(const QStringList &paths) override;
     void getSpDescriptor() override;
     void sign(const QString &psbt_v2_hex, const QString &descriptor) override;
     void verifyAddress(const QString &descriptor, const QString &path,

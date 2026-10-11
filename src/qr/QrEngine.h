@@ -2,8 +2,10 @@
 
 #include "qr/QrTypes.h"
 
+#include <QList>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 
 namespace qr {
 
@@ -16,8 +18,8 @@ class QrEngine : public QObject {
 
 public:
     explicit QrEngine(QObject *parent = nullptr);
-    // `path` is written m/...
-    virtual void getXpub(const QString &path) = 0;
+    // Each path is written m/...
+    virtual void getXpubs(const QStringList &paths) = 0;
     virtual void getSpDescriptor() = 0;
     virtual void sign(const QString &psbt_v2_hex, const QString &descriptor) = 0;
     virtual void verifyAddress(const QString &descriptor, const QString &path,
@@ -27,9 +29,9 @@ public:
 
 signals:
     void request(const qr::QrRequest &request);
-    // `path` is written m/...
-    void xpub(const QString &fingerprint, const QString &path, const QString &xpub,
-              const qr::QrDevice &device);
+    // One xpub per path asked, in the order asked.
+    void xpubs(const QString &fingerprint, const QList<qr::QrXpub> &xpubs,
+               const qr::QrDevice &device);
     void spDescriptor(const QString &descriptor);
     void signedPsbt(const QString &psbt_v2_hex);
     void addressVerified(bool matched);

@@ -41,7 +41,7 @@ QrFlow::~QrFlow() {
 
 void QrFlow::start() {
     showDisplay();
-    m_qr_engine->getXpub(KeysModule::defaultXpubPath());
+    m_qr_engine->getXpubs(KeysModule::accountXpubPaths());
 }
 
 void QrFlow::init() {
@@ -125,7 +125,7 @@ void QrFlow::connectCamera() {
             qontrol::UNIQUE);
     connect(m_camera->engine(), &qr::QrCameraEngine::response, m_qr_engine, &qr::QrEngine::response,
             qontrol::UNIQUE);
-    connect(m_qr_engine, &qr::QrEngine::xpub, this, &QrFlow::onQrXpub, qontrol::UNIQUE);
+    connect(m_qr_engine, &qr::QrEngine::xpubs, this, &QrFlow::onQrXpubs, qontrol::UNIQUE);
     connect(m_qr_engine, &qr::QrEngine::error, this, &QrFlow::onQrError, qontrol::UNIQUE);
 }
 
@@ -250,12 +250,16 @@ void QrFlow::onNextClicked() {
     }
 }
 
-void QrFlow::onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub,
-                      const qr::QrDevice &device) {
+void QrFlow::onQrXpubs(const QString &fingerprint, const QList<qr::QrXpub> &xpubs,
+                       const qr::QrDevice &device) {
     stop();
     m_fingerprint = fingerprint;
     m_device = device;
-    m_review->setKey(fingerprint, {{.path = path, .xpub = xpub}}, QString());
+    QList<PathXpub> pathXpubs;
+    for (const auto &entry : xpubs) {
+        pathXpubs.append({.path = entry.path, .xpub = entry.xpub});
+    }
+    m_review->setKey(fingerprint, pathXpubs, QString());
     showReview();
 }
 
