@@ -340,7 +340,9 @@ void KeysTab::rebuildKeys() {
     } else {
         auto *addKey = catalog::btnAddAKey();
         connect(addKey, &QPushButton::clicked, this, &KeysTab::openAddKey, qontrol::UNIQUE);
-        m_keys->header()->setAction(addKey);
+        // Inset as the rows are by the scroll area's gutter, so its right edge meets theirs.
+        m_keys->header()->setAction(
+            (new qontrol::Row)->margins(0, 0, catalog::ScrollArea::insetH(), 0)->push(addKey));
     }
     m_key_column->pushStretch(1);
     m_keys->header()->setCount(keyList.isEmpty() ? QString() : QString::number(keyList.size()));
