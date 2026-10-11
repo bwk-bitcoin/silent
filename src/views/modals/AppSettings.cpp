@@ -1,15 +1,17 @@
 #include "AppSettings.h"
 
+#include "appsettings/DisableFlow.h"
+#include "appsettings/SectionFlow.h"
+
 #include "AppController.h"
 #include "catalog/Button.h"
 #include "catalog/SelectRow.h"
 #include "catalog/Variants.h"
-#include "catalog/containers/Card.h"
-#include "catalog/containers/ModalActions.h"
 #include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/Section.h"
 #include "catalog/containers/SectionHeader.h"
 #include "catalog/containers/Separator.h"
+#include "catalog/containers/ViewSlots.h"
 #include "catalog/display/Badge.h"
 #include "catalog/display/Label.h"
 #include "catalog/feedback/EmptyState.h"
@@ -72,12 +74,6 @@ auto withNote(catalog::FieldGroup *field, catalog::FieldNote *note) -> QWidget *
     return (new qontrol::Column)->spacing(resolve(Spacing::XS))->push(field)->push(note);
 }
 
-auto wrapped(LabelRole role) -> Label * {
-    auto *label = new Label(role);
-    label->setWordWrap(true);
-    return label;
-}
-
 } // namespace
 
 AppSettings::AppSettings() {
@@ -90,11 +86,9 @@ AppSettings::AppSettings() {
     showMain();
 }
 
-AppSettings::~AppSettings() {
-    // Hand the module its widget back before the slot and its children go.
-    if (m_open_section != nullptr) {
-        m_section_slot->take(m_open_section.data());
-    }
+void AppSettings::done(int result) {
+    closeFlow();
+    catalog::Modal::done(result);
 }
 
 void AppSettings::init() {
@@ -111,8 +105,6 @@ void AppSettings::init() {
         m_host_events = m_host->events();
     }
     initMain();
-    initDisable();
-    initSection();
 }
 
 void AppSettings::doConnect() {
@@ -123,16 +115,10 @@ void AppSettings::doConnect() {
                 &AppSettings::onHostInstanceChanged, qontrol::UNIQUE);
     }
     connectMain();
-    connectDisable();
-    connectSection();
 }
 
 void AppSettings::view() {
     m_main = viewMain();
-    m_disable = viewDisable();
-    m_section = viewSection();
-    hideDisable();
-    hideSection();
     retranslateUi();
 }
 
@@ -246,7 +232,6 @@ auto AppSettings::buildPlugins() -> QWidget * {
 }
 
 void AppSettings::showMain() {
-    m_view = View::Main;
     setWindowTitle(TR("settings-title"));
     setHeader(nullptr);
     setBody(m_main);
@@ -455,155 +440,6 @@ void AppSettings::switchToLightTheme() {
     }
 }
 
-// ===== Disable view =====
-
-void AppSettings::initDisable() {
-    m_disable_question = wrapped(LabelRole::Body);
-    m_disable_accounts = new Notice;
-    m_disable_themes = new Notice;
-    m_disable_actions = new catalog::ModalActions;
-    m_disable_actions->setBack(catalog::ModalActions::Back::Back);
-    m_disable_btn = catalog::btnDisablePlugin();
-    m_disable_actions->addAction(m_disable_btn);
-}
-
-void AppSettings::connectDisable() {
-    connect(m_disable_btn, &QPushButton::clicked, this, &AppSettings::onNextClicked,
-            qontrol::UNIQUE);
-    connect(m_disable_actions, &catalog::ModalActions::backClicked, this,
-            &AppSettings::onBackClicked, qontrol::UNIQUE);
-}
-
-auto AppSettings::viewDisable() -> QWidget * {
-    return (new qontrol::Column)
-        ->spacing(resolve(Spacing::M))
-        ->push(m_disable_question)
-        ->push(m_disable_accounts)
-        ->push(m_disable_themes);
-}
-
-void AppSettings::showDisable(const QString &id) {
-    m_disabling_id = id;
-    QString name = m_plugin_registry->pluginName(id);
-    m_disable_question->setText(TR("settings-disable-question").arg(name, m_plugin_meta.value(id)));
-
-    QStringList accounts = m_plugin_registry->pluginAccountNames(id);
-    if (accounts.isEmpty()) {
-        m_disable_accounts->setTone(Notice::Tone::Info);
-        m_disable_accounts->setTitle(QString());
-        m_disable_accounts->setText(TR("settings-disable-no-account"));
-    } else if (accounts.size() == 1) {
-        m_disable_accounts->setTone(Notice::Tone::Warning);
-        m_disable_accounts->setTitle(TR("settings-disable-account-one"));
-        m_disable_accounts->setText(TR("settings-disable-account-one-text").arg(accounts.first()));
-    } else {
-        m_disable_accounts->setTone(Notice::Tone::Warning);
-        m_disable_accounts->setTitle(TR("settings-disable-accounts").arg(accounts.size()));
-        m_disable_accounts->setText(
-            TR("settings-disable-accounts-text").arg(accounts.join(QStringLiteral(", "))));
-    }
-
-    QStringList themes;
-    for (auto it = m_theme_plugin.constBegin(); it != m_theme_plugin.constEnd(); ++it) {
-        if (it.value() == id) {
-            themes.append(it.key());
-        }
-    }
-    themes.sort();
-    m_disable_themes->setTone(Notice::Tone::Info);
-    m_disable_themes->setText(TR("settings-disable-themes").arg(themes.join(QStringLiteral(", "))));
-    m_disable_themes->setVisible(!themes.isEmpty());
-
-    m_view = View::Disable;
-    setWindowTitle(TR("settings-disable-title"));
-    setHeader(nullptr);
-    setBody(m_disable);
-    setFooter(m_disable_actions);
-    setWidth(ModalWidth::Wide);
-}
-
-void AppSettings::hideDisable() {
-    keep(m_disable);
-    keep(m_disable_actions);
-}
-
-void AppSettings::disablePlugin() {
-    QString id = m_disabling_id;
-    QString activeTheme = m_theme_picker->currentData().toString();
-    bool themeGoes = !id.isEmpty() && m_theme_plugin.value(activeTheme) == id;
-
-    m_unloading_id = id;
-    onPluginsChanged();
-    showMain();
-    // Unloading runs on this thread: paint the Unloading row before it starts.
-    repaint();
-    bool disabled = m_plugin_registry->setEnabled(id, false);
-    m_unloading_id.clear();
-
-    if (!disabled) {
-        m_plugin_notice->setTitle(
-            TR("settings-disable-refused").arg(m_plugin_registry->pluginName(id)));
-        m_plugin_notice->setText(TR("settings-disable-refused-text"));
-        m_plugin_notice->setVisible(true);
-    } else if (themeGoes) {
-        switchToLightTheme();
-    }
-    onPluginsChanged();
-}
-
-// ===== Section view =====
-
-void AppSettings::initSection() {
-    m_section_text = wrapped(LabelRole::Body);
-    m_section_text->setTone(LabelTone::Secondary);
-    m_section_slot = new qontrol::Column;
-    m_section_actions = new catalog::ModalActions;
-    m_section_actions->setBack(catalog::ModalActions::Back::AllSettings);
-    m_done_btn = catalog::btnDone();
-    m_section_actions->addAction(m_done_btn);
-}
-
-void AppSettings::connectSection() {
-    connect(m_done_btn, &QPushButton::clicked, this, &AppSettings::onNextClicked, qontrol::UNIQUE);
-    connect(m_section_actions, &catalog::ModalActions::backClicked, this,
-            &AppSettings::onBackClicked, qontrol::UNIQUE);
-}
-
-auto AppSettings::viewSection() -> catalog::ScrollArea * {
-    auto *card = new catalog::Card(catalog::Card::Role::Inset);
-    card->setPad(catalog::Card::Pad::M);
-    card->setContent(m_section_slot);
-    auto *column =
-        (new qontrol::Column)->spacing(resolve(Spacing::S))->push(m_section_text)->push(card);
-    auto *scroll = new catalog::ScrollArea;
-    scroll->setFitContent(true);
-    scroll->setWidget(column);
-    return scroll;
-}
-
-void AppSettings::showSection(const QString &title) {
-    m_view = View::Section;
-    setWindowTitle(title);
-    setHeader(nullptr);
-    setBody(m_section);
-    setFooter(m_section_actions);
-    setWidth(ModalWidth::Wide);
-}
-
-void AppSettings::hideSection() {
-    keep(m_section);
-    keep(m_section_actions);
-}
-
-void AppSettings::closeSection() {
-    if (m_open_section != nullptr) {
-        m_section_slot->take(m_open_section.data());
-    }
-    m_open_section = nullptr;
-    m_open_section_id = 0;
-    showMain();
-}
-
 // ===== Shared =====
 
 void AppSettings::changeEvent(QEvent *event) {
@@ -614,11 +450,9 @@ void AppSettings::changeEvent(QEvent *event) {
 }
 
 void AppSettings::retranslateUi() {
-    // A module's section keeps the title it gave.
-    if (m_main->isVisibleTo(this)) {
+    // The language is picked on the main view: a flow is always opened in it.
+    if (m_flow == nullptr) {
         setWindowTitle(TR("settings-title"));
-    } else if (m_disable->isVisibleTo(this)) {
-        setWindowTitle(TR("settings-disable-title"));
     }
 
     m_general->header()->setLabel(TR("settings-general"));
@@ -642,44 +476,31 @@ void AppSettings::retranslateUi() {
     m_scanning->setTitle(TR("settings-scanning-plugins"));
     m_extensions->header()->setLabel(TR("settings-extension-settings"));
 
-    m_disable_actions->setBack(catalog::ModalActions::Back::Back);
-    m_disable_btn->setText(TR("btn-disable-plugin"));
-    m_section_actions->setBack(catalog::ModalActions::Back::AllSettings);
-    m_done_btn->setText(TR("btn-done"));
-
     onPluginsChanged();
     rebuildSettingSectionRows();
 }
 
+void AppSettings::openFlow(AppSettingsFlow *flow) {
+    m_flow = flow;
+    connect(m_flow, &AppSettingsFlow::viewChanged, this, &AppSettings::onFlowViewChanged,
+            qontrol::UNIQUE);
+    connect(m_flow, &AppSettingsFlow::back, this, &AppSettings::onFlowBack, qontrol::UNIQUE);
+    connect(m_flow, &AppSettingsFlow::confirmed, this, &AppSettings::onFlowConfirmed,
+            qontrol::UNIQUE);
+    setPage(m_flow);
+    m_flow->start();
+}
+
+void AppSettings::closeFlow() {
+    if (m_flow == nullptr) {
+        return;
+    }
+    // Deleted later: the flow may still be in the slot that emitted.
+    m_flow->deleteLater();
+    m_flow = nullptr;
+}
+
 // ===== Slots =====
-
-void AppSettings::onBackClicked() {
-    switch (m_view) {
-    case View::Disable:
-        // A Back from the disable view leaves the plugin enabled: its toggle shows it again.
-        onPluginsChanged();
-        showMain();
-        return;
-    case View::Section:
-        closeSection();
-        return;
-    case View::Main:
-        return;
-    }
-}
-
-void AppSettings::onNextClicked() {
-    switch (m_view) {
-    case View::Disable:
-        disablePlugin();
-        return;
-    case View::Section:
-        closeSection();
-        return;
-    case View::Main:
-        return;
-    }
-}
 
 void AppSettings::onThemeSelectionChanged(int index) {
     if (m_updating_theme_picker || index < 0) {
@@ -754,7 +575,8 @@ void AppSettings::onPluginToggled(bool enabled) {
     m_plugin_notice->setVisible(false);
     m_scan_result->setVisible(false);
     if (!enabled) {
-        showDisable(id);
+        m_disabling_id = id;
+        openFlow(new DisableFlow(m_plugin_registry, id, m_plugin_meta.value(id), m_theme_plugin));
         return;
     }
     // A plugin that fails to load gets its error row; a loaded one rebuilds the rows
@@ -815,29 +637,15 @@ void AppSettings::onOpenSectionClicked() {
                             ? TR("settings-section-fallback").arg(entry.id)
                             : entry.title.trimmed();
         QString module = sectionModuleName(entry.id);
-        m_section_text->setText(
-            TR("settings-section-belongs").arg(module.isEmpty() ? title : module));
-        m_open_section = entry.content;
-        m_open_section_id = entry.id;
-        m_section_slot->push(entry.content);
-        entry.content->show();
-        showSection(title);
+        openFlow(new SectionFlow(
+            m_host, entry.id, title,
+            TR("settings-section-belongs").arg(module.isEmpty() ? title : module), entry.content));
         return;
     }
 }
 
 void AppSettings::onHostSettingsSectionsChanged() {
     rebuildSettingSectionRows();
-    if (m_open_section_id == 0 || m_host == nullptr) {
-        return;
-    }
-    for (const auto &entry : m_host->settingSections()) {
-        if (entry.id == m_open_section_id) {
-            return;
-        }
-    }
-    // The module dropped the section on display.
-    closeSection();
 }
 
 void AppSettings::onHostInstanceChanged([[maybe_unused]] const QString &id) {
@@ -902,6 +710,55 @@ void AppSettings::onThemePalette(ReqId req_id, theme::Palette palette) {
         window()->update();
         window()->repaint();
     }
+}
+
+void AppSettings::onFlowViewChanged(const QString &title, ModalWidth width) {
+    setWindowTitle(title);
+    setWidth(width);
+}
+
+void AppSettings::onFlowBack() {
+    // A Back from disabling leaves the plugin enabled: its toggle shows it again.
+    onPluginsChanged();
+    showMain();
+    closeFlow();
+}
+
+// Only disabling a plugin asks to be confirmed.
+void AppSettings::onFlowConfirmed() {
+    QString id = m_disabling_id;
+    QString activeTheme = m_theme_picker->currentData().toString();
+    bool themeGoes = !id.isEmpty() && m_theme_plugin.value(activeTheme) == id;
+
+    m_unloading_id = id;
+    onPluginsChanged();
+    showMain();
+    closeFlow();
+    // Unloading runs on this thread: paint the Unloading row before it starts.
+    repaint();
+    bool disabled = m_plugin_registry->setEnabled(id, false);
+    m_unloading_id.clear();
+
+    if (!disabled) {
+        m_plugin_notice->setTitle(
+            TR("settings-disable-refused").arg(m_plugin_registry->pluginName(id)));
+        m_plugin_notice->setText(TR("settings-disable-refused-text"));
+        m_plugin_notice->setVisible(true);
+    } else if (themeGoes) {
+        switchToLightTheme();
+    }
+    onPluginsChanged();
+}
+
+// ===== AppSettingsFlow =====
+
+AppSettingsFlow::AppSettingsFlow(QWidget *parent) : QWidget(parent) {
+    m_slots = new catalog::ViewSlots;
+    (new qontrol::Column)->push(m_slots)->into(this);
+}
+
+auto AppSettingsFlow::viewSlots() const -> catalog::ViewSlots * {
+    return m_slots;
 }
 
 } // namespace modal

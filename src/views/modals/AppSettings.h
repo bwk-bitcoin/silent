@@ -6,7 +6,6 @@
 #include "theme/Palette.h"
 #include <QHash>
 #include <QList>
-#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -20,13 +19,13 @@ class EmptyState;
 class FieldGroup;
 class FieldNote;
 class Label;
-class ModalActions;
 class ModalStatus;
 class Notice;
 class ScrollArea;
 class Section;
 class SelectRow;
 class Separator;
+class ViewSlots;
 } // namespace catalog
 
 class PluginRegistry;
@@ -34,18 +33,19 @@ class IThemeProvider;
 
 namespace modal {
 
+class AppSettingsFlow;
+
 // The global Settings: General, Plugin Manager and Extension Settings on the main
-// step; disabling a plugin and a module's settings section replace it in place.
+// step; disabling a plugin and a module's settings section are flows embedded in its
+// place.
 class AppSettings : public catalog::Modal {
     Q_OBJECT
 
 public:
     AppSettings();
-    ~AppSettings() override;
+    void done(int result) override;
 
 public slots:
-    void onBackClicked();
-    void onNextClicked();
     void onThemeSelectionChanged(int index);
     void onLanguageSelectionChanged(int index);
     void onScanClicked();
@@ -56,11 +56,11 @@ public slots:
     void onHostInstanceChanged(const QString &id);
     void onThemeNames(ReqId req_id, const QStringList &themes);
     void onThemePalette(ReqId req_id, theme::Palette palette);
+    void onFlowViewChanged(const QString &title, ModalWidth width);
+    void onFlowBack();
+    void onFlowConfirmed();
 
 protected:
-    // The view on display: Back and the primary action act on it.
-    enum class View { Main, Disable, Section };
-
     void init();
     void doConnect();
     void view();
@@ -84,34 +84,15 @@ protected:
     void updateThemeNote();
     void switchToLightTheme();
 
-    // Disable view
-    // Disable view
-    void initDisable();
-    void connectDisable();
-    auto viewDisable() -> QWidget *;
-    void showDisable(const QString &id);
-    void hideDisable();
-    void disablePlugin();
-
-    // Section view
-    // Section view
-    void initSection();
-    void connectSection();
-    auto viewSection() -> catalog::ScrollArea *;
-    void showSection(const QString &title);
-    void hideSection();
-    void closeSection();
-
     // Shared
     // Shared
     void changeEvent(QEvent *event) override;
     void retranslateUi();
+    void openFlow(AppSettingsFlow *flow);
+    void closeFlow();
 
 private:
-    View m_view = View::Main;
     catalog::ScrollArea *m_main = nullptr;
-    QWidget *m_disable = nullptr;
-    catalog::ScrollArea *m_section = nullptr;
 
     catalog::Section *m_general = nullptr;
     catalog::FieldGroup *m_theme_field = nullptr;
@@ -135,20 +116,6 @@ private:
     catalog::Section *m_extensions = nullptr;
     qontrol::Column *m_section_column = nullptr;
 
-    catalog::Label *m_disable_question = nullptr;
-    catalog::Notice *m_disable_accounts = nullptr;
-    catalog::Notice *m_disable_themes = nullptr;
-    catalog::ModalActions *m_disable_actions = nullptr;
-    catalog::Button *m_disable_btn = nullptr;
-
-    catalog::Label *m_section_text = nullptr;
-    qontrol::Column *m_section_slot = nullptr;
-    catalog::ModalActions *m_section_actions = nullptr;
-    catalog::Button *m_done_btn = nullptr;
-    // The module owns its section widget: it is only lent to the slot while open.
-    QPointer<QWidget> m_open_section;
-    Host::SectionId m_open_section_id = 0;
-
     PluginRegistry *m_plugin_registry = nullptr;
     Host *m_host = nullptr;
     HostEvents *m_host_events = nullptr;
@@ -165,6 +132,34 @@ private:
     QHash<QString, QString> m_theme_plugin;
     bool m_updating_theme_picker = false;
     QString m_pending_theme_to_apply;
+
+    // The flow picked off the main view, deleted once it goes back or the window closes.
+    AppSettingsFlow *m_flow = nullptr;
+};
+
+// One page off the main settings, embedded in AppSettings in place of the main view:
+// its views, their button bars and the work behind them. Deleting it stops that work.
+class AppSettingsFlow : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit AppSettingsFlow(QWidget *parent = nullptr);
+    // Shows the first view, once AppSettings listens to the signals.
+    virtual void start() = 0;
+
+signals:
+    // The window title and width of the view now shown.
+    void viewChanged(const QString &title, ModalWidth width);
+    // Back left the flow: AppSettings shows its main view again.
+    void back();
+    // The flow's action is confirmed: AppSettings carries it out.
+    void confirmed();
+
+protected:
+    [[nodiscard]] auto viewSlots() const -> catalog::ViewSlots *;
+
+private:
+    catalog::ViewSlots *m_slots = nullptr;
 };
 
 } // namespace modal

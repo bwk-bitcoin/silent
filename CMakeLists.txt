@@ -177,6 +177,10 @@ set(SILENT_APP_SOURCES
     src/views/MenuTab.cpp
     src/views/modals/AppSettings.h
     src/views/modals/AppSettings.cpp
+    src/views/modals/appsettings/DisableFlow.h
+    src/views/modals/appsettings/DisableFlow.cpp
+    src/views/modals/appsettings/SectionFlow.h
+    src/views/modals/appsettings/SectionFlow.cpp
     src/modules/sp/modals/CreateAccount.h
     src/modules/sp/modals/CreateAccount.cpp
     src/views/utils.h
