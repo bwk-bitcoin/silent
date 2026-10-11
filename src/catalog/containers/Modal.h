@@ -26,6 +26,8 @@ public:
     // Empties the header and the footer and puts `page` in the body, filling the width.
     void setPage(QWidget *page);
     void setWidth(ModalWidth width);
+    // Opens over the active window, centred on it at the size its content lays out to.
+    void setVisible(bool visible) override;
 
 protected:
     // Hides `widget` and gives it to the modal, kept until a view shows it.

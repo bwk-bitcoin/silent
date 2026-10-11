@@ -3,7 +3,9 @@
 #include "catalog/containers/ViewSlots.h"
 #include "catalog/display/Label.h"
 
+#include <QApplication>
 #include <QEvent>
+#include <QLayout>
 
 namespace catalog {
 
@@ -26,6 +28,22 @@ void Modal::setFooter(QWidget *footer) {
 
 void Modal::setPage(QWidget *page) {
     m_slots->setPage(page);
+}
+
+void Modal::setVisible(bool visible) {
+    if (visible && !isVisible()) {
+        // Without a parent the window manager places the modal where it likes: give it
+        // the window it opens over, so it is centred there.
+        QWidget *over = QApplication::activeWindow();
+        if (parentWidget() == nullptr && over != nullptr && over != this) {
+            setParent(over, windowFlags());
+        }
+        // The position is computed from the size at this point: lay the content out
+        // first, or the modal is centred at its unlaid size and grows down from there.
+        layout()->activate();
+        adjustSize();
+    }
+    qontrol::Modal::setVisible(visible);
 }
 
 void Modal::setWidth(ModalWidth width) {
