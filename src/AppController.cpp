@@ -287,11 +287,14 @@ auto AppController::onDeleteConfirmed(const QString &account) -> void {
 auto AppController::onHostInstanceRemoved(const QString &id) -> void {
     m_open_accounts.remove(id);
     applyPersistedThemeAtStartup();
+    // The launcher dims open accounts: a closed one comes back to reopen.
+    listAccounts();
 }
 
 auto AppController::onHostInstanceRegistered(const QString &id) -> void {
     m_open_accounts.insert(id);
     applyPersistedThemeAtStartup();
+    listAccounts();
 }
 
 auto AppController::onHostSettingsSectionsChanged() -> void {
