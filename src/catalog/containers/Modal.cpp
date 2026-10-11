@@ -6,8 +6,31 @@
 #include <QApplication>
 #include <QEvent>
 #include <QLayout>
+#include <QLoggingCategory>
 
 namespace catalog {
+
+namespace {
+
+// Enable with QT_LOGGING_RULES="silent.modal.debug=true".
+Q_LOGGING_CATEGORY(lcModal, "silent.modal", QtWarningMsg)
+
+// The window a modal opens over: the active one, else the application's main window,
+// as the active window can be unset when a click does not give the window focus.
+auto openOver(const QWidget *modal) -> QWidget * {
+    QWidget *active = QApplication::activeWindow();
+    if (active != nullptr && active != modal) {
+        return active;
+    }
+    for (auto *widget : QApplication::topLevelWidgets()) {
+        if (widget != modal && widget->isVisible() && widget->windowType() == Qt::Window) {
+            return widget;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
 
 Modal::Modal() {
     m_slots = new ViewSlots;
@@ -34,8 +57,10 @@ void Modal::setVisible(bool visible) {
     if (visible && !isVisible()) {
         // Without a parent the window manager places the modal where it likes: give it
         // the window it opens over, so it is centred there.
-        QWidget *over = QApplication::activeWindow();
-        if (parentWidget() == nullptr && over != nullptr && over != this) {
+        QWidget *over = openOver(this);
+        qCDebug(lcModal) << "opening" << this << "parent" << parentWidget() << "active"
+                         << QApplication::activeWindow() << "over" << over;
+        if (parentWidget() == nullptr && over != nullptr) {
             setParent(over, windowFlags());
         }
         // The position is computed from the size at this point: lay the content out
