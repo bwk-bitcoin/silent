@@ -145,8 +145,6 @@ set(SILENT_APP_SOURCES
     src/modules/keys/modals/KeyDetail.cpp
     src/modules/keys/modals/FetchXpub.h
     src/modules/keys/modals/FetchXpub.cpp
-    src/modules/keys/modals/FetchXpubStep.h
-    src/modules/keys/modals/FetchXpubStep.cpp
     src/modules/sp/SpPlugin.h
     src/modules/sp/SpPlugin.cpp
     src/modules/sp/SpModule.h
