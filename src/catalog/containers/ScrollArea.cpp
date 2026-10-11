@@ -67,6 +67,11 @@ void ScrollArea::onRangeChanged(int minimum, int maximum) {
     setProperty("overflow", overflow);
     style()->unpolish(this);
     style()->polish(this);
+    // The scrollbar comes and goes with the overflow, and with it the width a fitting
+    // area asks for.
+    if (m_fit) {
+        updateGeometry();
+    }
 }
 
 auto ScrollArea::qss(const Palette &p) -> QString {

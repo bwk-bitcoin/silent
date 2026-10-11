@@ -1,5 +1,6 @@
 #include "catalog/containers/Modal.h"
 
+#include "catalog/containers/ViewSlots.h"
 #include "catalog/display/Label.h"
 
 #include <QEvent>
@@ -7,27 +8,24 @@
 namespace catalog {
 
 Modal::Modal() {
-    m_header = new qontrol::Row;
-    m_body = new qontrol::Row;
-    m_footer = new qontrol::Row;
-    setMainWidget((new qontrol::Column)
-                      ->margins(resolve(Padding::L))
-                      ->spacing(resolve(Spacing::M))
-                      ->push(m_header)
-                      ->push(m_body)
-                      ->push(m_footer));
+    m_slots = new ViewSlots;
+    setMainWidget((new qontrol::Column)->margins(resolve(Padding::L))->push(m_slots));
 }
 
 void Modal::setHeader(QWidget *header) {
-    replace(m_header, m_header_widget, header);
+    m_slots->setHeader(header);
 }
 
 void Modal::setBody(QWidget *body) {
-    replace(m_body, m_body_widget, body);
+    m_slots->setBody(body);
 }
 
 void Modal::setFooter(QWidget *footer) {
-    replace(m_footer, m_footer_widget, footer);
+    m_slots->setFooter(footer);
+}
+
+void Modal::setPage(QWidget *page) {
+    m_slots->setPage(page);
 }
 
 void Modal::setWidth(ModalWidth width) {
@@ -46,30 +44,7 @@ auto Modal::event(QEvent *event) -> bool {
 }
 
 void Modal::keep(QWidget *widget) {
-    widget->hide();
-    widget->setParent(this);
-}
-
-void Modal::replace(qontrol::Row *slot, QWidget *&current, QWidget *widget) {
-    if (current != nullptr) {
-        slot->take(current);
-        // Spacers only: the widget was taken out first.
-        slot->clear();
-        // Kept alive with the modal, so the consumer can put it back later.
-        keep(current);
-    }
-    current = widget;
-    if (widget != nullptr) {
-        // The body sits centred; a header or footer fills its row.
-        if (slot == m_body) {
-            slot->pushSpacer()->push(widget)->pushSpacer();
-        } else {
-            slot->push(widget);
-        }
-        widget->show();
-    }
-    slot->setVisible(widget != nullptr);
-    adjustSize();
+    m_slots->keep(widget);
 }
 
 auto modalHeader(const QString &title, QWidget *end) -> QWidget * {

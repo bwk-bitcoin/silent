@@ -8,6 +8,8 @@ class QEvent;
 
 namespace catalog {
 
+class ViewSlots;
+
 // A modal of three slots stacked top to bottom: a header, a body centred across the
 // window, and a footer. The consumer owns the widgets it puts in them and swaps them
 // to move between its views.
@@ -21,6 +23,8 @@ public:
     void setHeader(QWidget *header);
     void setBody(QWidget *body);
     void setFooter(QWidget *footer);
+    // Empties the header and the footer and puts `page` in the body, filling the width.
+    void setPage(QWidget *page);
     void setWidth(ModalWidth width);
 
 protected:
@@ -29,14 +33,7 @@ protected:
     auto event(QEvent *event) -> bool override;
 
 private:
-    void replace(qontrol::Row *slot, QWidget *&current, QWidget *widget);
-
-    qontrol::Row *m_header = nullptr;
-    qontrol::Row *m_body = nullptr;
-    qontrol::Row *m_footer = nullptr;
-    QWidget *m_header_widget = nullptr;
-    QWidget *m_body_widget = nullptr;
-    QWidget *m_footer_widget = nullptr;
+    ViewSlots *m_slots = nullptr;
 };
 
 // The title on the left of a modal header, with an optional widget on its right (a

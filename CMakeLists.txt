@@ -188,6 +188,8 @@ set(SILENT_APP_SOURCES
     src/catalog/containers/SectionHeader.cpp
     src/catalog/containers/Modal.h
     src/catalog/containers/Modal.cpp
+    src/catalog/containers/ViewSlots.h
+    src/catalog/containers/ViewSlots.cpp
     src/catalog/containers/Card.h
     src/catalog/containers/Card.cpp
     src/catalog/display/Badge.h
