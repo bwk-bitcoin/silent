@@ -540,7 +540,7 @@ auto Send::outputsView() -> QWidget * {
     if (visible > 1) {
         outputsHeight += (visible - 1) * resolve(Spacing::XS);
     }
-    outputsScroll->setFixedHeight(outputsHeight);
+    outputsScroll->setViewportHeight(outputsHeight);
 
     auto *addRow = (new qontrol::Row)->pushSpacer()->push(m_add_output_btn);
 

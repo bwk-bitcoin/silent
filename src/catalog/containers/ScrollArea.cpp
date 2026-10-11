@@ -32,6 +32,10 @@ void ScrollArea::setFitContent(bool fit) {
     updateGeometry();
 }
 
+void ScrollArea::setViewportHeight(int height) {
+    setFixedHeight(height + (2 * insetV()) + (2 * frameWidth()));
+}
+
 auto ScrollArea::sizeHint() const -> QSize {
     if (m_fit && widget() != nullptr) {
         // The gutters are reserved whether the scrollbar shows or not, so the hint

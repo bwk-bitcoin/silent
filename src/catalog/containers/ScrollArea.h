@@ -17,6 +17,9 @@ public:
     // Fitting, the area asks for its whole content height, wrapped text included, so
     // a list takes its height and scrolls only once its parent runs out of room.
     void setFitContent(bool fit);
+    // Pins the area so its viewport is `height` tall: the edge lines and the frame are
+    // added on top, so content of exactly that height does not overflow.
+    void setViewportHeight(int height);
     [[nodiscard]] auto sizeHint() const -> QSize override;
     [[nodiscard]] auto minimumSizeHint() const -> QSize override;
     [[nodiscard]] auto hasHeightForWidth() const -> bool override;

@@ -111,7 +111,7 @@ auto Table::selectedIds() const -> QStringList {
 void Table::setBodyHeight(int height) {
     m_body_height = height;
     if (m_scroll != nullptr && m_body_height != width::NONE) {
-        m_scroll->setFixedHeight(m_body_height);
+        m_scroll->setViewportHeight(m_body_height);
     }
     updateScrollRules();
 }
@@ -239,7 +239,7 @@ void Table::rebuild() {
         // viewport and clip the overflow rows instead of scrolling them.
         // Always on, as every scroll area: its gutter does not come and go.
         m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
-        m_scroll->setFixedHeight(m_body_height);
+        m_scroll->setViewportHeight(m_body_height);
     }
 
     updateScrollRules();
