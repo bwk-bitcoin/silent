@@ -1,13 +1,13 @@
 #include "SigningFlow.h"
 
 #include "CameraStep.h"
-#include "QrDisplayStep.h"
 
 #include "catalog/Button.h"
 #include "catalog/SelectRow.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/Card.h"
 #include "catalog/containers/ModalActions.h"
+#include "catalog/containers/Separator.h"
 #include "catalog/display/Badge.h"
 #include "catalog/display/Label.h"
 #include "catalog/display/RouteIcons.h"
@@ -16,6 +16,7 @@
 #include "catalog/feedback/Notice.h"
 #include "catalog/form/Field.h"
 #include "catalog/inputs/Input.h"
+#include "catalog/inputs/Stepper.h"
 #include "catalog/panels/receive/ChunkedAddress.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
@@ -24,7 +25,9 @@
 #include "modules/keys/DeviceName.h"
 #include "modules/keys/KeysModule.h"
 #include "qr/QrCameraEngine.h"
+#include "qr/QrDisplay.h"
 #include "qr/QrDisplayEngine.h"
+#include "qr/bbqr/BbqrDisplayEngine.h"
 #include "theme/Icon.h"
 #include "theme/Palette.h"
 
@@ -164,6 +167,26 @@ auto monoFileName(const QString &name) -> QString {
         .arg(font::MONO, name.toHtmlEscaped());
 }
 
+// One tuning control of the QR view: the stepper over the line that says what it does.
+auto tuneColumn(catalog::Stepper *stepper, const QString &hint) -> QWidget * {
+    auto *caption = new catalog::Label(hint, catalog::LabelRole::Caption);
+    caption->setWordWrap(true);
+    caption->setAlignment(Qt::AlignCenter);
+    auto *column = (new qontrol::Column)
+                       ->spacing(resolve(Spacing::XXS))
+                       ->pushAligned(stepper, Qt::AlignHCenter)
+                       ->push(caption);
+    column->setFixedWidth(resolve(Size::S));
+    return column;
+}
+
+auto levelStepper(const QString &label) -> catalog::Stepper * {
+    auto *stepper = new catalog::Stepper;
+    stepper->setLabel(label);
+    stepper->setRange(qr::MIN_LEVEL, qr::MAX_LEVEL);
+    stepper->setValue(qr::DEFAULT_LEVEL);
+    return stepper;
+}
 } // namespace
 
 auto FlowRow::usable() const -> bool {
@@ -250,6 +273,7 @@ void SigningFlow::view() {
     m_usb_step = viewUsb();
     m_sd_step = viewSd();
     m_password_step = viewPassword();
+    m_qr_step = viewQr();
     m_result_step = viewVerifyResult();
 
     hidePicker();
@@ -831,16 +855,35 @@ void SigningFlow::loadSd() {
 
 void SigningFlow::initQr() {
     m_qr_engine = new BwkQrEngine(m_module, this);
-    m_qr = new QrDisplayStep;
-    m_qr->setHint(m_copy.qrHint);
+    m_qr_display_engine = new qr::BbqrDisplayEngine(qr::QrDisplaySettings{}, this);
+    m_qr_hint = new catalog::Label(catalog::LabelRole::Body);
+    m_qr_hint->setTone(catalog::LabelTone::Secondary);
+    m_qr_hint->setAlignment(Qt::AlignCenter);
+    // On one line when it fits, as the design's text takes its natural width.
+    m_qr_hint->setTextWrapped(m_copy.qrHint, metric::QR_HINT_MAX_WIDTH);
+    m_qr_display = new qr::QrDisplay;
+    m_qr_contrast = levelStepper(TR("keys-qr-contrast"));
+    m_qr_density = levelStepper(TR("keys-qr-density"));
+    m_qr_speed = levelStepper(TR("flow-qr-speed"));
+    m_qr_next = catalog::btnNextScanTheAnswer();
+    m_qr_actions = new catalog::ModalActions;
+    m_qr_actions->addAction(m_qr_next);
     m_camera = new CameraStep;
     m_camera->setHint(m_copy.scanHint);
 }
 
 void SigningFlow::connectQr() {
-    connect(m_qr, &QrDisplayStep::nextClicked, this, &SigningFlow::onNextClicked, qontrol::UNIQUE);
+    connect(m_qr_display_engine, &qr::QrDisplayEngine::frame, m_qr_display, &qr::QrDisplay::frame,
+            qontrol::UNIQUE);
+    connect(m_qr_display_engine, &qr::QrDisplayEngine::frame, this, &SigningFlow::onQrFrame,
+            qontrol::UNIQUE);
+    for (auto *stepper : {m_qr_contrast, m_qr_density, m_qr_speed}) {
+        connect(stepper, &catalog::Stepper::valueChanged, this, &SigningFlow::onQrSettingsChanged,
+                qontrol::UNIQUE);
+    }
+    connect(m_qr_next, &QPushButton::clicked, this, &SigningFlow::onNextClicked, qontrol::UNIQUE);
     connect(m_camera, &CameraStep::backClicked, this, &SigningFlow::onBackClicked, qontrol::UNIQUE);
-    connect(m_qr_engine, &qr::QrEngine::request, m_qr->engine(), &qr::QrDisplayEngine::request,
+    connect(m_qr_engine, &qr::QrEngine::request, m_qr_display_engine, &qr::QrDisplayEngine::request,
             qontrol::UNIQUE);
     connect(m_camera->engine(), &qr::QrCameraEngine::response, m_qr_engine, &qr::QrEngine::response,
             qontrol::UNIQUE);
@@ -853,12 +896,29 @@ void SigningFlow::connectQr() {
     connect(m_qr_engine, &qr::QrEngine::error, this, &SigningFlow::onQrError, qontrol::UNIQUE);
 }
 
+auto SigningFlow::viewQr() -> QWidget * {
+    auto *tuning =
+        (new qontrol::Row)
+            ->spacing(resolve(Spacing::L))
+            ->pushSpacer()
+            ->pushAligned(tuneColumn(m_qr_contrast, TR("flow-qr-contrast-hint")), Qt::AlignTop)
+            ->pushAligned(tuneColumn(m_qr_density, TR("flow-qr-density-hint")), Qt::AlignTop)
+            ->pushAligned(tuneColumn(m_qr_speed, TR("flow-qr-speed-hint")), Qt::AlignTop)
+            ->pushSpacer();
+    return (new qontrol::Column)
+        ->spacing(resolve(Spacing::M))
+        ->push(m_qr_hint)
+        ->push(m_qr_display)
+        ->push(new catalog::Separator)
+        ->push(tuning);
+}
+
 void SigningFlow::showQrDisplay() {
     m_view = View::QrDisplay;
     setWindowTitle(m_copy.qrTitle);
     setHeader(nullptr);
-    setBody(m_qr);
-    setFooter(m_qr->actions());
+    setBody(m_qr_step);
+    setFooter(m_qr_actions);
     setWidth(ModalWidth::XXL);
 }
 
@@ -872,8 +932,8 @@ void SigningFlow::showCamera() {
 }
 
 void SigningFlow::hideQr() {
-    keep(m_qr);
-    keep(m_qr->actions());
+    keep(m_qr_step);
+    keep(m_qr_actions);
     keep(m_camera);
     keep(m_camera->actions());
 }
@@ -991,7 +1051,7 @@ void SigningFlow::stopRoute() {
     m_hot_req = 0;
     m_sd_req = 0;
     m_qr_engine->stop();
-    m_qr->stop();
+    m_qr_display_engine->stop();
     m_camera->stop();
 }
 
@@ -1047,7 +1107,7 @@ void SigningFlow::onBackClicked() {
     case View::Camera:
         m_camera->stop();
         showQrDisplay();
-        m_qr->restart();
+        m_qr_display_engine->restart();
         return;
     case View::Picker:
     case View::Password:
@@ -1075,7 +1135,7 @@ void SigningFlow::onNextClicked() {
         }
         return;
     case View::QrDisplay:
-        m_qr->stop();
+        m_qr_display_engine->stop();
         showCamera();
         m_camera->start();
         return;
@@ -1258,6 +1318,19 @@ void SigningFlow::onQrError(qr::QrError kind, const QString &message) {
         return;
     }
     fail(message);
+}
+
+void SigningFlow::onQrSettingsChanged() {
+    m_qr_display_engine->setSettings(qr::QrDisplaySettings{.density = m_qr_density->value(),
+                                                           .contrast = m_qr_contrast->value(),
+                                                           .speed = m_qr_speed->value()});
+}
+
+void SigningFlow::onQrFrame(const qr::QrFrame &frame) {
+    bool rendering = frame.image.isNull() && frame.error.isEmpty();
+    m_qr_density->setEnabled(!rendering);
+    m_qr_next->setEnabled(!rendering);
+    m_qr_actions->setReason(rendering ? TR("flow-qr-rebuild-reason") : QString());
 }
 
 } // namespace keys::flow

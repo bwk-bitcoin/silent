@@ -113,8 +113,6 @@ set(SILENT_APP_SOURCES
     src/modules/keys/KeysView.cpp
     src/modules/keys/flow/FlowCopy.h
     src/modules/keys/flow/FlowCopy.cpp
-    src/modules/keys/flow/QrDisplayStep.h
-    src/modules/keys/flow/QrDisplayStep.cpp
     src/modules/keys/flow/CameraSettings.h
     src/modules/keys/flow/CameraSettings.cpp
     src/modules/keys/flow/CameraStep.h

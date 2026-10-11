@@ -37,11 +37,13 @@ class WordInputGrid;
 
 namespace keys::flow {
 class CameraStep;
-class QrDisplayStep;
 } // namespace keys::flow
 
 namespace qr {
+class QrDisplay;
+class QrDisplayEngine;
 class QrEngine;
+struct QrFrame;
 } // namespace qr
 
 namespace keys::modal {
@@ -63,6 +65,7 @@ public slots:
     void onModeClicked();
     void onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub);
     void onQrError(qr::QrError kind, const QString &message);
+    void onQrFrame(const qr::QrFrame &frame);
     void onReviewChanged();
     void onOpenFileClicked();
     void onPasteChanged();
@@ -113,6 +116,7 @@ protected:
     // QR code and camera views
     void initQr();
     void connectQr();
+    [[nodiscard]] auto viewQr() -> QWidget *;
     void showQr();
     void showQrDisplay();
     void showCamera();
@@ -191,7 +195,12 @@ private:
     QWidget *m_modes_body = nullptr;
 
     qr::QrEngine *m_qr_engine = nullptr;
-    flow::QrDisplayStep *m_qr = nullptr;
+    qr::QrDisplayEngine *m_qr_display_engine = nullptr;
+    catalog::Label *m_qr_hint = nullptr;
+    qr::QrDisplay *m_qr_display = nullptr;
+    catalog::Button *m_qr_next = nullptr;
+    catalog::ModalActions *m_qr_actions = nullptr;
+    QWidget *m_qr_step = nullptr;
     flow::CameraStep *m_camera = nullptr;
 
     Source m_source = Source::Qr;

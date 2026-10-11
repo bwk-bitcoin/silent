@@ -3,9 +3,10 @@
 #include "modules/keys/BwkQrEngine.h"
 #include "modules/keys/KeysView.h"
 #include "modules/keys/flow/CameraStep.h"
-#include "modules/keys/flow/QrDisplayStep.h"
 #include "qr/QrCameraEngine.h"
+#include "qr/QrDisplay.h"
 #include "qr/QrDisplayEngine.h"
+#include "qr/bbqr/BbqrDisplayEngine.h"
 
 #include "catalog/Button.h"
 #include "catalog/SelectRow.h"
@@ -186,6 +187,7 @@ void AddKey::doConnect() {
 
 void AddKey::view() {
     m_modes_body = viewModes();
+    m_qr_step = viewQr();
     m_review_body = viewReview();
     m_paste_body = viewPaste();
     m_choose_body = viewHotChoose();
@@ -240,22 +242,36 @@ void AddKey::showModes() {
 
 void AddKey::initQr() {
     m_qr_engine = new BwkQrEngine(m_module, this);
-    m_qr = new flow::QrDisplayStep;
-    m_qr->setHint(TR("keys-add-qr-hint"));
-    m_qr->setTunable(false);
-    m_qr->setSize(metric::QR_REQUEST_SIZE);
-    m_qr->actions()->setBack(catalog::ModalActions::Back::Back);
+    // A plain code on white, the highest contrast, with no tuning controls.
+    m_qr_display_engine =
+        new qr::BbqrDisplayEngine(qr::QrDisplaySettings{.contrast = qr::MAX_LEVEL}, this);
+    m_qr_hint = new Label(LabelRole::Body);
+    m_qr_hint->setTone(LabelTone::Secondary);
+    m_qr_hint->setAlignment(Qt::AlignCenter);
+    // On one line when it fits, as the design's text takes its natural width.
+    m_qr_hint->setTextWrapped(TR("keys-add-qr-hint"), metric::QR_HINT_MAX_WIDTH);
+    m_qr_display = new qr::QrDisplay;
+    m_qr_display->setTunable(false);
+    m_qr_display->setSize(metric::QR_REQUEST_SIZE);
+    m_qr_next = catalog::btnNextScanTheAnswer();
+    m_qr_actions = new catalog::ModalActions;
+    m_qr_actions->setBack(catalog::ModalActions::Back::Back);
+    m_qr_actions->addAction(m_qr_next);
     m_camera = new flow::CameraStep;
     m_camera->setHint(TR("keys-add-scan-hint"));
 }
 
 void AddKey::connectQr() {
-    connect(m_qr, &flow::QrDisplayStep::nextClicked, this, &AddKey::onNextClicked, qontrol::UNIQUE);
-    connect(m_qr->actions(), &catalog::ModalActions::backClicked, this, &AddKey::onBackClicked,
+    connect(m_qr_display_engine, &qr::QrDisplayEngine::frame, m_qr_display, &qr::QrDisplay::frame,
+            qontrol::UNIQUE);
+    connect(m_qr_display_engine, &qr::QrDisplayEngine::frame, this, &AddKey::onQrFrame,
+            qontrol::UNIQUE);
+    connect(m_qr_next, &QPushButton::clicked, this, &AddKey::onNextClicked, qontrol::UNIQUE);
+    connect(m_qr_actions, &catalog::ModalActions::backClicked, this, &AddKey::onBackClicked,
             qontrol::UNIQUE);
     connect(m_camera, &flow::CameraStep::backClicked, this, &AddKey::onBackClicked,
             qontrol::UNIQUE);
-    connect(m_qr_engine, &qr::QrEngine::request, m_qr->engine(), &qr::QrDisplayEngine::request,
+    connect(m_qr_engine, &qr::QrEngine::request, m_qr_display_engine, &qr::QrDisplayEngine::request,
             qontrol::UNIQUE);
     connect(m_camera->engine(), &qr::QrCameraEngine::response, m_qr_engine, &qr::QrEngine::response,
             qontrol::UNIQUE);
@@ -268,12 +284,19 @@ void AddKey::showQr() {
     m_qr_engine->getXpub(KeysModule::defaultXpubPath());
 }
 
+auto AddKey::viewQr() -> QWidget * {
+    return (new qontrol::Column)
+        ->spacing(resolve(Spacing::M))
+        ->push(m_qr_hint)
+        ->pushAligned(m_qr_display, Qt::AlignHCenter);
+}
+
 void AddKey::showQrDisplay() {
     m_view = View::QrDisplay;
     setWindowTitle(TR("keys-add-qr-title"));
     setHeader(nullptr);
-    setBody(m_qr);
-    setFooter(m_qr->actions());
+    setBody(m_qr_step);
+    setFooter(m_qr_actions);
     setWidth(ModalWidth::L);
 }
 
@@ -288,13 +311,13 @@ void AddKey::showCamera() {
 
 void AddKey::stopQr() {
     m_qr_engine->stop();
-    m_qr->stop();
+    m_qr_display_engine->stop();
     m_camera->stop();
 }
 
 void AddKey::hideQr() {
-    keep(m_qr);
-    keep(m_qr->actions());
+    keep(m_qr_step);
+    keep(m_qr_actions);
     keep(m_camera);
     keep(m_camera->actions());
 }
@@ -890,7 +913,7 @@ void AddKey::onBackClicked() {
     case View::Camera:
         m_camera->stop();
         showQrDisplay();
-        m_qr->restart();
+        m_qr_display_engine->restart();
         return;
     case View::Review:
         m_review_fingerprint.clear();
@@ -920,7 +943,7 @@ void AddKey::onBackClicked() {
 void AddKey::onNextClicked() {
     switch (m_view) {
     case View::QrDisplay:
-        m_qr->stop();
+        m_qr_display_engine->stop();
         showCamera();
         m_camera->start();
         return;
@@ -1164,6 +1187,12 @@ void AddKey::onFailureRetry() {
         sealKey();
         return;
     }
+}
+
+void AddKey::onQrFrame(const qr::QrFrame &frame) {
+    bool rendering = frame.image.isNull() && frame.error.isEmpty();
+    m_qr_next->setEnabled(!rendering);
+    m_qr_actions->setReason(rendering ? TR("flow-qr-rebuild-reason") : QString());
 }
 
 } // namespace keys::modal

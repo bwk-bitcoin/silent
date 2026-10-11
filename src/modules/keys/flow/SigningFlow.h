@@ -28,6 +28,7 @@ class ModalActions;
 class ModalStatus;
 class Notice;
 class SelectRow;
+class Stepper;
 } // namespace catalog
 
 namespace qontrol {
@@ -39,13 +40,15 @@ class KeysModule;
 } // namespace keys
 
 namespace qr {
+class QrDisplay;
+class QrDisplayEngine;
 class QrEngine;
+struct QrFrame;
 } // namespace qr
 
 namespace keys::flow {
 
 class CameraStep;
-class QrDisplayStep;
 
 // Where a key stands in the flow; it picks the row's pill, line and whether it can be
 // picked.
@@ -155,6 +158,8 @@ public slots:
     void onQrVerified(bool matched);
     void onQrDescriptor(const QString &descriptor);
     void onQrError(qr::QrError kind, const QString &message);
+    void onQrSettingsChanged();
+    void onQrFrame(const qr::QrFrame &frame);
 
 protected:
     void init();
@@ -214,6 +219,7 @@ protected:
     // QR code and camera views
     void initQr();
     void connectQr();
+    [[nodiscard]] auto viewQr() -> QWidget *;
     void showQrDisplay();
     void showCamera();
     void hideQr();
@@ -298,7 +304,15 @@ private:
     catalog::ModalStatus *m_busy_step = nullptr;
 
     qr::QrEngine *m_qr_engine = nullptr;
-    QrDisplayStep *m_qr = nullptr;
+    qr::QrDisplayEngine *m_qr_display_engine = nullptr;
+    catalog::Label *m_qr_hint = nullptr;
+    qr::QrDisplay *m_qr_display = nullptr;
+    catalog::Stepper *m_qr_contrast = nullptr;
+    catalog::Stepper *m_qr_density = nullptr;
+    catalog::Stepper *m_qr_speed = nullptr;
+    catalog::Button *m_qr_next = nullptr;
+    catalog::ModalActions *m_qr_actions = nullptr;
+    QWidget *m_qr_step = nullptr;
     CameraStep *m_camera = nullptr;
 
     // Verify result: what the device said about the address, with the address itself,
