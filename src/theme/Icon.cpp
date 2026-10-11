@@ -35,6 +35,7 @@
 #include "resources/icon/usb.h"
 #include "resources/icon/x.h"
 #include <QIconEngine>
+#include <QImage>
 #include <QPainter>
 #include <QPixmap>
 #include <QRectF>
@@ -93,7 +94,23 @@ public:
         svg.replace(QStringLiteral("stroke-width=\"2\""),
                     QStringLiteral("stroke-width=\"%1\"").arg(m_stroke_width));
         QSvgRenderer renderer(svg.toUtf8());
-        renderer.render(painter, QRectF(rect));
+        // Qt rasterizes a 1px diagonal stroke unevenly (a cross loses an arm's end on
+        // its left): render at a multiple of the target pixels and scale down.
+        const qreal dpr =
+            painter->device() != nullptr ? painter->device()->devicePixelRatioF() : 1.0;
+        const QSize target = (QSizeF(rect.size()) * dpr).toSize();
+        if (target.isEmpty()) {
+            return;
+        }
+        QImage big(target * SUPERSAMPLE, QImage::Format_ARGB32_Premultiplied);
+        big.fill(Qt::transparent);
+        {
+            QPainter bigPainter(&big);
+            renderer.render(&bigPainter, QRectF(QPointF(0, 0), QSizeF(big.size())));
+        }
+        QImage scaled = big.scaled(target, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        scaled.setDevicePixelRatio(dpr);
+        painter->drawImage(rect, scaled);
     }
 
     QPixmap pixmap(const QSize &size, QIcon::Mode mode, QIcon::State state) override {
@@ -109,6 +126,7 @@ public:
     }
 
 private:
+    static constexpr int SUPERSAMPLE = 4;
     const char *m_svg;
     int m_stroke_width;
     IconColor m_color;
