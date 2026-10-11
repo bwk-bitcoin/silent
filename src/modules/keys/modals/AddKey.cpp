@@ -159,291 +159,6 @@ void AddKey::done(int result) {
     catalog::Modal::done(result);
 }
 
-void AddKey::onBackClicked() {
-    switch (m_view) {
-    case View::QrDisplay:
-    case View::Paste:
-    case View::HotChoose:
-        showModes();
-        return;
-    case View::Camera:
-        m_camera->stop();
-        showQrDisplay();
-        m_qr->restart();
-        return;
-    case View::Review:
-        m_review_fingerprint.clear();
-        if (m_source == Source::Qr) {
-            showQr();
-            return;
-        }
-        showModes();
-        return;
-    case View::Backup:
-        showHotChoose();
-        return;
-    case View::HotPassword:
-        if (m_hot_kind == HotKind::Import) {
-            showHotChoose();
-            return;
-        }
-        showBackup();
-        return;
-    case View::Modes:
-    case View::Sealing:
-    case View::Result:
-        return;
-    }
-}
-
-void AddKey::onNextClicked() {
-    switch (m_view) {
-    case View::QrDisplay:
-        m_qr->stop();
-        showCamera();
-        m_camera->start();
-        return;
-    case View::Review:
-        addReviewed();
-        return;
-    case View::Paste:
-        addPasted();
-        return;
-    case View::HotChoose:
-        continueHot();
-        return;
-    case View::Backup:
-        showHotPassword();
-        return;
-    case View::HotPassword:
-        sealKey();
-        return;
-    case View::Result:
-        accept();
-        return;
-    case View::Modes:
-    case View::Camera:
-    case View::Sealing:
-        return;
-    }
-}
-
-void AddKey::onModeClicked() {
-    switch (static_cast<Mode>(sender()->property(K_MODE).toInt())) {
-    case Mode::Qr:
-        showQr();
-        return;
-    case Mode::File:
-        showFile();
-        return;
-    case Mode::Paste:
-        m_paste->input()->clear();
-        m_paste_alias->clear();
-        m_paste_error->setVisible(false);
-        onPasteChanged();
-        showPaste();
-        return;
-    case Mode::Hot:
-        showHotChoose();
-        return;
-    }
-}
-
-void AddKey::onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub) {
-    stopQr();
-    m_review_fingerprint = fingerprint;
-    m_review_xpubs = {{.path = path, .xpub = xpub}};
-    m_review_routes = {KeyRouteKind::Qr};
-    m_review_alias->clear();
-    showReview(Source::Qr);
-}
-
-void AddKey::onQrScanFailed(QrErrorKind kind, const QString &message) {
-    m_camera->showScanError(kind, message);
-    adjustSize();
-}
-
-void AddKey::onQrFailed(const QString &message) {
-    stopQr();
-    showFailure(Failure::Qr, TR("keys-qr-failed-title"), message);
-}
-
-void AddKey::onReviewChanged() {
-    bool loaded = !m_review_fingerprint.isEmpty();
-    m_file_area->setVisible(!loaded);
-    m_review_table->setVisible(loaded);
-    m_review_alias_field->setVisible(loaded);
-    m_open_file->setVisible(!loaded);
-    m_add_reviewed->setVisible(loaded);
-
-    QString duplicate = registeredAlias(m_review_fingerprint);
-    m_review_duplicate->setText(TR("keys-duplicate-body").arg(m_review_fingerprint, duplicate));
-    m_review_duplicate->setVisible(loaded && !duplicate.isEmpty());
-    QString reason;
-    if (loaded) {
-        reason = duplicate.isEmpty() ? aliasReason(m_review_alias->text().trimmed())
-                                     : TR("keys-duplicate-reason");
-    }
-    m_add_reviewed->setEnabled(loaded && reason.isEmpty());
-    m_review_actions->setReason(reason);
-    adjustSize();
-}
-
-void AddKey::onOpenFileClicked() {
-    QString path =
-        QFileDialog::getOpenFileName(this, TR("keys-pick-file"), QString(), TR("keys-file-filter"));
-    if (!path.isEmpty()) {
-        loadFile(path);
-    }
-}
-
-void AddKey::onPasteChanged() {
-    QString text = m_paste->input()->text().trimmed();
-    auto key = pastedKey();
-    if (text.isEmpty()) {
-        m_paste->setState(catalog::ValidationMark::State::None);
-    } else {
-        m_paste->setState(key.has_value() ? catalog::ValidationMark::State::Valid
-                                          : catalog::ValidationMark::State::Invalid);
-    }
-    m_paste_note->setVisible(!text.isEmpty() && !key.has_value());
-    QString duplicate = key.has_value() ? registeredAlias(key->fingerprint) : QString();
-    m_paste_duplicate->setText(
-        TR("keys-duplicate-body").arg(key.has_value() ? key->fingerprint : QString(), duplicate));
-    m_paste_duplicate->setVisible(!duplicate.isEmpty());
-    QString reason;
-    if (key.has_value()) {
-        reason = duplicate.isEmpty() ? aliasReason(m_paste_alias->text().trimmed())
-                                     : TR("keys-duplicate-reason");
-    }
-    m_add_pasted->setEnabled(key.has_value() && reason.isEmpty());
-    m_paste_actions->setReason(reason);
-    adjustSize();
-}
-
-void AddKey::onHotKindClicked() {
-    m_hot_kind = static_cast<HotKind>(sender()->property(K_HOT_KIND).toInt());
-    showHotChoose();
-}
-
-void AddKey::onWordCountPicked() {
-    m_hot_kind = HotKind::Import;
-    m_words_input->setWordCount(m_word_count->currentData().toInt());
-    onHotChooseChanged();
-}
-
-void AddKey::onHotChooseChanged() {
-    m_generate12->setSelected(m_hot_kind == HotKind::Generate12);
-    m_generate24->setSelected(m_hot_kind == HotKind::Generate24);
-    m_import->setSelected(m_hot_kind == HotKind::Import);
-    bool importing = m_hot_kind == HotKind::Import;
-    m_words_input->setVisible(importing);
-
-    QString reason;
-    if (importing) {
-        int missing = 0;
-        int unknown = 0;
-        for (const auto &word : m_words_input->words()) {
-            if (word.isEmpty()) {
-                ++missing;
-            } else if (!::bip39_word_is_valid(word.toStdString())) {
-                ++unknown;
-            }
-        }
-        if (unknown > 0) {
-            reason = unknown == 1 ? TR("keys-words-unknown-one")
-                                  : TR("keys-words-unknown-many").arg(unknown);
-        } else if (missing > 0) {
-            reason = missing == 1 ? TR("keys-words-missing-one")
-                                  : TR("keys-words-missing-many").arg(missing);
-        } else if (!::mnemonic_is_valid(typedMnemonic().toStdString())) {
-            reason = TR("keys-words-checksum");
-        }
-    }
-    m_choose_continue->setEnabled(reason.isEmpty() && m_generate_req == 0);
-    m_choose_actions->setReason(reason);
-    adjustSize();
-}
-
-void AddKey::onMnemonicGenerated(ReqId req_id, const MnemonicResult &result) {
-    if (m_generate_req == 0 || req_id != m_generate_req) {
-        return;
-    }
-    m_generate_req = 0;
-    if (!result.is_ok) {
-        onHotChooseChanged();
-        showFailure(Failure::Seal, TR("keys-generate-failed-title"),
-                    KeysModule::toQt(result.error));
-        return;
-    }
-    m_mnemonic = KeysModule::toQt(result.mnemonic);
-    m_backup_words->setWords(m_mnemonic.split(QLatin1Char(' '), Qt::SkipEmptyParts));
-    m_backup_check->setChecked(false);
-    onBackupChanged();
-    showBackup();
-}
-
-void AddKey::onBackupChanged() {
-    bool wrote = m_backup_check->isChecked();
-    m_backup_continue->setEnabled(wrote);
-    m_backup_actions->setReason(wrote ? QString() : TR("keys-backup-reason"));
-}
-
-void AddKey::onHotPasswordChanged() {
-    QString password = m_password->text();
-    bool tooShort = !password.isEmpty() && password.size() < MIN_PASSWORD_LENGTH;
-    bool mismatch = !m_confirm->text().isEmpty() && m_confirm->text() != password;
-    m_password_short->setVisible(tooShort);
-    m_password_mismatch->setVisible(mismatch);
-
-    QString reason = aliasReason(m_hot_alias->text().trimmed());
-    if (reason.isEmpty() && password.isEmpty()) {
-        reason = TR("keys-password-choose");
-    } else if (reason.isEmpty() && tooShort) {
-        reason = TR("keys-password-short");
-    } else if (reason.isEmpty() && m_confirm->text() != password) {
-        reason = TR("keys-password-must-match");
-    }
-    m_seal->setEnabled(reason.isEmpty());
-    m_password_actions->setReason(reason);
-    adjustSize();
-}
-
-void AddKey::onHotKeyImported(ReqId req_id, const KeyInfoResult &result) {
-    if (m_seal_req == 0 || req_id != m_seal_req) {
-        return;
-    }
-    m_seal_req = 0;
-    if (!result.is_ok) {
-        showFailure(Failure::Seal, TR("keys-seal-failed-title"), KeysModule::toQt(result.error));
-        return;
-    }
-    clearSecrets();
-    m_status->setIcon(icon::circleCheck, IconColor::Success);
-    m_status->setTitle(TR("keys-added-title"));
-    m_status->setSubtitle(
-        TR("keys-added-sub")
-            .arg(KeysModule::toQt(result.key.alias), KeysModule::toQt(result.key.fingerprint)));
-    m_done->setVisible(true);
-    m_try_again->setVisible(false);
-    showResult();
-}
-
-void AddKey::onFailureRetry() {
-    switch (m_failure) {
-    case Failure::Qr:
-        showQr();
-        return;
-    case Failure::Seal:
-        if (m_mnemonic.isEmpty()) {
-            showHotChoose();
-            return;
-        }
-        sealKey();
-        return;
-    }
-}
-
 void AddKey::init() {
     setAcceptDrops(true);
     initModes();
@@ -1124,6 +839,293 @@ void AddKey::addKey(const QString &fingerprint, const QString &alias,
         return;
     }
     accept();
+}
+
+// ===== Slots =====
+
+void AddKey::onBackClicked() {
+    switch (m_view) {
+    case View::QrDisplay:
+    case View::Paste:
+    case View::HotChoose:
+        showModes();
+        return;
+    case View::Camera:
+        m_camera->stop();
+        showQrDisplay();
+        m_qr->restart();
+        return;
+    case View::Review:
+        m_review_fingerprint.clear();
+        if (m_source == Source::Qr) {
+            showQr();
+            return;
+        }
+        showModes();
+        return;
+    case View::Backup:
+        showHotChoose();
+        return;
+    case View::HotPassword:
+        if (m_hot_kind == HotKind::Import) {
+            showHotChoose();
+            return;
+        }
+        showBackup();
+        return;
+    case View::Modes:
+    case View::Sealing:
+    case View::Result:
+        return;
+    }
+}
+
+void AddKey::onNextClicked() {
+    switch (m_view) {
+    case View::QrDisplay:
+        m_qr->stop();
+        showCamera();
+        m_camera->start();
+        return;
+    case View::Review:
+        addReviewed();
+        return;
+    case View::Paste:
+        addPasted();
+        return;
+    case View::HotChoose:
+        continueHot();
+        return;
+    case View::Backup:
+        showHotPassword();
+        return;
+    case View::HotPassword:
+        sealKey();
+        return;
+    case View::Result:
+        accept();
+        return;
+    case View::Modes:
+    case View::Camera:
+    case View::Sealing:
+        return;
+    }
+}
+
+void AddKey::onModeClicked() {
+    switch (static_cast<Mode>(sender()->property(K_MODE).toInt())) {
+    case Mode::Qr:
+        showQr();
+        return;
+    case Mode::File:
+        showFile();
+        return;
+    case Mode::Paste:
+        m_paste->input()->clear();
+        m_paste_alias->clear();
+        m_paste_error->setVisible(false);
+        onPasteChanged();
+        showPaste();
+        return;
+    case Mode::Hot:
+        showHotChoose();
+        return;
+    }
+}
+
+void AddKey::onQrXpub(const QString &fingerprint, const QString &path, const QString &xpub) {
+    stopQr();
+    m_review_fingerprint = fingerprint;
+    m_review_xpubs = {{.path = path, .xpub = xpub}};
+    m_review_routes = {KeyRouteKind::Qr};
+    m_review_alias->clear();
+    showReview(Source::Qr);
+}
+
+void AddKey::onQrScanFailed(QrErrorKind kind, const QString &message) {
+    m_camera->showScanError(kind, message);
+    adjustSize();
+}
+
+void AddKey::onQrFailed(const QString &message) {
+    stopQr();
+    showFailure(Failure::Qr, TR("keys-qr-failed-title"), message);
+}
+
+void AddKey::onReviewChanged() {
+    bool loaded = !m_review_fingerprint.isEmpty();
+    m_file_area->setVisible(!loaded);
+    m_review_table->setVisible(loaded);
+    m_review_alias_field->setVisible(loaded);
+    m_open_file->setVisible(!loaded);
+    m_add_reviewed->setVisible(loaded);
+
+    QString duplicate = registeredAlias(m_review_fingerprint);
+    m_review_duplicate->setText(TR("keys-duplicate-body").arg(m_review_fingerprint, duplicate));
+    m_review_duplicate->setVisible(loaded && !duplicate.isEmpty());
+    QString reason;
+    if (loaded) {
+        reason = duplicate.isEmpty() ? aliasReason(m_review_alias->text().trimmed())
+                                     : TR("keys-duplicate-reason");
+    }
+    m_add_reviewed->setEnabled(loaded && reason.isEmpty());
+    m_review_actions->setReason(reason);
+    adjustSize();
+}
+
+void AddKey::onOpenFileClicked() {
+    QString path =
+        QFileDialog::getOpenFileName(this, TR("keys-pick-file"), QString(), TR("keys-file-filter"));
+    if (!path.isEmpty()) {
+        loadFile(path);
+    }
+}
+
+void AddKey::onPasteChanged() {
+    QString text = m_paste->input()->text().trimmed();
+    auto key = pastedKey();
+    if (text.isEmpty()) {
+        m_paste->setState(catalog::ValidationMark::State::None);
+    } else {
+        m_paste->setState(key.has_value() ? catalog::ValidationMark::State::Valid
+                                          : catalog::ValidationMark::State::Invalid);
+    }
+    m_paste_note->setVisible(!text.isEmpty() && !key.has_value());
+    QString duplicate = key.has_value() ? registeredAlias(key->fingerprint) : QString();
+    m_paste_duplicate->setText(
+        TR("keys-duplicate-body").arg(key.has_value() ? key->fingerprint : QString(), duplicate));
+    m_paste_duplicate->setVisible(!duplicate.isEmpty());
+    QString reason;
+    if (key.has_value()) {
+        reason = duplicate.isEmpty() ? aliasReason(m_paste_alias->text().trimmed())
+                                     : TR("keys-duplicate-reason");
+    }
+    m_add_pasted->setEnabled(key.has_value() && reason.isEmpty());
+    m_paste_actions->setReason(reason);
+    adjustSize();
+}
+
+void AddKey::onHotKindClicked() {
+    m_hot_kind = static_cast<HotKind>(sender()->property(K_HOT_KIND).toInt());
+    showHotChoose();
+}
+
+void AddKey::onWordCountPicked() {
+    m_hot_kind = HotKind::Import;
+    m_words_input->setWordCount(m_word_count->currentData().toInt());
+    onHotChooseChanged();
+}
+
+void AddKey::onHotChooseChanged() {
+    m_generate12->setSelected(m_hot_kind == HotKind::Generate12);
+    m_generate24->setSelected(m_hot_kind == HotKind::Generate24);
+    m_import->setSelected(m_hot_kind == HotKind::Import);
+    bool importing = m_hot_kind == HotKind::Import;
+    m_words_input->setVisible(importing);
+
+    QString reason;
+    if (importing) {
+        int missing = 0;
+        int unknown = 0;
+        for (const auto &word : m_words_input->words()) {
+            if (word.isEmpty()) {
+                ++missing;
+            } else if (!::bip39_word_is_valid(word.toStdString())) {
+                ++unknown;
+            }
+        }
+        if (unknown > 0) {
+            reason = unknown == 1 ? TR("keys-words-unknown-one")
+                                  : TR("keys-words-unknown-many").arg(unknown);
+        } else if (missing > 0) {
+            reason = missing == 1 ? TR("keys-words-missing-one")
+                                  : TR("keys-words-missing-many").arg(missing);
+        } else if (!::mnemonic_is_valid(typedMnemonic().toStdString())) {
+            reason = TR("keys-words-checksum");
+        }
+    }
+    m_choose_continue->setEnabled(reason.isEmpty() && m_generate_req == 0);
+    m_choose_actions->setReason(reason);
+    adjustSize();
+}
+
+void AddKey::onMnemonicGenerated(ReqId req_id, const MnemonicResult &result) {
+    if (m_generate_req == 0 || req_id != m_generate_req) {
+        return;
+    }
+    m_generate_req = 0;
+    if (!result.is_ok) {
+        onHotChooseChanged();
+        showFailure(Failure::Seal, TR("keys-generate-failed-title"),
+                    KeysModule::toQt(result.error));
+        return;
+    }
+    m_mnemonic = KeysModule::toQt(result.mnemonic);
+    m_backup_words->setWords(m_mnemonic.split(QLatin1Char(' '), Qt::SkipEmptyParts));
+    m_backup_check->setChecked(false);
+    onBackupChanged();
+    showBackup();
+}
+
+void AddKey::onBackupChanged() {
+    bool wrote = m_backup_check->isChecked();
+    m_backup_continue->setEnabled(wrote);
+    m_backup_actions->setReason(wrote ? QString() : TR("keys-backup-reason"));
+}
+
+void AddKey::onHotPasswordChanged() {
+    QString password = m_password->text();
+    bool tooShort = !password.isEmpty() && password.size() < MIN_PASSWORD_LENGTH;
+    bool mismatch = !m_confirm->text().isEmpty() && m_confirm->text() != password;
+    m_password_short->setVisible(tooShort);
+    m_password_mismatch->setVisible(mismatch);
+
+    QString reason = aliasReason(m_hot_alias->text().trimmed());
+    if (reason.isEmpty() && password.isEmpty()) {
+        reason = TR("keys-password-choose");
+    } else if (reason.isEmpty() && tooShort) {
+        reason = TR("keys-password-short");
+    } else if (reason.isEmpty() && m_confirm->text() != password) {
+        reason = TR("keys-password-must-match");
+    }
+    m_seal->setEnabled(reason.isEmpty());
+    m_password_actions->setReason(reason);
+    adjustSize();
+}
+
+void AddKey::onHotKeyImported(ReqId req_id, const KeyInfoResult &result) {
+    if (m_seal_req == 0 || req_id != m_seal_req) {
+        return;
+    }
+    m_seal_req = 0;
+    if (!result.is_ok) {
+        showFailure(Failure::Seal, TR("keys-seal-failed-title"), KeysModule::toQt(result.error));
+        return;
+    }
+    clearSecrets();
+    m_status->setIcon(icon::circleCheck, IconColor::Success);
+    m_status->setTitle(TR("keys-added-title"));
+    m_status->setSubtitle(
+        TR("keys-added-sub")
+            .arg(KeysModule::toQt(result.key.alias), KeysModule::toQt(result.key.fingerprint)));
+    m_done->setVisible(true);
+    m_try_again->setVisible(false);
+    showResult();
+}
+
+void AddKey::onFailureRetry() {
+    switch (m_failure) {
+    case Failure::Qr:
+        showQr();
+        return;
+    case Failure::Seal:
+        if (m_mnemonic.isEmpty()) {
+            showHotChoose();
+            return;
+        }
+        sealKey();
+        return;
+    }
 }
 
 } // namespace keys::modal

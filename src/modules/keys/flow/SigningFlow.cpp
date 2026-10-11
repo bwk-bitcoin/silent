@@ -225,226 +225,6 @@ void SigningFlow::done(int result) {
     catalog::Modal::done(result);
 }
 
-void SigningFlow::onBackClicked() {
-    switch (m_view) {
-    case View::Usb:
-        showPicker();
-        return;
-    case View::Camera:
-        m_camera->stop();
-        showQrDisplay();
-        m_qr->restart();
-        return;
-    case View::Picker:
-    case View::Password:
-    case View::Busy:
-    case View::Sd:
-    case View::QrDisplay:
-    case View::VerifyResult:
-        return;
-    }
-}
-
-void SigningFlow::onNextClicked() {
-    switch (m_view) {
-    case View::Usb:
-        startUsb();
-        return;
-    case View::Password:
-        proceedPassword();
-        return;
-    case View::Sd:
-        if (m_sd_phase == SdPhase::Save) {
-            saveSd();
-        } else {
-            loadSd();
-        }
-        return;
-    case View::QrDisplay:
-        m_qr->stop();
-        showCamera();
-        m_camera->start();
-        return;
-    case View::VerifyResult:
-        startRoute();
-        return;
-    case View::Picker:
-    case View::Busy:
-    case View::Camera:
-        return;
-    }
-}
-
-void SigningFlow::onRowClicked() {
-    auto *row = sender();
-    if (row == nullptr) {
-        return;
-    }
-    int index = row->property(ROW_INDEX).toInt();
-    if (index < 0 || index >= m_rows.size() || !m_rows.at(index).usable()) {
-        return;
-    }
-    m_current = m_rows.at(index);
-    startRoute();
-}
-
-void SigningFlow::onDeviceSigned(ReqId req_id, const QString &psbt_base64) {
-    if (m_device_req == 0 || req_id != m_device_req) {
-        return;
-    }
-    releaseDevice();
-    auto merged = ::usb_merge_signed(rust::String(m_psbt.toStdString()),
-                                     rust::String(psbt_base64.toStdString()));
-    if (!merged.is_ok) {
-        fail(KeysModule::toQt(merged.error));
-        return;
-    }
-    rowSigned(KeysModule::toQt(merged.psbt_v2_hex));
-}
-
-void SigningFlow::onDeviceAddressDisplayed(ReqId req_id, [[maybe_unused]] const QString &address) {
-    if (m_device_req == 0 || req_id != m_device_req) {
-        return;
-    }
-    releaseDevice();
-    showVerifyResult(VerifyResult::Matched);
-}
-
-void SigningFlow::onDeviceError(std::optional<ReqId> req_id, const QString &message) {
-    if (m_device_req == 0 || !req_id.has_value() || req_id.value() != m_device_req) {
-        return;
-    }
-    releaseDevice();
-    qWarning() << "keys: device:" << message;
-    auto error = usbErrorFor(message);
-    // Refusing to confirm an address is the device's answer that it does not match.
-    if (m_request.context == Context::Verify && error == UsbError::Rejected) {
-        showVerifyResult(VerifyResult::Mismatch);
-        return;
-    }
-    showUsbError(error);
-}
-
-void SigningFlow::onInstanceRemoved(const QString &id) {
-    if (m_device_req == 0 || id != m_device_instance) {
-        return;
-    }
-    releaseDevice();
-    showUsbError(UsbError::Disconnected);
-}
-
-void SigningFlow::onPasswordEdited() {
-    bool empty = m_password_input->text().isEmpty();
-    if (!empty) {
-        m_password_error->setVisible(false);
-    }
-    m_password_proceed->setEnabled(!empty);
-    m_password_actions->setReason(empty ? TR("flow-password-reason") : QString());
-}
-
-void SigningFlow::onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex,
-                              const QString &error, bool wrong_password) {
-    if (m_hot_req == 0 || req_id != m_hot_req) {
-        return;
-    }
-    m_hot_req = 0;
-    if (is_ok) {
-        rowSigned(psbt_v2_hex);
-        return;
-    }
-    if (wrong_password) {
-        m_password_error->setText(TR("flow-password-wrong"));
-        m_password_error->setVisible(true);
-        showPassword();
-        return;
-    }
-    fail(error);
-}
-
-void SigningFlow::onHotDescriptorFetched(ReqId req_id, bool is_ok, const QString &descriptor,
-                                         const QString &error, bool wrong_password) {
-    if (m_hot_req == 0 || req_id != m_hot_req) {
-        return;
-    }
-    m_hot_req = 0;
-    if (is_ok) {
-        deliverDescriptor(descriptor);
-        return;
-    }
-    if (wrong_password) {
-        m_password_error->setText(TR("flow-password-wrong"));
-        m_password_error->setVisible(true);
-        showPassword();
-        return;
-    }
-    fail(error);
-}
-
-void SigningFlow::onSdSaved(ReqId req_id, bool is_ok, const QString &error) {
-    if (m_sd_req == 0 || req_id != m_sd_req) {
-        return;
-    }
-    m_sd_req = 0;
-    if (!is_ok) {
-        qWarning() << "keys: sd save:" << error;
-        m_sd_failure = SdFailure::Write;
-        showSd();
-        return;
-    }
-    m_sd_phase = SdPhase::Load;
-    m_sd_failure = SdFailure::None;
-    showSd();
-}
-
-void SigningFlow::onSdLoaded(ReqId req_id, bool is_ok, const QString &psbt_hex,
-                             const QString &error) {
-    if (m_sd_req == 0 || req_id != m_sd_req) {
-        return;
-    }
-    m_sd_req = 0;
-    // The unsigned file read back, or a file this wallet cannot plan, is not the
-    // answer the device wrote.
-    bool readable = is_ok && psbt_hex != m_psbt &&
-                    m_module->rust()->signing_plan(rust::String(psbt_hex.toStdString())).is_ok;
-    if (!readable) {
-        qWarning() << "keys: sd load:" << error;
-        m_sd_failure = SdFailure::Read;
-        showSd();
-        return;
-    }
-    rowSigned(psbt_hex);
-}
-
-void SigningFlow::onQrSigned(const QString &psbt_v2_hex) {
-    m_camera->stop();
-    rowSigned(psbt_v2_hex);
-}
-
-void SigningFlow::onQrVerified(bool matched) {
-    m_camera->stop();
-    showVerifyResult(matched ? VerifyResult::Matched : VerifyResult::Mismatch);
-}
-
-void SigningFlow::onQrDescriptor(const QString &descriptor) {
-    m_camera->stop();
-    deliverDescriptor(descriptor);
-}
-
-void SigningFlow::onQrScanFailed(QrErrorKind kind, const QString &message) {
-    m_camera->showScanError(kind, message);
-    adjustSize();
-}
-
-void SigningFlow::onQrFailed(const QString &message) {
-    m_camera->stop();
-    if (m_request.context == Context::Verify) {
-        qWarning() << "keys: qr request:" << message;
-        showVerifyResult(VerifyResult::Error);
-        return;
-    }
-    fail(message);
-}
-
 void SigningFlow::init() {
     initPicker();
     initUsb();
@@ -1217,6 +997,228 @@ void SigningFlow::fail(const QString &message) {
     m_answered = true;
     emit failed(m_request.req_id, message);
     reject();
+}
+
+// ===== Slots =====
+
+void SigningFlow::onBackClicked() {
+    switch (m_view) {
+    case View::Usb:
+        showPicker();
+        return;
+    case View::Camera:
+        m_camera->stop();
+        showQrDisplay();
+        m_qr->restart();
+        return;
+    case View::Picker:
+    case View::Password:
+    case View::Busy:
+    case View::Sd:
+    case View::QrDisplay:
+    case View::VerifyResult:
+        return;
+    }
+}
+
+void SigningFlow::onNextClicked() {
+    switch (m_view) {
+    case View::Usb:
+        startUsb();
+        return;
+    case View::Password:
+        proceedPassword();
+        return;
+    case View::Sd:
+        if (m_sd_phase == SdPhase::Save) {
+            saveSd();
+        } else {
+            loadSd();
+        }
+        return;
+    case View::QrDisplay:
+        m_qr->stop();
+        showCamera();
+        m_camera->start();
+        return;
+    case View::VerifyResult:
+        startRoute();
+        return;
+    case View::Picker:
+    case View::Busy:
+    case View::Camera:
+        return;
+    }
+}
+
+void SigningFlow::onRowClicked() {
+    auto *row = sender();
+    if (row == nullptr) {
+        return;
+    }
+    int index = row->property(ROW_INDEX).toInt();
+    if (index < 0 || index >= m_rows.size() || !m_rows.at(index).usable()) {
+        return;
+    }
+    m_current = m_rows.at(index);
+    startRoute();
+}
+
+void SigningFlow::onDeviceSigned(ReqId req_id, const QString &psbt_base64) {
+    if (m_device_req == 0 || req_id != m_device_req) {
+        return;
+    }
+    releaseDevice();
+    auto merged = ::usb_merge_signed(rust::String(m_psbt.toStdString()),
+                                     rust::String(psbt_base64.toStdString()));
+    if (!merged.is_ok) {
+        fail(KeysModule::toQt(merged.error));
+        return;
+    }
+    rowSigned(KeysModule::toQt(merged.psbt_v2_hex));
+}
+
+void SigningFlow::onDeviceAddressDisplayed(ReqId req_id, [[maybe_unused]] const QString &address) {
+    if (m_device_req == 0 || req_id != m_device_req) {
+        return;
+    }
+    releaseDevice();
+    showVerifyResult(VerifyResult::Matched);
+}
+
+void SigningFlow::onDeviceError(std::optional<ReqId> req_id, const QString &message) {
+    if (m_device_req == 0 || !req_id.has_value() || req_id.value() != m_device_req) {
+        return;
+    }
+    releaseDevice();
+    qWarning() << "keys: device:" << message;
+    auto error = usbErrorFor(message);
+    // Refusing to confirm an address is the device's answer that it does not match.
+    if (m_request.context == Context::Verify && error == UsbError::Rejected) {
+        showVerifyResult(VerifyResult::Mismatch);
+        return;
+    }
+    showUsbError(error);
+}
+
+void SigningFlow::onInstanceRemoved(const QString &id) {
+    if (m_device_req == 0 || id != m_device_instance) {
+        return;
+    }
+    releaseDevice();
+    showUsbError(UsbError::Disconnected);
+}
+
+void SigningFlow::onPasswordEdited() {
+    bool empty = m_password_input->text().isEmpty();
+    if (!empty) {
+        m_password_error->setVisible(false);
+    }
+    m_password_proceed->setEnabled(!empty);
+    m_password_actions->setReason(empty ? TR("flow-password-reason") : QString());
+}
+
+void SigningFlow::onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex,
+                              const QString &error, bool wrong_password) {
+    if (m_hot_req == 0 || req_id != m_hot_req) {
+        return;
+    }
+    m_hot_req = 0;
+    if (is_ok) {
+        rowSigned(psbt_v2_hex);
+        return;
+    }
+    if (wrong_password) {
+        m_password_error->setText(TR("flow-password-wrong"));
+        m_password_error->setVisible(true);
+        showPassword();
+        return;
+    }
+    fail(error);
+}
+
+void SigningFlow::onHotDescriptorFetched(ReqId req_id, bool is_ok, const QString &descriptor,
+                                         const QString &error, bool wrong_password) {
+    if (m_hot_req == 0 || req_id != m_hot_req) {
+        return;
+    }
+    m_hot_req = 0;
+    if (is_ok) {
+        deliverDescriptor(descriptor);
+        return;
+    }
+    if (wrong_password) {
+        m_password_error->setText(TR("flow-password-wrong"));
+        m_password_error->setVisible(true);
+        showPassword();
+        return;
+    }
+    fail(error);
+}
+
+void SigningFlow::onSdSaved(ReqId req_id, bool is_ok, const QString &error) {
+    if (m_sd_req == 0 || req_id != m_sd_req) {
+        return;
+    }
+    m_sd_req = 0;
+    if (!is_ok) {
+        qWarning() << "keys: sd save:" << error;
+        m_sd_failure = SdFailure::Write;
+        showSd();
+        return;
+    }
+    m_sd_phase = SdPhase::Load;
+    m_sd_failure = SdFailure::None;
+    showSd();
+}
+
+void SigningFlow::onSdLoaded(ReqId req_id, bool is_ok, const QString &psbt_hex,
+                             const QString &error) {
+    if (m_sd_req == 0 || req_id != m_sd_req) {
+        return;
+    }
+    m_sd_req = 0;
+    // The unsigned file read back, or a file this wallet cannot plan, is not the
+    // answer the device wrote.
+    bool readable = is_ok && psbt_hex != m_psbt &&
+                    m_module->rust()->signing_plan(rust::String(psbt_hex.toStdString())).is_ok;
+    if (!readable) {
+        qWarning() << "keys: sd load:" << error;
+        m_sd_failure = SdFailure::Read;
+        showSd();
+        return;
+    }
+    rowSigned(psbt_hex);
+}
+
+void SigningFlow::onQrSigned(const QString &psbt_v2_hex) {
+    m_camera->stop();
+    rowSigned(psbt_v2_hex);
+}
+
+void SigningFlow::onQrVerified(bool matched) {
+    m_camera->stop();
+    showVerifyResult(matched ? VerifyResult::Matched : VerifyResult::Mismatch);
+}
+
+void SigningFlow::onQrDescriptor(const QString &descriptor) {
+    m_camera->stop();
+    deliverDescriptor(descriptor);
+}
+
+void SigningFlow::onQrScanFailed(QrErrorKind kind, const QString &message) {
+    m_camera->showScanError(kind, message);
+    adjustSize();
+}
+
+void SigningFlow::onQrFailed(const QString &message) {
+    m_camera->stop();
+    if (m_request.context == Context::Verify) {
+        qWarning() << "keys: qr request:" << message;
+        showVerifyResult(VerifyResult::Error);
+        return;
+    }
+    fail(message);
 }
 
 } // namespace keys::flow

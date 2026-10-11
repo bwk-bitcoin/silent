@@ -113,203 +113,6 @@ KeyDetail::~KeyDetail() {
     m_words->setWords({});
 }
 
-void KeyDetail::onBackClicked() {
-    switch (m_view) {
-    case View::Password:
-    case View::Remove:
-        showDetail();
-        return;
-    case View::Detail:
-    case View::Reveal:
-        return;
-    }
-}
-
-void KeyDetail::onNextClicked() {
-    switch (m_view) {
-    case View::Password:
-        proceedPassword();
-        return;
-    case View::Reveal:
-        closeWords();
-        return;
-    case View::Remove:
-        removeKey();
-        return;
-    case View::Detail:
-        return;
-    }
-}
-
-void KeyDetail::onKeyChanged() {
-    auto current = info();
-    if (!current.has_value()) {
-        // Removed: the window is closing.
-        return;
-    }
-    m_alias = KeysModule::toQt(current->alias);
-    // The detail's title is the alias, which may have just changed.
-    showHeader(m_detail->isVisibleTo(this) ? m_alias : windowTitle());
-    onAliasEdited();
-    refreshDevices();
-    refreshRoutes(current.value());
-    refreshXpubs();
-    refreshAccounts(current.value());
-    m_reveal->setVisible(current->has_hot_secret);
-}
-
-void KeyDetail::onAliasEdited() {
-    bool changed = m_alias_input->text().trimmed() != m_alias;
-    m_save_alias->setVisible(changed);
-    if (changed && m_alias_note->isVisible()) {
-        m_alias_note->setVisible(false);
-        adjustSize();
-    }
-}
-
-void KeyDetail::onSaveAliasClicked() {
-    QString alias = m_alias_input->text().trimmed();
-    if (alias == m_alias) {
-        return;
-    }
-    QString error;
-    if (alias.isEmpty()) {
-        error = TR("keys-alias-empty");
-    }
-    for (const auto &other : m_module->keys()) {
-        if (error.isEmpty() && KeysModule::toQt(other.fingerprint) != m_fingerprint &&
-            KeysModule::toQt(other.alias) == alias) {
-            error = TR("keys-alias-taken").arg(alias);
-        }
-    }
-    if (error.isEmpty()) {
-        auto result = m_module->setAlias(m_fingerprint, alias);
-        if (!result.is_ok) {
-            error = TR("keys-alias-failed").arg(KeysModule::toQt(result.error));
-        }
-    }
-    // A saved alias needs no message: the save button going away says it.
-    m_alias_note->setTone(catalog::FieldNote::Tone::Error);
-    m_alias_note->setText(error);
-    m_alias_note->setVisible(!error.isEmpty());
-    adjustSize();
-}
-
-void KeyDetail::onMoveUpClicked() {
-    int index = sender()->property(K_ROUTE_INDEX).toInt();
-    moveRoute(index, index - 1);
-}
-
-void KeyDetail::onMoveDownClicked() {
-    int index = sender()->property(K_ROUTE_INDEX).toInt();
-    moveRoute(index, index + 1);
-}
-
-void KeyDetail::onRemoveRouteClicked() {
-    auto current = info();
-    if (!current.has_value()) {
-        return;
-    }
-    auto index = static_cast<std::size_t>(sender()->property(K_ROUTE_INDEX).toInt());
-    showRouteResult(m_module->removeRoute(m_fingerprint, current->routes[index]));
-}
-
-void KeyDetail::onAddRouteClicked() {
-    m_adding_route = true;
-    onKeyChanged();
-}
-
-void KeyDetail::onConfirmRouteClicked() {
-    if (m_route_picker == nullptr) {
-        return;
-    }
-    auto kind = static_cast<KeyRouteKind>(m_route_picker->currentData().toInt());
-    m_adding_route = false;
-    auto result = m_module->addRoute(m_fingerprint, kind);
-    showRouteResult(result);
-}
-
-void KeyDetail::onCancelRouteClicked() {
-    m_adding_route = false;
-    onKeyChanged();
-}
-
-void KeyDetail::onFetchXpubClicked() {
-    // Over this modal, which shows the new xpub once the key records it.
-    AppController::execModal(new FetchXpub(m_module, m_fingerprint));
-}
-
-void KeyDetail::onRegisterClicked() {
-    QString descriptor = sender()->property(K_DESCRIPTOR).toString();
-    m_registrations.insert(descriptor, Registration::Registering);
-    m_register_queue.append(descriptor);
-    m_register_error->setVisible(false);
-    onKeyChanged();
-}
-
-void KeyDetail::onDescriptorIsRegistered(ReqId req_id, bool registered) {
-    if (m_register_req == 0 || req_id != m_register_req) {
-        return;
-    }
-    finishRegistrationRequest(registered ? Registration::Registered : Registration::NotRegistered);
-}
-
-void KeyDetail::onDescriptorRegistered(ReqId req_id, bool registered) {
-    if (m_register_req == 0 || req_id != m_register_req) {
-        return;
-    }
-    if (!registered) {
-        showRegistrationError(TR("keys-register-account-refused"));
-    }
-    finishRegistrationRequest(registered ? Registration::Registered : Registration::NotRegistered);
-}
-
-void KeyDetail::onRegistrationError(std::optional<ReqId> req_id, const QString &message) {
-    if (m_register_req == 0 || !req_id.has_value() || req_id.value() != m_register_req) {
-        return;
-    }
-    bool registering = m_registrations.value(m_register_descriptor) == Registration::Registering;
-    showRegistrationError(registering ? TR("keys-register-account-failed").arg(message)
-                                      : TR("keys-check-account-failed").arg(message));
-    finishRegistrationRequest(registering ? Registration::NotRegistered : Registration::Unknown);
-}
-
-void KeyDetail::onPasswordEdited() {
-    bool empty = m_password_input->text().isEmpty();
-    if (!empty) {
-        m_password_error->setVisible(false);
-    }
-    m_password_proceed->setEnabled(!empty);
-    m_password_actions->setReason(empty ? TR("flow-password-reason") : QString());
-}
-
-void KeyDetail::onMnemonicRevealed(ReqId req_id, const MnemonicResult &result) {
-    if (m_reveal_req == 0 || req_id != m_reveal_req) {
-        return;
-    }
-    m_reveal_req = 0;
-    if (!result.is_ok) {
-        m_password_error->setText(
-            result.wrong_password ? TR("flow-password-wrong")
-                                  : TR("keys-reveal-failed").arg(KeysModule::toQt(result.error)));
-        m_password_error->setVisible(true);
-        showPassword();
-        return;
-    }
-    // A QString cannot be zeroized: Rust owns the real wiping of the phrase.
-    QString mnemonic = KeysModule::toQt(result.mnemonic);
-    m_words->setWords(mnemonic.split(QLatin1Char(' '), Qt::SkipEmptyParts));
-    mnemonic.fill(QChar());
-    showReveal();
-}
-
-void KeyDetail::onToggleWordsClicked() {
-    bool masked = m_hide_words->isVisible();
-    m_words->setMasked(masked);
-    m_hide_words->setVisible(!masked);
-    m_show_words->setVisible(masked);
-}
-
 void KeyDetail::init() {
     auto current = info();
     m_alias = current.has_value() ? KeysModule::toQt(current->alias) : QString();
@@ -948,6 +751,205 @@ void KeyDetail::showHeader(const QString &title) {
     m_header = catalog::modalHeader(title, end);
     setHeader(m_header);
     delete old;
+}
+
+// ===== Slots =====
+
+void KeyDetail::onBackClicked() {
+    switch (m_view) {
+    case View::Password:
+    case View::Remove:
+        showDetail();
+        return;
+    case View::Detail:
+    case View::Reveal:
+        return;
+    }
+}
+
+void KeyDetail::onNextClicked() {
+    switch (m_view) {
+    case View::Password:
+        proceedPassword();
+        return;
+    case View::Reveal:
+        closeWords();
+        return;
+    case View::Remove:
+        removeKey();
+        return;
+    case View::Detail:
+        return;
+    }
+}
+
+void KeyDetail::onKeyChanged() {
+    auto current = info();
+    if (!current.has_value()) {
+        // Removed: the window is closing.
+        return;
+    }
+    m_alias = KeysModule::toQt(current->alias);
+    // The detail's title is the alias, which may have just changed.
+    showHeader(m_detail->isVisibleTo(this) ? m_alias : windowTitle());
+    onAliasEdited();
+    refreshDevices();
+    refreshRoutes(current.value());
+    refreshXpubs();
+    refreshAccounts(current.value());
+    m_reveal->setVisible(current->has_hot_secret);
+}
+
+void KeyDetail::onAliasEdited() {
+    bool changed = m_alias_input->text().trimmed() != m_alias;
+    m_save_alias->setVisible(changed);
+    if (changed && m_alias_note->isVisible()) {
+        m_alias_note->setVisible(false);
+        adjustSize();
+    }
+}
+
+void KeyDetail::onSaveAliasClicked() {
+    QString alias = m_alias_input->text().trimmed();
+    if (alias == m_alias) {
+        return;
+    }
+    QString error;
+    if (alias.isEmpty()) {
+        error = TR("keys-alias-empty");
+    }
+    for (const auto &other : m_module->keys()) {
+        if (error.isEmpty() && KeysModule::toQt(other.fingerprint) != m_fingerprint &&
+            KeysModule::toQt(other.alias) == alias) {
+            error = TR("keys-alias-taken").arg(alias);
+        }
+    }
+    if (error.isEmpty()) {
+        auto result = m_module->setAlias(m_fingerprint, alias);
+        if (!result.is_ok) {
+            error = TR("keys-alias-failed").arg(KeysModule::toQt(result.error));
+        }
+    }
+    // A saved alias needs no message: the save button going away says it.
+    m_alias_note->setTone(catalog::FieldNote::Tone::Error);
+    m_alias_note->setText(error);
+    m_alias_note->setVisible(!error.isEmpty());
+    adjustSize();
+}
+
+void KeyDetail::onMoveUpClicked() {
+    int index = sender()->property(K_ROUTE_INDEX).toInt();
+    moveRoute(index, index - 1);
+}
+
+void KeyDetail::onMoveDownClicked() {
+    int index = sender()->property(K_ROUTE_INDEX).toInt();
+    moveRoute(index, index + 1);
+}
+
+void KeyDetail::onRemoveRouteClicked() {
+    auto current = info();
+    if (!current.has_value()) {
+        return;
+    }
+    auto index = static_cast<std::size_t>(sender()->property(K_ROUTE_INDEX).toInt());
+    showRouteResult(m_module->removeRoute(m_fingerprint, current->routes[index]));
+}
+
+void KeyDetail::onAddRouteClicked() {
+    m_adding_route = true;
+    onKeyChanged();
+}
+
+void KeyDetail::onConfirmRouteClicked() {
+    if (m_route_picker == nullptr) {
+        return;
+    }
+    auto kind = static_cast<KeyRouteKind>(m_route_picker->currentData().toInt());
+    m_adding_route = false;
+    auto result = m_module->addRoute(m_fingerprint, kind);
+    showRouteResult(result);
+}
+
+void KeyDetail::onCancelRouteClicked() {
+    m_adding_route = false;
+    onKeyChanged();
+}
+
+void KeyDetail::onFetchXpubClicked() {
+    // Over this modal, which shows the new xpub once the key records it.
+    AppController::execModal(new FetchXpub(m_module, m_fingerprint));
+}
+
+void KeyDetail::onRegisterClicked() {
+    QString descriptor = sender()->property(K_DESCRIPTOR).toString();
+    m_registrations.insert(descriptor, Registration::Registering);
+    m_register_queue.append(descriptor);
+    m_register_error->setVisible(false);
+    onKeyChanged();
+}
+
+void KeyDetail::onDescriptorIsRegistered(ReqId req_id, bool registered) {
+    if (m_register_req == 0 || req_id != m_register_req) {
+        return;
+    }
+    finishRegistrationRequest(registered ? Registration::Registered : Registration::NotRegistered);
+}
+
+void KeyDetail::onDescriptorRegistered(ReqId req_id, bool registered) {
+    if (m_register_req == 0 || req_id != m_register_req) {
+        return;
+    }
+    if (!registered) {
+        showRegistrationError(TR("keys-register-account-refused"));
+    }
+    finishRegistrationRequest(registered ? Registration::Registered : Registration::NotRegistered);
+}
+
+void KeyDetail::onRegistrationError(std::optional<ReqId> req_id, const QString &message) {
+    if (m_register_req == 0 || !req_id.has_value() || req_id.value() != m_register_req) {
+        return;
+    }
+    bool registering = m_registrations.value(m_register_descriptor) == Registration::Registering;
+    showRegistrationError(registering ? TR("keys-register-account-failed").arg(message)
+                                      : TR("keys-check-account-failed").arg(message));
+    finishRegistrationRequest(registering ? Registration::NotRegistered : Registration::Unknown);
+}
+
+void KeyDetail::onPasswordEdited() {
+    bool empty = m_password_input->text().isEmpty();
+    if (!empty) {
+        m_password_error->setVisible(false);
+    }
+    m_password_proceed->setEnabled(!empty);
+    m_password_actions->setReason(empty ? TR("flow-password-reason") : QString());
+}
+
+void KeyDetail::onMnemonicRevealed(ReqId req_id, const MnemonicResult &result) {
+    if (m_reveal_req == 0 || req_id != m_reveal_req) {
+        return;
+    }
+    m_reveal_req = 0;
+    if (!result.is_ok) {
+        m_password_error->setText(
+            result.wrong_password ? TR("flow-password-wrong")
+                                  : TR("keys-reveal-failed").arg(KeysModule::toQt(result.error)));
+        m_password_error->setVisible(true);
+        showPassword();
+        return;
+    }
+    // A QString cannot be zeroized: Rust owns the real wiping of the phrase.
+    QString mnemonic = KeysModule::toQt(result.mnemonic);
+    m_words->setWords(mnemonic.split(QLatin1Char(' '), Qt::SkipEmptyParts));
+    mnemonic.fill(QChar());
+    showReveal();
+}
+
+void KeyDetail::onToggleWordsClicked() {
+    bool masked = m_hide_words->isVisible();
+    m_words->setMasked(masked);
+    m_hide_words->setVisible(!masked);
+    m_show_words->setVisible(masked);
 }
 
 } // namespace keys::modal

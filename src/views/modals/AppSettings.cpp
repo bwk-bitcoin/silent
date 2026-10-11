@@ -97,257 +97,6 @@ AppSettings::~AppSettings() {
     }
 }
 
-void AppSettings::onBackClicked() {
-    switch (m_view) {
-    case View::Disable:
-        // A Back from the disable view leaves the plugin enabled: its toggle shows it again.
-        onPluginsChanged();
-        showMain();
-        return;
-    case View::Section:
-        closeSection();
-        return;
-    case View::Main:
-        return;
-    }
-}
-
-void AppSettings::onNextClicked() {
-    switch (m_view) {
-    case View::Disable:
-        disablePlugin();
-        return;
-    case View::Section:
-        closeSection();
-        return;
-    case View::Main:
-        return;
-    }
-}
-
-void AppSettings::onThemeSelectionChanged(int index) {
-    if (m_updating_theme_picker || index < 0) {
-        return;
-    }
-    updateThemeNote();
-    adjustSize();
-
-    QString themeName = m_theme_picker->itemData(index).toString().trimmed();
-    if (themeName.isEmpty()) {
-        return;
-    }
-
-    if (themeName == LIGHT || themeName == DARK) {
-        if (auto *theme = Theme::get(); theme != nullptr) {
-            theme->setMode(themeName == DARK ? ThemeMode::Dark : ThemeMode::Light);
-        }
-        app_set_active_theme(rust::String(themeName.toStdString()));
-        return;
-    }
-
-    auto *provider = m_provider_for_theme_name.value(themeName, nullptr);
-    if (provider == nullptr) {
-        return;
-    }
-
-    app_set_active_theme(rust::String(themeName.toStdString()));
-    ReqId reqId = provider->palette(themeName);
-    if (reqId != 0) {
-        m_pending_palette.insert(reqId, provider);
-    }
-}
-
-void AppSettings::onLanguageSelectionChanged(int index) {
-    if (index < 0) {
-        return;
-    }
-    QString locale = m_language_picker->itemData(index).toString().trimmed();
-    if (locale.isEmpty()) {
-        return;
-    }
-    static_cast<void>(i18n::I18nManager::get()->applyLocale(locale, true));
-    m_language_note->setText(TR("settings-language-saved"));
-    m_language_note->setVisible(true);
-    adjustSize();
-}
-
-void AppSettings::onScanClicked() {
-    if (m_plugin_registry == nullptr) {
-        return;
-    }
-    m_plugin_notice->setVisible(false);
-    m_scan_result->setVisible(false);
-    setScanning(true);
-    // The scan reads the plugins folder on this thread: paint Scanning before it starts.
-    repaint();
-    int found = m_plugin_registry->rescanDiscoveredPlugins();
-    if (found > 0) {
-        m_scan_result->setText(found == 1 ? TR("settings-plugin-found-one")
-                                          : TR("settings-plugins-found").arg(found));
-        m_scan_result->setVisible(true);
-    }
-    setScanning(false);
-}
-
-void AppSettings::onPluginToggled(bool enabled) {
-    auto *toggle = qobject_cast<catalog::Toggle *>(sender());
-    if (toggle == nullptr || m_plugin_registry == nullptr) {
-        return;
-    }
-    QString id = toggle->property(K_PLUGIN_ID).toString();
-    m_plugin_notice->setVisible(false);
-    m_scan_result->setVisible(false);
-    if (!enabled) {
-        showDisable(id);
-        return;
-    }
-    // A plugin that fails to load gets its error row; a loaded one rebuilds the rows
-    // through enabledPluginsChanged.
-    if (!m_plugin_registry->setEnabled(id, true)) {
-        onPluginsChanged();
-    }
-}
-
-void AppSettings::onPluginsChanged() {
-    m_plugins_column->clear();
-    m_plugin_meta.clear();
-
-    bool available = m_plugin_registry != nullptr && m_plugin_registry->isAvailable();
-    m_registry_notice->setVisible(!available);
-    m_scan_btn->setEnabled(available);
-    int count = 0;
-    if (available) {
-        for (auto *plugin : m_plugin_registry->plugins()) {
-            if (plugin == nullptr) {
-                continue;
-            }
-            auto meta = plugin->meta();
-            QString id = meta.value(QStringLiteral("id")).trimmed();
-            // Built-in modules are not user-managed: only external plugins are listed.
-            if (id.isEmpty() || m_plugin_registry->pluginHasBuiltinModules(id)) {
-                continue;
-            }
-            QString version = meta.value(QStringLiteral("version")).trimmed();
-            QString line = version.isEmpty() ? id : QStringLiteral("%1  v%2").arg(id, version);
-            m_plugin_meta.insert(id, line);
-            auto *row = pluginRow(id, line);
-            m_plugins_column->push(row);
-            // A row added to a shown column stays hidden until the event loop shows it,
-            // so the step would be measured without it.
-            row->show();
-            ++count;
-        }
-    }
-    m_plugins->header()->setCount(count > 0 ? QString::number(count) : QString());
-    m_plugins_column->setVisible(count > 0);
-    m_plugins_empty->setVisible(available && count == 0 && !m_scanning_plugins);
-    m_scanning->setVisible(m_scanning_plugins && count == 0);
-    adjustSize();
-}
-
-void AppSettings::onOpenSectionClicked() {
-    if (sender() == nullptr || m_host == nullptr) {
-        return;
-    }
-    auto sectionId = sender()->property(K_SECTION_ID).value<Host::SectionId>();
-    // Re-queried rather than kept: a module can drop its section while Settings is open.
-    for (const auto &entry : m_host->settingSections()) {
-        if (entry.id != sectionId || entry.content == nullptr) {
-            continue;
-        }
-        QString title = entry.title.trimmed().isEmpty()
-                            ? TR("settings-section-fallback").arg(entry.id)
-                            : entry.title.trimmed();
-        QString module = sectionModuleName(entry.id);
-        m_section_text->setText(
-            TR("settings-section-belongs").arg(module.isEmpty() ? title : module));
-        m_open_section = entry.content;
-        m_open_section_id = entry.id;
-        m_section_slot->push(entry.content);
-        entry.content->show();
-        showSection(title);
-        return;
-    }
-}
-
-void AppSettings::onHostSettingsSectionsChanged() {
-    rebuildSettingSectionRows();
-    if (m_open_section_id == 0 || m_host == nullptr) {
-        return;
-    }
-    for (const auto &entry : m_host->settingSections()) {
-        if (entry.id == m_open_section_id) {
-            return;
-        }
-    }
-    // The module dropped the section on display.
-    closeSection();
-}
-
-void AppSettings::onHostInstanceChanged([[maybe_unused]] const QString &id) {
-    refreshThemeProviders();
-    requestThemeList();
-    applyPersistedTheme();
-}
-
-void AppSettings::onThemeNames(ReqId req_id, const QStringList &themes) {
-    auto *provider = m_pending_theme_list.take(req_id);
-    if (provider == nullptr) {
-        return;
-    }
-
-    for (const auto &themeNameRaw : themes) {
-        QString themeName = themeNameRaw.trimmed();
-        if (themeName.isEmpty()) {
-            continue;
-        }
-        if (!m_provider_for_theme_name.contains(themeName)) {
-            m_provider_for_theme_name.insert(themeName, provider);
-            m_theme_plugin.insert(themeName, m_provider_plugin.value(provider));
-        }
-        if (m_theme_picker->findData(themeName) < 0) {
-            m_updating_theme_picker = true;
-            m_theme_picker->addItem(themeName, themeName);
-            m_updating_theme_picker = false;
-        }
-    }
-
-    if (m_pending_theme_to_apply.isEmpty()) {
-        return;
-    }
-    int activeIndex = m_theme_picker->findData(m_pending_theme_to_apply);
-    if (activeIndex < 0) {
-        return;
-    }
-    setThemePickerIndexSilently(activeIndex);
-    auto *paletteProvider = m_provider_for_theme_name.value(m_pending_theme_to_apply, nullptr);
-    if (paletteProvider != nullptr) {
-        ReqId paletteReqId = paletteProvider->palette(m_pending_theme_to_apply);
-        if (paletteReqId != 0) {
-            m_pending_palette.insert(paletteReqId, paletteProvider);
-        }
-    }
-    m_pending_theme_to_apply.clear();
-}
-
-void AppSettings::onThemePalette(ReqId req_id, theme::Palette palette) {
-    if (!m_pending_palette.contains(req_id)) {
-        return;
-    }
-    m_pending_palette.remove(req_id);
-
-    auto *theme = Theme::get();
-    if (theme == nullptr) {
-        return;
-    }
-    theme->setPalette(palette);
-    theme->apply();
-    if (window() != nullptr) {
-        window()->update();
-        window()->repaint();
-    }
-}
-
 void AppSettings::init() {
     auto *controller = AppController::get();
     if (controller != nullptr) {
@@ -894,6 +643,259 @@ void AppSettings::retranslateUi() {
 
     onPluginsChanged();
     rebuildSettingSectionRows();
+}
+
+// ===== Slots =====
+
+void AppSettings::onBackClicked() {
+    switch (m_view) {
+    case View::Disable:
+        // A Back from the disable view leaves the plugin enabled: its toggle shows it again.
+        onPluginsChanged();
+        showMain();
+        return;
+    case View::Section:
+        closeSection();
+        return;
+    case View::Main:
+        return;
+    }
+}
+
+void AppSettings::onNextClicked() {
+    switch (m_view) {
+    case View::Disable:
+        disablePlugin();
+        return;
+    case View::Section:
+        closeSection();
+        return;
+    case View::Main:
+        return;
+    }
+}
+
+void AppSettings::onThemeSelectionChanged(int index) {
+    if (m_updating_theme_picker || index < 0) {
+        return;
+    }
+    updateThemeNote();
+    adjustSize();
+
+    QString themeName = m_theme_picker->itemData(index).toString().trimmed();
+    if (themeName.isEmpty()) {
+        return;
+    }
+
+    if (themeName == LIGHT || themeName == DARK) {
+        if (auto *theme = Theme::get(); theme != nullptr) {
+            theme->setMode(themeName == DARK ? ThemeMode::Dark : ThemeMode::Light);
+        }
+        app_set_active_theme(rust::String(themeName.toStdString()));
+        return;
+    }
+
+    auto *provider = m_provider_for_theme_name.value(themeName, nullptr);
+    if (provider == nullptr) {
+        return;
+    }
+
+    app_set_active_theme(rust::String(themeName.toStdString()));
+    ReqId reqId = provider->palette(themeName);
+    if (reqId != 0) {
+        m_pending_palette.insert(reqId, provider);
+    }
+}
+
+void AppSettings::onLanguageSelectionChanged(int index) {
+    if (index < 0) {
+        return;
+    }
+    QString locale = m_language_picker->itemData(index).toString().trimmed();
+    if (locale.isEmpty()) {
+        return;
+    }
+    static_cast<void>(i18n::I18nManager::get()->applyLocale(locale, true));
+    m_language_note->setText(TR("settings-language-saved"));
+    m_language_note->setVisible(true);
+    adjustSize();
+}
+
+void AppSettings::onScanClicked() {
+    if (m_plugin_registry == nullptr) {
+        return;
+    }
+    m_plugin_notice->setVisible(false);
+    m_scan_result->setVisible(false);
+    setScanning(true);
+    // The scan reads the plugins folder on this thread: paint Scanning before it starts.
+    repaint();
+    int found = m_plugin_registry->rescanDiscoveredPlugins();
+    if (found > 0) {
+        m_scan_result->setText(found == 1 ? TR("settings-plugin-found-one")
+                                          : TR("settings-plugins-found").arg(found));
+        m_scan_result->setVisible(true);
+    }
+    setScanning(false);
+}
+
+void AppSettings::onPluginToggled(bool enabled) {
+    auto *toggle = qobject_cast<catalog::Toggle *>(sender());
+    if (toggle == nullptr || m_plugin_registry == nullptr) {
+        return;
+    }
+    QString id = toggle->property(K_PLUGIN_ID).toString();
+    m_plugin_notice->setVisible(false);
+    m_scan_result->setVisible(false);
+    if (!enabled) {
+        showDisable(id);
+        return;
+    }
+    // A plugin that fails to load gets its error row; a loaded one rebuilds the rows
+    // through enabledPluginsChanged.
+    if (!m_plugin_registry->setEnabled(id, true)) {
+        onPluginsChanged();
+    }
+}
+
+void AppSettings::onPluginsChanged() {
+    m_plugins_column->clear();
+    m_plugin_meta.clear();
+
+    bool available = m_plugin_registry != nullptr && m_plugin_registry->isAvailable();
+    m_registry_notice->setVisible(!available);
+    m_scan_btn->setEnabled(available);
+    int count = 0;
+    if (available) {
+        for (auto *plugin : m_plugin_registry->plugins()) {
+            if (plugin == nullptr) {
+                continue;
+            }
+            auto meta = plugin->meta();
+            QString id = meta.value(QStringLiteral("id")).trimmed();
+            // Built-in modules are not user-managed: only external plugins are listed.
+            if (id.isEmpty() || m_plugin_registry->pluginHasBuiltinModules(id)) {
+                continue;
+            }
+            QString version = meta.value(QStringLiteral("version")).trimmed();
+            QString line = version.isEmpty() ? id : QStringLiteral("%1  v%2").arg(id, version);
+            m_plugin_meta.insert(id, line);
+            auto *row = pluginRow(id, line);
+            m_plugins_column->push(row);
+            // A row added to a shown column stays hidden until the event loop shows it,
+            // so the step would be measured without it.
+            row->show();
+            ++count;
+        }
+    }
+    m_plugins->header()->setCount(count > 0 ? QString::number(count) : QString());
+    m_plugins_column->setVisible(count > 0);
+    m_plugins_empty->setVisible(available && count == 0 && !m_scanning_plugins);
+    m_scanning->setVisible(m_scanning_plugins && count == 0);
+    adjustSize();
+}
+
+void AppSettings::onOpenSectionClicked() {
+    if (sender() == nullptr || m_host == nullptr) {
+        return;
+    }
+    auto sectionId = sender()->property(K_SECTION_ID).value<Host::SectionId>();
+    // Re-queried rather than kept: a module can drop its section while Settings is open.
+    for (const auto &entry : m_host->settingSections()) {
+        if (entry.id != sectionId || entry.content == nullptr) {
+            continue;
+        }
+        QString title = entry.title.trimmed().isEmpty()
+                            ? TR("settings-section-fallback").arg(entry.id)
+                            : entry.title.trimmed();
+        QString module = sectionModuleName(entry.id);
+        m_section_text->setText(
+            TR("settings-section-belongs").arg(module.isEmpty() ? title : module));
+        m_open_section = entry.content;
+        m_open_section_id = entry.id;
+        m_section_slot->push(entry.content);
+        entry.content->show();
+        showSection(title);
+        return;
+    }
+}
+
+void AppSettings::onHostSettingsSectionsChanged() {
+    rebuildSettingSectionRows();
+    if (m_open_section_id == 0 || m_host == nullptr) {
+        return;
+    }
+    for (const auto &entry : m_host->settingSections()) {
+        if (entry.id == m_open_section_id) {
+            return;
+        }
+    }
+    // The module dropped the section on display.
+    closeSection();
+}
+
+void AppSettings::onHostInstanceChanged([[maybe_unused]] const QString &id) {
+    refreshThemeProviders();
+    requestThemeList();
+    applyPersistedTheme();
+}
+
+void AppSettings::onThemeNames(ReqId req_id, const QStringList &themes) {
+    auto *provider = m_pending_theme_list.take(req_id);
+    if (provider == nullptr) {
+        return;
+    }
+
+    for (const auto &themeNameRaw : themes) {
+        QString themeName = themeNameRaw.trimmed();
+        if (themeName.isEmpty()) {
+            continue;
+        }
+        if (!m_provider_for_theme_name.contains(themeName)) {
+            m_provider_for_theme_name.insert(themeName, provider);
+            m_theme_plugin.insert(themeName, m_provider_plugin.value(provider));
+        }
+        if (m_theme_picker->findData(themeName) < 0) {
+            m_updating_theme_picker = true;
+            m_theme_picker->addItem(themeName, themeName);
+            m_updating_theme_picker = false;
+        }
+    }
+
+    if (m_pending_theme_to_apply.isEmpty()) {
+        return;
+    }
+    int activeIndex = m_theme_picker->findData(m_pending_theme_to_apply);
+    if (activeIndex < 0) {
+        return;
+    }
+    setThemePickerIndexSilently(activeIndex);
+    auto *paletteProvider = m_provider_for_theme_name.value(m_pending_theme_to_apply, nullptr);
+    if (paletteProvider != nullptr) {
+        ReqId paletteReqId = paletteProvider->palette(m_pending_theme_to_apply);
+        if (paletteReqId != 0) {
+            m_pending_palette.insert(paletteReqId, paletteProvider);
+        }
+    }
+    m_pending_theme_to_apply.clear();
+}
+
+void AppSettings::onThemePalette(ReqId req_id, theme::Palette palette) {
+    if (!m_pending_palette.contains(req_id)) {
+        return;
+    }
+    m_pending_palette.remove(req_id);
+
+    auto *theme = Theme::get();
+    if (theme == nullptr) {
+        return;
+    }
+    theme->setPalette(palette);
+    theme->apply();
+    if (window() != nullptr) {
+        window()->update();
+        window()->repaint();
+    }
 }
 
 } // namespace modal

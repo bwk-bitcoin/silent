@@ -49,72 +49,6 @@ FetchXpub::FetchXpub(KeysModule *module, const QString &fingerprint)
     view();
 }
 
-void FetchXpub::onNextClicked() {
-    switch (m_view) {
-    case View::Fetch:
-        fetch();
-        return;
-    case View::Fetching:
-        return;
-    }
-}
-
-void FetchXpub::onPurposeChanged() {
-    if (!m_typed && purpose() != PURPOSE_CUSTOM) {
-        m_account->setText(QString::number(freeAccount(purpose())));
-    }
-    onInputChanged();
-}
-
-void FetchXpub::onAccountEdited() {
-    m_typed = true;
-    onInputChanged();
-}
-
-void FetchXpub::onInputChanged() {
-    m_error->setVisible(false);
-    refresh();
-}
-
-void FetchXpub::onDeviceXpub(ReqId req_id, const QString &xpub) {
-    if (m_req == 0 || req_id != m_req) {
-        return;
-    }
-    QString instance = m_instance;
-    QString path = m_path;
-    stopFetch();
-    auto result = m_module->cacheXpub(m_fingerprint, path, xpub);
-    if (!result.is_ok) {
-        showError(KeysModule::toQt(result.error));
-        return;
-    }
-    for (const auto &entry : Host::get()->signers()) {
-        if (entry.signer != nullptr && entry.instanceId == instance) {
-            auto recorded = m_module->recordDevice(entry);
-            if (!recorded.is_ok) {
-                qWarning() << "keys:" << KeysModule::toQt(recorded.error);
-            }
-        }
-    }
-    accept();
-}
-
-void FetchXpub::onDeviceError(std::optional<ReqId> req_id, const QString &message) {
-    if (m_req == 0 || !req_id.has_value() || req_id.value() != m_req) {
-        return;
-    }
-    stopFetch();
-    showError(message);
-}
-
-void FetchXpub::onInstanceRemoved(const QString &id) {
-    if (m_req == 0 || id != m_instance) {
-        return;
-    }
-    stopFetch();
-    showError(TR("keys-register-disconnected"));
-}
-
 void FetchXpub::init() {
     for (const auto &entry :
          m_module->rust()->key_xpubs(rust::String(m_fingerprint.toStdString()))) {
@@ -325,6 +259,74 @@ void FetchXpub::stopFetch() {
     }
     m_signer = nullptr;
     m_req = 0;
+}
+
+// ===== Slots =====
+
+void FetchXpub::onNextClicked() {
+    switch (m_view) {
+    case View::Fetch:
+        fetch();
+        return;
+    case View::Fetching:
+        return;
+    }
+}
+
+void FetchXpub::onPurposeChanged() {
+    if (!m_typed && purpose() != PURPOSE_CUSTOM) {
+        m_account->setText(QString::number(freeAccount(purpose())));
+    }
+    onInputChanged();
+}
+
+void FetchXpub::onAccountEdited() {
+    m_typed = true;
+    onInputChanged();
+}
+
+void FetchXpub::onInputChanged() {
+    m_error->setVisible(false);
+    refresh();
+}
+
+void FetchXpub::onDeviceXpub(ReqId req_id, const QString &xpub) {
+    if (m_req == 0 || req_id != m_req) {
+        return;
+    }
+    QString instance = m_instance;
+    QString path = m_path;
+    stopFetch();
+    auto result = m_module->cacheXpub(m_fingerprint, path, xpub);
+    if (!result.is_ok) {
+        showError(KeysModule::toQt(result.error));
+        return;
+    }
+    for (const auto &entry : Host::get()->signers()) {
+        if (entry.signer != nullptr && entry.instanceId == instance) {
+            auto recorded = m_module->recordDevice(entry);
+            if (!recorded.is_ok) {
+                qWarning() << "keys:" << KeysModule::toQt(recorded.error);
+            }
+        }
+    }
+    accept();
+}
+
+void FetchXpub::onDeviceError(std::optional<ReqId> req_id, const QString &message) {
+    if (m_req == 0 || !req_id.has_value() || req_id.value() != m_req) {
+        return;
+    }
+    stopFetch();
+    showError(message);
+}
+
+void FetchXpub::onInstanceRemoved(const QString &id) {
+    if (m_req == 0 || id != m_instance) {
+        return;
+    }
+    stopFetch();
+    showError(TR("keys-register-disconnected"));
 }
 
 } // namespace keys::modal
