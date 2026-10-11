@@ -3149,6 +3149,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "ureq",
+ "v4l",
  "zeroize",
 ]
 

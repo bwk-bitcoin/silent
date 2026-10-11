@@ -41,6 +41,8 @@ ureq = { version = "3.3", default-features = false, features = ["gzip", "native-
 # toolchain (mozjpeg), so capture is Linux only and every other target gets an
 # explicit error.
 nokhwa = { version = "0.10", default-features = false, features = ["input-v4l", "decoding"] }
+# The same v4l nokhwa captures with: lists only the nodes that capture video.
+v4l = "0.14"
 
 [dev-dependencies]
 blindbitd = { git = "https://github.com/pythcoiner/blindbitd.git", features = ["electrum"] }

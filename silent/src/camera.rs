@@ -168,12 +168,31 @@ pub fn list_cameras() -> Result<Vec<CameraInfo>, CameraError> {
             .index()
             .as_index()
             .map_err(|e| CameraError::Capture(e.to_string()))?;
+        if !can_capture(index) {
+            continue;
+        }
         cameras.push(CameraInfo {
             index,
             name: info.human_name(),
         });
     }
+    if cameras.is_empty() {
+        return Err(CameraError::NoCamera);
+    }
     Ok(cameras)
+}
+
+/// Whether the v4l2 node `index` captures video. A UVC webcam exposes a second node
+/// that only streams metadata; it would list the camera twice. A node whose caps
+/// cannot be read is kept, so opening it reports why.
+#[cfg(target_os = "linux")]
+fn can_capture(index: u32) -> bool {
+    match v4l::Device::new(index as usize).and_then(|device| device.query_caps()) {
+        Ok(caps) => caps
+            .capabilities
+            .contains(v4l::capability::Flags::VIDEO_CAPTURE),
+        Err(_) => true,
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
