@@ -3,12 +3,15 @@
 #include <cstdint>
 
 #include <QList>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
 
 #include <interfaces/types.h>
 #include <silent.h>
+
+#include "CameraViewport.h"
 
 class QTimer;
 
@@ -26,7 +29,7 @@ class KeysModule;
 
 namespace keys::flow {
 
-class CameraViewport;
+class CameraSettings;
 
 // Reads an animated QR answer back off a device's screen. Rust owns capture,
 // decoding and reassembly; this step picks the camera, paints the preview, counts
@@ -63,6 +66,8 @@ protected:
     void doConnect();
     void view();
     void openCamera(int camera);
+    // The preview's state, on the step and in Camera Settings while it is open.
+    void setViewportState(CameraViewport::State state);
     void rebuildContrastTable();
     [[nodiscard]] auto previewImage(const CameraFrameResult &frame) const -> QImage;
 
@@ -71,6 +76,9 @@ private:
     KeysModule *m_module = nullptr;
     catalog::Label *m_hint = nullptr;
     CameraViewport *m_viewport = nullptr;
+    CameraViewport::State m_viewport_state = CameraViewport::State::Starting;
+    // Camera Settings while it is open, fed the same frames as the step.
+    QPointer<CameraSettings> m_open_settings;
     catalog::ScanProgress *m_progress = nullptr;
     catalog::Notice *m_scan_error = nullptr;
     catalog::Button *m_scan_again = nullptr;

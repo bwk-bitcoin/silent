@@ -12,15 +12,27 @@
 
 namespace keys::flow {
 
-CameraSettings::CameraSettings(const QStringList &cameras, int camera, int contrast) {
+CameraSettings::CameraSettings(const QStringList &cameras, int camera, int contrast,
+                               CameraViewport::State state) {
     setWindowTitle(TR("flow-camera-settings-title"));
     setFixedWidth(resolve(ModalWidth::XS));
     init(cameras, camera, contrast);
     doConnect();
     view();
+    setState(state);
+}
+
+void CameraSettings::setState(CameraViewport::State state) {
+    m_viewport->setState(state);
+}
+
+void CameraSettings::setFrame(const QImage &frame) {
+    m_viewport->setFrame(frame);
 }
 
 void CameraSettings::init(const QStringList &cameras, int camera, int contrast) {
+    m_viewport = new CameraViewport;
+
     m_camera_combo = new catalog::ComboBox;
     m_camera_combo->addItems(cameras);
     m_camera_combo->setCurrentIndex(camera);
@@ -43,7 +55,13 @@ void CameraSettings::view() {
     auto *fields = (new catalog::FieldGroup)
                        ->addField(TR("flow-camera-source"), m_camera_combo)
                        ->addField(TR("flow-camera-contrast"), m_contrast_stepper);
-    setMainWidget((new qontrol::Column)->margins(resolve(Padding::L))->push(fields));
+    // As wide as the fields under it, as the design's preview takes their width.
+    m_viewport->setFixedWidth(fields->sizeHint().width());
+    setMainWidget((new qontrol::Column)
+                      ->margins(resolve(Padding::L))
+                      ->spacing(resolve(Spacing::M))
+                      ->pushAligned(m_viewport, Qt::AlignHCenter)
+                      ->pushAligned(fields, Qt::AlignHCenter));
 }
 
 } // namespace keys::flow

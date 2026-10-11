@@ -115,17 +115,17 @@ void CameraStep::start() {
     m_camera_names.clear();
     m_camera_indexes.clear();
     if (m_module->rust() == nullptr) {
-        m_viewport->setState(CameraViewport::State::Denied);
+        setViewportState(CameraViewport::State::Denied);
         return;
     }
     auto list = m_module->rust()->camera_list();
     if (!list.is_ok) {
         qWarning() << "keys: camera list:" << KeysModule::toQt(list.error);
-        m_viewport->setState(CameraViewport::State::Denied);
+        setViewportState(CameraViewport::State::Denied);
         return;
     }
     if (list.names.empty()) {
-        m_viewport->setState(CameraViewport::State::None);
+        setViewportState(CameraViewport::State::None);
         return;
     }
     for (std::size_t i = 0; i < list.names.size(); ++i) {
@@ -145,7 +145,7 @@ void CameraStep::stop() {
 void CameraStep::openCamera(int camera) {
     m_preview_timer->stop();
     m_camera = camera;
-    m_viewport->setState(CameraViewport::State::Starting);
+    setViewportState(CameraViewport::State::Starting);
     m_progress->setVisible(false);
     m_module->cancelCamera();
     m_req_id = m_module->nextReqId();
@@ -158,7 +158,7 @@ void CameraStep::showScanError(QrErrorKind kind, const QString &message) {
         qWarning() << "keys: camera failed:" << message;
         m_preview_timer->stop();
         m_progress->setVisible(false);
-        m_viewport->setState(CameraViewport::State::Failed);
+        setViewportState(CameraViewport::State::Failed);
         return;
     case QrErrorKind::RequestIdMismatch:
         m_scan_error->setTitle(TR("flow-scan-wrong-request-title"));
@@ -187,11 +187,11 @@ void CameraStep::onCameraOpened(ReqId req_id, bool is_ok, const QString &error) 
     }
     if (!is_ok) {
         qWarning() << "keys: camera open:" << error;
-        m_viewport->setState(CameraViewport::State::Failed);
+        setViewportState(CameraViewport::State::Failed);
         return;
     }
     m_last_seq = 0;
-    m_viewport->setState(CameraViewport::State::Live);
+    setViewportState(CameraViewport::State::Live);
     m_progress->setVisible(true);
     m_preview_timer->start();
 }
@@ -203,7 +203,11 @@ void CameraStep::onPreviewTick() {
     auto frame = m_module->rust()->camera_frame();
     if (frame.is_ok && frame.seq != m_last_seq) {
         m_last_seq = frame.seq;
-        m_viewport->setFrame(previewImage(frame));
+        QImage image = previewImage(frame);
+        m_viewport->setFrame(image);
+        if (!m_open_settings.isNull()) {
+            m_open_settings->setFrame(image);
+        }
     }
     auto progress = m_module->rust()->camera_progress();
     if (progress.is_ok) {
@@ -212,7 +216,8 @@ void CameraStep::onPreviewTick() {
 }
 
 void CameraStep::onSettingsClicked() {
-    auto *settings = new CameraSettings(m_camera_names, m_camera, m_contrast);
+    auto *settings = new CameraSettings(m_camera_names, m_camera, m_contrast, m_viewport_state);
+    m_open_settings = settings;
     connect(settings, &CameraSettings::cameraPicked, this, &CameraStep::onCameraPicked,
             qontrol::UNIQUE);
     connect(settings, &CameraSettings::contrastPicked, this, &CameraStep::onContrastPicked,
@@ -237,6 +242,14 @@ void CameraStep::onScanAgainClicked() {
     m_progress->setProgress(0, 0);
     if (m_module->rust() != nullptr) {
         m_module->rust()->camera_reset();
+    }
+}
+
+void CameraStep::setViewportState(CameraViewport::State state) {
+    m_viewport_state = state;
+    m_viewport->setState(state);
+    if (!m_open_settings.isNull()) {
+        m_open_settings->setState(state);
     }
 }
 
