@@ -8,7 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  LINT_BASE_COMMIT: 68e75c4
+  LINT_BASE_COMMIT: cc7c2f5
 
 jobs:
   lint-rust:
