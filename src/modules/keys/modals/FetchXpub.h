@@ -31,9 +31,10 @@ namespace keys::modal {
 
 class Unseal;
 
-// Fetches the xpub at a chosen path from the key's connected device, or derives it
-// from a hot key with its password, and caches it, opened over the key detail it
-// returns to: picking the path, then the device or password wait.
+// Fetches the xpub at a chosen path from the key's connected device, derives it from a
+// hot key with its password, or asks it over the key's QR route, and caches it, opened
+// over the key detail it returns to: picking the path, then the device wait, the
+// password or the QR request and scan.
 // The path is a standard purpose with its account index (and its script type for
 // BIP48), or a custom path; the default account is the first one not cached yet.
 class FetchXpub final : public catalog::Modal {
@@ -53,6 +54,9 @@ public slots:
     void onHotPassword(const QString &password);
     void onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpub, const QString &error,
                           bool wrong_password);
+    void onQrXpub(ReqId req_id, const QString &xpub, const QString &fingerprint,
+                  const QString &path);
+    void onQrError(std::optional<ReqId> req_id, const QString &message);
 
 protected:
     // The view on display: the primary action acts on it.
@@ -76,6 +80,7 @@ protected:
     void showError(const QString &error);
     void fetch();
     void fetchHot();
+    void fetchQr();
 
     // Fetching view
     void initFetching();
@@ -115,6 +120,10 @@ private:
     QPointer<Unseal> m_unseal;
     ReqId m_hot_req = 0;
     QString m_hot_error;
+    // A QR route's request, run by the signing flow over this modal.
+    ReqId m_qr_req = 0;
+    bool m_qr_fetched = false;
+    QString m_qr_error;
 };
 
 } // namespace keys::modal

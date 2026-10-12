@@ -393,10 +393,12 @@ void KeyDetail::refreshXpubs() {
     }
 
     auto device = readyDevice(m_fingerprint);
-    // A hot key derives its xpubs itself, with its password: no device needed.
+    // A hot key derives its xpubs itself, with its password, and a QR key answers over
+    // QR codes: no device needed.
     auto info = keyInfo(m_module, m_fingerprint);
     bool hot = info.has_value() && info->has_hot_secret;
-    bool fetchable = device.has_value() || hot;
+    bool qr = info.has_value() && hasRoute(*info, KeyRouteKind::Qr);
+    bool fetchable = device.has_value() || hot || qr;
     Label *empty = nullptr;
     if (rows.isEmpty()) {
         empty = emptyLine(fetchable ? TR("keys-xpubs-empty") : TR("keys-xpubs-empty-offline"));
@@ -407,6 +409,8 @@ void KeyDetail::refreshXpubs() {
         fetch->setToolTip(TR("keys-fetch-xpub-from").arg(deviceName(*device->signer)));
     } else if (hot) {
         fetch->setToolTip(TR("keys-fetch-xpub-hot"));
+    } else if (qr) {
+        fetch->setToolTip(TR("keys-fetch-xpub-qr"));
     } else {
         fetch->setToolTip(TR("keys-fetch-xpub-connect"));
     }

@@ -383,6 +383,7 @@ keys-fetch-xpub-from => "Fetch xpubs from %1" => "NONE"
 keys-fetch-xpub-hot
 => "Derive xpubs from the hot key, with its password"
 => "Derive xpubs from the hot key, with its password";;
+keys-fetch-xpub-qr => "Fetch xpubs over QR codes" => "Fetch xpubs over QR codes"
 keys-fetching-sub => "Confirm on %1 if it asks." => "NONE"
 keys-fetching-title => "Fetching the xpub…" => "NONE"
 keys-file-drop => "Open or drop a file here" => "NONE"

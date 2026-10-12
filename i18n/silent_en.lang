@@ -680,6 +680,8 @@ keys-fetch-xpub-connect => "Connect the device to fetch xpubs"
 
 keys-fetch-xpub-hot => "Derive xpubs from the hot key, with its password"
 
+keys-fetch-xpub-qr => "Fetch xpubs over QR codes"
+
 keys-accounts => "Registered Accounts"
 
 keys-accounts-empty => "No account uses this key."

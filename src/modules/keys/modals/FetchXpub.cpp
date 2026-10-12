@@ -65,6 +65,8 @@ void FetchXpub::doConnect() {
             &FetchXpub::onInstanceRemoved, qontrol::UNIQUE);
     connect(m_module, &KeysModule::hotXpubFetched, this, &FetchXpub::onHotXpubFetched,
             qontrol::UNIQUE);
+    connect(m_module->bus(), &IKeys::xpubReady, this, &FetchXpub::onQrXpub, qontrol::UNIQUE);
+    connect(m_module->bus(), &IKeys::error, this, &FetchXpub::onQrError, qontrol::UNIQUE);
     connectFetch();
 }
 
@@ -229,6 +231,10 @@ void FetchXpub::fetch() {
             fetchHot();
             return;
         }
+        if (info.has_value() && hasRoute(*info, KeyRouteKind::Qr)) {
+            fetchQr();
+            return;
+        }
         showError(TR("keys-fetch-xpub-connect"));
         return;
     }
@@ -262,6 +268,27 @@ void FetchXpub::fetchHot() {
     }
     if (!m_hot_error.isEmpty()) {
         showError(m_hot_error);
+    }
+}
+
+// No device, no hot secret: the key's QR route, its request code and the scan of the
+// answer in the signing flow over this modal. The module caches the xpub before it
+// answers; fetched, this modal closes too.
+void FetchXpub::fetchQr() {
+    m_error->setVisible(false);
+    m_path = path();
+    m_qr_fetched = false;
+    m_qr_error.clear();
+    m_qr_req = m_module->bus()->newRequest();
+    // Returns once the flow has closed, its answer delivered.
+    m_module->fetchXpub(m_qr_req, m_fingerprint, m_path);
+    m_qr_req = 0;
+    if (m_qr_fetched) {
+        accept();
+        return;
+    }
+    if (!m_qr_error.isEmpty()) {
+        showError(m_qr_error);
     }
 }
 
@@ -382,6 +409,22 @@ void FetchXpub::onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpub,
     }
     m_hot_error = error;
     m_unseal->finish(false);
+}
+
+void FetchXpub::onQrXpub(ReqId req_id, [[maybe_unused]] const QString &xpub,
+                         [[maybe_unused]] const QString &fingerprint,
+                         [[maybe_unused]] const QString &path) {
+    if (m_qr_req == 0 || req_id != m_qr_req) {
+        return;
+    }
+    m_qr_fetched = true;
+}
+
+void FetchXpub::onQrError(std::optional<ReqId> req_id, const QString &message) {
+    if (m_qr_req == 0 || !req_id.has_value() || req_id.value() != m_qr_req) {
+        return;
+    }
+    m_qr_error = message;
 }
 
 void FetchXpub::onInstanceRemoved(const QString &id) {

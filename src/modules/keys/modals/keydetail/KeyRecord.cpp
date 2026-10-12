@@ -49,6 +49,10 @@ auto keyAccounts(KeysModule *module, const QString &fingerprint) -> QList<KeyAcc
     return list;
 }
 
+auto hasRoute(const KeyInfo &info, KeyRouteKind kind) -> bool {
+    return std::ranges::find(info.routes, kind) != info.routes.end();
+}
+
 auto accountXpubs(const QString &fingerprint, Network network) -> QList<AccountXpub> {
     // A key in a sub-account descriptor: [fingerprint/path]xpub, e.g.
     // tr([73c5da0a/86'/1'/0']tpub.../<0;1>/*).

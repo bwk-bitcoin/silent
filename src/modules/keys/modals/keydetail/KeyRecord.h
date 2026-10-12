@@ -34,6 +34,8 @@ struct AccountXpub {
 // The key's record, none once it is removed.
 auto keyInfo(KeysModule *module, const QString &fingerprint) -> std::optional<KeyInfo>;
 auto keyAccounts(KeysModule *module, const QString &fingerprint) -> QList<KeyAccount>;
+// Whether the key can be reached over `kind`.
+auto hasRoute(const KeyInfo &info, KeyRouteKind kind) -> bool;
 // The key's xpubs held by the taproot and segwit sub-accounts of the accounts on
 // `network`, read from their configs: an account holds them whether or not the key
 // still caches them, or has their descriptors registered.
