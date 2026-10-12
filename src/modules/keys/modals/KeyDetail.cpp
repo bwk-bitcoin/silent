@@ -400,7 +400,8 @@ void KeyDetail::refreshXpubs() {
         fetch->setToolTip(TR("keys-fetch-xpub-connect"));
     }
     connect(fetch, &QPushButton::clicked, this, &KeyDetail::onFetchXpubClicked, qontrol::UNIQUE);
-    m_xpubs_table->addWidgetRow(QStringLiteral("add"), {nullptr, empty, fetch, nullptr}, true);
+    // In the last column, under the removes, where the routes' + is.
+    m_xpubs_table->addWidgetRow(QStringLiteral("add"), {nullptr, empty, nullptr, fetch}, true);
     m_xpubs_section->header()->setCount(countText(static_cast<int>(xpubs.size())));
 }
 
