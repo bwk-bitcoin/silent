@@ -12,15 +12,16 @@ namespace catalog {
 
 namespace {
 
-constexpr int CHUNK_LEN = 4;         // characters per address group
-constexpr int AUTO_WRAP_CHUNKS = 14; // chunk count above which Auto mode wraps to two lines
+// Address length above which Auto mode wraps to two lines (14 groups of 4), whatever
+// the grouping.
+constexpr int AUTO_WRAP_LENGTH = 56;
 
 } // namespace
 
 ChunkedAddress::ChunkedAddress(QWidget *parent) : QLabel(parent) {
     setProperty("class", "chunked-address");
     setAlignment(Qt::AlignCenter);
-    setCursor(Qt::PointingHandCursor); // click toggles chunked vs one string
+    setCursor(Qt::PointingHandCursor); // click cycles the grouping
     auto labelFont = this->font();
     labelFont.setFamily(font::MONO);
     labelFont.setPointSize(size::BODY);
@@ -47,7 +48,17 @@ void ChunkedAddress::setLineMode(LineMode mode) {
 
 void ChunkedAddress::mousePressEvent(QMouseEvent *event) {
     if (event->button() == Qt::LeftButton) {
-        m_chunked = !m_chunked;
+        switch (m_chunking) {
+        case Chunking::Four:
+            m_chunking = Chunking::Six;
+            break;
+        case Chunking::Six:
+            m_chunking = Chunking::None;
+            break;
+        case Chunking::None:
+            m_chunking = Chunking::Four;
+            break;
+        }
         rebuild();
         return;
     }
@@ -65,15 +76,16 @@ void ChunkedAddress::changeEvent(QEvent *event) {
 void ChunkedAddress::rebuild() {
     const auto &palette = Theme::get()->palette();
 
-    if (!m_chunked) {
+    const int length = static_cast<int>(m_chunking);
+    if (length == 0) {
         setText(QString("<span style='color:%1'>%2</span>")
                     .arg(palette.text.name(), m_address.toHtmlEscaped()));
         return;
     }
 
     QStringList chunks;
-    for (int i = 0; i < m_address.size(); i += CHUNK_LEN) {
-        chunks.append(m_address.mid(i, CHUNK_LEN));
+    for (int i = 0; i < m_address.size(); i += length) {
+        chunks.append(m_address.mid(i, length));
     }
 
     int rows = 1;
@@ -85,7 +97,7 @@ void ChunkedAddress::rebuild() {
         rows = chunks.size() > 1 ? 2 : 1;
         break;
     case LineMode::Auto:
-        rows = chunks.size() > AUTO_WRAP_CHUNKS ? 2 : 1; // long silent-payment strings wrap
+        rows = m_address.size() > AUTO_WRAP_LENGTH ? 2 : 1; // long silent-payment strings wrap
         break;
     }
 
