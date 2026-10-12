@@ -222,16 +222,12 @@ OutputW::OutputW(Send *screen, int id) {
                            ->push(m_address_input, 1)
                            ->push(m_address_indicator)
                            ->push(m_scan_btn);
-    // An empty mark keeps the description as wide as the address; the scan button takes
-    // its width from the address, so both rows end at the same edge.
-    auto *labelRow = (new qontrol::Row)
-                         ->spacing(resolve(Spacing::XS))
-                         ->push(m_label_input, 1)
-                         ->push(new catalog::ValidationMark);
+    // The scan button takes its width from the address: the description input ends
+    // where the button does.
 
     auto *fields = (new catalog::FieldGroup(catalog::FieldGroup::Labels::Payment))
                        ->addField(TR("send-address"), addressRow)
-                       ->addField(TR("send-label"), labelRow)
+                       ->addField(TR("send-label"), m_label_input)
                        ->addField(TR("send-amount"), amountRow);
 
     auto *card = new catalog::Card;
