@@ -3,11 +3,11 @@
     "bwk": {
       "flake": false,
       "locked": {
-        "lastModified": 1791771899,
-        "narHash": "sha256-57gIAjmd+1/ZOkz+LfyPdXEQG1kkmA5KUqCdMrCDu7Y=",
+        "lastModified": 1791823074,
+        "narHash": "sha256-qRppqAPle4Lbl1a/jHFbEdl8jOCViWjynNZ2hvGh8pY=",
         "owner": "pythcoiner",
         "repo": "bwk",
-        "rev": "827f76ee7828248a76f30d83522f16a39abc8496",
+        "rev": "ac015d99e1f4701ee434297c6188b10d921c8c4c",
         "type": "github"
       },
       "original": {
