@@ -972,8 +972,11 @@ void Send::onCancelSigned() {
 void Send::onClearInputs() {
     qDebug() << "Send::onClearInputs()";
     m_selected_coins.clear();
+    // Only the coin table and the totals change: rebuilding the screen would make it
+    // blink.
+    updateCoinCheckboxes();
+    onUpdateInputsTotal();
     onProcess();
-    view();
 }
 
 void Send::onCoinSelectionChanged(const QString &row_id, bool selected) {
