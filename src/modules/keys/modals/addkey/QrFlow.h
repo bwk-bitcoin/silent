@@ -47,6 +47,7 @@ public slots:
     void onQrXpubs(const QString &fingerprint, const QList<qr::QrXpub> &xpubs,
                    const qr::QrDevice &device);
     void onQrError(qr::QrError kind, const QString &message);
+    void onQrSettingsClicked();
     void onQrFrame(const qr::QrFrame &frame);
 
 protected:
@@ -94,6 +95,7 @@ private:
 
     qr::QrDisplayEngine *m_qr_display_engine = nullptr;
     qr::QrDisplay *m_qr_display = nullptr;
+    catalog::Button *m_qr_settings = nullptr;
     catalog::Button *m_qr_next = nullptr;
     catalog::ModalActions *m_qr_actions = nullptr;
     QWidget *m_qr_step = nullptr;

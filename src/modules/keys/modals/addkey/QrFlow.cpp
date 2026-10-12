@@ -1,6 +1,8 @@
 #include "QrFlow.h"
 
+#include "AppController.h"
 #include "modules/keys/DeviceName.h"
+#include "modules/keys/flow/QrSettings.h"
 
 #include "KeyReview.h"
 
@@ -66,17 +68,17 @@ void QrFlow::view() {
 // ===== QR code view =====
 
 void QrFlow::initDisplay() {
-    // A plain code on white, at the highest contrast and the lowest density (the
-    // coarsest code, the easiest to scan), with no tuning controls.
     m_qr_display_engine = new qr::BbqrDisplayEngine(this);
-    m_qr_display_engine->setContrast(qr::QrContrast::Highest);
-    m_qr_display_engine->setDensity(qr::QrDensity::Lowest);
+    // The tuning picked last, as on the other QR codes; changed in QR Settings.
+    flow::applyQrLevels(m_qr_display_engine);
     m_qr_display = new qr::QrDisplay;
     m_qr_display->setTunable(false);
     m_qr_display->setSize(metric::QR_REQUEST_SIZE);
+    m_qr_settings = catalog::btnQrSettings();
     m_qr_next = catalog::btnNextScanTheAnswer();
     m_qr_actions = new catalog::ModalActions;
     m_qr_actions->setBack(catalog::ModalActions::Back::Back);
+    m_qr_actions->addAction(m_qr_settings);
     m_qr_actions->addAction(m_qr_next);
 }
 
@@ -84,6 +86,8 @@ void QrFlow::connectDisplay() {
     connect(m_qr_display_engine, &qr::QrDisplayEngine::frame, m_qr_display, &qr::QrDisplay::frame,
             qontrol::UNIQUE);
     connect(m_qr_display_engine, &qr::QrDisplayEngine::frame, this, &QrFlow::onQrFrame,
+            qontrol::UNIQUE);
+    connect(m_qr_settings, &QPushButton::clicked, this, &QrFlow::onQrSettingsClicked,
             qontrol::UNIQUE);
     connect(m_qr_next, &QPushButton::clicked, this, &QrFlow::onNextClicked, qontrol::UNIQUE);
     connect(m_qr_actions, &catalog::ModalActions::backClicked, this, &QrFlow::onBackClicked,
@@ -264,6 +268,10 @@ void QrFlow::onQrError(qr::QrError kind, const QString &message) {
     }
     stop();
     showFailure(message);
+}
+
+void QrFlow::onQrSettingsClicked() {
+    AppController::execModal(new flow::QrSettings(m_qr_display_engine));
 }
 
 void QrFlow::onQrFrame(const qr::QrFrame &frame) {
