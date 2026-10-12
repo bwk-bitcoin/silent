@@ -2,6 +2,8 @@
 
 Privacy-focused desktop Bitcoin wallet using the Silent Payments protocol.
 
+![Silent](docs/assets/screenshot.png)
+
 ## Architecture
 
 ```
