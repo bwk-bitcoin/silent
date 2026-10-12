@@ -8,11 +8,18 @@
 
 use std::str::FromStr;
 
-use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
-use bwk_qr_protocol::{
-    request, response, Message, MessageType, Request, RequestId, Response, SignResponseKind,
+use bitcoin::{
+    bip32::{ChildNumber, DerivationPath, Fingerprint, Xpub},
+    Network,
 };
-use bwk_sp::bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor;
+use bwk_qr_protocol::{
+    request, response, types::SpKeys, Message, MessageType, Request, RequestId, Response,
+    SignResponseKind,
+};
+use bwk_sp::{
+    bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor,
+    receiver::{scan_path, spend_path},
+};
 
 use crate::hwi;
 use crate::keys::error::Error;
@@ -84,17 +91,24 @@ impl QrSession {
         self.issue(body, Vec::new(), None, None)
     }
 
+    /// A silent payment address is asked for with its account's keys instead of the
+    /// sp() descriptor, which holds the scan secret: `path` is then its label, empty
+    /// for the account's address.
     pub fn verify_address(
         &mut self,
         descriptor: &str,
         path: DerivationPath,
         address: String,
     ) -> Result<QrRequest, Error> {
+        let body = match SpDescriptor::from_str(descriptor) {
+            Ok(sp) => request::DescriptorBody::from(&sp_keys(&sp)?),
+            Err(_) => request::DescriptorBody::Bip380(descriptor.to_string()),
+        };
         let body = request::Body::VerifyAddress(request::VerifyAddress {
             descriptor_alias: hwi::wallet_name(descriptor),
             derivation_path: bwk_qr_protocol::types::DerivationPath::from(&path),
             address: Some(address.clone()),
-            descriptor: Some(request::DescriptorBody::Bip380(descriptor.to_string())),
+            descriptor: Some(body),
             proof: None,
         });
         self.issue(body, Vec::new(), Some(address), None)
@@ -314,6 +328,32 @@ fn validate_registration(registration: response::Registration) -> Result<QrRespo
 /// The device echoes back the address it independently derived as `bitcoin:<address>`,
 /// never the bare address; comparing it against `expected_address` is the whole
 /// point of the request.
+/// The keys a signer rebuilds an sp() descriptor's address from, with no secret: its
+/// fingerprint and the BIP-352 spend and scan paths of its account.
+fn sp_keys(descriptor: &SpDescriptor) -> Result<SpKeys, Error> {
+    let (fingerprint, origin) = descriptor.origin().ok_or(Error::SpDescriptorNoOrigin)?;
+    // The origin is the account, `352'/coin'/account'`, or a key under it.
+    let steps: Vec<ChildNumber> = origin.clone().into();
+    let purpose = ChildNumber::from_hardened_idx(352).expect("352 is a valid index");
+    let (Some(&first), Some(&coin), Some(&account)) = (steps.first(), steps.get(1), steps.get(2))
+    else {
+        return Err(Error::SpAccountPath(origin));
+    };
+    if first != purpose || !coin.is_hardened() || !account.is_hardened() {
+        return Err(Error::SpAccountPath(origin));
+    }
+    // The paths only tell mainnet (coin 0') from the test networks (coin 1').
+    let network = match coin {
+        ChildNumber::Hardened { index: 0 } => Network::Bitcoin,
+        _ => Network::Testnet,
+    };
+    Ok(SpKeys {
+        fingerprint,
+        spend_path: spend_path(network, account),
+        scan_path: scan_path(network, account),
+    })
+}
+
 fn validate_address_uri(
     address_uri: response::AddressUri,
     expected_address: Option<String>,

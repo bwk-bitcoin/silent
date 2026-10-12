@@ -168,6 +168,8 @@ pub enum Error {
     SignaturesUnsupported,
     #[error("sp() descriptor has no key origin")]
     SpDescriptorNoOrigin,
+    #[error("sp() descriptor origin '{0}' is not a BIP-352 account path")]
+    SpAccountPath(DerivationPath),
     #[error("registration response did not report whether registration succeeded")]
     IncompleteRegistration,
     #[error("address verification response carries no address uri")]

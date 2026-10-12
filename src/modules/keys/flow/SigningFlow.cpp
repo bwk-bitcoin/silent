@@ -283,6 +283,9 @@ auto SigningFlow::verifyRows() const -> QList<FlowRow> {
     QList<FlowRow> rows;
     auto keys =
         m_module->rust()->keys_for_descriptor(rust::String(m_request.descriptor.toStdString()));
+    // A silent payment address is only checked over QR codes: no USB device protocol
+    // supports it.
+    bool silentPayment = ::validate_sp_descriptor(rust::String(m_request.descriptor.toStdString()));
     for (const auto &info : keys) {
         FlowRow row;
         row.fingerprint = KeysModule::toQt(info.fingerprint);
@@ -290,7 +293,7 @@ auto SigningFlow::verifyRows() const -> QList<FlowRow> {
         // Only a device with a screen can check an address: a connected USB device, or
         // one over QR codes.
         for (const auto &route : info.routes) {
-            if (route == KeyRouteKind::Usb) {
+            if (route == KeyRouteKind::Usb && !silentPayment) {
                 auto device = liveDevice(row.fingerprint);
                 if (device.has_value()) {
                     row.route = KeyRouteKind::Usb;
@@ -307,7 +310,8 @@ auto SigningFlow::verifyRows() const -> QList<FlowRow> {
             }
         }
         if (!row.usable()) {
-            bool hasUsb = std::ranges::find(info.routes, KeyRouteKind::Usb) != info.routes.end();
+            bool hasUsb = !silentPayment &&
+                          std::ranges::find(info.routes, KeyRouteKind::Usb) != info.routes.end();
             row.status = hasUsb ? SignerStatus::Disconnected : SignerStatus::NoRoute;
             row.route = hasUsb ? KeyRouteKind::Usb : KeyRouteKind::Unknown;
             row.device = hasUsb ? rememberedDevice(row.fingerprint) : QString();

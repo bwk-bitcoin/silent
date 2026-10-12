@@ -752,3 +752,101 @@ fn test_four_path_xpubs_response_keeps_the_request_order() {
         "expected the four xpubs paired with their paths in request order"
     );
 }
+
+// ===== Silent payment address verification =====
+
+const SP_ADDRESS: &str = "tsp1qqexample";
+
+/// An sp() descriptor of a signet account, its scan secret in clear.
+fn sp_descriptor_with_origin() -> (String, String) {
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let scan_xprv =
+        bitcoin::bip32::Xpriv::new_master(bitcoin::Network::Signet, &[0x71; 64]).expect("seed");
+    let spend_xprv =
+        bitcoin::bip32::Xpriv::new_master(bitcoin::Network::Signet, &[0x72; 64]).expect("seed");
+    let fp = scan_xprv.fingerprint(&secp);
+    (
+        format!("sp([{fp}/352h/1h/0h]{scan_xprv}/0h,{spend_xprv}/0h)"),
+        fp.to_string(),
+    )
+}
+
+fn sp_verify_request(
+    session: &mut QrSession,
+) -> (RequestId, bwk_qr_protocol::request::VerifyAddress) {
+    let (descriptor, _) = sp_descriptor_with_origin();
+    let request = session
+        .verify_address(
+            &descriptor,
+            DerivationPath::master(),
+            SP_ADDRESS.to_string(),
+        )
+        .expect("sp verify_address request");
+    match bwk_qr_protocol::decode(request.message()).expect("decodes") {
+        Message::Request(bwk_qr_protocol::Request {
+            id,
+            body: bwk_qr_protocol::request::Body::VerifyAddress(body),
+        }) => (id, body),
+        other => panic!("not a verify address request: {other:?}"),
+    }
+}
+
+#[test]
+fn test_sp_verify_request_carries_the_account_keys_not_the_descriptor() {
+    let (descriptor, fp) = sp_descriptor_with_origin();
+    let (_, body) = sp_verify_request(&mut QrSession::new());
+    assert_eq!(
+        body.descriptor,
+        Some(bwk_qr_protocol::request::DescriptorBody::SpKeys(format!(
+            "{fp}|m/352'/1'/0'/0'/0|m/352'/1'/0'/1'/0"
+        )))
+    );
+    // No label: the account's own address.
+    assert!(body.derivation_path.0.is_empty());
+    assert_eq!(body.address.as_deref(), Some(SP_ADDRESS));
+    assert!(body.proof.is_none());
+    // The scan secret never reaches the code shown on screen.
+    let scan_xprv = descriptor
+        .split([']', '/'])
+        .find(|part| part.starts_with("tprv"))
+        .expect("the fixture holds a tprv");
+    let request = QrSession::new()
+        .verify_address(
+            &descriptor,
+            DerivationPath::master(),
+            SP_ADDRESS.to_string(),
+        )
+        .expect("request");
+    assert!(!String::from_utf8_lossy(request.message()).contains(scan_xprv));
+}
+
+#[test]
+fn test_sp_verify_request_needs_the_descriptor_origin() {
+    let mut session = QrSession::new();
+    let result = session.verify_address(
+        &sp_descriptor_without_origin(),
+        DerivationPath::master(),
+        SP_ADDRESS.to_string(),
+    );
+    assert!(matches!(result, Err(Error::SpDescriptorNoOrigin)));
+}
+
+#[test]
+fn test_sp_verify_answer_is_compared_with_the_address() {
+    for (answered, matched) in [(SP_ADDRESS, true), ("tsp1qqother", false)] {
+        let mut session = QrSession::new();
+        let (id, _) = sp_verify_request(&mut session);
+        let answer = bwk_qr_protocol::encode_response(&Response {
+            id,
+            body: response::Body::AddressUri(response::AddressUri {
+                uri: Some(format!("bitcoin:{answered}")),
+            }),
+        })
+        .expect("encodes");
+        match session.decode_response(&answer) {
+            Ok(QrResponse::AddressVerified(verified)) => assert_eq!(verified, matched),
+            Ok(_) => panic!("not an address verification"),
+            Err(e) => panic!("refused: {e}"),
+        }
+    }
+}

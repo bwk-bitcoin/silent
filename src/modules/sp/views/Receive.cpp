@@ -37,7 +37,7 @@ void Receive::init() {
     m_sp_section = new catalog::FoldSection(TR("receive-silent-payment-address"));
     m_sp_row = new catalog::AddressRow;
     m_sp_row->setGenerateVisible(false);
-    m_sp_row->setVerifyVisible(false);
+    m_sp_row->setVerifyVisible(verifyUnavailableNote().isEmpty());
     m_sp_row->setTwoLineAddress(true); // long SP address wraps to two lines
     m_sp_row->setAddress(QString(m_sp_address.c_str()));
     m_sp_section->setContent(m_sp_row);
@@ -62,6 +62,8 @@ void Receive::init() {
 
 void Receive::doConnect() {
     connect(m_sp_section, &catalog::FoldSection::toggled, this, &Receive::onSpSectionToggled,
+            qontrol::UNIQUE);
+    connect(m_sp_row, &catalog::AddressRow::verifyRequested, this, &Receive::onVerifyAddress,
             qontrol::UNIQUE);
     if (m_has_sub_accounts) {
         connect(m_segwit_row, &catalog::AddressRow::generateRequested, this,
@@ -294,7 +296,7 @@ void Receive::changeEvent(QEvent *event) {
 
 void Receive::retranslateUi() {
     m_sp_section->setTitle(TR("receive-silent-payment-address"));
-    m_sp_row->setVerifyNote(TR("receive-sp-verify-note"));
+    m_sp_row->setVerifyNote(verifyUnavailableNote());
     if (m_segwit_section != nullptr) {
         m_segwit_section->setTitle(TR("receive-segwit-address"));
     }

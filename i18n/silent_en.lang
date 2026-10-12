@@ -623,9 +623,6 @@ flow-plan-failed => "Silent could not read this transaction."
 
 flow-password-wrong => "Wrong password. Try again."
 
-receive-sp-verify-note
-=> "Silent payment addresses can't be checked on a signing device yet. No device protocol supports it.";;
-
 keys-register-failed-title => "Could not register %1"
 
 keys-devices-empty-title => "No Device Connected"

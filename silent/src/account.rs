@@ -409,9 +409,8 @@ impl Account {
     }
 
     /// Descriptor and derivation path to verify `address` on a signing device.
-    /// Empty when `address` cannot be resolved to one of the account's segwit or
-    /// taproot sub-accounts: the silent payment address itself is not derived at
-    /// a BIP32 path, so it has none.
+    /// The silent payment address gives the account's sp() descriptor and an empty
+    /// path, as it carries no label. Empty when `address` is none of the account's.
     pub fn address_verify_info(&self, address: &str) -> AddressVerifyInfo {
         let empty = AddressVerifyInfo {
             descriptor: String::new(),
@@ -420,6 +419,12 @@ impl Account {
         let Some(inner) = &self.inner else {
             return empty;
         };
+        if inner.account.sp_address().to_string() == address {
+            return AddressVerifyInfo {
+                descriptor: self.descriptor(),
+                path: "m".to_string(),
+            };
+        }
         for scanner in inner.account.scanners() {
             for entry in scanner.address_entries() {
                 if entry.address.clone().assume_checked().to_string() != address {
