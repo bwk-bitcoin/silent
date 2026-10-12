@@ -32,7 +32,9 @@ EmptyState::EmptyState(IconFn icon, const QString &title, const QString &subtitl
                    ->pushAligned(glyph, Qt::AlignHCenter)
                    ->pushAligned(m_title, Qt::AlignHCenter)
                    ->pushAligned(m_subtitle, Qt::AlignHCenter);
-    setContent(m_column);
+    // Centred in a card taller than it: the room left goes around the content, never
+    // into the gaps between the icon and the text.
+    setContent((new qontrol::Column)->pushStretch(1)->push(m_column)->pushStretch(1));
 }
 
 void EmptyState::setTitle(const QString &title) {

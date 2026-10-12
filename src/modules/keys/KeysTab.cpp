@@ -137,11 +137,16 @@ void KeysTab::init() {
     m_devices_empty->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     m_devices = new catalog::Section(TR("keys-devices"));
     m_devices->header()->setFoldable(true);
+    // Inset as the rows are by the scroll area's gutter: as wide as them.
+    auto *devicesEmpty =
+        (new qontrol::Row)
+            ->margins(catalog::ScrollArea::insetH(), 0, catalog::ScrollArea::insetH(), 0)
+            ->push(m_devices_empty);
     // Under each header, the design's gap before the list (its scroll area's padding).
     m_devices->setContent((new qontrol::Column)
                               ->margins(0, resolve(Spacing::XS), 0, 0)
                               ->push(m_device_scroll)
-                              ->push(m_devices_empty));
+                              ->push(devicesEmpty));
 
     m_key_column = (new qontrol::Column)->spacing(resolve(Spacing::S));
     m_key_scroll = new catalog::ScrollArea;
