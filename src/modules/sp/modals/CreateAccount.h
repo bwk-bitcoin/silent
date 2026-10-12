@@ -88,6 +88,9 @@ public slots:
     void updateActions();
 
 protected:
+    // A descriptor or xpub a Get button asks the key for.
+    enum class Fetch : std::uint8_t { SilentPayment, Taproot, Segwit };
+
     void init();
     void doConnect();
     void view();
@@ -102,6 +105,10 @@ protected:
     void showFetchError(const QString &message);
     // Runs the fetch the last click asked for, once this window has closed.
     void runFetch();
+    // Takes a sub-account's xpub from the key's cache, in place: true when it was there.
+    auto takeCachedXpub(Fetch fetch) -> bool;
+    // Keeps the sub-account descriptor built on `xpub`, or shows why it could not be.
+    void applyXpub(Fetch fetch, const QString &fingerprint, const QString &xpub);
     // Registers the next of the account's descriptors with its key, then writes the
     // account once all are.
     void registerNext();
@@ -141,7 +148,6 @@ private:
     // The descriptors still to register before the account is written.
     QStringList m_to_register;
     // What the window closed to fetch, run by exec() in its place.
-    enum class Fetch : std::uint8_t { SilentPayment, Taproot, Segwit };
     std::optional<Fetch> m_pending_fetch;
     // The sub-account the outstanding xpub request is for.
     Fetch m_xpub_fetch = Fetch::Taproot;

@@ -88,6 +88,12 @@ void KeysBus::xpub(ReqId req_id, Network network, const QString &fingerprint, co
     m_module->fetchXpub(req_id, fingerprint, path);
 }
 
+auto KeysBus::cachedXpub(Network network, const QString &fingerprint, const QString &path) const
+    -> QString {
+    NetworkScope scope(m_module, network);
+    return m_module->cachedXpub(fingerprint, path);
+}
+
 void KeysBus::registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
                                  const QString &descriptor) {
     NetworkScope scope(m_module, network);
@@ -426,11 +432,9 @@ void KeysModule::fetchXpub(ReqId req_id, const QString &fingerprint, const QStri
         m_bus->deliverError(req_id, TR("keys-module-not-ready"));
         return;
     }
-    for (const auto &cached : rust()->key_xpubs(rust::String(fingerprint.toStdString()))) {
-        if (samePath(toQt(cached.path), path)) {
-            m_bus->deliverXpub(req_id, toQt(cached.xpub), fingerprint, path);
-            return;
-        }
+    if (auto cached = cachedXpub(fingerprint, path); !cached.isEmpty()) {
+        m_bus->deliverXpub(req_id, cached, fingerprint, path);
+        return;
     }
     auto infos = keys();
     auto found = std::ranges::find_if(infos, [&fingerprint](const KeyInfo &info) {
@@ -444,6 +448,18 @@ void KeysModule::fetchXpub(ReqId req_id, const QString &fingerprint, const QStri
                                          .req_id = req_id,
                                          .path = path,
                                          .fingerprint = fingerprint}));
+}
+
+auto KeysModule::cachedXpub(const QString &fingerprint, const QString &path) const -> QString {
+    if (rust() == nullptr) {
+        return {};
+    }
+    for (const auto &cached : rust()->key_xpubs(rust::String(fingerprint.toStdString()))) {
+        if (samePath(toQt(cached.path), path)) {
+            return toQt(cached.xpub);
+        }
+    }
+    return {};
 }
 
 void KeysModule::registerDescriptor(ReqId req_id, const QString &fingerprint,

@@ -425,7 +425,31 @@ void CreateAccount::onFetchClicked() {
     } else {
         return;
     }
+    // A cached xpub needs no modal: this window stays open.
+    if (m_pending_fetch != Fetch::SilentPayment && takeCachedXpub(m_pending_fetch.value())) {
+        m_pending_fetch.reset();
+        return;
+    }
     done(FETCH_RESULT);
+}
+
+auto CreateAccount::takeCachedXpub(Fetch fetch) -> bool {
+    auto *bus = Host::get()->keys();
+    if (bus == nullptr) {
+        return false;
+    }
+    QString xpub =
+        bus->cachedXpub(network(), m_key_fp,
+                        subAccountPath(fetch == Fetch::Taproot ? TAPROOT_PURPOSE : SEGWIT_PURPOSE));
+    if (xpub.isEmpty()) {
+        return false;
+    }
+    m_fetch_error->setVisible(false);
+    applyXpub(fetch, m_key_fp, xpub);
+    refreshKeyRows();
+    updateActions();
+    adjustSize();
+    return true;
 }
 
 void CreateAccount::runFetch() {
@@ -477,9 +501,13 @@ void CreateAccount::onXpubReady(ReqId req_id, const QString &xpub, const QString
         return;
     }
     m_xpub_req_id = 0;
+    applyXpub(m_xpub_fetch, fingerprint, xpub);
+}
+
+void CreateAccount::applyXpub(Fetch fetch, const QString &fingerprint, const QString &xpub) {
     auto key = rust::String(fingerprint.toStdString());
     auto value = rust::String(xpub.toStdString());
-    bool taproot = m_xpub_fetch == Fetch::Taproot;
+    bool taproot = fetch == Fetch::Taproot;
     QString descriptor = QString::fromStdString(
         std::string(taproot ? ::taproot_descriptor_for(key, value, network())
                             : ::segwit_descriptor_for(key, value, network())));

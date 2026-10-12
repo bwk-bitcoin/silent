@@ -60,6 +60,10 @@ public:
     // xpubReady(), error() or cancelled().
     virtual void xpub(ReqId req_id, Network network, const QString &fingerprint,
                       const QString &path) = 0;
+    // The key's xpub at `path` when its cache holds one, else empty: no modal, no
+    // request, so a caller can skip xpub() and the window it opens.
+    [[nodiscard]] virtual auto cachedXpub(Network network, const QString &fingerprint,
+                                          const QString &path) const -> QString = 0;
     // Records that `descriptor` is registered with this key, and registers it on the
     // devices that need it.
     virtual void registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,

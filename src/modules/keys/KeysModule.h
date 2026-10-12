@@ -63,6 +63,8 @@ public:
     void spDescriptor(ReqId req_id, Network network, const QString &fingerprint) override;
     void xpub(ReqId req_id, Network network, const QString &fingerprint,
               const QString &path) override;
+    [[nodiscard]] auto cachedXpub(Network network, const QString &fingerprint,
+                                  const QString &path) const -> QString override;
     void registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
                             const QString &descriptor) override;
 
@@ -174,6 +176,8 @@ public:
     // The xpub at `path` of `fingerprint`'s key: from its cache when it holds one,
     // else over its route (see xpubRoute()), then cached.
     void fetchXpub(ReqId req_id, const QString &fingerprint, const QString &path);
+    // The key's cached xpub at `path`, empty when not cached.
+    [[nodiscard]] auto cachedXpub(const QString &fingerprint, const QString &path) const -> QString;
     // Records `descriptor` as registered with `fingerprint`'s key and answers
     // `req_id` through the bus's descriptorRegistered or error signal.
     void registerDescriptor(ReqId req_id, const QString &fingerprint, const QString &descriptor);
