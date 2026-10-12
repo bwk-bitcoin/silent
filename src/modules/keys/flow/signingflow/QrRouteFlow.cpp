@@ -52,7 +52,7 @@ void QrRouteFlow::start() {
         m_qr_engine->verifyAddress(request().descriptor, request().path, request().address);
         return;
     case Context::Fetch:
-        m_qr_engine->getSpDescriptor();
+        m_qr_engine->getSpAccount();
         return;
     case Context::FetchXpub:
         m_qr_engine->getXpubs({request().path});
@@ -156,7 +156,7 @@ void QrRouteFlow::connectCamera() {
             qontrol::UNIQUE);
     connect(m_qr_engine, &qr::QrEngine::addressVerified, this, &QrRouteFlow::onQrVerified,
             qontrol::UNIQUE);
-    connect(m_qr_engine, &qr::QrEngine::spDescriptor, this, &QrRouteFlow::onQrDescriptor,
+    connect(m_qr_engine, &qr::QrEngine::spAccount, this, &QrRouteFlow::onQrSpAccount,
             qontrol::UNIQUE);
     connect(m_qr_engine, &qr::QrEngine::xpubs, this, &QrRouteFlow::onQrXpubs, qontrol::UNIQUE);
     connect(m_qr_engine, &qr::QrEngine::error, this, &QrRouteFlow::onQrError, qontrol::UNIQUE);
@@ -253,9 +253,9 @@ void QrRouteFlow::onQrVerified(bool matched) {
                              : SigningFlow::VerifyResult::Mismatch);
 }
 
-void QrRouteFlow::onQrDescriptor(const QString &descriptor) {
+void QrRouteFlow::onQrSpAccount(const QString &descriptor, const QList<qr::QrXpub> &xpubs) {
     m_camera->stop();
-    emit descriptorFetched(descriptor);
+    emit descriptorFetched(descriptor, xpubs);
 }
 
 void QrRouteFlow::onQrXpubs(const QString &fingerprint, const QList<qr::QrXpub> &xpubs,

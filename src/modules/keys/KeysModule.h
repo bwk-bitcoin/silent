@@ -28,6 +28,7 @@ class SigningFlow;
 
 namespace qr {
 struct QrDevice;
+struct QrXpub;
 } // namespace qr
 
 namespace keys {
@@ -251,6 +252,10 @@ private slots:
     // A flow fetched an xpub: cached on its key, then handed to the caller.
     void onFlowXpubFetched(ReqId req_id, const QString &xpub, const QString &fingerprint,
                            const QString &path);
+    // A flow fetched an sp() descriptor: the xpubs handed with it cached on its key,
+    // then the descriptor handed to the caller.
+    void onFlowDescriptorFetched(ReqId req_id, const QString &descriptor,
+                                 const QString &fingerprint, const QList<qr::QrXpub> &xpubs);
 
 protected:
     void createModule();

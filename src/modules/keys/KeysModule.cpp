@@ -364,7 +364,7 @@ void KeysModule::runFlow(flow::SigningFlow *flow) {
             qontrol::UNIQUE);
     connect(flow, &flow::SigningFlow::addressVerified, m_bus.get(), &KeysBus::deliverVerified,
             qontrol::UNIQUE);
-    connect(flow, &flow::SigningFlow::descriptorFetched, m_bus.get(), &KeysBus::deliverSpDescriptor,
+    connect(flow, &flow::SigningFlow::descriptorFetched, this, &KeysModule::onFlowDescriptorFetched,
             qontrol::UNIQUE);
     connect(flow, &flow::SigningFlow::xpubFetched, this, &KeysModule::onFlowXpubFetched,
             qontrol::UNIQUE);
@@ -658,6 +658,19 @@ void KeysModule::onFlowXpubFetched(ReqId req_id, const QString &xpub, const QStr
         qWarning() << "keys:" << toQt(cached.error);
     }
     m_bus->deliverXpub(req_id, xpub, fingerprint, path);
+}
+
+void KeysModule::onFlowDescriptorFetched(ReqId req_id, const QString &descriptor,
+                                         const QString &fingerprint,
+                                         const QList<qr::QrXpub> &xpubs) {
+    // Cached first: the caller reads the cache when the descriptor lands.
+    for (const auto &xpub : xpubs) {
+        auto cached = cacheXpub(fingerprint, xpub.path, xpub.xpub);
+        if (!cached.is_ok) {
+            qWarning() << "keys:" << toQt(cached.error);
+        }
+    }
+    m_bus->deliverSpDescriptor(req_id, descriptor, fingerprint);
 }
 
 void KeysModule::saveSdPsbt(ReqId req_id, const QString &path, const QString &psbt_v2_hex) {

@@ -25,6 +25,15 @@ auto toQrError(QrErrorKind kind) -> qr::QrError {
     }
 }
 
+auto toQrXpubs(const rust::Vec<KeyXpub> &entries) -> QList<qr::QrXpub> {
+    QList<qr::QrXpub> xpubs;
+    for (const auto &entry : entries) {
+        xpubs.append(
+            {.path = xpubPath(KeysModule::toQt(entry.path)), .xpub = KeysModule::toQt(entry.xpub)});
+    }
+    return xpubs;
+}
+
 } // namespace
 
 BwkQrEngine::BwkQrEngine(KeysModule *module, QObject *parent)
@@ -44,12 +53,12 @@ void BwkQrEngine::getXpubs(const QStringList &paths) {
     issue(m_module->rust()->qr_request_get_xpubs(std::move(rustPaths)));
 }
 
-void BwkQrEngine::getSpDescriptor() {
+void BwkQrEngine::getSpAccount() {
     if (m_module->rust() == nullptr) {
         emit error(qr::QrError::RequestFailed, TR("keys-module-not-ready"));
         return;
     }
-    issue(m_module->rust()->qr_request_get_sp_descriptor());
+    issue(m_module->rust()->qr_request_get_sp_account());
 }
 
 void BwkQrEngine::sign(const QString &psbt_v2_hex, const QString &descriptor) {
@@ -113,20 +122,15 @@ void BwkQrEngine::forwardResponse(const ::QrResponse &decoded) {
             emit error(qr::QrError::RequestFailed, TR("keys-qr-wrong-kind"));
             return;
         }
-        QList<qr::QrXpub> xpubList;
-        for (const auto &entry : entries) {
-            xpubList.append({.path = xpubPath(KeysModule::toQt(entry.path)),
-                             .xpub = KeysModule::toQt(entry.xpub)});
-        }
         qr::QrDevice device{.vendor = KeysModule::toQt(decoded.vendor()),
                             .model = KeysModule::toQt(decoded.model()),
                             .version = KeysModule::toQt(decoded.version()),
                             .capabilities = decoded.capabilities()};
-        emit xpubs(KeysModule::toQt(decoded.fingerprint()), xpubList, device);
+        emit xpubs(KeysModule::toQt(decoded.fingerprint()), toQrXpubs(entries), device);
         return;
     }
-    case QrResponseKind::SpDescriptor:
-        emit spDescriptor(KeysModule::toQt(decoded.descriptor()));
+    case QrResponseKind::SpAccount:
+        emit spAccount(KeysModule::toQt(decoded.descriptor()), toQrXpubs(decoded.xpubs()));
         return;
     case QrResponseKind::SignedPsbt:
         emit signedPsbt(KeysModule::toQt(decoded.psbt_hex()));

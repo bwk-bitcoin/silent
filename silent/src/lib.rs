@@ -123,7 +123,7 @@ mod ffi {
         Registration,
         AddressVerified,
         SignedPsbt,
-        SpDescriptor,
+        SpAccount,
     }
 
     /// Why a QR response was refused: the two failures the UI words on their own,
@@ -1238,7 +1238,7 @@ mod ffi {
             descriptors: Vec<String>,
             psbt_v2_hex: &str,
         ) -> QrMessageResult;
-        fn qr_request_get_sp_descriptor(self: &mut KeysModule) -> QrMessageResult;
+        fn qr_request_get_sp_account(self: &mut KeysModule) -> QrMessageResult;
 
         /// Decodes a response's bytes and validates them against the outstanding
         /// request.
@@ -1250,9 +1250,9 @@ mod ffi {
         fn error_kind(self: &QrResponse) -> QrErrorKind;
         /// Only meaningful when is_ok().
         fn kind(self: &QrResponse) -> QrResponseKind;
-        /// The signer's fingerprint when kind() is Xpubs or SpDescriptor, else empty.
+        /// The signer's fingerprint when kind() is Xpubs or SpAccount, else empty.
         fn fingerprint(self: &QrResponse) -> String;
-        /// The SP descriptor when kind() is SpDescriptor, else empty.
+        /// The SP descriptor when kind() is SpAccount, else empty.
         fn descriptor(self: &QrResponse) -> String;
         /// The signed PSBT as v2 hex when kind() is SignedPsbt, else empty.
         fn psbt_hex(self: &QrResponse) -> String;
@@ -1264,7 +1264,8 @@ mod ffi {
         fn version(self: &QrResponse) -> String;
         /// The device capability bits when kind() is Xpubs, else 0.
         fn capabilities(self: &QrResponse) -> u32;
-        /// The derived xpubs when kind() is Xpubs, else empty.
+        /// The derived xpubs when kind() is Xpubs, the taproot and segwit xpubs when
+        /// SpAccount, else empty.
         fn xpubs(self: &QrResponse) -> Vec<KeyXpub>;
         /// The device's verify_address answer when kind() is AddressVerified, else false.
         fn verified(self: &QrResponse) -> bool;

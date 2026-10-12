@@ -493,6 +493,13 @@ void CreateAccount::onSpDescriptorReady(ReqId req_id, const QString &descriptor,
     m_descriptor = descriptor;
     m_descriptor_fingerprint = fingerprint;
     m_descriptor_network = network();
+    // A QR fetch cached the sub-accounts' xpubs with the descriptor.
+    if (m_taproot_descriptor.isEmpty()) {
+        takeCachedXpub(Fetch::Taproot);
+    }
+    if (m_segwit_descriptor.isEmpty()) {
+        takeCachedXpub(Fetch::Segwit);
+    }
 }
 
 void CreateAccount::onXpubReady(ReqId req_id, const QString &xpub, const QString &fingerprint,

@@ -480,10 +480,15 @@ pub fn taproot_descriptor_for(fingerprint: String, xpub: String, network: Networ
     sub_account_descriptor("tr", &fingerprint, &xpub, network)
 }
 
+/// The account a taproot / segwit sub-account is derived at.
+pub(crate) fn sub_account() -> ChildNumber {
+    ChildNumber::from_hardened_idx(0).expect("account 0 is a valid index")
+}
+
 /// `wpkh` or `tr` over the account 0 path of that script type, as bwk builds its own
 /// (`bwk_descriptor::descriptor::{wpkh, tr}`), receive and change in one.
 fn sub_account_descriptor(script: &str, fingerprint: &str, xpub: &str, network: Network) -> String {
-    let account = ChildNumber::from_hardened_idx(0).expect("account 0 is a valid index");
+    let account = sub_account();
     let path = match script {
         "wpkh" => wpkh_path(network.into(), account),
         _ => tr_path(network.into(), account),

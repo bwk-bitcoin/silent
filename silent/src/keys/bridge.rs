@@ -586,8 +586,12 @@ impl KeysModule {
         to_message(self.session.sign(&descriptors, &psbt))
     }
 
-    pub fn qr_request_get_sp_descriptor(&mut self) -> ffi::QrMessageResult {
-        to_message(self.session.get_sp_descriptor())
+    /// The silent payment account on the module's network.
+    pub fn qr_request_get_sp_account(&mut self) -> ffi::QrMessageResult {
+        let Some(manager) = self.inner.as_ref() else {
+            return failed_message(&self.error);
+        };
+        to_message(self.session.get_sp_account(manager.network()))
     }
 
     /// Decodes a response's bytes and validates them against the outstanding request.
@@ -834,23 +838,23 @@ impl QrResponse {
             Ok(qr::QrResponse::Registration { .. }) => ffi::QrResponseKind::Registration,
             Ok(qr::QrResponse::AddressVerified(_)) => ffi::QrResponseKind::AddressVerified,
             Ok(qr::QrResponse::SignedPsbt(_)) => ffi::QrResponseKind::SignedPsbt,
-            Ok(qr::QrResponse::SpDescriptor { .. }) => ffi::QrResponseKind::SpDescriptor,
+            Ok(qr::QrResponse::SpAccount { .. }) => ffi::QrResponseKind::SpAccount,
         }
     }
 
-    /// The signer's fingerprint when kind() is Xpubs or SpDescriptor, else empty.
+    /// The signer's fingerprint when kind() is Xpubs or SpAccount, else empty.
     pub fn fingerprint(&self) -> String {
         match self.inner.as_ref() {
             Ok(qr::QrResponse::Xpubs { fingerprint, .. })
-            | Ok(qr::QrResponse::SpDescriptor { fingerprint, .. }) => fingerprint.to_string(),
+            | Ok(qr::QrResponse::SpAccount { fingerprint, .. }) => fingerprint.to_string(),
             _ => String::new(),
         }
     }
 
-    /// The SP descriptor when kind() is SpDescriptor, else empty.
+    /// The SP descriptor when kind() is SpAccount, else empty.
     pub fn descriptor(&self) -> String {
         match self.inner.as_ref() {
-            Ok(qr::QrResponse::SpDescriptor { descriptor, .. }) => descriptor.clone(),
+            Ok(qr::QrResponse::SpAccount { descriptor, .. }) => descriptor.clone(),
             _ => String::new(),
         }
     }
@@ -896,10 +900,14 @@ impl QrResponse {
         }
     }
 
-    /// The derived xpubs when kind() is Xpubs, else empty.
+    /// The derived xpubs when kind() is Xpubs, the taproot and segwit xpubs when
+    /// SpAccount, else empty.
     pub fn xpubs(&self) -> Vec<ffi::KeyXpub> {
         match self.inner.as_ref() {
             Ok(qr::QrResponse::Xpubs {
+                fingerprint, xpubs, ..
+            })
+            | Ok(qr::QrResponse::SpAccount {
                 fingerprint, xpubs, ..
             }) => xpubs
                 .iter()

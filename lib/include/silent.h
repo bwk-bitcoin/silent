@@ -1152,7 +1152,7 @@ enum class QrResponseKind : ::std::uint8_t {
   Registration = 1,
   AddressVerified = 2,
   SignedPsbt = 3,
-  SpDescriptor = 4,
+  SpAccount = 4,
 };
 #endif // CXXBRIDGE1_ENUM_QrResponseKind
 
@@ -2251,7 +2251,7 @@ struct KeysModule final : public ::rust::Opaque {
   ::QrMessageResult qr_request_register_descriptor(::rust::Str descriptor) noexcept;
   ::QrMessageResult qr_request_verify_address(::rust::Str descriptor, ::rust::Str path, ::rust::Str address) noexcept;
   ::QrMessageResult qr_request_sign(::rust::Vec<::rust::String> descriptors, ::rust::Str psbt_v2_hex) noexcept;
-  ::QrMessageResult qr_request_get_sp_descriptor() noexcept;
+  ::QrMessageResult qr_request_get_sp_account() noexcept;
 
   // Decodes a response's bytes and validates them against the outstanding
   // request.
@@ -2281,10 +2281,10 @@ struct QrResponse final : public ::rust::Opaque {
   // Only meaningful when is_ok().
   ::QrResponseKind kind() const noexcept;
 
-  // The signer's fingerprint when kind() is Xpubs or SpDescriptor, else empty.
+  // The signer's fingerprint when kind() is Xpubs or SpAccount, else empty.
   ::rust::String fingerprint() const noexcept;
 
-  // The SP descriptor when kind() is SpDescriptor, else empty.
+  // The SP descriptor when kind() is SpAccount, else empty.
   ::rust::String descriptor() const noexcept;
 
   // The signed PSBT as v2 hex when kind() is SignedPsbt, else empty.
@@ -2302,7 +2302,8 @@ struct QrResponse final : public ::rust::Opaque {
   // The device capability bits when kind() is Xpubs, else 0.
   ::std::uint32_t capabilities() const noexcept;
 
-  // The derived xpubs when kind() is Xpubs, else empty.
+  // The derived xpubs when kind() is Xpubs, the taproot and segwit xpubs when
+  // SpAccount, else empty.
   ::rust::Vec<::KeyXpub> xpubs() const noexcept;
 
   // The device's verify_address answer when kind() is AddressVerified, else false.

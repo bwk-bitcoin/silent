@@ -20,7 +20,9 @@ public:
     explicit QrEngine(QObject *parent = nullptr);
     // Each path is written m/...
     virtual void getXpubs(const QStringList &paths) = 0;
-    virtual void getSpDescriptor() = 0;
+    // The silent payment account: its sp() descriptor, with its taproot and segwit
+    // sub-accounts' xpubs.
+    virtual void getSpAccount() = 0;
     virtual void sign(const QString &psbt_v2_hex, const QString &descriptor) = 0;
     virtual void verifyAddress(const QString &descriptor, const QString &path,
                                const QString &address) = 0;
@@ -32,7 +34,7 @@ signals:
     // One xpub per path asked, in the order asked.
     void xpubs(const QString &fingerprint, const QList<qr::QrXpub> &xpubs,
                const qr::QrDevice &device);
-    void spDescriptor(const QString &descriptor);
+    void spAccount(const QString &descriptor, const QList<qr::QrXpub> &xpubs);
     void signedPsbt(const QString &psbt_v2_hex);
     void addressVerified(bool matched);
     void error(qr::QrError kind, const QString &message);

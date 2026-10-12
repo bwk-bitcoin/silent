@@ -11,6 +11,7 @@
 
 #include "FlowCopy.h"
 #include "catalog/containers/Modal.h"
+#include "qr/QrTypes.h"
 #include "theme/Palette.h"
 
 #include <interfaces/types.h>
@@ -104,7 +105,9 @@ public:
 signals:
     void psbtSigned(ReqId req_id, QString psbt_v2_hex);
     void addressVerified(ReqId req_id, bool matched);
-    void descriptorFetched(ReqId req_id, QString descriptor, QString fingerprint);
+    // `xpubs` are the key's sub-account xpubs the route handed with the descriptor.
+    void descriptorFetched(ReqId req_id, QString descriptor, QString fingerprint,
+                           QList<qr::QrXpub> xpubs);
     void xpubFetched(ReqId req_id, QString xpub, QString fingerprint, QString path);
     // A failure the flow cannot recover from; the window closes.
     void failed(ReqId req_id, QString message);
@@ -117,7 +120,7 @@ public slots:
     void onFlowBack();
     void onPsbtSigned(const QString &psbt_v2_hex);
     void onVerifyResultChanged(std::optional<SigningFlow::VerifyResult> result);
-    void onDescriptorFetched(const QString &descriptor);
+    void onDescriptorFetched(const QString &descriptor, const QList<qr::QrXpub> &xpubs);
     void onXpubFetched(const QString &xpub);
     void onFailed(const QString &message);
 
@@ -186,7 +189,8 @@ signals:
     void psbtSigned(const QString &psbt_v2_hex);
     // What the device said about the address, none while it is asked again.
     void verifyResultChanged(std::optional<SigningFlow::VerifyResult> result);
-    void descriptorFetched(const QString &descriptor);
+    // `xpubs` are the sub-account xpubs handed along, none on a route that has none.
+    void descriptorFetched(const QString &descriptor, const QList<qr::QrXpub> &xpubs);
     void xpubFetched(const QString &xpub);
     // A failure the route cannot recover from: SigningFlow closes.
     void failed(const QString &message);

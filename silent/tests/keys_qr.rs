@@ -3,6 +3,8 @@
 //!
 //! None of these cases touch a key record, so no datadir override is needed here.
 
+mod common;
+
 use std::str::FromStr;
 
 use bitcoin::{
@@ -11,14 +13,21 @@ use bitcoin::{
     hashes::Hash,
     transaction,
 };
-use bwk_qr_protocol::{response, Message, MessageType, RequestId, Response};
-use bwk_sp::bwk_sign::{
-    bwk_descriptor::descriptor::{wpkh, wpkh_path, DescriptorDerivator},
-    hot_signer::HotSigner,
+use bwk_qr_protocol::{
+    request::{self, KeyKind, KeyRequest},
+    response,
+    types::{ExtendedKey, Fingerprint as ProtocolFingerprint},
+    Message, MessageType, RequestId, Response,
 };
-use bwk_sp::bwk_tx::bwk_psbt::{
-    sp::{set_sp_input_ecdh_share, set_sp_input_tweak, sp_input_ecdh_share, sp_input_tweak},
-    Input as PsbtInput, Output as PsbtOutput, PsbtV2,
+use bwk_sp::{
+    bwk_sign::{
+        bwk_descriptor::descriptor::{tr_path, wpkh, wpkh_path, DescriptorDerivator},
+        hot_signer::HotSigner,
+    },
+    bwk_tx::bwk_psbt::{
+        sp::{set_sp_input_ecdh_share, set_sp_input_tweak, sp_input_ecdh_share, sp_input_tweak},
+        Input as PsbtInput, Output as PsbtOutput, PsbtV2,
+    },
 };
 use silent::keys::{
     psbt::merge_signatures_bytes,
@@ -70,6 +79,23 @@ fn big_sign_psbt_bytes() -> Vec<u8> {
         vec![0u8; BIG_UNKNOWN_LEN],
     );
     psbt.serialize().expect("serialize big psbt")
+}
+
+/// A `Keys` response body from a stable firmware, carrying `keys` for `fingerprint`.
+fn keys_body(keys: Vec<ExtendedKey>, fingerprint: [u8; 4]) -> response::Body {
+    response::Body::Keys(response::Keys {
+        keys,
+        fingerprint: ProtocolFingerprint(fingerprint),
+        vendor: "vendor".to_string(),
+        model: "model".to_string(),
+        version: response::FirmwareVersion {
+            major: 1,
+            minor: 0,
+            patch: 0,
+            flag: response::ReleaseFlag::Stable,
+        },
+        capabilities: response::Capabilities(0),
+    })
 }
 
 fn sp_descriptor_without_origin() -> String {
@@ -230,16 +256,16 @@ fn test_five_requests_round_trip() {
     let sign = session
         .sign(&["wpkh(desc)".to_string()], &sign_psbt_bytes())
         .expect("sign request");
-    let sp_descriptor = session
-        .get_sp_descriptor()
-        .expect("get_sp_descriptor request");
+    let sp_account = session
+        .get_sp_account(bitcoin::Network::Regtest)
+        .expect("get_sp_account request");
 
     let ids = [
         xpubs.id(),
         register.id(),
         verify.id(),
         sign.id(),
-        sp_descriptor.id(),
+        sp_account.id(),
     ];
     for id in &ids {
         assert_ne!(
@@ -258,11 +284,11 @@ fn test_five_requests_round_trip() {
     );
 
     for (request, expected_type) in [
-        (&xpubs, MessageType::GetXpubs),
+        (&xpubs, MessageType::GetKeys),
         (&register, MessageType::RegisterDescriptor),
         (&verify, MessageType::AddressVerification),
         (&sign, MessageType::Signing),
-        (&sp_descriptor, MessageType::GetSpDescriptor),
+        (&sp_account, MessageType::GetKeys),
     ] {
         match bwk_qr_protocol::decode(request.message()).expect("decode request message") {
             Message::Request(decoded) => {
@@ -317,16 +343,14 @@ fn test_sign_request_round_trips_through_bbqr_frames() {
 fn test_request_id_mismatch_is_refused() {
     let mut session = QrSession::new();
     let request = session
-        .get_sp_descriptor()
-        .expect("get_sp_descriptor request");
+        .get_sp_account(bitcoin::Network::Regtest)
+        .expect("get_sp_account request");
     let outstanding_hex = format!("{:02x}{:02x}", request.id().0[0], request.id().0[1]);
 
     let wrong_id = RequestId([0xff, 0xff]);
     let response = Response {
         id: wrong_id,
-        body: response::Body::SpDescriptor(response::SpDescriptor {
-            descriptor: "sp(scan,spend)".to_string(),
-        }),
+        body: keys_body(Vec::new(), [0u8; 4]),
     };
     let encoded = bwk_qr_protocol::encode_response(&response).expect("encode response");
 
@@ -351,19 +375,7 @@ fn test_bad_xpub_count_is_refused() {
 
     let response = Response {
         id: session.outstanding_id().expect("outstanding request"),
-        body: response::Body::Xpubs(response::Xpubs {
-            xpubs: vec![bwk_qr_protocol::types::Xpub([0u8; 78])],
-            fingerprint: bwk_qr_protocol::types::Fingerprint([0u8; 4]),
-            vendor: "vendor".to_string(),
-            model: "model".to_string(),
-            version: response::FirmwareVersion {
-                major: 1,
-                minor: 0,
-                patch: 0,
-                flag: response::ReleaseFlag::Stable,
-            },
-            capabilities: response::Capabilities(0),
-        }),
+        body: keys_body(vec![ExtendedKey([0u8; 78])], [0u8; 4]),
     };
     let encoded = bwk_qr_protocol::encode_response(&response).expect("encode response");
 
@@ -415,30 +427,6 @@ fn test_bare_signatures_are_refused() {
     assert!(
         error.contains("full") && error.to_lowercase().contains("psbt"),
         "expected the error to say only a full psbt is accepted, got {error}"
-    );
-}
-
-// ===== Case 15: an sp() descriptor response with no origin is refused =====
-
-#[test]
-fn test_origin_less_sp_descriptor_response_is_refused() {
-    let mut session = QrSession::new();
-    session
-        .get_sp_descriptor()
-        .expect("get_sp_descriptor request");
-
-    let response = Response {
-        id: session.outstanding_id().expect("outstanding request"),
-        body: response::Body::SpDescriptor(response::SpDescriptor {
-            descriptor: sp_descriptor_without_origin(),
-        }),
-    };
-    let encoded = bwk_qr_protocol::encode_response(&response).expect("encode response");
-
-    let error = expect_refused(&mut session, &encoded);
-    assert!(
-        error.contains("origin"),
-        "expected the error to name the missing origin, got {error}"
     );
 }
 
@@ -665,9 +653,9 @@ fn test_xpubs_response_carries_the_device() {
         .expect("get_xpubs request");
     let response = Response {
         id: session.outstanding_id().expect("outstanding request"),
-        body: response::Body::Xpubs(response::Xpubs {
-            xpubs: vec![(&xpub).into()],
-            fingerprint: bwk_qr_protocol::types::Fingerprint([0xde, 0xad, 0xbe, 0xef]),
+        body: response::Body::Keys(response::Keys {
+            keys: vec![(&xpub).into()],
+            fingerprint: ProtocolFingerprint([0xde, 0xad, 0xbe, 0xef]),
             vendor: "vendor".to_string(),
             model: "model".to_string(),
             version: response::FirmwareVersion {
@@ -728,19 +716,10 @@ fn test_four_path_xpubs_response_keeps_the_request_order() {
     session.get_xpubs(paths).expect("get_xpubs request");
     let response = Response {
         id: session.outstanding_id().expect("outstanding request"),
-        body: response::Body::Xpubs(response::Xpubs {
-            xpubs: expected.iter().map(|(_, xpub)| xpub.into()).collect(),
-            fingerprint: bwk_qr_protocol::types::Fingerprint([0xde, 0xad, 0xbe, 0xef]),
-            vendor: "vendor".to_string(),
-            model: "model".to_string(),
-            version: response::FirmwareVersion {
-                major: 1,
-                minor: 0,
-                patch: 0,
-                flag: response::ReleaseFlag::Stable,
-            },
-            capabilities: response::Capabilities(0),
-        }),
+        body: keys_body(
+            expected.iter().map(|(_, xpub)| xpub.into()).collect(),
+            [0xde, 0xad, 0xbe, 0xef],
+        ),
     };
     let encoded = bwk_qr_protocol::encode_response(&response).expect("encode response");
 
@@ -849,4 +828,208 @@ fn test_sp_verify_answer_is_compared_with_the_address() {
             Err(e) => panic!("refused: {e}"),
         }
     }
+}
+
+// ===== Silent payment account =====
+
+const TEST_FINGERPRINT: [u8; 4] = [0x73, 0xc5, 0xda, 0x0a];
+
+/// The networks an sp account is asked on, with their silent `Network` and the coin
+/// type of their paths.
+const SP_ACCOUNT_NETWORKS: [(bitcoin::Network, silent::Network, u32); 2] = [
+    (bitcoin::Network::Regtest, silent::Network::Regtest, 1),
+    (bitcoin::Network::Bitcoin, silent::Network::Bitcoin, 0),
+];
+
+fn path(path: &str) -> DerivationPath {
+    DerivationPath::from_str(path).expect("valid path")
+}
+
+/// The spend, scan, taproot and segwit paths of the test account, in request order.
+fn sp_account_paths(coin: u32) -> [DerivationPath; 4] {
+    [
+        path(&format!("m/352'/{coin}'/0'/0'/0")),
+        path(&format!("m/352'/{coin}'/0'/1'/0")),
+        path(&format!("m/86'/{coin}'/0'")),
+        path(&format!("m/84'/{coin}'/0'")),
+    ]
+}
+
+/// The keys a signer on the test mnemonic answers an sp account request with: the
+/// spend key public, the scan key private, the taproot and segwit xpubs.
+fn sp_account_keys(network: bitcoin::Network, coin: u32) -> Vec<ExtendedKey> {
+    let signer = HotSigner::new_from_mnemonics(network, TEST_MNEMONIC).expect("valid signer");
+    let [spend, scan, taproot, segwit] = sp_account_paths(coin);
+    vec![
+        (&signer.xpub(&spend).xkey).into(),
+        (&signer.xpriv(&scan).xkey).into(),
+        (&signer.xpub(&taproot).xkey).into(),
+        (&signer.xpub(&segwit).xkey).into(),
+    ]
+}
+
+/// Issues an sp account request and answers it with `keys` from the test key.
+fn answer_sp_account(
+    network: bitcoin::Network,
+    keys: Vec<ExtendedKey>,
+) -> Result<QrResponse, Error> {
+    let mut session = QrSession::new();
+    session
+        .get_sp_account(network)
+        .expect("get_sp_account request");
+    let response = Response {
+        id: session.outstanding_id().expect("outstanding request"),
+        body: keys_body(keys, TEST_FINGERPRINT),
+    };
+    let encoded = bwk_qr_protocol::encode_response(&response).expect("encode response");
+    session.decode_response(&encoded)
+}
+
+#[test]
+fn test_sp_account_request_asks_the_four_keys() {
+    for (network, _, coin) in SP_ACCOUNT_NETWORKS {
+        let request = QrSession::new()
+            .get_sp_account(network)
+            .expect("get_sp_account request");
+        let keys = match bwk_qr_protocol::decode(request.message()).expect("decodes") {
+            Message::Request(bwk_qr_protocol::Request {
+                body: request::Body::GetKeys(body),
+                ..
+            }) => body.keys,
+            other => panic!("not a get keys request: {other:?}"),
+        };
+        let expected: Vec<KeyRequest> = [
+            (format!("m/352'/{coin}'/0'/0'/0"), KeyKind::Public),
+            (format!("m/352'/{coin}'/0'/1'/0"), KeyKind::Private),
+            (format!("m/86'/{coin}'/0'"), KeyKind::Public),
+            (format!("m/84'/{coin}'/0'"), KeyKind::Public),
+        ]
+        .into_iter()
+        .map(|(key_path, kind)| KeyRequest {
+            derivation_path: (&path(&key_path)).into(),
+            kind,
+        })
+        .collect();
+        assert_eq!(
+            keys, expected,
+            "unexpected key requests on {network}: spend public, scan private, then the \
+             taproot and segwit xpubs"
+        );
+    }
+}
+
+#[test]
+fn test_sp_account_response_builds_the_watch_only_descriptor() {
+    for (network, silent_network, coin) in SP_ACCOUNT_NETWORKS {
+        let answer = answer_sp_account(network, sp_account_keys(network, coin));
+        let Ok(QrResponse::SpAccount {
+            descriptor,
+            fingerprint,
+            xpubs,
+        }) = answer
+        else {
+            panic!("expected an accepted sp account response on {network}");
+        };
+        assert_eq!(
+            descriptor,
+            common::descriptor_from_mnemonic(TEST_MNEMONIC, silent_network),
+            "expected the hot key's watch-only sp() descriptor on {network}"
+        );
+        assert_eq!(
+            fingerprint.to_string(),
+            "73c5da0a",
+            "unexpected fingerprint on {network}"
+        );
+        let signer = HotSigner::new_from_mnemonics(network, TEST_MNEMONIC).expect("valid signer");
+        let account = ChildNumber::from_hardened_idx(0).expect("valid account index");
+        let taproot = tr_path(network, account).expect("valid tr path");
+        let segwit = wpkh_path(network, account).expect("valid wpkh path");
+        assert_eq!(
+            xpubs,
+            vec![
+                (taproot.clone(), signer.xpub(&taproot).xkey),
+                (segwit.clone(), signer.xpub(&segwit).xkey),
+            ],
+            "expected the taproot and segwit xpubs with their paths on {network}"
+        );
+    }
+}
+
+#[test]
+fn test_sp_account_key_of_the_wrong_kind_is_refused() {
+    let network = bitcoin::Network::Regtest;
+    let signer = HotSigner::new_from_mnemonics(network, TEST_MNEMONIC).expect("valid signer");
+    let [spend, scan, _, _] = sp_account_paths(1);
+
+    // The scan key as an xpub.
+    let mut keys = sp_account_keys(network, 1);
+    keys[1] = (&signer.xpub(&scan).xkey).into();
+    let error = answer_sp_account(network, keys).err();
+    assert!(
+        matches!(
+            &error,
+            Some(Error::KeyKindMismatch { path, requested: KeyKind::Private }) if *path == scan
+        ),
+        "expected a private key mismatch at the scan path, got {error:?}"
+    );
+
+    // The spend key as an xpriv.
+    let mut keys = sp_account_keys(network, 1);
+    keys[0] = (&signer.xpriv(&spend).xkey).into();
+    let error = answer_sp_account(network, keys).err();
+    assert!(
+        matches!(
+            &error,
+            Some(Error::KeyKindMismatch { path, requested: KeyKind::Public }) if *path == spend
+        ),
+        "expected a public key mismatch at the spend path, got {error:?}"
+    );
+}
+
+#[test]
+fn test_sp_account_key_count_mismatch_is_refused() {
+    let network = bitcoin::Network::Regtest;
+    let mut keys = sp_account_keys(network, 1);
+    keys.pop();
+    let error = answer_sp_account(network, keys).err();
+    assert!(
+        matches!(
+            error,
+            Some(Error::XpubCountMismatch {
+                requested: 4,
+                returned: 3
+            })
+        ),
+        "expected 4 keys requested and 3 returned, got {error:?}"
+    );
+}
+
+#[test]
+fn test_sp_account_private_key_export_refusal_surfaces() {
+    let mut session = QrSession::new();
+    session
+        .get_sp_account(bitcoin::Network::Regtest)
+        .expect("get_sp_account request");
+    let response = Response {
+        id: session.outstanding_id().expect("outstanding request"),
+        body: response::Body::Error(response::ErrorBody {
+            message_type: MessageType::GetKeys,
+            error: response::Error::from(0x0c),
+            message: "scan branch only".to_string(),
+        }),
+    };
+    let encoded = bwk_qr_protocol::encode_response(&response).expect("encode response");
+
+    let error = session.decode_response(&encoded).err();
+    assert!(
+        matches!(
+            &error,
+            Some(Error::SignerRefused {
+                message_type: MessageType::GetKeys,
+                code: response::Error::PrivateKeyExportRefused,
+                message,
+            }) if message == "scan branch only"
+        ),
+        "expected the signer's private key export refusal, got {error:?}"
+    );
 }

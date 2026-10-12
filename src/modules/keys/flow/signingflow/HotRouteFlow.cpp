@@ -94,7 +94,7 @@ void HotRouteFlow::deliver(const Answer &answer) {
         emit psbtSigned(answer.value);
         return;
     case AnswerKind::Descriptor:
-        emit descriptorFetched(answer.value);
+        emit descriptorFetched(answer.value, {});
         return;
     case AnswerKind::Xpub:
         emit xpubFetched(answer.value);

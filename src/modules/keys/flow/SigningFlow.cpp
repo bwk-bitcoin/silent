@@ -482,7 +482,7 @@ void SigningFlow::onVerifyResultChanged(std::optional<SigningFlow::VerifyResult>
     m_verify_result = result;
 }
 
-void SigningFlow::onDescriptorFetched(const QString &descriptor) {
+void SigningFlow::onDescriptorFetched(const QString &descriptor, const QList<qr::QrXpub> &xpubs) {
     // Only a descriptor carrying the asked key's origin is handed over: never one for
     // another key, never one repaired here.
     auto validated = ::validate_sp_descriptor_origin(rust::String(descriptor.toStdString()));
@@ -493,7 +493,7 @@ void SigningFlow::onDescriptorFetched(const QString &descriptor) {
     }
     m_answered = true;
     emit descriptorFetched(m_request.req_id, KeysModule::toQt(validated.descriptor),
-                           KeysModule::toQt(validated.fingerprint));
+                           KeysModule::toQt(validated.fingerprint), xpubs);
     accept();
 }
 

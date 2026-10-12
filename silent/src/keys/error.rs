@@ -160,8 +160,13 @@ pub enum Error {
         code: bwk_qr_protocol::response::Error,
         message: String,
     },
-    #[error("get_xpubs requested {requested} path(s) but the response carries {returned}")]
+    #[error("get_keys requested {requested} key(s) but the response carries {returned}")]
     XpubCountMismatch { requested: usize, returned: usize },
+    #[error("the signer returned the wrong kind of key at '{path}', {requested:?} was requested")]
+    KeyKindMismatch {
+        path: DerivationPath,
+        requested: bwk_qr_protocol::request::KeyKind,
+    },
     #[error("signed PSBT failed to parse as PSBT v2 or v0")]
     InvalidSignedPsbt,
     #[error("signer returned bare signatures, only a full signed PSBT is accepted")]

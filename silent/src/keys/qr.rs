@@ -9,30 +9,77 @@
 use std::str::FromStr;
 
 use bitcoin::{
-    bip32::{ChildNumber, DerivationPath, Fingerprint, Xpub},
+    bip32::{ChildNumber, DerivationPath, Fingerprint, Xpriv, Xpub},
     Network,
 };
 use bwk_qr_protocol::{
-    request, response, types::SpKeys, Message, MessageType, Request, RequestId, Response,
-    SignResponseKind,
+    request::{self, KeyKind},
+    response,
+    types::{self, SpKeys},
+    Message, MessageType, Request, RequestId, Response, SignResponseKind,
 };
 use bwk_sp::{
-    bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor,
+    bwk_sign::bwk_descriptor::{
+        descriptor::{tr_path, wpkh_path},
+        sp_descriptor::SpDescriptor,
+    },
     receiver::{scan_path, spend_path},
 };
 
-use crate::hwi;
-use crate::keys::error::Error;
-use crate::keys::psbt;
+use crate::{
+    config::sub_account,
+    hwi,
+    keys::{
+        error::Error,
+        hot::{sp_account, watch_only_sp_descriptor},
+        psbt,
+    },
+};
 
-/// What the next response has to match. `requested_paths` is empty for every
-/// request but `GetXpubs`, whose response carries xpubs in request order and
-/// nothing else to pair them with. Read back by `validate_response` to check a
-/// decoded response against what was actually asked.
+/// What a `GetKeys` request asked for. Its response carries the keys in request
+/// order and nothing else to pair them with.
+enum KeysRequest {
+    /// Every key public.
+    Xpubs(Vec<DerivationPath>),
+    SpAccount(SpAccountPaths),
+}
+
+/// The keys of a silent payment account: its spend key public and its scan key
+/// private, then the taproot and segwit sub-accounts' xpubs.
+struct SpAccountPaths {
+    network: Network,
+    account: ChildNumber,
+    spend: DerivationPath,
+    scan: DerivationPath,
+    taproot: DerivationPath,
+    segwit: DerivationPath,
+}
+
+impl KeysRequest {
+    /// The keys asked for, in request order.
+    fn keys(&self) -> Vec<(DerivationPath, KeyKind)> {
+        match self {
+            Self::Xpubs(paths) => paths
+                .iter()
+                .map(|path| (path.clone(), KeyKind::Public))
+                .collect(),
+            Self::SpAccount(paths) => vec![
+                (paths.spend.clone(), KeyKind::Public),
+                (paths.scan.clone(), KeyKind::Private),
+                (paths.taproot.clone(), KeyKind::Public),
+                (paths.segwit.clone(), KeyKind::Public),
+            ],
+        }
+    }
+}
+
+/// What the next response has to match. `keys` is `None` for every request but
+/// `GetKeys`. Read back by `validate_response` to check a decoded response against
+/// what was actually asked.
 struct Outstanding {
     id: RequestId,
     message_type: MessageType,
-    requested_paths: Vec<DerivationPath>,
+    keys: Option<KeysRequest>,
     /// The address a `VerifyAddress` request asked the device to confirm, so the
     /// response can be compared against it. `None` for every other request.
     expected_address: Option<String>,
@@ -75,12 +122,36 @@ impl QrSession {
         if paths.is_empty() {
             return Err(Error::EmptyPathList);
         }
-        let derivation_paths = paths
+        self.get_keys(KeysRequest::Xpubs(paths))
+    }
+
+    /// Asks for the silent payment account in one request: the signer gives out its
+    /// scan key, never its spend key, and the sp() descriptor is built from them here.
+    pub fn get_sp_account(&mut self, network: Network) -> Result<QrRequest, Error> {
+        let account = sp_account()?;
+        let sub_account = sub_account();
+        let paths = SpAccountPaths {
+            network,
+            account,
+            spend: spend_path(network, account),
+            scan: scan_path(network, account),
+            taproot: tr_path(network, sub_account).expect("the sub-account is hardened"),
+            segwit: wpkh_path(network, sub_account).expect("the sub-account is hardened"),
+        };
+        self.get_keys(KeysRequest::SpAccount(paths))
+    }
+
+    fn get_keys(&mut self, keys: KeysRequest) -> Result<QrRequest, Error> {
+        let requests = keys
+            .keys()
             .iter()
-            .map(bwk_qr_protocol::types::DerivationPath::from)
+            .map(|(path, kind)| request::KeyRequest {
+                derivation_path: types::DerivationPath::from(path),
+                kind: *kind,
+            })
             .collect();
-        let body = request::Body::GetXpubs(request::GetXpubs { derivation_paths });
-        self.issue(body, paths, None, None)
+        let body = request::Body::GetKeys(request::GetKeys { keys: requests });
+        self.issue(body, Some(keys), None, None)
     }
 
     pub fn register_descriptor(&mut self, descriptor: &str) -> Result<QrRequest, Error> {
@@ -88,7 +159,7 @@ impl QrSession {
             descriptor_alias: hwi::wallet_name(descriptor),
             descriptor: Some(request::DescriptorBody::Bip380(descriptor.to_string())),
         });
-        self.issue(body, Vec::new(), None, None)
+        self.issue(body, None, None, None)
     }
 
     /// A silent payment address is asked for with its account's keys instead of the
@@ -106,12 +177,12 @@ impl QrSession {
         };
         let body = request::Body::VerifyAddress(request::VerifyAddress {
             descriptor_alias: hwi::wallet_name(descriptor),
-            derivation_path: bwk_qr_protocol::types::DerivationPath::from(&path),
+            derivation_path: types::DerivationPath::from(&path),
             address: Some(address.clone()),
             descriptor: Some(body),
             proof: None,
         });
-        self.issue(body, Vec::new(), Some(address), None)
+        self.issue(body, None, Some(address), None)
     }
 
     pub fn sign(
@@ -144,19 +215,14 @@ impl QrSession {
             psbt: payload,
             want_kind: Some(SignResponseKind::Psbt),
         });
-        self.issue(body, Vec::new(), None, Some(psbt_v2_bytes.to_vec()))
-    }
-
-    pub fn get_sp_descriptor(&mut self) -> Result<QrRequest, Error> {
-        let body = request::Body::GetSpDescriptor(request::GetSpDescriptor {});
-        self.issue(body, Vec::new(), None, None)
+        self.issue(body, None, None, Some(psbt_v2_bytes.to_vec()))
     }
 
     /// Encodes the request and makes it the outstanding one.
     fn issue(
         &mut self,
         body: request::Body,
-        requested_paths: Vec<DerivationPath>,
+        keys: Option<KeysRequest>,
         expected_address: Option<String>,
         original_psbt_v2: Option<Vec<u8>>,
     ) -> Result<QrRequest, Error> {
@@ -166,7 +232,7 @@ impl QrSession {
         self.outstanding = Some(Outstanding {
             id,
             message_type,
-            requested_paths,
+            keys,
             expected_address,
             original_psbt_v2,
         });
@@ -193,7 +259,6 @@ impl QrSession {
             });
         }
         let expected_type = outstanding.message_type;
-        let requested_paths = outstanding.requested_paths.clone();
         let expected_address = outstanding.expected_address.clone();
         let original_psbt_v2 = outstanding.original_psbt_v2.clone();
 
@@ -214,11 +279,14 @@ impl QrSession {
         }
 
         let parsed = match body {
-            response::Body::Xpubs(xpubs) => validate_xpubs(xpubs, &requested_paths)?,
-            response::Body::Signed(signed) => validate_signed(signed, original_psbt_v2.as_deref())?,
-            response::Body::SpDescriptor(descriptor) => {
-                validate_sp_descriptor_response(descriptor)?
+            response::Body::Keys(keys) => {
+                let requested = outstanding
+                    .keys
+                    .as_ref()
+                    .expect("a GetKeys request always records its keys");
+                validate_keys(keys, requested)?
             }
+            response::Body::Signed(signed) => validate_signed(signed, original_psbt_v2.as_deref())?,
             response::Body::Registration(registration) => validate_registration(registration)?,
             response::Body::AddressUri(address_uri) => {
                 validate_address_uri(address_uri, expected_address)?
@@ -252,36 +320,99 @@ pub enum QrResponse {
     /// merged in. Always v2, even for a plain (non-SP) sign request that was sent to
     /// the device as v0.
     SignedPsbt(Vec<u8>),
-    SpDescriptor {
+    /// A silent payment account: its watch-only sp() descriptor, built from the keys
+    /// the signer gave, and its taproot and segwit sub-accounts' xpubs.
+    SpAccount {
         descriptor: String,
         fingerprint: Fingerprint,
+        xpubs: Vec<(DerivationPath, Xpub)>,
     },
 }
 
-fn validate_xpubs(
-    xpubs: response::Xpubs,
-    requested_paths: &[DerivationPath],
-) -> Result<QrResponse, Error> {
-    if xpubs.xpubs.len() != requested_paths.len() {
+/// A `Keys` response must carry one key per requested key, each of the requested kind.
+fn validate_keys(keys: response::Keys, requested: &KeysRequest) -> Result<QrResponse, Error> {
+    let requested_keys = requested.keys();
+    if keys.keys.len() != requested_keys.len() {
         return Err(Error::XpubCountMismatch {
-            requested: requested_paths.len(),
-            returned: xpubs.xpubs.len(),
+            requested: requested_keys.len(),
+            returned: keys.keys.len(),
         });
     }
-    let mut converted = Vec::with_capacity(xpubs.xpubs.len());
-    for (path, xpub) in requested_paths.iter().zip(xpubs.xpubs.iter()) {
-        converted.push((path.clone(), Xpub::try_from(xpub)?));
+    let fingerprint = Fingerprint::from(&keys.fingerprint);
+    match requested {
+        KeysRequest::Xpubs(paths) => {
+            let mut xpubs = Vec::with_capacity(paths.len());
+            for (path, key) in paths.iter().zip(keys.keys.iter()) {
+                xpubs.push((path.clone(), public_key(key, path)?));
+            }
+            Ok(QrResponse::Xpubs {
+                fingerprint,
+                xpubs,
+                vendor: keys.vendor,
+                model: keys.model,
+                version: format!(
+                    "{}.{}.{}",
+                    keys.version.major, keys.version.minor, keys.version.patch
+                ),
+                capabilities: keys.capabilities.0,
+            })
+        }
+        KeysRequest::SpAccount(paths) => {
+            let keys = keys
+                .keys
+                .try_into()
+                .expect("the key count is checked above");
+            sp_account_response(fingerprint, keys, paths)
+        }
     }
-    Ok(QrResponse::Xpubs {
-        fingerprint: Fingerprint::from(&xpubs.fingerprint),
-        xpubs: converted,
-        vendor: xpubs.vendor,
-        model: xpubs.model,
-        version: format!(
-            "{}.{}.{}",
-            xpubs.version.major, xpubs.version.minor, xpubs.version.patch
-        ),
-        capabilities: xpubs.capabilities.0,
+}
+
+/// `keys` are in `SpAccountPaths` request order.
+fn sp_account_response(
+    fingerprint: Fingerprint,
+    [spend, scan, taproot, segwit]: [types::ExtendedKey; 4],
+    paths: &SpAccountPaths,
+) -> Result<QrResponse, Error> {
+    let spend = public_key(&spend, &paths.spend)?;
+    let scan = private_key(&scan, &paths.scan)?;
+    let taproot = public_key(&taproot, &paths.taproot)?;
+    let segwit = public_key(&segwit, &paths.segwit)?;
+    let descriptor = watch_only_sp_descriptor(
+        fingerprint,
+        paths.network,
+        paths.account,
+        scan.private_key,
+        spend.public_key,
+    );
+    Ok(QrResponse::SpAccount {
+        descriptor: descriptor.to_string(),
+        fingerprint,
+        xpubs: vec![
+            (paths.taproot.clone(), taproot),
+            (paths.segwit.clone(), segwit),
+        ],
+    })
+}
+
+/// The xpub the signer returned for a public key request at `path`.
+fn public_key(key: &types::ExtendedKey, path: &DerivationPath) -> Result<Xpub, Error> {
+    Xpub::try_from(key).map_err(|e| match Xpriv::try_from(key) {
+        Ok(_) => Error::KeyKindMismatch {
+            path: path.clone(),
+            requested: KeyKind::Public,
+        },
+        Err(_) => Error::from(e),
+    })
+}
+
+/// The xpriv the signer returned for a private key request at `path`.
+fn private_key(key: &types::ExtendedKey, path: &DerivationPath) -> Result<Xpriv, Error> {
+    Xpriv::try_from(key).map_err(|e| match Xpub::try_from(key) {
+        Ok(_) => Error::KeyKindMismatch {
+            path: path.clone(),
+            requested: KeyKind::Private,
+        },
+        Err(_) => Error::from(e),
     })
 }
 
@@ -301,18 +432,6 @@ fn validate_signed(
         }
         response::Signed::Signatures(_) => Err(Error::SignaturesUnsupported),
     }
-}
-
-fn validate_sp_descriptor_response(
-    descriptor: response::SpDescriptor,
-) -> Result<QrResponse, Error> {
-    let parsed = SpDescriptor::from_str(&descriptor.descriptor)
-        .map_err(|e| Error::DescriptorParse(e.to_string()))?;
-    let fingerprint = parsed.fingerprint().ok_or(Error::SpDescriptorNoOrigin)?;
-    Ok(QrResponse::SpDescriptor {
-        descriptor: descriptor.descriptor,
-        fingerprint,
-    })
 }
 
 fn validate_registration(registration: response::Registration) -> Result<QrResponse, Error> {

@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use bitcoin::{
     bip32::{ChildNumber, DerivationPath, Fingerprint, Xpub},
+    secp256k1::{PublicKey, SecretKey},
     Network, NetworkKind,
 };
 use bwk_sp::{
@@ -115,21 +116,38 @@ pub fn sp_descriptor(
     let signer = HotSigner::new_from_mnemonics(network, mnemonic.as_str())
         .map_err(|e| Error::Signer(e.to_string()))?;
     let account = sp_account()?;
+    Ok(watch_only_sp_descriptor(
+        signer.fingerprint(),
+        network,
+        account,
+        signer.private_key_at(&scan_path(network, account)),
+        signer.public_key_at(&spend_path(network, account)),
+    ))
+}
 
+/// The watch-only sp() descriptor of the BIP-352 `account` of the key `fingerprint`,
+/// from its scan secret and spend public key, origin included.
+pub(crate) fn watch_only_sp_descriptor(
+    fingerprint: Fingerprint,
+    network: Network,
+    account: ChildNumber,
+    scan_key: SecretKey,
+    spend_key: PublicKey,
+) -> SpDescriptor {
     // FIXME: bwk's Config::new builds this descriptor with origin: None, so it is
     // rebuilt here. Upstream ask: a watch-only sp() builder that sets the origin.
     let origin = (
-        signer.fingerprint(),
+        fingerprint,
         DerivationPath::from(bip352_base_derivation(network, account)),
     );
-    Ok(SpDescriptor::Packed {
+    SpDescriptor::Packed {
         origin: Some(origin),
         key: SpKey::Scan(SpScanKey {
-            scan_key: signer.private_key_at(&scan_path(network, account)),
-            spend_key: signer.public_key_at(&spend_path(network, account)),
+            scan_key,
+            spend_key,
             network: NetworkKind::from(network),
         }),
-    })
+    }
 }
 
 /// The xpub at `path` of this key's hot secret, for an account's sub-account.
