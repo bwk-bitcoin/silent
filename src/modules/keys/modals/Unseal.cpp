@@ -43,6 +43,11 @@ void Unseal::setBusy(const QString &title, const QString &subtitle) {
     m_busy_step->setSubtitle(subtitle);
 }
 
+void Unseal::setBackShown(bool shown) {
+    m_password_actions->setBack(shown ? catalog::ModalActions::Back::Back
+                                      : catalog::ModalActions::Back::None);
+}
+
 void Unseal::finish(bool accepted) {
     hold(accepted ? Outcome::Accept : Outcome::Reject);
 }

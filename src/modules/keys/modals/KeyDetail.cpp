@@ -700,6 +700,8 @@ void KeyDetail::onRegistrationError(std::optional<ReqId> req_id, const QString &
 void KeyDetail::onRevealClicked() {
     auto *unseal = new Unseal(TR("keys-reveal-title"), QString(), catalog::btnShowMnemonic());
     unseal->setBusy(TR("keys-reveal-busy"), QString());
+    // The header cross is the way out: nothing to go back to.
+    unseal->setBackShown(false);
     connect(unseal, &Unseal::passwordEntered, this, &KeyDetail::onRevealPassword, qontrol::UNIQUE);
     m_unseal = unseal;
     bool opened = unseal->exec() == QDialog::Accepted;

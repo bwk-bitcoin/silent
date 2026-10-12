@@ -33,6 +33,8 @@ public:
     ~Unseal() override;
     // The spinner's lines while the caller works.
     void setBusy(const QString &title, const QString &subtitle);
+    // Back on the password step, closing as the header cross does; shown by default.
+    void setBackShown(bool shown);
     // Closes, accepted or not, once the spinner has shown long enough.
     void finish(bool accepted);
     // Back to the password, `error` under it, once the spinner has shown long enough.
