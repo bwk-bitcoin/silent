@@ -3,6 +3,7 @@
 #include "catalog/display/Label.h"
 #include "catalog/inputs/Stepper.h"
 #include "i18n/Tr.h"
+#include "qr/QrDisplay.h"
 #include "qr/QrDisplayEngine.h"
 #include "qr/QrTypes.h"
 #include "theme/Palette.h"
@@ -60,6 +61,8 @@ void QrSettings::init() {
     m_contrast = levelStepper(TR("keys-qr-contrast"), levels.contrast);
     m_density = levelStepper(TR("keys-qr-density"), levels.density);
     m_speed = levelStepper(TR("flow-qr-speed"), levels.speed);
+    m_display = new qr::QrDisplay;
+    m_display->setSize(metric::QR_REQUEST_SIZE);
 }
 
 void QrSettings::doConnect() {
@@ -68,15 +71,24 @@ void QrSettings::doConnect() {
                 qontrol::UNIQUE);
     }
     connect(m_engine, &qr::QrDisplayEngine::frame, this, &QrSettings::onFrame, qontrol::UNIQUE);
+    connect(m_engine, &qr::QrDisplayEngine::frame, m_display, &qr::QrDisplay::frame,
+            qontrol::UNIQUE);
 }
 
 void QrSettings::view() {
-    setBody((new qontrol::Row)
+    auto *controls =
+        (new qontrol::Row)
+            ->spacing(resolve(Spacing::L))
+            ->pushAligned(tuneColumn(m_contrast, TR("flow-qr-contrast-hint")), Qt::AlignTop)
+            ->pushAligned(tuneColumn(m_density, TR("flow-qr-density-hint")), Qt::AlignTop)
+            ->pushAligned(tuneColumn(m_speed, TR("flow-qr-speed-hint")), Qt::AlignTop);
+    // The code being tuned, so each change shows here rather than behind the modal.
+    setBody((new qontrol::Column)
                 ->spacing(resolve(Spacing::L))
-                ->pushAligned(tuneColumn(m_contrast, TR("flow-qr-contrast-hint")), Qt::AlignTop)
-                ->pushAligned(tuneColumn(m_density, TR("flow-qr-density-hint")), Qt::AlignTop)
-                ->pushAligned(tuneColumn(m_speed, TR("flow-qr-speed-hint")), Qt::AlignTop));
+                ->pushAligned(m_display, Qt::AlignHCenter)
+                ->pushAligned(controls, Qt::AlignHCenter));
     setWidth(ModalWidth::M);
+    m_engine->refresh();
 }
 
 void QrSettings::onLevelChanged() {

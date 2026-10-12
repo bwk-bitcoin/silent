@@ -123,6 +123,10 @@ void QrDisplayEngine::onFrameTick() {
     emitFrame();
 }
 
+void QrDisplayEngine::refresh() {
+    emitFrame();
+}
+
 void QrDisplayEngine::emitFrame() {
     QrFrame out;
     out.background = background();

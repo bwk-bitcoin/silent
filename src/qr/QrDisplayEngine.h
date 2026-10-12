@@ -34,6 +34,8 @@ public:
     // Pauses on the frame shown; restart() plays again from the first.
     void stop();
     void restart();
+    // Emits the frame on display again, for a display connected after it was shown.
+    void refresh();
 
 signals:
     void frame(const qr::QrFrame &frame);
