@@ -15,6 +15,7 @@ public:
     // Auto   : two lines only for long addresses (over 56 characters), else one.
     // Single : always one line.
     // Double : two lines (when there is more than one chunk).
+    // With setWordWrap(true), a line also breaks between groups to fit the width.
     enum class LineMode { Auto, Single, Double };
 
     explicit ChunkedAddress(QWidget *parent = nullptr);

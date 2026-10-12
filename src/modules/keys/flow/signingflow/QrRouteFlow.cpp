@@ -90,6 +90,9 @@ void QrRouteFlow::initDisplay() {
     m_qr_hint->setTextWrapped(copy().qrHint, metric::QR_HINT_MAX_WIDTH);
     // The address being checked, to compare with the one the device shows.
     m_qr_address = new catalog::ChunkedAddress;
+    // As many lines as the card's width needs: a silent payment address takes three.
+    m_qr_address->setLineMode(catalog::ChunkedAddress::LineMode::Single);
+    m_qr_address->setWordWrap(true);
     m_qr_address->setAddress(request().address);
     m_qr_address_card = new catalog::Card(catalog::Card::Role::Inset);
     m_qr_address_card->setPad(catalog::Card::Pad::M);
@@ -122,13 +125,18 @@ auto QrRouteFlow::viewDisplay() -> QWidget * {
         ->spacing(resolve(Spacing::M))
         ->push(m_qr_hint)
         ->push(m_qr_address_card)
-        ->push(m_qr_display);
+        ->pushAligned(m_qr_display, Qt::AlignHCenter);
 }
 
 void QrRouteFlow::showDisplay() {
     m_view = View::Display;
     viewSlots()->setHeader(nullptr);
-    viewSlots()->setBody(m_qr_step);
+    // The address card spans the modal, as in the design; the code stays centred.
+    if (request().context == Context::Verify) {
+        viewSlots()->setWideBody(m_qr_step);
+    } else {
+        viewSlots()->setBody(m_qr_step);
+    }
     viewSlots()->setFooter(m_qr_actions);
     emit viewChanged(copy().qrTitle, ModalWidth::XXL);
 }

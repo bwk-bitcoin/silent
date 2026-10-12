@@ -78,8 +78,12 @@ void ChunkedAddress::rebuild() {
 
     const int length = static_cast<int>(m_chunking);
     if (length == 0) {
-        setText(QString("<span style='color:%1'>%2</span>")
-                    .arg(palette.text.name(), m_address.toHtmlEscaped()));
+        QString text = m_address.toHtmlEscaped();
+        if (wordWrap()) {
+            // One unbroken string still breaks to fit: anywhere, as it has no spaces.
+            text = QStringList(text.split(QString(), Qt::SkipEmptyParts)).join(QChar(0x200B));
+        }
+        setText(QString("<span style='color:%1'>%2</span>").arg(palette.text.name(), text));
         return;
     }
 
@@ -116,7 +120,8 @@ void ChunkedAddress::rebuild() {
             colorIdx++;
         }
         idx += count;
-        lines.append(spans.join("&nbsp;"));
+        // With word wrap on, a line breaks between groups where it would overflow.
+        lines.append(spans.join(wordWrap() ? " " : "&nbsp;"));
     }
     setText(lines.join("<br>"));
 }
