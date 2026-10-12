@@ -2,7 +2,12 @@
 
 Privacy-focused desktop Bitcoin wallet using the Silent Payments protocol.
 
-![Silent](docs/assets/screenshot.png)
+| | Light | Dark |
+|---|---|---|
+| History | ![History, light](docs/assets/screenshots/history-light.png) | ![History, dark](docs/assets/screenshots/history-dark.png) |
+| Send | ![Send, light](docs/assets/screenshots/send-light.png) | ![Send, dark](docs/assets/screenshots/send-dark.png) |
+| Keys | ![Keys, light](docs/assets/screenshots/keys-light.png) | ![Keys, dark](docs/assets/screenshots/keys-dark.png) |
+| Add a key | ![Add a key, light](docs/assets/screenshots/add-key-light.png) | ![Add a key, dark](docs/assets/screenshots/add-key-dark.png) |
 
 ## Architecture
 
