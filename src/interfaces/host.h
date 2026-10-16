@@ -69,6 +69,7 @@ public:
     virtual void requestSignerPolling(IModule *requester, bool enabled) = 0;
     // Asks every enabled module to list its instances again, so the launcher and
     // account discovery see an account a module just wrote to disk.
+    // Callable from any thread; the work runs on the GUI thread. It never starts an instance.
     virtual void refreshLauncher() = 0;
 
     virtual TabId openTab(QWidget *content, IInstance *owner) = 0;

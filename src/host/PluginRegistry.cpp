@@ -90,6 +90,8 @@ PluginRegistry::PluginRegistry(QObject *parent) : QObject(parent) {
                 &PluginRegistry::onHostInstanceRemoved, qontrol::UNIQUE);
         connect(host->events(), &HostEvents::signerPollingChanged, this,
                 &PluginRegistry::onSignerPollingChanged, qontrol::UNIQUE);
+        connect(host->events(), &HostEvents::launcherRefreshRequested, this,
+                &PluginRegistry::onLauncherRefreshRequested, qontrol::UNIQUE);
     }
     rescanDiscoveredPlugins();
     reloadEnabledPlugins();
@@ -832,14 +834,19 @@ void PluginRegistry::activateModule(IModule *module, IPlugin *plugin) {
         }
     }
 
+    requestModuleInstances(module);
+}
+
+void PluginRegistry::requestModuleInstances(IModule *module) {
     ReqId listReqId = module->list();
-    if (listReqId != 0) {
-        m_pending_list_requests[module].insert(listReqId);
-        if (m_sync_list_responses.contains(module) &&
-            m_sync_list_responses.value(module).first == listReqId) {
-            auto response = m_sync_list_responses.take(module);
-            applyModuleInstances(module, response.first, response.second);
-        }
+    if (listReqId == 0) {
+        return;
+    }
+    m_pending_list_requests[module].insert(listReqId);
+    if (m_sync_list_responses.contains(module) &&
+        m_sync_list_responses.value(module).first == listReqId) {
+        auto response = m_sync_list_responses.take(module);
+        applyModuleInstances(module, response.first, response.second);
     }
 }
 
@@ -966,9 +973,17 @@ void PluginRegistry::onHostInstanceRegistered(const QString &id) {
 }
 
 void PluginRegistry::relistModules() {
+    const auto modules = enabledModulesForLauncher();
+    for (auto *module : modules) {
+        if (module == nullptr || !m_module_owner.contains(module)) {
+            continue;
+        }
+        requestModuleInstances(module);
+    }
 }
 
 void PluginRegistry::onLauncherRefreshRequested() {
+    relistModules();
 }
 
 void PluginRegistry::onSignerPollingChanged(bool enabled) {

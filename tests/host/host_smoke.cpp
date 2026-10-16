@@ -92,6 +92,26 @@ auto waitForInstance(const QString &id, bool present, int timeout_ms) -> bool {
     return hostHasInstance(id) == present;
 }
 
+// Spins the GUI thread until the spy has seen the expected count of signals.
+auto waitForSignals(const smoke::SignalSpy &spy, int count, int timeout_ms) -> bool {
+    QElapsedTimer timer;
+    timer.start();
+    while (spy.count() < count && timer.elapsed() < timeout_ms) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    return spy.count() >= count;
+}
+
+auto launcherLists(const PluginRegistry &registry, const IModule *module, const QString &id)
+    -> bool {
+    for (const auto &entry : registry.launcherInstancesForModule(module)) {
+        if (entry.first == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 auto main(int argc, char *argv[]) -> int {
@@ -325,6 +345,52 @@ auto main(int argc, char *argv[]) -> int {
           "a module answering autoStart() before it returns should still be started");
     check(hostHasInstance(QStringLiteral("sync-auto")),
           "the auto-started instance should be registered with the host");
+
+    // ===== refreshLauncher: a persisted instance shows up, nothing starts =====
+    smoke::SignalSpy refreshSpy;
+    QObject::connect(Host::get()->events(), &HostEvents::launcherRefreshRequested, &refreshSpy,
+                     &smoke::SignalSpy::onSignal, qontrol::UNIQUE);
+    int changedBefore = spy.count();
+
+    syncModule->addListed(QStringLiteral("sync-2"), QStringLiteral("Sync Two"));
+    Host::get()->refreshLauncher();
+    check(refreshSpy.count() == 1, "refreshLauncher should emit launcherRefreshRequested once");
+    check(launcherLists(registry, syncModule, QStringLiteral("sync-2")),
+          "a relist should show the instance a module persisted since activation");
+    check(spy.count() > changedBefore,
+          "a relist answer should fire enabledPluginsChanged so the launcher refreshes");
+    check(!syncModule->started().contains(QStringLiteral("sync-2")),
+          "a relist should not start the newly listed instance");
+    check(!hostHasInstance(QStringLiteral("sync-2")),
+          "a relisted instance should be listed, not registered with the host");
+
+    int changedBeforeFlush = spy.count();
+    Host::get()->refreshLauncher();
+    module->flush();
+    check(launcherLists(registry, module, QStringLiteral("inst-1")),
+          "a deferred relist answer should still list inst-1");
+    check(spy.count() > changedBeforeFlush,
+          "a deferred relist answer should be applied, not parked");
+
+    auto *dev9 = module->createInstance(QStringLiteral("dev-9"), false);
+    QThread refreshWorker;
+    smoke::ThreadedCaller refreshCaller(module, dev9);
+    refreshCaller.moveToThread(&refreshWorker);
+    refreshWorker.start();
+
+    int refreshBefore = refreshSpy.count();
+    QMetaObject::invokeMethod(&refreshCaller, "refreshFromThread", Qt::QueuedConnection);
+    check(waitForCalls(refreshCaller, 1, 2000),
+          "the worker should have returned from refreshLauncher");
+    check(refreshSpy.count() == refreshBefore,
+          "a cross-thread refresh must not run before the GUI thread runs it");
+    check(waitForSignals(refreshSpy, refreshBefore + 1, 2000),
+          "the host should marshal a cross-thread refresh onto the GUI thread");
+    check(refreshSpy.count() == refreshBefore + 1,
+          "a cross-thread refresh should emit launcherRefreshRequested once");
+
+    refreshWorker.quit();
+    refreshWorker.wait();
 
     if (g_ok) {
         std::fprintf(stdout, "host smoke: OK\n");

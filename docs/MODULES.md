@@ -229,6 +229,9 @@ An instance is brought up by one of:
   `startInstance(id)`. Creating a *new* instance is the same path: the module offers a
   "create" entry in that list; clicking it starts an instance that pushes a create
   wizard (`host->openWizard(...)`), persisting itself on finish, discarding on cancel.
+  Once the new instance is on disk the wizard calls `Host::get()->refreshLauncher()`:
+  the host asks every enabled module to `list()` again and the launcher shows the new
+  entry. The new instance is not started; the user opens it from the launcher.
 - **Another instance**: an instance may ask a module to start further instances.
 
 Because instances appear and disappear at runtime, **discovery is dynamic**:
@@ -270,6 +273,10 @@ public:
     // ORed: polling runs while any module wants it. Asking twice is asking once.
     void requestSignerPolling(IModule *requester, bool enabled);
 
+    // asks every enabled module to list() again, so the launcher and account
+    // discovery see an instance a module just persisted. Starts nothing.
+    void refreshLauncher();
+
     // UI is PUSHED by the instance: it supplies a widget + itself, gets back an id,
     // and later updates or removes the widget by that id. The host owns the
     // id -> widget map. All of an instance's UI is removed on its teardown.
@@ -307,6 +314,7 @@ signals:
     void instanceRemoved(QString id);
     void settingSectionsChanged();   // a section was added or removed
     void signerPollingChanged(bool enabled);  // the global flag, only when it flips
+    void launcherRefreshRequested();  // refreshLauncher() was called
 };
 ```
 
@@ -316,9 +324,9 @@ signals:
 blocks and no method returns mutable instance state synchronously** (reading that
 state from another thread would be a data race).
 
-- `registerInstance`, `removeInstance` and `retireInstance` are callable **from any
-  thread**. The host marshals to the GUI thread itself, so a module reacting to a device
-  thread (a hotplug event) just calls them. Off the GUI thread the call is asynchronous:
+- `registerInstance`, `removeInstance`, `retireInstance` and `refreshLauncher` are
+  callable **from any thread**. The host marshals to the GUI thread itself, so a
+  module reacting to a device thread (a hotplug event) just calls them. Off the GUI thread the call is asynchronous:
   it returns before the work happens, so read the result on `instanceRegistered` /
   `instanceRemoved`, never on return. The instance must outlive that hop: do not delete
   an instance inside `retireInstance`, and do not free one you have just asked the host

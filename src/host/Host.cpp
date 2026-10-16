@@ -61,6 +61,8 @@ HostImpl::HostImpl() : QObject(nullptr), m_i18n(new HostI18nImpl()) {
             qontrol::UNIQUE);
     connect(this, &HostImpl::signerPollingRequested, this, &HostImpl::onSignerPollingRequested,
             qontrol::UNIQUE);
+    connect(this, &HostImpl::refreshLauncherRequested, this, &HostImpl::onRefreshLauncherRequested,
+            qontrol::UNIQUE);
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
@@ -105,9 +107,12 @@ void HostImpl::requestSignerPolling(IModule *requester, bool enabled) {
 }
 
 void HostImpl::refreshLauncher() {
+    emit refreshLauncherRequested();
 }
 
 void HostImpl::onRefreshLauncherRequested() {
+    assertGuiThread();
+    emit m_events.launcherRefreshRequested();
 }
 
 void HostImpl::onRegisterInstanceRequested(const QString &id, IInstance *instance, IModule *owner) {

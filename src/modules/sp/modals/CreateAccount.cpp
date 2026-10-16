@@ -618,7 +618,7 @@ void CreateAccount::finishCreate() {
     ::app_set_last_endpoint(BackendServer::Electrum, network(),
                             rust::String(electrumUrl.toStdString()));
 
-    AppController::get()->onAccountCreated(name);
+    Host::get()->refreshLauncher();
     accept();
 }
 

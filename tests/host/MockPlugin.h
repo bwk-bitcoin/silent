@@ -47,6 +47,18 @@ public:
         return QString();
     }
 
+    [[nodiscard]] QString brand() const override {
+        return QString();
+    }
+
+    [[nodiscard]] QString model() const override {
+        return QString();
+    }
+
+    [[nodiscard]] QString serial() const override {
+        return QString();
+    }
+
     [[nodiscard]] plugin::SignerState state() const override {
         return m_state;
     }
@@ -82,6 +94,14 @@ public:
         -> ReqId override {
         Q_UNUSED(psbt_base64);
         Q_UNUSED(descriptor);
+        return 0;
+    }
+
+    auto displayAddress(const QString &descriptor, const QString &path, const QString &address)
+        -> ReqId override {
+        Q_UNUSED(descriptor);
+        Q_UNUSED(path);
+        Q_UNUSED(address);
         return 0;
     }
 
@@ -298,10 +318,13 @@ public:
 
     auto list() -> ReqId override {
         ReqId req_id = ++m_next_req_id;
-        QList<QPair<QString, QString>> instances;
-        instances.append({QStringLiteral("sync-1"), QStringLiteral("Sync One")});
-        emit IModule::instances(req_id, instances);
+        emit IModule::instances(req_id, m_listed);
         return req_id;
+    }
+
+    // Persists one more instance: the next list() answers it too.
+    void addListed(const QString &id, const QString &name) {
+        m_listed.append({id, name});
     }
 
     auto autoStart() -> ReqId override {
@@ -323,6 +346,7 @@ public:
 
 private:
     ReqId m_next_req_id = 0;
+    QList<QPair<QString, QString>> m_listed{{QStringLiteral("sync-1"), QStringLiteral("Sync One")}};
     QStringList m_started;
     QList<MockInstance *> m_live_instances;
 };
@@ -357,6 +381,11 @@ public slots:
 
     void retireFromThread() {
         m_instance->retire();
+        m_calls_done.ref();
+    }
+
+    void refreshFromThread() {
+        Host::get()->refreshLauncher();
         m_calls_done.ref();
     }
 

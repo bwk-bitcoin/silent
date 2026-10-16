@@ -42,7 +42,6 @@ public:
 
 signals:
     void accountList(QList<QString>);
-    void accountCreated(const QString &name);
     void regtestDefaultsReady(const QString &blindbit, const QString &electrum);
 
 public slots:
@@ -52,7 +51,6 @@ public slots:
     auto listAccounts() -> void;
     auto createAccount(const QString &name, const QString &descriptor, Network network,
                        const QString &blindbit_url, const QString &electrum_url) -> void;
-    auto onAccountCreated(const QString &name) -> void;
     auto openAccount(const QString &name) -> void;
     auto deleteAccount(const QString &name) -> void;
     auto openAppSettings() -> void;

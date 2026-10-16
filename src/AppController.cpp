@@ -72,8 +72,6 @@ auto AppController::initState() -> void {
                 &AppController::onHostSettingsSectionsChanged, qontrol::UNIQUE);
     }
 
-    connect(this, &AppController::accountCreated, this, &AppController::onAccountCreated,
-            qontrol::UNIQUE);
     connect(this, &AppController::regtestDefaultsReady, this,
             &AppController::onRegtestDefaultsReady, qontrol::UNIQUE);
     connect(m_plugin_registry.get(), &PluginRegistry::enabledPluginsChanged, this,
@@ -241,11 +239,6 @@ auto AppController::createAccount(const QString &name, const QString &descriptor
     Q_UNUSED(electrum_url);
     qCritical()
         << "createAccount is deprecated in AppController and should be handled by module UI";
-}
-
-auto AppController::onAccountCreated(const QString &name) -> void {
-    addAccount(name);
-    listAccounts();
 }
 
 auto AppController::openAccount(const QString &name) -> void {

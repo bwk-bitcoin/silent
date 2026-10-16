@@ -78,6 +78,8 @@ protected:
     void applyModuleInstances(IModule *module, ReqId req_id,
                               QList<QPair<QString, QString>> instances);
     void applyModuleAutoStart(IModule *module, ReqId req_id, QStringList ids);
+    // Sends list() to one active module, replaying an answer it gave from inside list().
+    void requestModuleInstances(IModule *module);
 
     [[nodiscard]] auto instanceName(const QList<IModule *> &modules,
                                     const QString &instance_id) const -> QString;
