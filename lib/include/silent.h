@@ -1186,8 +1186,9 @@ enum class MusigRound : ::std::uint8_t {
 
 #ifndef CXXBRIDGE1_ENUM_QrErrorKind
 #define CXXBRIDGE1_ENUM_QrErrorKind
-// Why a QR response was refused: the two failures the UI words on their own,
-// and every other one, which only surfaces as free text.
+// Why a QR response was refused: the three failures the UI words on their own
+// (a request id mismatch, a signatures-only answer, a lost MuSig2 session), and
+// every other one, which only surfaces as free text.
 enum class QrErrorKind : ::std::uint8_t {
   Other = 0,
   RequestIdMismatch = 1,

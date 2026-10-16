@@ -39,8 +39,8 @@ pub const MNEMONIC_WORDS_LONG: usize = 24;
 const ENTROPY_BYTES_SHORT: usize = 16;
 const ENTROPY_BYTES_LONG: usize = 32;
 
-/// One process-wide MuSig2 session store, shared by every `sign_hot` call.
-#[allow(dead_code)]
+/// One process-wide store: `sign_hot` rebuilds its signer per call, and round 2
+/// must find round 1's session.
 static HOT_MUSIG_SESSIONS: std::sync::LazyLock<MusigSessionStore> =
     std::sync::LazyLock::new(MusigSessionStore::new);
 
@@ -215,8 +215,9 @@ pub fn sign_hot(
         .into_bitcoin_psbt()
         .map_err(|_| Error::SpOutputsPending)?;
 
-    let signer = HotSigner::new_from_mnemonics(network, mnemonic.as_str())
+    let mut signer = HotSigner::new_from_mnemonics(network, mnemonic.as_str())
         .map_err(|e| Error::Signer(e.to_string()))?;
+    signer.set_musig_sessions(HOT_MUSIG_SESSIONS.clone());
     let mut miniscript_signed_any = false;
     for descriptor in &descriptors {
         if descriptor.is_sp() {
@@ -232,6 +233,7 @@ pub fn sign_hot(
             Err(HotSignerError::SigningInfo) => {
                 log::debug!("hot sign: descriptor matched no input");
             }
+            Err(HotSignerError::MusigSession) => return Err(Error::MusigSession),
             Err(e) => return Err(Error::Signer(e.to_string())),
         }
     }

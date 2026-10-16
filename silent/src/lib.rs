@@ -137,8 +137,9 @@ mod ffi {
         Ready,
     }
 
-    /// Why a QR response was refused: the two failures the UI words on their own,
-    /// and every other one, which only surfaces as free text.
+    /// Why a QR response was refused: the three failures the UI words on their own
+    /// (a request id mismatch, a signatures-only answer, a lost MuSig2 session), and
+    /// every other one, which only surfaces as free text.
     #[derive(Debug, Clone, Copy)]
     pub enum QrErrorKind {
         Other,
@@ -2023,8 +2024,9 @@ pub use ffi::{
     BackendInfo, CameraFrameResult, CameraListResult, FingerprintsResult, KeyDescriptor, KeyDevice,
     KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice,
     LogLevel, MnemonicResult, Network, Notification, NotificationFlag, Output, PsbtFileResult,
-    PsbtPayloadResult, PsbtValidation, QrMessageResult, QrResponseKind, RegtestDefaults,
-    SignResult, SigningCandidate, SigningPlan, TransactionSimulation, TransactionTemplate,
+    PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult, QrResponseKind,
+    RegtestDefaults, SignResult, SigningCandidate, SigningPlan, TransactionSimulation,
+    TransactionTemplate,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{

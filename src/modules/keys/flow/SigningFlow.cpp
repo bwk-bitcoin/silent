@@ -259,7 +259,7 @@ auto SigningFlow::signRow(const SigningCandidate &candidate) const -> FlowRow {
     row.alias = KeysModule::toQt(candidate.alias);
     row.route = candidate.route;
     row.device_id = KeysModule::toQt(candidate.device_id);
-    if (m_signed.contains(row.fingerprint)) {
+    if (m_signed.contains(row.fingerprint) || candidate.musig_done) {
         row.status = SignerStatus::Signed;
     } else if (candidate.can_sign) {
         row.status = candidate.must_sign_first ? SignerStatus::First : SignerStatus::Ready;

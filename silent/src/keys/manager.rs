@@ -90,6 +90,8 @@ pub struct SigningCandidate {
     pub must_sign_first: bool,
     /// None when the candidate can sign right now.
     pub unusable: Option<UnusableReason>,
+    /// The key already gave its share for the PSBT's current MuSig2 round.
+    pub musig_done: bool,
 }
 
 /// What the signer picker is built from for one PSBT.
@@ -277,6 +279,7 @@ impl KeyManager {
     ) -> SigningCandidate {
         let is_sp = artifacts.sp_fingerprint == Some(fingerprint);
         let must_sign_first = is_sp && artifacts.sp_outputs_pending;
+        let musig_done = artifacts.musig_done.contains(&fingerprint);
 
         let record = match self.records.get(&fingerprint) {
             Some(record) => record,
@@ -289,6 +292,7 @@ impl KeyManager {
                     device_id: String::new(),
                     must_sign_first,
                     unusable: Some(UnusableReason::NotRegistered),
+                    musig_done,
                 };
             }
         };
@@ -302,6 +306,7 @@ impl KeyManager {
                 device_id: String::new(),
                 must_sign_first: false,
                 unusable: Some(UnusableReason::SpOutputsPending),
+                musig_done,
             };
         }
 
@@ -322,6 +327,7 @@ impl KeyManager {
                     device_id,
                     must_sign_first,
                     unusable: None,
+                    musig_done,
                 }
             }
             None => SigningCandidate {
@@ -332,6 +338,7 @@ impl KeyManager {
                 device_id: String::new(),
                 must_sign_first,
                 unusable: Some(unusable_reason(record)),
+                musig_done,
             },
         }
     }
@@ -729,8 +736,8 @@ pub(crate) fn descriptor_key_fingerprint(key: &DescriptorPublicKey) -> Option<Fi
 }
 
 /// Whether `descriptor` names `fingerprint` among its key origins. Every key of a
-/// miniscript descriptor is walked (its `fingerprint()` returns only one); an sp()
-/// descriptor is single-key.
+/// miniscript descriptor is walked (its `fingerprint()` returns only one), and a
+/// musig() key matches each of its cosigners; an sp() descriptor is single-key.
 pub(crate) fn descriptor_has_key(descriptor: &Descriptor, fingerprint: Fingerprint) -> bool {
     match descriptor.as_miniscript() {
         Some(miniscript) => miniscript
@@ -1858,6 +1865,29 @@ mod tests {
     }
 
     #[test]
+    fn keys_for_descriptor_finds_a_musig_cosigner() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let (a, b, c) = (fingerprint(1), fingerprint(2), fingerprint(3));
+        for fp in [a, c] {
+            manager
+                .add_key(KeyRecord::new(fp, Network::Regtest, "cosigner".to_string()))
+                .expect("add key");
+        }
+        let descriptor = format!(
+            "tr(musig([{a}]{},[{b}]{})/<0;1>/*)",
+            test_xpub(),
+            other_test_xpub()
+        );
+        let found = manager.keys_for_descriptor(&descriptor);
+        assert_eq!(
+            found,
+            vec![a],
+            "expected only cosigner {a} among the registered keys, got {found:?}"
+        );
+    }
+
+    #[test]
     fn registered_descriptors_on_an_unknown_fingerprint_is_empty() {
         let tmp = temp_dir::TempDir::new().expect("create temp dir");
         let manager = manager_over(tmp.path(), Network::Regtest);
@@ -1915,6 +1945,32 @@ mod tests {
         };
 
         (manager, artifacts)
+    }
+
+    #[test]
+    fn a_key_whose_share_is_in_is_musig_done() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let manager = manager_over(tmp.path(), Network::Regtest);
+        let (a, b) = (fingerprint(1), fingerprint(2));
+        let artifacts = PsbtArtifacts {
+            required: BTreeSet::from([a, b]),
+            sp_fingerprint: None,
+            sp_inputs: false,
+            sp_outputs: false,
+            sp_outputs_pending: false,
+            musig_done: BTreeSet::from([a]),
+        };
+        let plan = manager.plan_from_artifacts(&artifacts);
+        let done: Vec<(Fingerprint, bool)> = plan
+            .candidates
+            .iter()
+            .map(|candidate| (candidate.fingerprint, candidate.musig_done))
+            .collect();
+        assert_eq!(
+            done,
+            vec![(a, true), (b, false)],
+            "expected {a} musig_done and {b} not, got {done:?}"
+        );
     }
 
     #[test]

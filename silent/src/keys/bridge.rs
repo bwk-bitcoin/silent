@@ -702,6 +702,7 @@ pub fn hot_sign(material: &HotMaterial, password: &str, psbt_v2_hex: &str) -> ff
         },
         Err(e) => ffi::SignResult {
             wrong_password: matches!(e, Error::WrongPassword),
+            musig_session: matches!(e, Error::MusigSession),
             ..failed_sign(&format!("sign_hot {}: {e}", record.fingerprint))
         },
     }
@@ -1146,7 +1147,7 @@ fn to_ffi_signing_candidate(candidate: &SigningCandidate) -> ffi::SigningCandida
         unusable: ffi::KeyUnusableReason::from(candidate.unusable),
         must_sign_first: candidate.must_sign_first,
         registered: candidate.registered,
-        musig_done: false,
+        musig_done: candidate.musig_done,
     }
 }
 
@@ -1208,14 +1209,15 @@ impl From<Option<crate::keys::manager::UnusableReason>> for ffi::KeyUnusableReas
     }
 }
 
-/// The two QR response validation failures the GUI must show translated; every
-/// other `Error` variant (session, protocol, ...) stays `Other` and surfaces only as
-/// the free-text `error` field.
+/// The three QR response failures the GUI words on their own; every other `Error`
+/// variant (session, protocol, ...) stays `Other` and surfaces only as the free-text
+/// `error` field.
 impl From<&Error> for ffi::QrErrorKind {
     fn from(error: &Error) -> Self {
         match error {
             Error::RequestIdMismatch { .. } => ffi::QrErrorKind::RequestIdMismatch,
             Error::SignaturesUnsupported => ffi::QrErrorKind::SignaturesUnsupported,
+            Error::MusigSession => ffi::QrErrorKind::MusigSession,
             _ => ffi::QrErrorKind::Other,
         }
     }

@@ -6,12 +6,26 @@
 
 use std::str::FromStr;
 
-use bitcoin::bip32::{ChildNumber, Fingerprint};
-use bitcoin::{Amount, Network, OutPoint, ScriptBuf, Sequence, TxOut};
-use bwk_sp::bwk_sign::bwk_descriptor::descriptor::{wpkh, wpkh_path, DescriptorDerivator};
-use bwk_sp::bwk_sign::bwk_descriptor::wallet::to_wallet;
-use bwk_sp::bwk_sign::hot_signer::HotSigner;
-use bwk_sp::bwk_tx::bwk_psbt::{Input as PsbtInput, Output as PsbtOutput, PsbtV2};
+use bitcoin::{
+    bip32::{ChildNumber, DerivationPath, Fingerprint, Xpriv, Xpub},
+    secp256k1::{PublicKey, Secp256k1, SecretKey},
+    Amount, Network, NetworkKind, OutPoint, Psbt, ScriptBuf, Sequence, TxOut,
+};
+use bwk_sp::{
+    bwk_sign::{
+        bwk_descriptor::{
+            descriptor::{wpkh, wpkh_path, Descriptor, DescriptorDerivator},
+            updater::update_input,
+            wallet::{to_wallet, WalletDescriptorExt},
+        },
+        bwk_keys::keys::OXpub,
+        hot_signer::HotSigner,
+    },
+    bwk_tx::bwk_psbt::{
+        musig::{musig_input_partial_sigs, musig_input_pub_nonces, set_musig_input_pub_nonce},
+        Input as PsbtInput, Output as PsbtOutput, PsbtV2,
+    },
+};
 use silent::{KeyRouteKind, LiveDevice, Network as FfiNetwork};
 
 // ===== Datadir =====
@@ -530,5 +544,169 @@ fn test_commit_hot_key_refuses_a_network_mismatch() {
     assert!(
         !lookup.is_ok,
         "expected no key to be created for a refused network mismatch"
+    );
+}
+
+// ===== MuSig2 fixtures =====
+
+/// Not TEST_MNEMONIC: every network of this file already holds its hot secret, and
+/// a second commit of it would be refused.
+const MUSIG_MNEMONIC: &str = "legal winner thank year wave sausage worth useful \
+    legal winner thank yellow";
+const MUSIG_PATH: &str = "m/87'/1'/0'/2";
+const COSIGNER_SEED: [u8; 32] = [0x42; 32];
+const COSIGNER_ORIGIN: [u8; 4] = [0xbb, 0x00, 0x00, 0x02];
+const PUB_NONCE_LEN: usize = 66;
+
+/// The hot key's `[fp/87'/1'/0'/2]` key.
+fn hot_xpub(network: Network) -> OXpub {
+    let path = DerivationPath::from_str(MUSIG_PATH).expect("valid path");
+    let signer = HotSigner::new_from_mnemonics(network, MUSIG_MNEMONIC).expect("valid signer");
+    signer.xpub(&path)
+}
+
+fn cosigner_xpub() -> Xpub {
+    let xpriv = Xpriv::new_master(NetworkKind::Test, &COSIGNER_SEED).expect("valid seed");
+    Xpub::from_priv(&Secp256k1::new(), &xpriv)
+}
+
+/// `tr(musig(H, B)/<0;1>/*)`: the participants are both xpubs' own keys.
+fn musig_descriptor(network: Network) -> String {
+    let origin = Fingerprint::from(COSIGNER_ORIGIN);
+    format!(
+        "tr(musig({},[{origin}]{})/<0;1>/*)",
+        hot_xpub(network),
+        cosigner_xpub()
+    )
+}
+
+/// A v2 PSBT spending `descriptor` at index 0, filled by the bwk updater.
+fn musig_psbt(descriptor: &str) -> PsbtV2 {
+    let parsed = Descriptor::from_str(descriptor).expect("valid musig descriptor");
+    let wallet = parsed.as_miniscript().expect("a miniscript descriptor");
+    let definite = wallet.single_paths().expect("single paths")[0]
+        .derive_at(RECEIVE_INDEX)
+        .expect("derive index 0");
+    let tx = bitcoin::Transaction {
+        version: bitcoin::transaction::Version::TWO,
+        lock_time: bitcoin::absolute::LockTime::ZERO,
+        input: vec![bitcoin::TxIn {
+            previous_output: OutPoint::new(bitcoin::hashes::Hash::all_zeros(), 0),
+            sequence: Sequence::MAX,
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(1_000),
+            script_pubkey: ScriptBuf::new(),
+        }],
+    };
+    let mut psbt = Psbt::from_unsigned_tx(tx).expect("unsigned tx");
+    psbt.inputs[0].witness_utxo = Some(TxOut {
+        value: Amount::from_sat(100_000),
+        script_pubkey: definite.script_pubkey(),
+    });
+    update_input(&mut psbt, 0, &definite).expect("update input");
+    PsbtV2::from_bitcoin_psbt(psbt).expect("psbt to v2")
+}
+
+/// A valid 66-byte public nonce: two compressed public keys of fixed secrets.
+fn pub_nonce(first: u8, second: u8) -> [u8; PUB_NONCE_LEN] {
+    let secp = Secp256k1::new();
+    let point = |byte: u8| {
+        let secret = SecretKey::from_slice(&[byte; 32]).expect("valid key");
+        PublicKey::from_secret_key(&secp, &secret).serialize()
+    };
+    let mut nonce = [0u8; PUB_NONCE_LEN];
+    nonce[..33].copy_from_slice(&point(first));
+    nonce[33..].copy_from_slice(&point(second));
+    nonce
+}
+
+/// Commits the musig hot key on `network`, registers the musig descriptor on it and
+/// runs round 1: the material and the PSBT round 1 returned.
+fn hot_round1(network: FfiNetwork, btc_network: Network) -> (Box<silent::HotMaterial>, PsbtV2) {
+    let _ = datadir();
+    let mut module = silent::new_keys_module(network);
+    assert!(
+        module.is_ok(),
+        "module failed to open: {}",
+        module.get_error()
+    );
+    let committed = seal_and_commit(&mut module, MUSIG_MNEMONIC, "password", "musig", network);
+    assert!(committed.is_ok, "commit failed: {}", committed.error);
+    let fingerprint = committed.key.fingerprint.clone();
+
+    let descriptor = musig_descriptor(btc_network);
+    let register = module.register_descriptor(&fingerprint, &descriptor);
+    assert!(register.is_ok, "register failed: {}", register.error);
+
+    let material = module.hot_material(&fingerprint);
+    assert!(
+        material.is_ok(),
+        "hot_material failed: {}",
+        material.get_error()
+    );
+    let psbt_hex = hex::encode(musig_psbt(&descriptor).serialize().expect("serialize psbt"));
+    let result = silent::hot_sign(&material, "password", &psbt_hex);
+    assert!(
+        result.is_ok,
+        "expected round 1 ok, got error: {}",
+        result.error
+    );
+    let signed = PsbtV2::deserialize(&hex::decode(&result.psbt_v2_hex).expect("valid hex"))
+        .expect("round 1 psbt parses as v2");
+    (material, signed)
+}
+
+// ===== Case 24: the hot key's round 1 adds only its nonce =====
+
+#[test]
+fn hot_round1_adds_only_its_nonce() {
+    let (_, signed) = hot_round1(FfiNetwork::Regtest, Network::Regtest);
+    let input = &signed.inputs[0].psbt;
+    let participants: Vec<PublicKey> = musig_input_pub_nonces(input)
+        .expect("valid 0x1b entries")
+        .into_iter()
+        .map(|nonce| nonce.participant)
+        .collect();
+    let hot = hot_xpub(Network::Regtest).xkey.public_key;
+    assert_eq!(
+        participants,
+        vec![hot],
+        "expected exactly the hot key's 0x1b"
+    );
+    assert!(
+        input.tap_key_sig.is_none(),
+        "expected no tap_key_sig in round 1"
+    );
+    let sigs = musig_input_partial_sigs(input).expect("valid 0x1c entries");
+    assert!(sigs.is_empty(), "expected no 0x1c in round 1, got {sigs:?}");
+}
+
+// ===== Case 25: round 2 against a nonce the session never gave is a session error =====
+
+#[test]
+fn hot_round2_without_its_session_is_musig_session() {
+    let (material, mut psbt) = hot_round1(FfiNetwork::Signet, Network::Signet);
+    let input = &mut psbt.inputs[0].psbt;
+    let mut nonce = musig_input_pub_nonces(input).expect("valid 0x1b entries")[0];
+    nonce.nonce = pub_nonce(0x21, 0x22);
+    set_musig_input_pub_nonce(input, &nonce);
+    nonce.participant = cosigner_xpub().public_key;
+    nonce.nonce = pub_nonce(0x31, 0x32);
+    set_musig_input_pub_nonce(input, &nonce);
+
+    let psbt_hex = hex::encode(psbt.serialize().expect("serialize psbt"));
+    let result = silent::hot_sign(&material, "password", &psbt_hex);
+    assert!(!result.is_ok, "expected round 2 refused");
+    assert!(
+        result.musig_session,
+        "expected the musig session flag, got error: {}",
+        result.error
+    );
+    assert!(
+        !result.wrong_password,
+        "expected no wrong password flag, got error: {}",
+        result.error
     );
 }

@@ -198,17 +198,22 @@ impl QrSession {
                 proof: None,
             })
             .collect();
-        let parsed = psbt::parse_v2(psbt_v2_bytes)?;
+        // Round 1 goes out without nonces: a device decides its round from its own
+        // nonce, and the merge keeps the nonces already gathered.
+        let mut wire = psbt::parse_v2(psbt_v2_bytes)?;
+        let stripped = psbt::strip_musig_round1(&mut wire)?;
         // A silent-payment PSBT needs its input tweaks and ECDH shares, which a v0
-        // conversion drops, so it goes over the wire unchanged. A plain hardware signer
-        // over QR still expects v0.
-        let payload = if psbt::has_sp_artifacts(&parsed)? {
-            psbt_v2_bytes.to_vec()
-        } else {
-            parsed
+        // conversion drops, so it goes over the wire as v2, unchanged unless stripped.
+        // A plain hardware signer over QR still expects v0.
+        let payload = match (psbt::has_sp_artifacts(&wire)?, stripped) {
+            (false, _) => wire
                 .into_bitcoin_psbt()
                 .map_err(|e| Error::PsbtSerialize(e.to_string()))?
+                .serialize(),
+            (true, true) => wire
                 .serialize()
+                .map_err(|e| Error::PsbtSerialize(e.to_string()))?,
+            (true, false) => psbt_v2_bytes.to_vec(),
         };
         let body = request::Body::Sign(request::Sign {
             descriptors,
@@ -264,6 +269,9 @@ impl QrSession {
 
         let body = response.body;
         if let response::Body::Error(e) = body {
+            if e.error == response::Error::MusigSession {
+                return Err(Error::MusigSession);
+            }
             return Err(Error::SignerRefused {
                 message_type: e.message_type,
                 code: e.error,

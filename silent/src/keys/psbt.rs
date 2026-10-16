@@ -1,7 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bitcoin::{
     bip32::Fingerprint,
+    hashes::{hash160, Hash},
     secp256k1::{All, PublicKey, Scalar, Secp256k1},
     Psbt, ScriptBuf,
 };
@@ -9,7 +10,11 @@ use bwk_sp::{
     account::bip375,
     bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor,
     bwk_tx::bwk_psbt::{
-        musig::{PSBT_IN_MUSIG2_PARTIAL_SIG, PSBT_IN_MUSIG2_PUB_NONCE},
+        musig::{
+            musig_input_partial_sigs, musig_input_participants_all, musig_input_pub_nonces,
+            remove_musig_input_partial_sigs, remove_musig_input_pub_nonces,
+            Error as MusigFieldError, PSBT_IN_MUSIG2_PARTIAL_SIG, PSBT_IN_MUSIG2_PUB_NONCE,
+        },
         sp::{
             sp_input_tweak, sp_v0_output, PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE,
             PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE, PSBT_IN_SP_SPEND_BIP32_DERIVATION,
@@ -22,7 +27,6 @@ use bwk_sp::{
 use crate::keys::error::Error;
 
 const FINGERPRINT_LEN: usize = 4;
-#[allow(dead_code)]
 const MUSIG_INPUT_TYPES: [u8; 2] = [PSBT_IN_MUSIG2_PUB_NONCE, PSBT_IN_MUSIG2_PARTIAL_SIG];
 
 /// What a PSBT requires to be fully signed, worked out from the PSBT alone.
@@ -58,9 +62,13 @@ struct Scan {
 
 fn scan(psbt: &PsbtV2) -> Result<Scan, Error> {
     let mut required = BTreeSet::new();
+    let mut synthetic = BTreeSet::new();
     let mut sp_inputs = false;
 
     for input in &psbt.inputs {
+        for entry in musig_input_participants_all(&input.psbt).map_err(musig_field_error)? {
+            synthetic.insert(synthetic_fingerprint(&entry.aggregate));
+        }
         for (fingerprint, _) in input.psbt.bip32_derivation.values() {
             required.insert(*fingerprint);
         }
@@ -95,6 +103,10 @@ fn scan(psbt: &PsbtV2) -> Result<Scan, Error> {
             sp_inputs = true;
         }
     }
+
+    // A musig aggregate's tap_key_origins entry names its BIP-328 synthetic xpub,
+    // which no device holds: only its cosigners sign.
+    required.retain(|fingerprint| !synthetic.contains(fingerprint));
 
     let mut sp_outputs = false;
     let mut sp_outputs_pending = false;
@@ -391,26 +403,113 @@ pub fn inspect(
         sp_inputs,
         sp_outputs,
         sp_outputs_pending,
-        musig_done: BTreeSet::new(),
+        musig_done: musig_done_fingerprints(psbt)?,
     })
 }
 
+fn musig_field_error(e: MusigFieldError) -> Error {
+    Error::PsbtParse(e.to_string())
+}
+
+/// The fingerprint of the BIP-328 synthetic xpub of `aggregate`.
+fn synthetic_fingerprint(aggregate: &PublicKey) -> Fingerprint {
+    let id = hash160::Hash::hash(&aggregate.serialize()).to_byte_array();
+    Fingerprint::from([id[0], id[1], id[2], id[3]])
+}
+
+/// How many entries of one input name each participant.
+type ParticipantCounts = BTreeMap<PublicKey, usize>;
+
+fn count_participants(participants: impl IntoIterator<Item = PublicKey>) -> ParticipantCounts {
+    let mut counts = ParticipantCounts::new();
+    for participant in participants {
+        *counts.entry(participant).or_default() += 1;
+    }
+    counts
+}
+
+/// Every participant of the input's 0x1a entries, once per entry listing it.
+fn expected_participants(input: &bitcoin::psbt::Input) -> Result<ParticipantCounts, Error> {
+    let entries = musig_input_participants_all(input).map_err(musig_field_error)?;
+    Ok(count_participants(
+        entries.into_iter().flat_map(|entry| entry.participants),
+    ))
+}
+
+fn pub_nonce_counts(input: &bitcoin::psbt::Input) -> Result<ParticipantCounts, Error> {
+    let nonces = musig_input_pub_nonces(input).map_err(musig_field_error)?;
+    Ok(count_participants(
+        nonces.into_iter().map(|nonce| nonce.participant),
+    ))
+}
+
+fn partial_sig_counts(input: &bitcoin::psbt::Input) -> Result<ParticipantCounts, Error> {
+    let sigs = musig_input_partial_sigs(input).map_err(musig_field_error)?;
+    Ok(count_participants(
+        sigs.into_iter().map(|sig| sig.participant),
+    ))
+}
+
+/// Whether `got` holds at least `expected` entries for `participant`.
+fn reached(got: &ParticipantCounts, participant: &PublicKey, expected: usize) -> bool {
+    got.get(participant).copied().unwrap_or(0) >= expected
+}
+
 /// Every expected 0x1b present (expected participants read from 0x1a).
-#[allow(unused_variables)]
 pub fn musig_nonces_complete(psbt: &PsbtV2) -> Result<bool, Error> {
-    todo!()
+    for input in &psbt.inputs {
+        let expected = expected_participants(&input.psbt)?;
+        let nonces = pub_nonce_counts(&input.psbt)?;
+        if !expected
+            .iter()
+            .all(|(participant, count)| reached(&nonces, participant, *count))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// In round 1 drops every 0x1b and 0x1c; whether anything was dropped.
-#[allow(unused_variables)]
 pub fn strip_musig_round1(psbt: &mut PsbtV2) -> Result<bool, Error> {
-    todo!()
+    if musig_nonces_complete(psbt)? {
+        return Ok(false);
+    }
+    let mut removed = 0;
+    for input in &mut psbt.inputs {
+        removed += remove_musig_input_pub_nonces(&mut input.psbt);
+        removed += remove_musig_input_partial_sigs(&mut input.psbt);
+    }
+    Ok(removed > 0)
 }
 
-/// Fingerprints whose share for the current round is already in the PSBT.
-#[allow(unused_variables)]
+/// Fingerprints whose share for the current round is already in the PSBT: their
+/// 0x1b while some nonce is missing, else their 0x1c. A fingerprint is done when
+/// each of its participants has every entry its inputs expect.
 pub fn musig_done_fingerprints(psbt: &PsbtV2) -> Result<BTreeSet<Fingerprint>, Error> {
-    todo!()
+    let nonces_complete = musig_nonces_complete(psbt)?;
+    let mut done: BTreeMap<Fingerprint, bool> = BTreeMap::new();
+    for input in &psbt.inputs {
+        let expected = expected_participants(&input.psbt)?;
+        let got = if nonces_complete {
+            partial_sig_counts(&input.psbt)?
+        } else {
+            pub_nonce_counts(&input.psbt)?
+        };
+        for (participant, count) in &expected {
+            let x_only = participant.x_only_public_key().0;
+            let Some((_, (fingerprint, _))) = input.psbt.tap_key_origins.get(&x_only) else {
+                log::debug!("musig participant {participant} has no tap_key_origins entry");
+                continue;
+            };
+            *done.entry(*fingerprint).or_insert(true) &= reached(&got, participant, *count);
+        }
+    }
+    Ok(done
+        .into_iter()
+        .filter(|(_, done)| *done)
+        .map(|(fingerprint, _)| fingerprint)
+        .collect())
 }
 
 pub fn inspect_bytes(
@@ -423,11 +522,12 @@ pub fn inspect_bytes(
 }
 
 /// Copies only signature fields (`partial_sigs`, `tap_key_sig`, `tap_script_sigs`)
-/// from `signed` into `original`, adding entries and never removing existing ones.
+/// and MuSig2 nonces / partial signatures from `signed` into `original`, adding
+/// entries and never removing existing ones.
 /// Refuses a `signed` PSBT for a different transaction, and an `original` PSBT with
 /// an output the sp() key has not derived yet, since the txid to check `signed`
 /// against does not exist until that output is derived. Returns how many inputs
-/// gained at least one signature.
+/// gained at least one signature, MuSig2 nonce or partial signature.
 pub fn merge_signatures(original: &mut PsbtV2, signed: &Psbt) -> Result<usize, Error> {
     let expected = match original.unsigned_tx() {
         Ok(tx) => tx.compute_txid(),
@@ -458,9 +558,9 @@ pub fn merge_signatures(original: &mut PsbtV2, signed: &Psbt) -> Result<usize, E
 /// answer against only exists in the answer. The answer must pass the BIP375 checks
 /// (scripts against shares, DLEQ proofs, a share per scan key, tx frozen) and be the
 /// original transaction, only the SP output scripts being new. Then the scripts,
-/// the ECDH shares and proofs, `tx_modifiable` and the signatures are copied into
-/// `original`, which passes the same checks afterwards. Returns how many inputs
-/// gained at least one signature.
+/// the ECDH shares and proofs, `tx_modifiable`, the signatures and MuSig2 nonces /
+/// partial signatures are copied into `original`, which passes the same checks
+/// afterwards. Returns how many inputs gained at least one of them.
 pub fn merge_sp_signed(original: &mut PsbtV2, signed: &PsbtV2) -> Result<usize, Error> {
     bip375::verify_signed(signed).map_err(|e| Error::SpSignedInvalid(e.to_string()))?;
     check_same_transaction(original, signed)?;
@@ -562,12 +662,14 @@ fn copy_unknown(into: &mut UnknownMap, from: &UnknownMap, types: &[u8]) {
 }
 
 /// Adds `signed`'s signatures to `input`, keeping the ones it has. Whether any
-/// signature was added.
+/// signature was added. Also copies 0x1b / 0x1c; a nonce-only answer counts as
+/// progress.
 fn copy_signatures(input: &mut bitcoin::psbt::Input, signed: &bitcoin::psbt::Input) -> bool {
     let count = |input: &bitcoin::psbt::Input| {
         input.partial_sigs.len()
             + usize::from(input.tap_key_sig.is_some())
             + input.tap_script_sigs.len()
+            + unknown_of(&input.unknown, &MUSIG_INPUT_TYPES).len()
     };
     let before = count(input);
     input.partial_sigs.extend(signed.partial_sigs.clone());
@@ -575,14 +677,16 @@ fn copy_signatures(input: &mut bitcoin::psbt::Input, signed: &bitcoin::psbt::Inp
         input.tap_key_sig = signed.tap_key_sig;
     }
     input.tap_script_sigs.extend(signed.tap_script_sigs.clone());
+    copy_unknown(&mut input.unknown, &signed.unknown, &MUSIG_INPUT_TYPES);
     count(input) > before
 }
 
 /// `merge_signatures` over serialized bytes: `signed` is accepted as either a v0 or
 /// a v2 serialized PSBT, and the result is `original_v2`'s v2 serialization with the
-/// signatures merged in. While `original_v2` still has silent payment outputs to
-/// derive, `signed` is the sp() signer's answer and must be v2, merged by
-/// `merge_sp_signed`. `Error::NothingSigned` when no input gained a signature.
+/// signatures and MuSig2 nonces / partial signatures merged in. While `original_v2`
+/// still has silent payment outputs to derive, `signed` is the sp() signer's answer
+/// and must be v2, merged by `merge_sp_signed`. `Error::NothingSigned` when no input
+/// gained any of them.
 pub fn merge_signatures_bytes(original_v2: &[u8], signed: &[u8]) -> Result<Vec<u8>, Error> {
     let mut original = parse_v2(original_v2)?;
     let touched = if scan(&original)?.sp_outputs_pending {
