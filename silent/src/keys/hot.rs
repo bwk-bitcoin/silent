@@ -19,6 +19,7 @@ use bwk_sp::{
         },
         error::Error as HotSignerError,
         hot_signer::HotSigner,
+        musig::MusigSessionStore,
     },
     bwk_tx::bwk_psbt::{PsbtV2, TxModifiable},
     receiver::{bip352_base_derivation, scan_path, spend_path},
@@ -37,6 +38,11 @@ pub const MNEMONIC_WORDS_SHORT: usize = 12;
 pub const MNEMONIC_WORDS_LONG: usize = 24;
 const ENTROPY_BYTES_SHORT: usize = 16;
 const ENTROPY_BYTES_LONG: usize = 32;
+
+/// One process-wide MuSig2 session store, shared by every `sign_hot` call.
+#[allow(dead_code)]
+static HOT_MUSIG_SESSIONS: std::sync::LazyLock<MusigSessionStore> =
+    std::sync::LazyLock::new(MusigSessionStore::new);
 
 /// Account index the silent-payment spend key is derived at.
 const SP_ACCOUNT_INDEX: u32 = 0;

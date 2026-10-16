@@ -109,6 +109,7 @@ void CameraStep::showScanError(qr::QrError kind, const QString &message) {
         break;
     case qr::QrError::RequestFailed:
     case qr::QrError::Refused:
+    case qr::QrError::MusigSession:
     default:
         m_scan_error->setTitle(TR("flow-scan-other-title"));
         m_scan_error->setText(message);

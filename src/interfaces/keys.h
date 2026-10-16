@@ -47,6 +47,8 @@ public:
     // need not be the one the Keys tab shows.
     // Signs the PSBT with every key the descriptors need, in the order the module
     // decides. `wallet_name` names the files of an SD card route.
+    // One round per call. A PSBT answered with only MuSig2 nonces added is success
+    // (signed_), the caller calls sign() again for the next round.
     virtual void sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
                       const QStringList &descriptors, const QString &wallet_name) = 0;
     // Shows `address` on the device holding the key `descriptor` belongs to.
@@ -79,7 +81,8 @@ signals:
     void xpubReady(ReqId req_id, QString xpub, QString fingerprint, QString path);
     void descriptorRegistered(ReqId req_id, QString fingerprint);
     // A failure the caller reports, once.
-    void error(std::optional<ReqId> req_id, QString message);
+    void error(std::optional<ReqId> req_id, QString message,
+               plugin::SignError kind = plugin::SignError::Other);
     // The user closed the flow, or it already showed why there is no answer: the
     // caller shows nothing.
     void cancelled(ReqId req_id);

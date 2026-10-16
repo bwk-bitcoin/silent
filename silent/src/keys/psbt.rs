@@ -9,6 +9,7 @@ use bwk_sp::{
     account::bip375,
     bwk_sign::bwk_descriptor::sp_descriptor::SpDescriptor,
     bwk_tx::bwk_psbt::{
+        musig::{PSBT_IN_MUSIG2_PARTIAL_SIG, PSBT_IN_MUSIG2_PUB_NONCE},
         sp::{
             sp_input_tweak, sp_v0_output, PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE,
             PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE, PSBT_IN_SP_SPEND_BIP32_DERIVATION,
@@ -21,6 +22,8 @@ use bwk_sp::{
 use crate::keys::error::Error;
 
 const FINGERPRINT_LEN: usize = 4;
+#[allow(dead_code)]
+const MUSIG_INPUT_TYPES: [u8; 2] = [PSBT_IN_MUSIG2_PUB_NONCE, PSBT_IN_MUSIG2_PARTIAL_SIG];
 
 /// What a PSBT requires to be fully signed, worked out from the PSBT alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +39,8 @@ pub struct PsbtArtifacts {
     /// At least one output script is still underived, so no signature over these
     /// bytes can survive.
     pub sp_outputs_pending: bool,
+    /// Fingerprints whose share for the current MuSig2 round is already in the PSBT.
+    pub musig_done: BTreeSet<Fingerprint>,
 }
 
 pub fn parse_v2(bytes: &[u8]) -> Result<PsbtV2, Error> {
@@ -386,7 +391,26 @@ pub fn inspect(
         sp_inputs,
         sp_outputs,
         sp_outputs_pending,
+        musig_done: BTreeSet::new(),
     })
+}
+
+/// Every expected 0x1b present (expected participants read from 0x1a).
+#[allow(unused_variables)]
+pub fn musig_nonces_complete(psbt: &PsbtV2) -> Result<bool, Error> {
+    todo!()
+}
+
+/// In round 1 drops every 0x1b and 0x1c; whether anything was dropped.
+#[allow(unused_variables)]
+pub fn strip_musig_round1(psbt: &mut PsbtV2) -> Result<bool, Error> {
+    todo!()
+}
+
+/// Fingerprints whose share for the current round is already in the PSBT.
+#[allow(unused_variables)]
+pub fn musig_done_fingerprints(psbt: &PsbtV2) -> Result<BTreeSet<Fingerprint>, Error> {
+    todo!()
 }
 
 pub fn inspect_bytes(

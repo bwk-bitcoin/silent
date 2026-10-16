@@ -12,7 +12,8 @@ use bwk_sp::bwk::bwk_electrum::{
     coin_store::PaymentType,
     notification::{Notification as BwkNotification, SpNotification, TxListenerNotif},
 };
-use bwk_sp::bwk_sign::miniscript::{Descriptor as MiniscriptDescriptor, DescriptorPublicKey};
+use bwk_sp::bwk_sign::bwk_descriptor::wallet::WalletDescriptor;
+use bwk_sp::bwk_sign::miniscript::Descriptor as MiniscriptDescriptor;
 use bwk_sp::receiver::RecipientAddress;
 
 use crate::config::Config;
@@ -44,7 +45,7 @@ enum SubAccountScript {
 }
 
 impl SubAccountScript {
-    fn of(descriptor: &MiniscriptDescriptor<DescriptorPublicKey>) -> Option<Self> {
+    fn of(descriptor: &WalletDescriptor) -> Option<Self> {
         match descriptor {
             MiniscriptDescriptor::Wpkh(_) => Some(Self::Segwit),
             MiniscriptDescriptor::Tr(_) => Some(Self::Taproot),

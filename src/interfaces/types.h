@@ -4,6 +4,7 @@
 #include <QMetaType>
 #include <QString>
 #include <QtGlobal>
+#include <cstdint>
 #include <optional>
 
 using ReqId = quint64;
@@ -44,9 +45,16 @@ struct SignerEntry {
     ISigner *signer{};  // routing handle for this session
 };
 
+// Why a sign request failed, beyond its message.
+enum class SignError : std::uint8_t {
+    Other,
+    MusigSession, // the device has no matching MuSig2 session: restart from round 1
+};
+
 } // namespace plugin
 
 Q_DECLARE_METATYPE(plugin::Coin)
 Q_DECLARE_METATYPE(plugin::Balance)
 Q_DECLARE_METATYPE(QList<plugin::Coin>)
 Q_DECLARE_METATYPE(std::optional<ReqId>)
+Q_DECLARE_METATYPE(plugin::SignError)

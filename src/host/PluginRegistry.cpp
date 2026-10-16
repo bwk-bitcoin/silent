@@ -965,6 +965,12 @@ void PluginRegistry::onHostInstanceRegistered(const QString &id) {
     m_instance_owner_by_id.insert(instanceId, ownerPluginId);
 }
 
+void PluginRegistry::relistModules() {
+}
+
+void PluginRegistry::onLauncherRefreshRequested() {
+}
+
 void PluginRegistry::onSignerPollingChanged(bool enabled) {
     m_signer_polling = enabled;
     // Every enabled module is told, not just the ones holding instances: a module

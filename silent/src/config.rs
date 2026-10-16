@@ -335,6 +335,11 @@ impl Config {
     pub fn set_plugin_id(&mut self, plugin_id: String) {
         self.plugin_id = plugin_id;
     }
+
+    /// The bwk::Account config of a musig account (plugin id "musig").
+    pub fn to_musig_config(&self) -> Result<bwk::config::Config, String> {
+        todo!()
+    }
 }
 
 /// Override for the data directory. Once set, all calls to `datadir()` use this path.

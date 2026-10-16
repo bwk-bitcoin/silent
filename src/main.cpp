@@ -6,6 +6,7 @@
 #include "metatypes.h"
 #include "modules/hwi/HwiPlugin.h"
 #include "modules/keys/KeysModule.h"
+#include "modules/musig/MusigPlugin.h"
 #include "modules/sp/SpPlugin.h"
 #include "qr/QrTypes.h"
 #include "resources/font/noto_sans.h"
@@ -23,6 +24,7 @@
 #ifdef SILENT_STATIC_PLUGINS
 Q_IMPORT_PLUGIN(SpPlugin)
 Q_IMPORT_PLUGIN(HwiPlugin)
+Q_IMPORT_PLUGIN(MusigPlugin)
 #endif
 
 auto main(int argc, char *argv[]) -> int {
@@ -63,6 +65,7 @@ auto main(int argc, char *argv[]) -> int {
     qRegisterMetaType<MnemonicResult>();
     qRegisterMetaType<KeyInfoResult>();
     qRegisterMetaType<std::optional<ReqId>>();
+    qRegisterMetaType<plugin::SignError>();
 
     // Initialize Rust logging (Debug level for verbose output)
     init_logging(LogLevel::Error);
@@ -88,6 +91,7 @@ auto main(int argc, char *argv[]) -> int {
     // Initialize host singleton and register built-in plugins before controller state setup.
     Host::get();
     controller->registerBuiltinPlugin(std::make_unique<SpPlugin>());
+    controller->registerBuiltinPlugin(std::make_unique<MusigPlugin>());
     controller->registerBuiltinPlugin(std::make_unique<HwiPlugin>());
     controller->registerBuiltinPlugin(std::make_unique<keys::KeysModule>());
 

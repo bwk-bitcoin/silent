@@ -21,7 +21,10 @@ use bwk_qr_protocol::{
 };
 use bwk_sp::{
     bwk_sign::{
-        bwk_descriptor::descriptor::{tr_path, wpkh, wpkh_path, DescriptorDerivator},
+        bwk_descriptor::{
+            descriptor::{tr_path, wpkh, wpkh_path, DescriptorDerivator},
+            wallet::to_wallet,
+        },
         hot_signer::HotSigner,
     },
     bwk_tx::bwk_psbt::{
@@ -158,10 +161,13 @@ fn signable_input(
     descriptor_string: &str,
     path: &DerivationPath,
 ) -> PsbtInput {
-    let descriptor = bwk_sp::bwk_sign::miniscript::Descriptor::<
-        bwk_sp::bwk_sign::miniscript::DescriptorPublicKey,
-    >::from_str(descriptor_string)
-    .expect("valid wpkh descriptor");
+    let descriptor =
+        to_wallet(
+            bwk_sp::bwk_sign::miniscript::Descriptor::<
+                bwk_sp::bwk_sign::miniscript::DescriptorPublicKey,
+            >::from_str(descriptor_string)
+            .expect("valid wpkh descriptor"),
+        );
     let derivator = descriptor
         .spk_derivator(network)
         .expect("valid spk derivator");
@@ -445,10 +451,13 @@ fn test_v0_signed_answer_merges_into_the_original_v2() {
         .expect("sign request");
 
     let mut v0 = original.clone().into_bitcoin_psbt().expect("into v0");
-    let descriptor = bwk_sp::bwk_sign::miniscript::Descriptor::<
-        bwk_sp::bwk_sign::miniscript::DescriptorPublicKey,
-    >::from_str(&descriptor_string)
-    .expect("valid wpkh descriptor");
+    let descriptor =
+        to_wallet(
+            bwk_sp::bwk_sign::miniscript::Descriptor::<
+                bwk_sp::bwk_sign::miniscript::DescriptorPublicKey,
+            >::from_str(&descriptor_string)
+            .expect("valid wpkh descriptor"),
+        );
     let signer = HotSigner::new_from_mnemonics(network, TEST_MNEMONIC).expect("valid signer");
     signer
         .inner_sign(&mut v0, &descriptor)
@@ -502,10 +511,13 @@ fn test_v2_signed_answer_keeps_sp_fields_intact() {
         .expect("sign request");
 
     let mut v0 = original.clone().into_bitcoin_psbt().expect("into v0");
-    let descriptor = bwk_sp::bwk_sign::miniscript::Descriptor::<
-        bwk_sp::bwk_sign::miniscript::DescriptorPublicKey,
-    >::from_str(&descriptor_string)
-    .expect("valid wpkh descriptor");
+    let descriptor =
+        to_wallet(
+            bwk_sp::bwk_sign::miniscript::Descriptor::<
+                bwk_sp::bwk_sign::miniscript::DescriptorPublicKey,
+            >::from_str(&descriptor_string)
+            .expect("valid wpkh descriptor"),
+        );
     let signer = HotSigner::new_from_mnemonics(network, TEST_MNEMONIC).expect("valid signer");
     signer
         .inner_sign(&mut v0, &descriptor)

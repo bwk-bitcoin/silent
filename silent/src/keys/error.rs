@@ -193,6 +193,8 @@ pub enum Error {
     Decode(#[from] bwk_qr_protocol::decode::Error),
     #[error(transparent)]
     XpubConvert(#[from] bwk_qr_protocol::types::Error),
+    #[error("MuSig2 session missing or mismatch")]
+    MusigSession,
 }
 
 fn fmt_sp_key_unknown(fingerprint: &Option<Fingerprint>) -> String {

@@ -50,6 +50,9 @@ public:
     [[nodiscard]] QList<CreatorLauncher> externalCreatorLaunchers() const;
     bool startLauncherInstance(IModule *module, const QString &instance_id);
     void deleteInstance(IModule *module, const QString &instance_id);
+    // Calls list() on every active module and applies each answer through
+    // applyModuleInstances, the path activateModule uses.
+    void relistModules();
     [[nodiscard]] bool isPluginEnabled(const QString &plugin_id) const;
     [[nodiscard]] bool isPluginBuiltin(const QString &plugin_id) const;
     [[nodiscard]] bool isBuiltinModule(IModule *module) const;
@@ -65,6 +68,7 @@ private slots:
     void onHostInstanceRegistered(const QString &id);
     void onHostInstanceRemoved(const QString &id);
     void onSignerPollingChanged(bool enabled);
+    void onLauncherRefreshRequested();
 
 protected:
     // A module that answers from inside list()/autoStart() replies before the pending

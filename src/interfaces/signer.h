@@ -60,7 +60,8 @@ signals:
     // shown without keeping its own map.
     void addressDisplayed(ReqId req_id, QString address);
     void raw(ReqId req_id, QByteArray response);
-    void error(std::optional<ReqId> req_id, QString message);
+    void error(std::optional<ReqId> req_id, QString message,
+               plugin::SignError kind = plugin::SignError::Other);
 };
 
 Q_DECLARE_INTERFACE(ISigner, "dev.silent.ISigner/1.0")

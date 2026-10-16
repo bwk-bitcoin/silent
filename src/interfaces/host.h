@@ -31,6 +31,7 @@ signals:
     void settingSectionsChanged();
     // The global "signers must poll" flag, emitted only when it flips.
     void signerPollingChanged(bool enabled);
+    void launcherRefreshRequested();
 };
 
 class Host {
@@ -66,6 +67,9 @@ public:
     // one flag per module and polls while any of them is true, so asking twice is the
     // same as asking once and there is nothing to balance.
     virtual void requestSignerPolling(IModule *requester, bool enabled) = 0;
+    // Asks every enabled module to list its instances again, so the launcher and
+    // account discovery see an account a module just wrote to disk.
+    virtual void refreshLauncher() = 0;
 
     virtual TabId openTab(QWidget *content, IInstance *owner) = 0;
     virtual void setTabTitle(TabId tab, const QString &title) = 0;

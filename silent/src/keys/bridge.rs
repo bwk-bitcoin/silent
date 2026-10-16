@@ -697,6 +697,7 @@ pub fn hot_sign(material: &HotMaterial, password: &str, psbt_v2_hex: &str) -> ff
             is_ok: true,
             error: String::new(),
             wrong_password: false,
+            musig_session: false,
             psbt_v2_hex: hex::encode(signed),
         },
         Err(e) => ffi::SignResult {
@@ -798,6 +799,7 @@ pub fn usb_merge_signed(original_v2_hex: &str, signed_v0_base64: &str) -> ffi::S
             is_ok: true,
             error: String::new(),
             wrong_password: false,
+            musig_session: false,
             psbt_v2_hex: hex::encode(merged),
         },
         Err(e) => failed_sign(&e.to_string()),
@@ -1099,6 +1101,7 @@ fn failed_sign(error: &str) -> ffi::SignResult {
         is_ok: false,
         error: error.to_string(),
         wrong_password: false,
+        musig_session: false,
         psbt_v2_hex: String::new(),
     }
 }
@@ -1143,6 +1146,7 @@ fn to_ffi_signing_candidate(candidate: &SigningCandidate) -> ffi::SigningCandida
         unusable: ffi::KeyUnusableReason::from(candidate.unusable),
         must_sign_first: candidate.must_sign_first,
         registered: candidate.registered,
+        musig_done: false,
     }
 }
 

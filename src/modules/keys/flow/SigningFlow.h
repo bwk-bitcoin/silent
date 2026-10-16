@@ -110,7 +110,7 @@ signals:
                            QList<qr::QrXpub> xpubs);
     void xpubFetched(ReqId req_id, QString xpub, QString fingerprint, QString path);
     // A failure the flow cannot recover from; the window closes.
-    void failed(ReqId req_id, QString message);
+    void failed(ReqId req_id, QString message, plugin::SignError kind = plugin::SignError::Other);
     // Closed before an answer, or after showing why there is none.
     void cancelled(ReqId req_id);
 

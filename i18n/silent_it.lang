@@ -537,6 +537,8 @@ main-window-title
 => "Silent - Silent Payments Wallet"
 => "Silent - Wallet Silent Payments";;
 menu-custom => "Custom" => "Personalizzato"
+musig-create-account => "Create Shared Account" => "NONE"
+musig-instance-not-found => "MuSig2 instance not found: %1" => "NONE"
 network-bitcoin => "Bitcoin" => "Bitcoin"
 network-regtest => "Regtest" => "Regtest"
 network-signet => "Signet" => "Signet"

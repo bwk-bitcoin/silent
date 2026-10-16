@@ -974,6 +974,7 @@ enum class HwiEventFlag : ::std::uint8_t;
 enum class KeyRouteKind : ::std::uint8_t;
 enum class KeyUnusableReason : ::std::uint8_t;
 enum class QrResponseKind : ::std::uint8_t;
+enum class MusigRound : ::std::uint8_t;
 enum class QrErrorKind : ::std::uint8_t;
 struct Notification;
 struct RustCoin;
@@ -1014,6 +1015,21 @@ struct CameraListResult;
 struct CameraFrameResult;
 struct QrDisplayLevels;
 struct PsbtFileResult;
+struct MusigDescriptorResult;
+struct MusigCosignerStatus;
+struct MusigRoundStatus;
+struct MusigSpendLeaf;
+struct MusigSpendLeaves;
+enum class PolicyKeyType : ::std::uint8_t;
+enum class PolicySemantic : ::std::uint8_t;
+enum class PolicyLocktime : ::std::uint8_t;
+struct PolicyKey;
+struct PolicyPath;
+struct PolicySpec;
+struct PolicyCompileResult;
+struct PolicyReviewKey;
+struct PolicyReviewPath;
+struct PolicyReview;
 struct Config;
 struct Account;
 struct Poll;
@@ -1030,6 +1046,7 @@ struct SealedHotKey;
 struct CameraHandle;
 struct BbqrFrames;
 struct BbqrScanner;
+struct MusigAccount;
 
 #ifndef CXXBRIDGE1_ENUM_Network
 #define CXXBRIDGE1_ENUM_Network
@@ -1156,6 +1173,17 @@ enum class QrResponseKind : ::std::uint8_t {
 };
 #endif // CXXBRIDGE1_ENUM_QrResponseKind
 
+#ifndef CXXBRIDGE1_ENUM_MusigRound
+#define CXXBRIDGE1_ENUM_MusigRound
+// MuSig2 signing round of a PSBT.
+enum class MusigRound : ::std::uint8_t {
+  NotMusig = 0,
+  Nonces = 1,
+  PartialSigs = 2,
+  Ready = 3,
+};
+#endif // CXXBRIDGE1_ENUM_MusigRound
+
 #ifndef CXXBRIDGE1_ENUM_QrErrorKind
 #define CXXBRIDGE1_ENUM_QrErrorKind
 // Why a QR response was refused: the two failures the UI words on their own,
@@ -1164,6 +1192,8 @@ enum class QrErrorKind : ::std::uint8_t {
   Other = 0,
   RequestIdMismatch = 1,
   SignaturesUnsupported = 2,
+  // The device lost or refused its MuSig2 session (response error 0x0D).
+  MusigSession = 3,
 };
 #endif // CXXBRIDGE1_ENUM_QrErrorKind
 
@@ -1629,6 +1659,8 @@ struct SigningCandidate final {
   // The SP key, which completes the output scripts before anyone else signs.
   bool must_sign_first CXX_DEFAULT_VALUE(false);
   bool registered CXX_DEFAULT_VALUE(false);
+  // The key already gave its share for the PSBT's current MuSig2 round.
+  bool musig_done CXX_DEFAULT_VALUE(false);
 
   using IsRelocatable = ::std::true_type;
 };
@@ -1693,6 +1725,8 @@ struct SignResult final {
   ::rust::String error;
   // The password did not open the hot secret. Only `hot_sign` sets it.
   bool wrong_password CXX_DEFAULT_VALUE(false);
+  // The hot key has no MuSig2 session for this PSBT: restart from round 1.
+  bool musig_session CXX_DEFAULT_VALUE(false);
   // The signed PSBT, serialized v2 and hex encoded. Empty on error.
   ::rust::String psbt_v2_hex;
 
@@ -1803,6 +1837,231 @@ struct PsbtFileResult final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_PsbtFileResult
+
+#ifndef CXXBRIDGE1_STRUCT_MusigDescriptorResult
+#define CXXBRIDGE1_STRUCT_MusigDescriptorResult
+// Result of validating a musig() descriptor.
+struct MusigDescriptorResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  // Standard BIP-390 text with checksum. Empty on error.
+  ::rust::String descriptor;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_MusigDescriptorResult
+
+#ifndef CXXBRIDGE1_STRUCT_MusigCosignerStatus
+#define CXXBRIDGE1_STRUCT_MusigCosignerStatus
+// Signing progress of one cosigner on a PSBT.
+struct MusigCosignerStatus final {
+  ::rust::String fingerprint;
+  ::std::uint32_t nonces CXX_DEFAULT_VALUE(0);
+  ::std::uint32_t partial_sigs CXX_DEFAULT_VALUE(0);
+  ::std::uint32_t expected CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_MusigCosignerStatus
+
+#ifndef CXXBRIDGE1_STRUCT_MusigRoundStatus
+#define CXXBRIDGE1_STRUCT_MusigRoundStatus
+// Signing progress of a PSBT.
+struct MusigRoundStatus final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::MusigRound round;
+  ::rust::Vec<::MusigCosignerStatus> cosigners;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_MusigRoundStatus
+
+#ifndef CXXBRIDGE1_STRUCT_MusigSpendLeaf
+#define CXXBRIDGE1_STRUCT_MusigSpendLeaf
+// One way to spend a musig account's coins: the key path or one tap leaf
+// (bwk `SpendLeaf`). Picked before round 1 (decision 15).
+struct MusigSpendLeaf final {
+  // The key path (internal key); leaf_hash is empty.
+  bool key_path CXX_DEFAULT_VALUE(false);
+  // Hex tap leaf hash.
+  ::rust::String leaf_hash;
+  // Master fingerprints of the keys that sign it.
+  ::rust::Vec<::rust::String> fingerprints;
+  // `older()` blocks, 0 for none.
+  ::std::uint32_t relative CXX_DEFAULT_VALUE(0);
+  // `after()` height, 0 for none.
+  ::std::uint32_t absolute CXX_DEFAULT_VALUE(0);
+  // Every given coin's timelock on it is met at the current tip.
+  bool spendable CXX_DEFAULT_VALUE(false);
+  // Witness weight of one input spent this way.
+  ::std::uint64_t satisfaction_wu CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_MusigSpendLeaf
+
+#ifndef CXXBRIDGE1_STRUCT_MusigSpendLeaves
+#define CXXBRIDGE1_STRUCT_MusigSpendLeaves
+struct MusigSpendLeaves final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  // Key path first, then leaves in DFS order.
+  ::rust::Vec<::MusigSpendLeaf> leaves;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_MusigSpendLeaves
+
+#ifndef CXXBRIDGE1_ENUM_PolicyKeyType
+#define CXXBRIDGE1_ENUM_PolicyKeyType
+// Role of a key (bwk-bup `KeyType`), stored in its origin's last step R.
+enum class PolicyKeyType : ::std::uint8_t {
+  Internal = 0,
+  External = 1,
+  Cosigner = 2,
+  SafetyNet = 3,
+  // Review only: the origin carries no known R.
+  Unknown = 4,
+};
+#endif // CXXBRIDGE1_ENUM_PolicyKeyType
+
+#ifndef CXXBRIDGE1_ENUM_PolicySemantic
+#define CXXBRIDGE1_ENUM_PolicySemantic
+// Shape of a path's keys (bwk-bup `Semantic`).
+enum class PolicySemantic : ::std::uint8_t {
+  Single = 0,
+  // m-of-n; every multisig compiles to MuSig2 leaves.
+  Multi = 1,
+  // Mandatory keys plus a subset of the others.
+  MultiMandatory = 2,
+  // Review only: nested, custom or unknown shapes.
+  Other = 3,
+};
+#endif // CXXBRIDGE1_ENUM_PolicySemantic
+
+#ifndef CXXBRIDGE1_ENUM_PolicyLocktime
+#define CXXBRIDGE1_ENUM_PolicyLocktime
+// Timelock kind of a path (bwk-bup `Locktime`).
+enum class PolicyLocktime : ::std::uint8_t {
+  None = 0,
+  Relative = 1,
+  AbsoluteRenewable = 2,
+  Absolute = 3,
+};
+#endif // CXXBRIDGE1_ENUM_PolicyLocktime
+
+#ifndef CXXBRIDGE1_STRUCT_PolicyKey
+#define CXXBRIDGE1_STRUCT_PolicyKey
+// One key of a path, as the creator gathered it. The binding derives the
+// role key `[fp/87'/coin'/account'/R]xpub` from the account xpub.
+struct PolicyKey final {
+  ::rust::String fingerprint;
+  // The BIP-87 account path `m/87'/coin'/account'`.
+  ::rust::String account_path;
+  // The xpub at `account_path`; ignored by preview_policy.
+  ::rust::String account_xpub;
+  ::PolicyKeyType key_type;
+  // MultiMandatory only: the key signs every leaf.
+  bool mandatory CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PolicyKey
+
+#ifndef CXXBRIDGE1_STRUCT_PolicyPath
+#define CXXBRIDGE1_STRUCT_PolicyPath
+struct PolicyPath final {
+  ::PolicySemantic semantic;
+  // Signers per spend: 1 for Single, m for Multi, mandatory plus cosigners
+  // for MultiMandatory.
+  ::std::uint32_t threshold CXX_DEFAULT_VALUE(0);
+  ::PolicyLocktime locktime;
+  // Blocks for Relative, height for the absolute kinds, 0 for None.
+  ::std::uint32_t locktime_value CXX_DEFAULT_VALUE(0);
+  ::rust::Vec<::PolicyKey> keys;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PolicyPath
+
+#ifndef CXXBRIDGE1_STRUCT_PolicySpec
+#define CXXBRIDGE1_STRUCT_PolicySpec
+// A policy from the creator. The binding infers the bwk-bup `PolicyType` from
+// the paths (Csv, Cltv, CsvWithMandatoryKey, else Unknown).
+struct PolicySpec final {
+  ::Network network;
+  ::rust::Vec<::PolicyPath> paths;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PolicySpec
+
+#ifndef CXXBRIDGE1_STRUCT_PolicyCompileResult
+#define CXXBRIDGE1_STRUCT_PolicyCompileResult
+struct PolicyCompileResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  // Index in PolicySpec.paths the error is about, -1 for the whole policy.
+  ::std::int32_t error_path CXX_DEFAULT_VALUE(0);
+  // The error is PolicyError::TooManyLeaves.
+  bool too_many_leaves CXX_DEFAULT_VALUE(false);
+  // Standard BIP-390 text with checksum; empty on error and from preview_policy.
+  ::rust::String descriptor;
+  // Tap leaves, padding excluded.
+  ::std::uint32_t leaf_count CXX_DEFAULT_VALUE(0);
+  // bwk-bup MAX_LEAVES.
+  ::std::uint32_t max_leaves CXX_DEFAULT_VALUE(0);
+  // The primary path is the internal key (key path spend).
+  bool has_key_path CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PolicyCompileResult
+
+#ifndef CXXBRIDGE1_STRUCT_PolicyReviewKey
+#define CXXBRIDGE1_STRUCT_PolicyReviewKey
+struct PolicyReviewKey final {
+  ::rust::String fingerprint;
+  // Origin path, `m/87'/coin'/account'/R` form.
+  ::rust::String origin_path;
+  ::rust::String xpub;
+  ::PolicyKeyType key_type;
+  bool mandatory CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PolicyReviewKey
+
+#ifndef CXXBRIDGE1_STRUCT_PolicyReviewPath
+#define CXXBRIDGE1_STRUCT_PolicyReviewPath
+struct PolicyReviewPath final {
+  ::PolicySemantic semantic;
+  ::std::uint32_t threshold CXX_DEFAULT_VALUE(0);
+  ::PolicyLocktime locktime;
+  ::std::uint32_t locktime_value CXX_DEFAULT_VALUE(0);
+  ::rust::Vec<::PolicyReviewKey> keys;
+  // Its tap leaves; 0 on the key path.
+  ::std::uint32_t leaf_count CXX_DEFAULT_VALUE(0);
+  bool key_path CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PolicyReviewPath
+
+#ifndef CXXBRIDGE1_STRUCT_PolicyReview
+#define CXXBRIDGE1_STRUCT_PolicyReview
+// A descriptor lifted back to paths and key types, the C++ side writes the
+// plain words from it.
+struct PolicyReview final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::Vec<::PolicyReviewPath> paths;
+  ::std::uint32_t leaf_count CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PolicyReview
 
 #ifndef CXXBRIDGE1_STRUCT_Config
 #define CXXBRIDGE1_STRUCT_Config
@@ -2430,6 +2689,85 @@ private:
 };
 #endif // CXXBRIDGE1_STRUCT_BbqrScanner
 
+#ifndef CXXBRIDGE1_STRUCT_MusigAccount
+#define CXXBRIDGE1_STRUCT_MusigAccount
+// A MuSig2 policy account, wrapping bwk::Account.
+struct MusigAccount final : public ::rust::Opaque {
+  bool is_ok() const noexcept;
+  ::rust::String get_error() const noexcept;
+  ::rust::String name() const noexcept;
+
+  // Regtest when it failed to load.
+  ::Network network() const noexcept;
+
+  // Standard BIP-390 text.
+  ::rust::String descriptor() const noexcept;
+
+  ::rust::Vec<::rust::String> cosigner_fingerprints() const noexcept;
+
+  // Reloads the Electrum endpoint from the config and starts the listener.
+  bool start_electrum() noexcept;
+
+  void stop_electrum() noexcept;
+  ::rust::String electrum_url() const noexcept;
+
+  // Saves the endpoint to the config and restarts the listener.
+  bool set_electrum_url(::rust::String url) noexcept;
+
+  ::rust::Box<::Poll> try_recv() noexcept;
+  ::rust::Box<::NotificationReceiver> take_receiver() noexcept;
+  ::std::uint64_t balance() const noexcept;
+  ::rust::String new_addr() noexcept;
+  ::rust::Vec<::RustCoin> coins() const noexcept;
+  ::CoinState spendable_coins() const noexcept;
+  bool update_coin_label(::rust::String outpoint, ::rust::String label) noexcept;
+  ::rust::Vec<::RustTx> payment_history() const noexcept;
+  ::AddressVerifyInfo address_verify_info(::rust::Str address) const noexcept;
+  ::TransactionSimulation simulate_transaction(::TransactionTemplate tx_template) const noexcept;
+
+  // Every spend path for the coins `outpoints`, `spendable` at the current tip.
+  ::MusigSpendLeaves spend_leaves(::rust::Vec<::rust::String> outpoints) const noexcept;
+
+  // Prepares the PSBT, then restricts it to `spend` (Account::restrict_spend_path).
+  ::rust::Box<::PsbtResult> prepare_transaction(::TransactionTemplate tx_template, ::MusigSpendLeaf spend) const noexcept;
+
+  // Per cosigner nonce / partial sig counts of the PSBT.
+  ::MusigRoundStatus round_status(::rust::Str psbt_v2_hex) const noexcept;
+
+  // Aggregates partial sigs, finalizes; TxResult value is the tx hex.
+  ::TxResult finalize_psbt(::rust::Str psbt_v2_hex) const noexcept;
+
+  // TxResult value is the txid.
+  ::TxResult broadcast_transaction(::rust::String signed_tx_hex) const noexcept;
+
+  // Blocking: call from a background thread.
+  ::PsbtValidation validate_before_sign(::PsbtResult const &psbt_result) const noexcept;
+
+  ~MusigAccount() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_MusigAccount
+
+// `m/87'/coin'/account'` for `network`.
+::rust::String bip87_account_path(::Network network, ::std::uint32_t account) noexcept;
+
+// Compiles with placeholder keys (account_xpub ignored): leaf count, cap and
+// shape errors before any device is asked. descriptor stays empty.
+::PolicyCompileResult preview_policy(::PolicySpec spec) noexcept;
+
+// Derives each key's R from its account xpub, builds the bwk-bup Policy and
+// compiles it, every multisig to MuSig2.
+::PolicyCompileResult compile_policy(::PolicySpec spec) noexcept;
+
+// `Policy::from_descriptor` of BIP-390 text, key types read from R.
+::PolicyReview review_policy(::rust::String descriptor) noexcept;
+
 // Initialize logging with the specified level.
 // Call this once at application startup.
 void init_logging(::LogLevel level) noexcept;
@@ -2609,6 +2947,16 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 
 // Create a new SyncEstimator with default EMA alpha.
 ::rust::Box<::SyncEstimator> new_sync_estimator() noexcept;
+
+// Parses BIP-390 text and returns its canonical form.
+::MusigDescriptorResult validate_musig_descriptor(::rust::String descriptor) noexcept;
+
+// Every cosigner fingerprint of a musig() descriptor, empty on error.
+::rust::Vec<::rust::String> musig_descriptor_fingerprints(::rust::String descriptor) noexcept;
+
+// Loads the account `account_name` (config plugin id "musig").
+// Check is_ok() before use.
+::rust::Box<::MusigAccount> new_musig_account(::rust::String account_name) noexcept;
 
 #ifdef __clang__
 #pragma clang diagnostic pop

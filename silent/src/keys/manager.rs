@@ -13,8 +13,10 @@ use bitcoin::{
     secp256k1::{All, Secp256k1},
     Network,
 };
-use bwk_sp::bwk_sign::bwk_descriptor::{descriptor::Descriptor, sp_descriptor::SpDescriptor};
-use bwk_sp::bwk_sign::miniscript::{DescriptorPublicKey, ForEachKey};
+use bwk_sp::bwk_sign::bwk_descriptor::{
+    descriptor::Descriptor, sp_descriptor::SpDescriptor, wallet::WalletDescriptorExt,
+};
+use bwk_sp::bwk_sign::miniscript::DescriptorPublicKey;
 use zeroize::Zeroizing;
 
 use crate::keys::{
@@ -731,9 +733,10 @@ pub(crate) fn descriptor_key_fingerprint(key: &DescriptorPublicKey) -> Option<Fi
 /// descriptor is single-key.
 pub(crate) fn descriptor_has_key(descriptor: &Descriptor, fingerprint: Fingerprint) -> bool {
     match descriptor.as_miniscript() {
-        Some(miniscript) => {
-            miniscript.for_any_key(|key| descriptor_key_fingerprint(key) == Some(fingerprint))
-        }
+        Some(miniscript) => miniscript
+            .plain_keys()
+            .iter()
+            .any(|key| descriptor_key_fingerprint(key) == Some(fingerprint)),
         None => descriptor.fingerprint() == Some(fingerprint),
     }
 }
@@ -1837,6 +1840,24 @@ mod tests {
     }
 
     #[test]
+    fn descriptor_has_key_walks_every_key() {
+        let text = "tr([73c5da0a/86'/1'/0']tpubDC8msFGeGuwnKG9Upg7DM2b4DaRqg3CUZa5g8v2SRQ6K4NSkxUgd7HsL2XVWbVm39yBA4LAxysQAm397zwQSQoQgewGiYZqrA9DsP4zbQ1M/<0;1>/*,pk([deadbeef/86'/1'/0']tpubDDxT9mkZzWwkKwpGT5fY6iiM9muYTPkTx6Eig8dpHR7TChuGGCWYAHVmpW1ciido5RiFWwjzYsF1GZHkEHg2nrYp3zNtx3QQRkznyLhQ77x/<0;1>/*))";
+        let descriptor = Descriptor::from_str(text).expect("valid tr descriptor");
+        for origin in ["73c5da0a", "deadbeef"] {
+            let fp = Fingerprint::from_str(origin).unwrap();
+            assert!(
+                descriptor_has_key(&descriptor, fp),
+                "expected the descriptor to carry origin {origin}"
+            );
+        }
+        let absent = Fingerprint::from_str("cafebabe").unwrap();
+        assert!(
+            !descriptor_has_key(&descriptor, absent),
+            "expected no key with origin {absent}"
+        );
+    }
+
+    #[test]
     fn registered_descriptors_on_an_unknown_fingerprint_is_empty() {
         let tmp = temp_dir::TempDir::new().expect("create temp dir");
         let manager = manager_over(tmp.path(), Network::Regtest);
@@ -1890,6 +1911,7 @@ mod tests {
             sp_inputs: true,
             sp_outputs: true,
             sp_outputs_pending: true,
+            musig_done: BTreeSet::new(),
         };
 
         (manager, artifacts)
@@ -1913,6 +1935,7 @@ mod tests {
             sp_inputs: false,
             sp_outputs: false,
             sp_outputs_pending: false,
+            musig_done: BTreeSet::new(),
         };
         let plan = manager.plan_from_artifacts(&artifacts);
         assert_eq!(
@@ -2035,6 +2058,7 @@ mod tests {
             sp_inputs: false,
             sp_outputs: false,
             sp_outputs_pending: false,
+            musig_done: BTreeSet::new(),
         };
         let plan = manager.plan_from_artifacts(&artifacts);
         let candidate = &plan.candidates[0];
@@ -2066,6 +2090,7 @@ mod tests {
             sp_inputs: false,
             sp_outputs: false,
             sp_outputs_pending: false,
+            musig_done: BTreeSet::new(),
         };
         let plan = manager.plan_from_artifacts(&artifacts);
         let candidate = &plan.candidates[0];
@@ -2132,6 +2157,7 @@ mod tests {
             sp_inputs: false,
             sp_outputs: false,
             sp_outputs_pending: false,
+            musig_done: BTreeSet::new(),
         };
         let plan = manager.plan_from_artifacts(&artifacts);
 
@@ -2191,6 +2217,7 @@ mod tests {
             sp_inputs: false,
             sp_outputs: false,
             sp_outputs_pending: false,
+            musig_done: BTreeSet::new(),
         };
         let plan = manager.plan_from_artifacts(&artifacts);
 
@@ -2222,6 +2249,7 @@ mod tests {
             sp_inputs: false,
             sp_outputs: false,
             sp_outputs_pending: false,
+            musig_done: BTreeSet::new(),
         };
         let plan = manager.plan_from_artifacts(&artifacts);
         assert_eq!(
@@ -2250,6 +2278,7 @@ mod tests {
             sp_inputs: false,
             sp_outputs: false,
             sp_outputs_pending: false,
+            musig_done: BTreeSet::new(),
         };
         let plan = manager.plan_from_artifacts(&artifacts);
         assert!(

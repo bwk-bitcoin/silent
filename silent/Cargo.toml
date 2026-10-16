@@ -10,6 +10,7 @@ doctest = false
 [dependencies]
 # When changing rev, also update flake.lock:
 #   nix --extra-experimental-features 'nix-command flakes' flake update bwk
+bwk = { git = "https://github.com/pythcoiner/bwk.git", rev = "ac015d99e1f4701ee434297c6188b10d921c8c4c", features = ["musig"] }
 bwk-sp = { git = "https://github.com/pythcoiner/bwk.git", rev = "ac015d99e1f4701ee434297c6188b10d921c8c4c" }
 bwk-hwi = { git = "https://github.com/pythcoiner/bwk.git", rev = "ac015d99e1f4701ee434297c6188b10d921c8c4c", features = ["service"] }
 bwk-qr = { git = "https://github.com/pythcoiner/bwk.git", rev = "ac015d99e1f4701ee434297c6188b10d921c8c4c" }
@@ -51,3 +52,13 @@ temp-dir = "0.1"
 
 [build-dependencies]
 cxx-build = "1.0"
+
+# During the musig2 work silent builds against the local bwk worktree; a rev pin
+# replaces this section once the bwk side lands.
+[patch."https://github.com/pythcoiner/bwk.git"]
+bwk = { path = "/home/pyth/bwk-signing/bwk" }
+bwk-sp = { path = "/home/pyth/bwk-signing/sp" }
+bwk-hwi = { path = "/home/pyth/bwk-signing/hwi" }
+bwk-qr = { path = "/home/pyth/bwk-signing/qr" }
+bwk-qr-protocol = { path = "/home/pyth/bwk-signing/qr-protocol" }
+bwk-utils = { path = "/home/pyth/bwk-signing/utils" }

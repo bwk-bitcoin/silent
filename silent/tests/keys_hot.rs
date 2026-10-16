@@ -9,6 +9,7 @@ use std::str::FromStr;
 use bitcoin::bip32::{ChildNumber, Fingerprint};
 use bitcoin::{Amount, Network, OutPoint, ScriptBuf, Sequence, TxOut};
 use bwk_sp::bwk_sign::bwk_descriptor::descriptor::{wpkh, wpkh_path, DescriptorDerivator};
+use bwk_sp::bwk_sign::bwk_descriptor::wallet::to_wallet;
 use bwk_sp::bwk_sign::hot_signer::HotSigner;
 use bwk_sp::bwk_tx::bwk_psbt::{Input as PsbtInput, Output as PsbtOutput, PsbtV2};
 use silent::{KeyRouteKind, LiveDevice, Network as FfiNetwork};
@@ -84,10 +85,13 @@ fn one_input_psbt(input: PsbtInput) -> PsbtV2 {
 /// `bip32_derivation`, ready for `sign_hot` to sign.
 fn bip32_psbt(network: Network) -> PsbtV2 {
     let (descriptor_string, path) = wpkh_descriptor(network);
-    let descriptor = bwk_sp::bwk_sign::miniscript::Descriptor::<
-        bwk_sp::bwk_sign::miniscript::DescriptorPublicKey,
-    >::from_str(&descriptor_string)
-    .expect("valid wpkh descriptor");
+    let descriptor =
+        to_wallet(
+            bwk_sp::bwk_sign::miniscript::Descriptor::<
+                bwk_sp::bwk_sign::miniscript::DescriptorPublicKey,
+            >::from_str(&descriptor_string)
+            .expect("valid wpkh descriptor"),
+        );
     let derivator = descriptor
         .spk_derivator(network)
         .expect("valid spk derivator");

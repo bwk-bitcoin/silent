@@ -126,7 +126,13 @@ struct QrDevice {
 
 // Why a codec could not start an exchange or refused an answer. Only RequestFailed
 // ends the exchange: after the others the scan goes on.
-enum class QrError : std::uint8_t { RequestFailed, WrongRequest, Unsupported, Refused };
+enum class QrError : std::uint8_t {
+    RequestFailed,
+    WrongRequest,
+    Unsupported,
+    Refused,
+    MusigSession
+};
 
 } // namespace qr
 

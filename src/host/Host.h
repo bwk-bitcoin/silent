@@ -22,6 +22,7 @@ public:
     void setKeys(IKeys *keys, IModule *owner) override;
     [[nodiscard]] IKeys *keys() const override;
     void requestSignerPolling(IModule *requester, bool enabled) override;
+    void refreshLauncher() override;
 
     TabId openTab(QWidget *content, IInstance *owner) override;
     void setTabTitle(TabId tab, const QString &title) override;
@@ -56,6 +57,7 @@ signals:
     void retireInstanceRequested(IInstance *self);
     void setKeysRequested(IKeys *keys, IModule *owner);
     void signerPollingRequested(IModule *requester, bool enabled);
+    void refreshLauncherRequested();
 
 private slots:
     void onRegisterInstanceRequested(const QString &id, IInstance *instance, IModule *owner);
@@ -63,6 +65,7 @@ private slots:
     void onRetireInstanceRequested(IInstance *self);
     void onSetKeysRequested(IKeys *keys, IModule *owner);
     void onSignerPollingRequested(IModule *requester, bool enabled);
+    void onRefreshLauncherRequested();
     void onHostedTabCloseRequested(QWidget *content);
     void onWizardModalFinished(int result);
 

@@ -108,8 +108,9 @@ void KeysBus::deliverVerified(ReqId req_id, bool matched) {
     emit verified(req_id, matched);
 }
 
-void KeysBus::deliverError(std::optional<ReqId> req_id, const QString &message) {
-    emit error(req_id, message);
+void KeysBus::deliverError(std::optional<ReqId> req_id, const QString &message,
+                           plugin::SignError kind) {
+    emit error(req_id, message, kind);
 }
 
 void KeysBus::deliverCancelled(ReqId req_id) {

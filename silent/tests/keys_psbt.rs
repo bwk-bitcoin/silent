@@ -18,6 +18,7 @@ use bwk_sp::bwk_sign::{
         descriptor::{wpkh, wpkh_path, DescriptorDerivator},
         sp_descriptor::SpDescriptor,
         sp_key::{SpKey, SpScanKey},
+        wallet::to_wallet,
     },
     hot_signer::HotSigner,
 };
@@ -590,10 +591,13 @@ fn wpkh_descriptor(network: Network) -> (String, DerivationPath) {
 /// The output script is already derived, so nothing here is pending.
 fn usb_signable_psbt(network: Network) -> PsbtV2 {
     let (descriptor_string, path) = wpkh_descriptor(network);
-    let descriptor = bwk_sp::bwk_sign::miniscript::Descriptor::<
-        bwk_sp::bwk_sign::miniscript::DescriptorPublicKey,
-    >::from_str(&descriptor_string)
-    .expect("valid wpkh descriptor");
+    let descriptor =
+        to_wallet(
+            bwk_sp::bwk_sign::miniscript::Descriptor::<
+                bwk_sp::bwk_sign::miniscript::DescriptorPublicKey,
+            >::from_str(&descriptor_string)
+            .expect("valid wpkh descriptor"),
+        );
     let derivator = descriptor
         .spk_derivator(network)
         .expect("valid spk derivator");
@@ -636,10 +640,13 @@ fn test_usb_sign_round_trip_keeps_sp_fields_and_merges_the_signature() {
 
     let mut v0 = Psbt::from_str(&payload.psbt_base64).expect("valid v0 psbt");
     let (descriptor_string, _) = wpkh_descriptor(network);
-    let descriptor = bwk_sp::bwk_sign::miniscript::Descriptor::<
-        bwk_sp::bwk_sign::miniscript::DescriptorPublicKey,
-    >::from_str(&descriptor_string)
-    .expect("valid wpkh descriptor");
+    let descriptor =
+        to_wallet(
+            bwk_sp::bwk_sign::miniscript::Descriptor::<
+                bwk_sp::bwk_sign::miniscript::DescriptorPublicKey,
+            >::from_str(&descriptor_string)
+            .expect("valid wpkh descriptor"),
+        );
     let signer = HotSigner::new_from_mnemonics(network, TEST_MNEMONIC).expect("valid signer");
     signer
         .inner_sign(&mut v0, &descriptor)

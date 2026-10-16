@@ -11,6 +11,8 @@ pub mod hwi;
 pub mod hwi_config;
 pub mod image;
 pub mod keys;
+pub mod musig;
+pub mod policy;
 pub mod sync_estimator;
 
 use bwk_sp::bwk::bwk_electrum::url::ElectrumScheme;
@@ -126,6 +128,15 @@ mod ffi {
         SpAccount,
     }
 
+    /// MuSig2 signing round of a PSBT.
+    #[derive(Debug, Clone, Copy)]
+    pub enum MusigRound {
+        NotMusig,
+        Nonces,
+        PartialSigs,
+        Ready,
+    }
+
     /// Why a QR response was refused: the two failures the UI words on their own,
     /// and every other one, which only surfaces as free text.
     #[derive(Debug, Clone, Copy)]
@@ -133,6 +144,8 @@ mod ffi {
         Other,
         RequestIdMismatch,
         SignaturesUnsupported,
+        /// The device lost or refused its MuSig2 session (response error 0x0D).
+        MusigSession,
     }
 
     // ===== Shared Structs =====
@@ -490,6 +503,8 @@ mod ffi {
         /// The SP key, which completes the output scripts before anyone else signs.
         pub must_sign_first: bool,
         pub registered: bool,
+        /// The key already gave its share for the PSBT's current MuSig2 round.
+        pub musig_done: bool,
     }
 
     /// Signer picker for one PSBT, built by `KeysModule::signing_plan`.
@@ -538,6 +553,8 @@ mod ffi {
         pub error: String,
         /// The password did not open the hot secret. Only `hot_sign` sets it.
         pub wrong_password: bool,
+        /// The hot key has no MuSig2 session for this PSBT: restart from round 1.
+        pub musig_session: bool,
         /// The signed PSBT, serialized v2 and hex encoded. Empty on error.
         pub psbt_v2_hex: String,
     }
@@ -615,6 +632,192 @@ mod ffi {
         pub psbt_hex: String,
     }
 
+    /// Result of validating a musig() descriptor.
+    #[derive(Debug, Clone)]
+    pub struct MusigDescriptorResult {
+        pub is_ok: bool,
+        pub error: String,
+        /// Standard BIP-390 text with checksum. Empty on error.
+        pub descriptor: String,
+    }
+
+    /// Signing progress of one cosigner on a PSBT.
+    #[derive(Debug, Clone)]
+    pub struct MusigCosignerStatus {
+        pub fingerprint: String,
+        pub nonces: u32,
+        pub partial_sigs: u32,
+        pub expected: u32,
+    }
+
+    /// Signing progress of a PSBT.
+    #[derive(Debug, Clone)]
+    pub struct MusigRoundStatus {
+        pub is_ok: bool,
+        pub error: String,
+        pub round: MusigRound,
+        pub cosigners: Vec<MusigCosignerStatus>,
+    }
+
+    /// One way to spend a musig account's coins: the key path or one tap leaf
+    /// (bwk `SpendLeaf`). Picked before round 1 (decision 15).
+    #[derive(Debug, Clone)]
+    pub struct MusigSpendLeaf {
+        /// The key path (internal key); leaf_hash is empty.
+        pub key_path: bool,
+        /// Hex tap leaf hash.
+        pub leaf_hash: String,
+        /// Master fingerprints of the keys that sign it.
+        pub fingerprints: Vec<String>,
+        /// `older()` blocks, 0 for none.
+        pub relative: u32,
+        /// `after()` height, 0 for none.
+        pub absolute: u32,
+        /// Every given coin's timelock on it is met at the current tip.
+        pub spendable: bool,
+        /// Witness weight of one input spent this way.
+        pub satisfaction_wu: u64,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct MusigSpendLeaves {
+        pub is_ok: bool,
+        pub error: String,
+        /// Key path first, then leaves in DFS order.
+        pub leaves: Vec<MusigSpendLeaf>,
+    }
+
+    // ===== Policy =====
+
+    /// Role of a key (bwk-bup `KeyType`), stored in its origin's last step R.
+    #[derive(Debug, Clone, Copy)]
+    pub enum PolicyKeyType {
+        Internal,
+        External,
+        Cosigner,
+        SafetyNet,
+        /// Review only: the origin carries no known R.
+        Unknown,
+    }
+
+    /// Shape of a path's keys (bwk-bup `Semantic`).
+    #[derive(Debug, Clone, Copy)]
+    pub enum PolicySemantic {
+        Single,
+        /// m-of-n; every multisig compiles to MuSig2 leaves.
+        Multi,
+        /// Mandatory keys plus a subset of the others.
+        MultiMandatory,
+        /// Review only: nested, custom or unknown shapes.
+        Other,
+    }
+
+    /// Timelock kind of a path (bwk-bup `Locktime`).
+    #[derive(Debug, Clone, Copy)]
+    pub enum PolicyLocktime {
+        None,
+        Relative,
+        AbsoluteRenewable,
+        Absolute,
+    }
+
+    /// One key of a path, as the creator gathered it. The binding derives the
+    /// role key `[fp/87'/coin'/account'/R]xpub` from the account xpub.
+    #[derive(Debug, Clone)]
+    pub struct PolicyKey {
+        pub fingerprint: String,
+        /// The BIP-87 account path `m/87'/coin'/account'`.
+        pub account_path: String,
+        /// The xpub at `account_path`; ignored by preview_policy.
+        pub account_xpub: String,
+        pub key_type: PolicyKeyType,
+        /// MultiMandatory only: the key signs every leaf.
+        pub mandatory: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct PolicyPath {
+        pub semantic: PolicySemantic,
+        /// Signers per spend: 1 for Single, m for Multi, mandatory plus cosigners
+        /// for MultiMandatory.
+        pub threshold: u32,
+        pub locktime: PolicyLocktime,
+        /// Blocks for Relative, height for the absolute kinds, 0 for None.
+        pub locktime_value: u32,
+        pub keys: Vec<PolicyKey>,
+    }
+
+    /// A policy from the creator. The binding infers the bwk-bup `PolicyType` from
+    /// the paths (Csv, Cltv, CsvWithMandatoryKey, else Unknown).
+    #[derive(Debug, Clone)]
+    pub struct PolicySpec {
+        pub network: Network,
+        pub paths: Vec<PolicyPath>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct PolicyCompileResult {
+        pub is_ok: bool,
+        pub error: String,
+        /// Index in PolicySpec.paths the error is about, -1 for the whole policy.
+        pub error_path: i32,
+        /// The error is PolicyError::TooManyLeaves.
+        pub too_many_leaves: bool,
+        /// Standard BIP-390 text with checksum; empty on error and from preview_policy.
+        pub descriptor: String,
+        /// Tap leaves, padding excluded.
+        pub leaf_count: u32,
+        /// bwk-bup MAX_LEAVES.
+        pub max_leaves: u32,
+        /// The primary path is the internal key (key path spend).
+        pub has_key_path: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct PolicyReviewKey {
+        pub fingerprint: String,
+        /// Origin path, `m/87'/coin'/account'/R` form.
+        pub origin_path: String,
+        pub xpub: String,
+        pub key_type: PolicyKeyType,
+        pub mandatory: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct PolicyReviewPath {
+        pub semantic: PolicySemantic,
+        pub threshold: u32,
+        pub locktime: PolicyLocktime,
+        pub locktime_value: u32,
+        pub keys: Vec<PolicyReviewKey>,
+        /// Its tap leaves; 0 on the key path.
+        pub leaf_count: u32,
+        pub key_path: bool,
+    }
+
+    /// A descriptor lifted back to paths and key types, the C++ side writes the
+    /// plain words from it.
+    #[derive(Debug, Clone)]
+    pub struct PolicyReview {
+        pub is_ok: bool,
+        pub error: String,
+        pub paths: Vec<PolicyReviewPath>,
+        pub leaf_count: u32,
+    }
+
+    extern "Rust" {
+        /// `m/87'/coin'/account'` for `network`.
+        fn bip87_account_path(network: Network, account: u32) -> String;
+        /// Compiles with placeholder keys (account_xpub ignored): leaf count, cap and
+        /// shape errors before any device is asked. descriptor stays empty.
+        fn preview_policy(spec: PolicySpec) -> PolicyCompileResult;
+        /// Derives each key's R from its account xpub, builds the bwk-bup Policy and
+        /// compiles it, every multisig to MuSig2.
+        fn compile_policy(spec: PolicySpec) -> PolicyCompileResult;
+        /// `Policy::from_descriptor` of BIP-390 text, key types read from R.
+        fn review_policy(descriptor: String) -> PolicyReview;
+    }
+
     // ===== Opaque Rust Types =====
 
     extern "Rust" {
@@ -667,6 +870,9 @@ mod ffi {
 
         /// Joins BBQR parts scanned off camera frames back into payloads.
         type BbqrScanner;
+
+        /// A MuSig2 policy account, wrapping bwk::Account.
+        type MusigAccount;
     }
 
     // ===== Utility Functions =====
@@ -1322,6 +1528,70 @@ mod ffi {
         /// Reset estimator state (on scan start/stop).
         fn reset(self: &mut SyncEstimator);
     }
+
+    // ===== Musig Utility Functions =====
+
+    extern "Rust" {
+        /// Parses BIP-390 text and returns its canonical form.
+        fn validate_musig_descriptor(descriptor: String) -> MusigDescriptorResult;
+        /// Every cosigner fingerprint of a musig() descriptor, empty on error.
+        fn musig_descriptor_fingerprints(descriptor: String) -> Vec<String>;
+    }
+
+    // ===== Musig Account Methods =====
+
+    extern "Rust" {
+        /// Loads the account `account_name` (config plugin id "musig").
+        /// Check is_ok() before use.
+        fn new_musig_account(account_name: String) -> Box<MusigAccount>;
+        fn is_ok(self: &MusigAccount) -> bool;
+        fn get_error(self: &MusigAccount) -> String;
+        fn name(self: &MusigAccount) -> String;
+        /// Regtest when it failed to load.
+        fn network(self: &MusigAccount) -> Network;
+        /// Standard BIP-390 text.
+        fn descriptor(self: &MusigAccount) -> String;
+        fn cosigner_fingerprints(self: &MusigAccount) -> Vec<String>;
+
+        /// Reloads the Electrum endpoint from the config and starts the listener.
+        fn start_electrum(self: &mut MusigAccount) -> bool;
+        fn stop_electrum(self: &mut MusigAccount);
+        fn electrum_url(self: &MusigAccount) -> String;
+        /// Saves the endpoint to the config and restarts the listener.
+        fn set_electrum_url(self: &mut MusigAccount, url: String) -> bool;
+
+        fn try_recv(self: &mut MusigAccount) -> Box<Poll>;
+        fn take_receiver(self: &mut MusigAccount) -> Box<NotificationReceiver>;
+
+        fn balance(self: &MusigAccount) -> u64;
+        fn new_addr(self: &mut MusigAccount) -> String;
+        fn coins(self: &MusigAccount) -> Vec<RustCoin>;
+        fn spendable_coins(self: &MusigAccount) -> CoinState;
+        fn update_coin_label(self: &mut MusigAccount, outpoint: String, label: String) -> bool;
+        fn payment_history(self: &MusigAccount) -> Vec<RustTx>;
+        fn address_verify_info(self: &MusigAccount, address: &str) -> AddressVerifyInfo;
+
+        fn simulate_transaction(
+            self: &MusigAccount,
+            tx_template: TransactionTemplate,
+        ) -> TransactionSimulation;
+        /// Every spend path for the coins `outpoints`, `spendable` at the current tip.
+        fn spend_leaves(self: &MusigAccount, outpoints: Vec<String>) -> MusigSpendLeaves;
+        /// Prepares the PSBT, then restricts it to `spend` (Account::restrict_spend_path).
+        fn prepare_transaction(
+            self: &MusigAccount,
+            tx_template: TransactionTemplate,
+            spend: MusigSpendLeaf,
+        ) -> Box<PsbtResult>;
+        /// Per cosigner nonce / partial sig counts of the PSBT.
+        fn round_status(self: &MusigAccount, psbt_v2_hex: &str) -> MusigRoundStatus;
+        /// Aggregates partial sigs, finalizes; TxResult value is the tx hex.
+        fn finalize_psbt(self: &MusigAccount, psbt_v2_hex: &str) -> TxResult;
+        /// TxResult value is the txid.
+        fn broadcast_transaction(self: &MusigAccount, signed_tx_hex: String) -> TxResult;
+        /// Blocking: call from a background thread.
+        fn validate_before_sign(self: &MusigAccount, psbt_result: &PsbtResult) -> PsbtValidation;
+    }
 }
 
 /// Initialize logging with the specified level.
@@ -1765,6 +2035,10 @@ pub use keys::bridge::{
     hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, hot_xpub, new_keys_module, usb_merge_signed,
     usb_sign_payload, HotMaterial, KeysModule, QrResponse, SealedHotKey,
 };
+pub use musig::{
+    musig_descriptor_fingerprints, new_musig_account, validate_musig_descriptor, MusigAccount,
+};
+pub use policy::{bip87_account_path, compile_policy, preview_policy, review_policy};
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};
 
 #[cfg(test)]

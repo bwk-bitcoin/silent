@@ -104,6 +104,12 @@ void HostImpl::requestSignerPolling(IModule *requester, bool enabled) {
     emit signerPollingRequested(requester, enabled);
 }
 
+void HostImpl::refreshLauncher() {
+}
+
+void HostImpl::onRefreshLauncherRequested() {
+}
+
 void HostImpl::onRegisterInstanceRequested(const QString &id, IInstance *instance, IModule *owner) {
     assertGuiThread();
     if (instance == nullptr || owner == nullptr) {

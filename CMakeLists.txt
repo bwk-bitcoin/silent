@@ -177,6 +177,38 @@ set(SILENT_APP_SOURCES
     src/modules/sp/SpAccount.cpp
     src/modules/sp/StatusBar.h
     src/modules/sp/StatusBar.cpp
+    src/modules/musig/MusigPlugin.h
+    src/modules/musig/MusigPlugin.cpp
+    src/modules/musig/MusigModule.h
+    src/modules/musig/MusigModule.cpp
+    src/modules/musig/MusigInstance.h
+    src/modules/musig/MusigInstance.cpp
+    src/modules/musig/MusigAccountAdapter.h
+    src/modules/musig/MusigAccountAdapter.cpp
+    src/modules/musig/MusigAccountController.h
+    src/modules/musig/MusigAccountController.cpp
+    src/modules/musig/MusigAccountWidget.h
+    src/modules/musig/MusigAccountWidget.cpp
+    src/modules/musig/views/Coins.h
+    src/modules/musig/views/Coins.cpp
+    src/modules/musig/views/History.h
+    src/modules/musig/views/History.cpp
+    src/modules/musig/views/Receive.h
+    src/modules/musig/views/Receive.cpp
+    src/modules/musig/views/Send.h
+    src/modules/musig/views/Send.cpp
+    src/modules/musig/views/Settings.h
+    src/modules/musig/views/Settings.cpp
+    src/modules/musig/creator/MusigCreatorModule.h
+    src/modules/musig/creator/MusigCreatorModule.cpp
+    src/modules/musig/creator/CreatePolicy.h
+    src/modules/musig/creator/CreatePolicy.cpp
+    src/modules/musig/creator/PolicyEditor.h
+    src/modules/musig/creator/PolicyEditor.cpp
+    src/modules/musig/creator/PathEditor.h
+    src/modules/musig/creator/PathEditor.cpp
+    src/modules/musig/creator/ReviewPolicy.h
+    src/modules/musig/creator/ReviewPolicy.cpp
     src/views/MenuTab.h
     src/views/MenuTab.cpp
     src/views/modals/AppSettings.h

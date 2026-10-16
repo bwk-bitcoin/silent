@@ -999,3 +999,7 @@ settings-section-belongs
 settings-plugin-no-library => "No plugin library found in its folder."
 
 settings-plugin-not-silent => "This library is not a Silent plugin."
+
+musig-create-account => "Create Shared Account"
+
+musig-instance-not-found => "MuSig2 instance not found: %1"
