@@ -462,6 +462,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bwk-bup"
+version = "0.1.0"
+dependencies = [
+ "bwk-descriptor",
+ "bwk-keys",
+ "miniscript",
+ "serde",
+]
+
+[[package]]
 name = "bwk-coin"
 version = "0.0.1"
 dependencies = [
@@ -602,6 +612,7 @@ dependencies = [
  "bwk-musig",
  "bwk-psbt",
  "crossbeam",
+ "getrandom 0.2.17",
  "log",
  "miniscript",
  "serde",
@@ -3139,6 +3150,7 @@ dependencies = [
  "bitcoin",
  "blindbitd",
  "bwk",
+ "bwk-bup",
  "bwk-hwi",
  "bwk-qr",
  "bwk-qr-protocol",

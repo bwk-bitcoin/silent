@@ -2023,10 +2023,11 @@ pub use config::{
 pub use ffi::{
     BackendInfo, CameraFrameResult, CameraListResult, FingerprintsResult, KeyDescriptor, KeyDevice,
     KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice,
-    LogLevel, MnemonicResult, Network, Notification, NotificationFlag, Output, PsbtFileResult,
-    PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult, QrResponseKind,
-    RegtestDefaults, SignResult, SigningCandidate, SigningPlan, TransactionSimulation,
-    TransactionTemplate,
+    LogLevel, MnemonicResult, Network, Notification, NotificationFlag, Output, PolicyCompileResult,
+    PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey,
+    PolicyReviewPath, PolicySemantic, PolicySpec, PsbtFileResult, PsbtPayloadResult,
+    PsbtValidation, QrErrorKind, QrMessageResult, QrResponseKind, RegtestDefaults, SignResult,
+    SigningCandidate, SigningPlan, TransactionSimulation, TransactionTemplate,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{
