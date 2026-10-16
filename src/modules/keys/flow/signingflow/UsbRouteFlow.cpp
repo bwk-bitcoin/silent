@@ -288,12 +288,18 @@ void UsbRouteFlow::onDeviceAddressDisplayed(ReqId req_id, [[maybe_unused]] const
     showVerifyResult(SigningFlow::VerifyResult::Matched);
 }
 
-void UsbRouteFlow::onDeviceError(std::optional<ReqId> req_id, const QString &message) {
+void UsbRouteFlow::onDeviceError(std::optional<ReqId> req_id, const QString &message,
+                                 plugin::SignError kind) {
     if (m_device_req == 0 || !req_id.has_value() || req_id.value() != m_device_req) {
         return;
     }
     releaseDevice();
     qWarning() << "keys: device:" << message;
+    // A retry over the same MuSig2 session cannot succeed: the caller restarts.
+    if (kind == plugin::SignError::MusigSession) {
+        emit failed(message, kind);
+        return;
+    }
     auto error = usbErrorFor(message);
     // Refusing to confirm an address is the device's answer that it does not match.
     if (request().context == Context::Verify && error == UsbError::Rejected) {

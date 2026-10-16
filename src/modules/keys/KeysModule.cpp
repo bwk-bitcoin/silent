@@ -564,12 +564,12 @@ void KeysModule::onMnemonicRevealFinished(ReqId req_id, const MnemonicResult &re
 void KeysModule::signHot(ReqId req_id, const QString &fingerprint, const QString &password,
                          const QString &psbt_v2_hex) {
     if (rust() == nullptr) {
-        emit hotSignFinished(req_id, false, QString(), TR("keys-module-not-ready"), false);
+        emit hotSignFinished(req_id, false, QString(), TR("keys-module-not-ready"), false, false);
         return;
     }
     auto material = rust()->hot_material(rust::String(fingerprint.toStdString()));
     if (!material->is_ok()) {
-        emit hotSignFinished(req_id, false, QString(), toQt(material->get_error()), false);
+        emit hotSignFinished(req_id, false, QString(), toQt(material->get_error()), false, false);
         return;
     }
     auto *thread = QThread::create([this, req_id, material = material.into_raw(),
@@ -580,15 +580,16 @@ void KeysModule::signHot(ReqId req_id, const QString &fingerprint, const QString
         password.assign(password.size(), '\0');
         password.clear();
         emit hotSignFinished(req_id, result.is_ok, toQt(result.psbt_v2_hex), toQt(result.error),
-                             result.wrong_password);
+                             result.wrong_password, result.musig_session);
     });
     connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
     thread->start();
 }
 
 void KeysModule::onHotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error,
-                                   bool wrong_password) {
-    emit hotSigned(req_id, is_ok, std::move(psbt_v2_hex), std::move(error), wrong_password);
+                                   bool wrong_password, bool musig_session) {
+    emit hotSigned(req_id, is_ok, std::move(psbt_v2_hex), std::move(error), wrong_password,
+                   musig_session);
 }
 
 void KeysModule::fetchHotSpDescriptor(ReqId req_id, const QString &fingerprint,

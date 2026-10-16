@@ -41,6 +41,9 @@ public:
     virtual ReqId getXpub(const QString &path) = 0;
     virtual ReqId isDescriptorRegistered(const QString &descriptor) = 0;
     virtual ReqId registerDescriptor(const QString &descriptor) = 0;
+    // One round per call: a PSBT returned with only MuSig2 nonces added is success;
+    // the caller calls again for the next round. A device with no matching session
+    // answers error() with SignError::MusigSession.
     virtual ReqId signWithDescriptor(const QString &psbt_base64, const QString &descriptor) = 0;
     // Asks the device to show `address` on its own screen so the user can compare it.
     // `descriptor` is the wallet the address belongs to and `path` its derivation.

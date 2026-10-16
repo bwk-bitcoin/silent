@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include <QAtomicInt>
 #include <QList>
 #include <QMap>
@@ -415,6 +417,53 @@ public slots:
 
 private:
     int m_count = 0;
+};
+
+// Records IKeys::error emissions with their kind, through named slots. Count and kind
+// are atomic so a spy living on another thread can be polled; read the message and
+// request id only once that thread has been waited on.
+class ErrorKindSpy final : public QObject {
+    Q_OBJECT
+
+public:
+    explicit ErrorKindSpy(QObject *parent = nullptr) : QObject(parent) {}
+    ~ErrorKindSpy() override = default;
+
+    [[nodiscard]] auto count() const -> int {
+        return m_count.loadAcquire();
+    }
+
+    [[nodiscard]] auto kind() const -> plugin::SignError {
+        return static_cast<plugin::SignError>(m_kind.loadAcquire());
+    }
+
+    [[nodiscard]] auto message() const -> QString {
+        return m_message;
+    }
+
+    [[nodiscard]] auto reqId() const -> std::optional<ReqId> {
+        return m_req_id;
+    }
+
+public slots:
+    void onError(std::optional<ReqId> req_id, const QString &message, plugin::SignError kind) {
+        m_req_id = req_id;
+        m_message = message;
+        m_kind.storeRelease(static_cast<int>(kind));
+        m_count.ref();
+    }
+
+    // Proves a two-argument slot still connects to the three-argument signal.
+    void onLegacyError([[maybe_unused]] std::optional<ReqId> req_id,
+                       [[maybe_unused]] const QString &message) {
+        m_count.ref();
+    }
+
+private:
+    QAtomicInt m_count;
+    QAtomicInt m_kind;
+    QString m_message;
+    std::optional<ReqId> m_req_id;
 };
 
 // Builtin-style plugin exposing the single mock module.

@@ -271,6 +271,12 @@ void QrRouteFlow::onQrXpubs(const QString &fingerprint, const QList<qr::QrXpub> 
 }
 
 void QrRouteFlow::onQrError(qr::QrError kind, const QString &message) {
+    if (kind == qr::QrError::MusigSession) {
+        // The signer holds no MuSig2 session for this PSBT: the caller restarts.
+        m_camera->stop();
+        emit failed(message, plugin::SignError::MusigSession);
+        return;
+    }
     if (kind != qr::QrError::RequestFailed) {
         // A refused answer: the scan goes on.
         m_camera->showScanError(kind, message);

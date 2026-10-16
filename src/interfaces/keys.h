@@ -30,7 +30,8 @@ struct KeyEntry {
 // it hands over a PSBT and the module owns the picker and every route step. Each of
 // sign(), verifyAddress(), spDescriptor() and xpub() runs one modal flow (xpub() none
 // when cached) and returns once its window has closed; it answers exactly once, with
-// its result, error() or cancelled().
+// its result, error() or cancelled(). A MuSig2 PSBT takes two sign() calls: the
+// first gathers every cosigner's nonce, the second their partial signatures.
 class IKeys : public QObject {
     Q_OBJECT
 
@@ -80,7 +81,9 @@ signals:
     void spDescriptorReady(ReqId req_id, QString descriptor, QString fingerprint);
     void xpubReady(ReqId req_id, QString xpub, QString fingerprint, QString path);
     void descriptorRegistered(ReqId req_id, QString fingerprint);
-    // A failure the caller reports, once.
+    // A failure the caller reports, once. `kind` is MusigSession when a key lost its
+    // MuSig2 session: drop every nonce and partial signature and start again from
+    // round 1. Other for everything else.
     void error(std::optional<ReqId> req_id, QString message,
                plugin::SignError kind = plugin::SignError::Other);
     // The user closed the flow, or it already showed why there is no answer: the

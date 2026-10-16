@@ -72,7 +72,7 @@ void HotRouteFlow::hideWaiting() {
 // The key's answer to the password: a wrong one asks again, any other one closes the
 // prompt, to be delivered once it has.
 void HotRouteFlow::answer(AnswerKind kind, bool is_ok, const QString &value, const QString &error,
-                          bool wrong_password) {
+                          bool wrong_password, bool musig_session) {
     if (m_unseal.isNull()) {
         return;
     }
@@ -80,13 +80,18 @@ void HotRouteFlow::answer(AnswerKind kind, bool is_ok, const QString &value, con
         m_unseal->retry(TR("flow-password-wrong"));
         return;
     }
-    m_answer = Answer{.kind = kind, .is_ok = is_ok, .value = value, .error = error};
+    m_answer = Answer{.kind = kind,
+                      .is_ok = is_ok,
+                      .value = value,
+                      .error = error,
+                      .musig_session = musig_session};
     m_unseal->finish(true);
 }
 
 void HotRouteFlow::deliver(const Answer &answer) {
     if (!answer.is_ok) {
-        emit failed(answer.error);
+        emit failed(answer.error, answer.musig_session ? plugin::SignError::MusigSession
+                                                       : plugin::SignError::Other);
         return;
     }
     switch (answer.kind) {
@@ -148,12 +153,12 @@ void HotRouteFlow::onPasswordEntered(const QString &password) {
 }
 
 void HotRouteFlow::onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex,
-                               const QString &error, bool wrong_password) {
+                               const QString &error, bool wrong_password, bool musig_session) {
     if (m_hot_req == 0 || req_id != m_hot_req) {
         return;
     }
     m_hot_req = 0;
-    answer(AnswerKind::Signed, is_ok, psbt_v2_hex, error, wrong_password);
+    answer(AnswerKind::Signed, is_ok, psbt_v2_hex, error, wrong_password, musig_session);
 }
 
 void HotRouteFlow::onHotDescriptorFetched(ReqId req_id, bool is_ok, const QString &descriptor,
@@ -162,7 +167,7 @@ void HotRouteFlow::onHotDescriptorFetched(ReqId req_id, bool is_ok, const QStrin
         return;
     }
     m_hot_req = 0;
-    answer(AnswerKind::Descriptor, is_ok, descriptor, error, wrong_password);
+    answer(AnswerKind::Descriptor, is_ok, descriptor, error, wrong_password, false);
 }
 
 void HotRouteFlow::onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpub,
@@ -171,7 +176,7 @@ void HotRouteFlow::onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpu
         return;
     }
     m_hot_req = 0;
-    answer(AnswerKind::Xpub, is_ok, xpub, error, wrong_password);
+    answer(AnswerKind::Xpub, is_ok, xpub, error, wrong_password, false);
 }
 
 } // namespace keys::flow

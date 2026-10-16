@@ -27,6 +27,7 @@
 #include <interfaces/instance.h>
 #include <interfaces/module.h>
 #include <interfaces/signer.h>
+#include <modules/keys/KeysModule.h>
 
 #include "MockPlugin.h"
 
@@ -116,6 +117,8 @@ auto launcherLists(const PluginRegistry &registry, const IModule *module, const 
 
 auto main(int argc, char *argv[]) -> int {
     QApplication app(argc, argv);
+    qRegisterMetaType<plugin::SignError>();
+    qRegisterMetaType<std::optional<ReqId>>();
 
     // Initialise the host singleton before the registry connects to its events.
     Host::get();
@@ -391,6 +394,46 @@ auto main(int argc, char *argv[]) -> int {
 
     refreshWorker.quit();
     refreshWorker.wait();
+
+    // ===== IKeys error kind: carried, defaulted, queued =====
+    // deliverError never touches the module, so the bus needs none.
+    keys::KeysBus bus(nullptr);
+    smoke::ErrorKindSpy errorSpy;
+    smoke::ErrorKindSpy legacySpy;
+    QObject::connect(&bus, &IKeys::error, &errorSpy, &smoke::ErrorKindSpy::onError,
+                     qontrol::UNIQUE);
+    QObject::connect(&bus, &IKeys::error, &legacySpy, &smoke::ErrorKindSpy::onLegacyError,
+                     qontrol::UNIQUE);
+
+    bus.deliverError(7, QStringLiteral("plain"));
+    check(errorSpy.count() == 1, "a two-argument deliverError should emit error once");
+    check(errorSpy.kind() == plugin::SignError::Other, "the kind should default to Other");
+    check(errorSpy.reqId() == std::optional<ReqId>(7), "the request id should be carried");
+    check(legacySpy.count() == 1, "a two-argument slot should still receive error");
+
+    bus.deliverError(8, QStringLiteral("lost"), plugin::SignError::MusigSession);
+    check(errorSpy.count() == 2 && errorSpy.kind() == plugin::SignError::MusigSession,
+          "the MusigSession kind should be carried");
+    check(errorSpy.message() == QStringLiteral("lost"), "the message should be carried");
+
+    QThread errorThread;
+    smoke::ErrorKindSpy queuedSpy;
+    queuedSpy.moveToThread(&errorThread);
+    errorThread.start();
+    QObject::connect(&bus, &IKeys::error, &queuedSpy, &smoke::ErrorKindSpy::onError,
+                     qontrol::UNIQUE);
+    bus.deliverError(9, QStringLiteral("queued"), plugin::SignError::MusigSession);
+    QElapsedTimer errorTimer;
+    errorTimer.start();
+    while (queuedSpy.count() < 1 && errorTimer.elapsed() < 2000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(1);
+    }
+    errorThread.quit();
+    errorThread.wait();
+    check(queuedSpy.count() == 1, "a queued receiver should get error once");
+    check(queuedSpy.kind() == plugin::SignError::MusigSession,
+          "the kind should survive a queued connection");
 
     if (g_ok) {
         std::fprintf(stdout, "host smoke: OK\n");

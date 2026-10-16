@@ -503,9 +503,9 @@ void SigningFlow::onXpubFetched(const QString &xpub) {
     accept();
 }
 
-void SigningFlow::onFailed(const QString &message) {
+void SigningFlow::onFailed(const QString &message, plugin::SignError kind) {
     m_answered = true;
-    emit failed(m_request.req_id, message);
+    emit failed(m_request.req_id, message, kind);
     reject();
 }
 

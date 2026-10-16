@@ -223,9 +223,9 @@ signals:
     void mnemonicRevealFinished(ReqId req_id, MnemonicResult result);
     void mnemonicRevealed(ReqId req_id, MnemonicResult result);
     void hotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error,
-                         bool wrong_password);
+                         bool wrong_password, bool musig_session);
     void hotSigned(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error,
-                   bool wrong_password);
+                   bool wrong_password, bool musig_session);
     void hotSpDescriptorFinished(ReqId req_id, bool is_ok, QString descriptor, QString error,
                                  bool wrong_password);
     void hotSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error,
@@ -245,7 +245,7 @@ private slots:
     void onHotKeySealed(ReqId req_id, SealedHotKey *sealed, const QString &alias);
     void onMnemonicRevealFinished(ReqId req_id, const MnemonicResult &result);
     void onHotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error,
-                           bool wrong_password);
+                           bool wrong_password, bool musig_session);
     void onHotSpDescriptorFinished(ReqId req_id, bool is_ok, QString descriptor, QString error,
                                    bool wrong_password);
     void onHotXpubFinished(ReqId req_id, bool is_ok, QString xpub, QString error,

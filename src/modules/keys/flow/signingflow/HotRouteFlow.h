@@ -36,7 +36,7 @@ public slots:
     void onAskPassword();
     void onPasswordEntered(const QString &password);
     void onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex, const QString &error,
-                     bool wrong_password);
+                     bool wrong_password, bool musig_session);
     void onHotDescriptorFetched(ReqId req_id, bool is_ok, const QString &descriptor,
                                 const QString &error, bool wrong_password);
     void onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpub, const QString &error,
@@ -51,6 +51,7 @@ protected:
         bool is_ok;
         QString value;
         QString error;
+        bool musig_session = false;
     };
 
     void init();
@@ -63,7 +64,7 @@ protected:
     void hideWaiting();
 
     void answer(AnswerKind kind, bool is_ok, const QString &value, const QString &error,
-                bool wrong_password);
+                bool wrong_password, bool musig_session);
     void deliver(const Answer &answer);
 
 private:

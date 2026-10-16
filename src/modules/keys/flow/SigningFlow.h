@@ -122,7 +122,7 @@ public slots:
     void onVerifyResultChanged(std::optional<SigningFlow::VerifyResult> result);
     void onDescriptorFetched(const QString &descriptor, const QList<qr::QrXpub> &xpubs);
     void onXpubFetched(const QString &xpub);
-    void onFailed(const QString &message);
+    void onFailed(const QString &message, plugin::SignError kind = plugin::SignError::Other);
 
 protected:
     void init();
@@ -192,8 +192,9 @@ signals:
     // `xpubs` are the sub-account xpubs handed along, none on a route that has none.
     void descriptorFetched(const QString &descriptor, const QList<qr::QrXpub> &xpubs);
     void xpubFetched(const QString &xpub);
-    // A failure the route cannot recover from: SigningFlow closes.
-    void failed(const QString &message);
+    // A failure the route cannot recover from: SigningFlow closes. `kind` says why,
+    // for the caller to retry or restart.
+    void failed(const QString &message, plugin::SignError kind = plugin::SignError::Other);
     // Left with no picker to go back to: SigningFlow closes as cancelled.
     void cancelled();
 

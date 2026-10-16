@@ -479,6 +479,9 @@ public:
     virtual ReqId getXpub(const QString &derivationPath) = 0;
     virtual ReqId isDescriptorRegistered(const QString &descriptor) = 0;
     virtual ReqId registerDescriptor(const QString &descriptor) = 0;
+    // One round per call: a PSBT returned with only MuSig2 nonces added is success;
+    // the caller calls again for the next round. A device with no matching session
+    // answers error() with SignError::MusigSession.
     virtual ReqId signWithDescriptor(const QString &psbtBase64,
                                      const QString &descriptor) = 0;  // -> updated PSBT
     virtual ReqId raw(const QByteArray &request) = 0;              // custom, on demand
@@ -490,7 +493,8 @@ signals:
     void descriptorIsRegistered(ReqId, bool isRegistered);
     void signed_(ReqId, QString psbtBase64);     // PSBT signed with the descriptor
     void raw(ReqId, QByteArray response);
-    void error(std::optional<ReqId>, QString message);
+    void error(std::optional<ReqId>, QString message,
+               plugin::SignError kind = plugin::SignError::Other);
 };
 
 class IThemeProvider : public QObject {      // named palettes
@@ -540,6 +544,8 @@ struct Balance { quint64 confirmed; quint64 unconfirmed; };
 enum class SignerState { Ready, Locked, Unsupported };
 // one live signer: which entry it is, where it came from, how to reach it
 struct SignerEntry { QString instanceId; IModule *module; ISigner *signer; };
+// why a sign request failed, beyond its message
+enum class SignError { Other, MusigSession };
 }
 ```
 
@@ -617,6 +623,27 @@ descriptor through that entry's `signer`. The three parts of an entry have three
 A signing-device module typically runs **one instance per connected device**: it registers
 an instance when a device shows up and drops it when the device goes away, so `signers()`
 tracks what is actually plugged in.
+
+### Signing through the keys module (IKeys)
+
+An account never picks a signer. It calls `Host::get()->keys()->sign(...)` with the PSBT
+and its descriptors, and the keys module owns the picker and every route step (USB, QR,
+hot key, SD card). Each request answers exactly once: `signed_`, `error` or `cancelled`.
+
+A request is **one round per call**. A MuSig2 PSBT takes two calls: the first gathers
+every cosigner's nonce and is answered `signed_` with only nonces added, the second
+gathers the partial signatures. The caller calls `sign()` again for the next round.
+
+`error` carries a kind next to its message:
+
+```cpp
+void error(std::optional<ReqId> req_id, QString message,
+           plugin::SignError kind = plugin::SignError::Other);
+```
+
+`kind` is `MusigSession` when a device lost its MuSig2 session (QR error `0x0D`, a hot
+key, or a USB device reporting it): the caller drops every nonce and partial signature
+and starts again from round 1. It is `Other` for everything else.
 
 ### Polling is off until a module asks for it
 

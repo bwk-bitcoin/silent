@@ -125,7 +125,8 @@ struct QrDevice {
 };
 
 // Why a codec could not start an exchange or refused an answer. Only RequestFailed
-// ends the exchange: after the others the scan goes on.
+// and MusigSession end the exchange: after the others the scan goes on. MusigSession
+// is the signer's 0x0D answer: it holds no MuSig2 session for this PSBT.
 enum class QrError : std::uint8_t {
     RequestFailed,
     WrongRequest,
