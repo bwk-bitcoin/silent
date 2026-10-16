@@ -9,7 +9,7 @@ use bwk_sp::account::recipient::SpRecipientAddress;
 use bwk_sp::account::{Account as SpAccount, ScanMode};
 use bwk_sp::bwk::bwk_coin::KeyChain;
 use bwk_sp::bwk::bwk_electrum::{
-    coin_store::PaymentType,
+    coin_store::{Payment, PaymentType},
     notification::{Notification as BwkNotification, SpNotification, TxListenerNotif},
 };
 use bwk_sp::bwk_sign::bwk_descriptor::wallet::WalletDescriptor;
@@ -365,34 +365,7 @@ impl Account {
         };
 
         // Already aggregated over SP and sub-accounts by bwk.
-        let mut txs: Vec<RustTx> = inner
-            .account
-            .payment_history()
-            .into_iter()
-            .map(|payment| {
-                let direction = match payment.payment_type {
-                    PaymentType::Receive => "incoming",
-                    PaymentType::Send | PaymentType::ToSelf => "outgoing",
-                };
-                RustTx {
-                    txid: payment.txid,
-                    direction: direction.to_string(),
-                    amount: payment.amount,
-                    fee: 0,
-                    height: payment.height.unwrap_or(0) as u32,
-                }
-            })
-            .collect();
-
-        // Newest first: unconfirmed (height 0) on top, then by height descending.
-        txs.sort_by(|a, b| match (a.height, b.height) {
-            (0, 0) => std::cmp::Ordering::Equal,
-            (0, _) => std::cmp::Ordering::Less,
-            (_, 0) => std::cmp::Ordering::Greater,
-            (x, y) => y.cmp(&x),
-        });
-
-        txs
+        rust_txs(inner.account.payment_history())
     }
 
     /// Get the account SP descriptor.
@@ -819,39 +792,7 @@ impl Account {
             return err_validation("Account not initialized".to_string());
         };
 
-        let prepared = match &psbt_result.inner {
-            Ok(prepared) => prepared,
-            Err(e) => return err_validation(format!("Invalid PSBT: {e}")),
-        };
-
-        let psbt = match crate::keys::psbt::parse_v2(&prepared.bytes_v2) {
-            Ok(psbt) => psbt,
-            Err(e) => return err_validation(format!("Invalid PSBT: {e}")),
-        };
-
-        match validate_psbt_via_electrum(&psbt, &inner.electrum_url) {
-            Ok(issue) => {
-                let mut issues = Vec::new();
-                for (idx, addr) in &issue.reused_outputs {
-                    issues.push(format!("Output #{idx}: address {addr} already used"));
-                }
-                for (idx, outpoint, spending_txid) in &issue.spent_inputs {
-                    issues.push(format!(
-                        "Input #{idx}: {outpoint} already spent in {spending_txid}"
-                    ));
-                }
-                let is_valid = issue.reused_outputs.is_empty() && issue.spent_inputs.is_empty();
-                crate::ffi::PsbtValidation {
-                    is_ok: true,
-                    error: String::new(),
-                    is_valid,
-                    issues: issues.join("\n"),
-                    reused_output_count: issue.reused_outputs.len() as u32,
-                    spent_input_count: issue.spent_inputs.len() as u32,
-                }
-            }
-            Err(e) => err_validation(e),
-        }
+        psbt_validation(psbt_result, &inner.electrum_url)
     }
 
     /// Log all details of a failed broadcast for debugging/reproduction.
@@ -875,6 +816,86 @@ impl Account {
         };
 
         log_failed_broadcast_impl(inner, &tx, &signed_tx_hex, &tx_template);
+    }
+}
+
+/// Map bwk payments to the FFI history, newest first: unconfirmed (height 0) on top,
+/// then by height descending.
+pub(crate) fn rust_txs(payments: Vec<Payment>) -> Vec<RustTx> {
+    let mut txs: Vec<RustTx> = payments
+        .into_iter()
+        .map(|payment| {
+            let direction = match payment.payment_type {
+                PaymentType::Receive => "incoming",
+                PaymentType::Send | PaymentType::ToSelf => "outgoing",
+            };
+            RustTx {
+                txid: payment.txid,
+                direction: direction.to_string(),
+                amount: payment.amount,
+                fee: 0,
+                height: payment.height.unwrap_or(0) as u32,
+            }
+        })
+        .collect();
+
+    txs.sort_by(|a, b| match (a.height, b.height) {
+        (0, 0) => std::cmp::Ordering::Equal,
+        (0, _) => std::cmp::Ordering::Less,
+        (_, 0) => std::cmp::Ordering::Greater,
+        (x, y) => y.cmp(&x),
+    });
+
+    txs
+}
+
+/// Validate a prepared transaction via Electrum before signing: output address reuse
+/// and already-spent inputs. Blocking.
+pub(crate) fn psbt_validation(
+    psbt_result: &PsbtResult,
+    electrum_url: &str,
+) -> crate::ffi::PsbtValidation {
+    let err_validation = |error: String| crate::ffi::PsbtValidation {
+        is_ok: false,
+        error,
+        is_valid: false,
+        issues: String::new(),
+        reused_output_count: 0,
+        spent_input_count: 0,
+    };
+
+    let bytes_v2 = match psbt_result.v2_bytes() {
+        Ok(bytes) => bytes,
+        Err(e) => return err_validation(format!("Invalid PSBT: {e}")),
+    };
+
+    let psbt = match crate::keys::psbt::parse_v2(bytes_v2) {
+        Ok(psbt) => psbt,
+        Err(e) => return err_validation(format!("Invalid PSBT: {e}")),
+    };
+
+    match validate_psbt_via_electrum(&psbt, electrum_url) {
+        Ok(issue) => {
+            let mut issues = Vec::new();
+            for (idx, addr) in &issue.reused_outputs {
+                issues.push(format!("Output #{idx}: address {addr} already used"));
+            }
+            for (idx, outpoint, spending_txid) in &issue.spent_inputs {
+                issues.push(format!(
+                    "Input #{idx}: {outpoint} already spent in {spending_txid}"
+                ));
+            }
+            let is_valid = issue.reused_outputs.is_empty() && issue.spent_inputs.is_empty();
+            crate::ffi::PsbtValidation {
+                is_ok: true,
+                error: String::new(),
+                is_valid,
+                issues: issues.join("\n"),
+                reused_output_count: issue.reused_outputs.len() as u32,
+                spent_input_count: issue.spent_inputs.len() as u32,
+            }
+        }
+        Err(e) => err_validation(e),
     }
 }
 
@@ -1173,7 +1194,10 @@ fn fetch_or_cache_tx(
 }
 
 /// Broadcast a transaction via Electrum server.
-fn broadcast_via_electrum(electrum_url: &str, tx: &bitcoin::Transaction) -> Result<(), String> {
+pub(crate) fn broadcast_via_electrum(
+    electrum_url: &str,
+    tx: &bitcoin::Transaction,
+) -> Result<(), String> {
     use bitcoin::consensus::encode::serialize_hex;
     use bwk_sp::bwk::bwk_electrum::electrum::{request::Request, response::Response};
     use std::collections::HashMap;
@@ -1236,7 +1260,7 @@ fn broadcast_via_electrum(electrum_url: &str, tx: &bitcoin::Transaction) -> Resu
 }
 
 /// Convert unified bwk Notification to Silent FFI Notification.
-fn convert_notification(notif: BwkNotification) -> Notification {
+pub(crate) fn convert_notification(notif: BwkNotification) -> Notification {
     match notif {
         BwkNotification::Sp(sp) => convert_sp_notification(sp),
         // A chain-tip-advance pass mutated tx state, so the coins need a refresh.
@@ -1412,6 +1436,10 @@ pub struct NotificationReceiver {
 }
 
 impl NotificationReceiver {
+    pub(crate) fn new(receiver: mpsc::Receiver<BwkNotification>) -> Self {
+        NotificationReceiver { receiver }
+    }
+
     /// Blocking receive — blocks until a notification arrives.
     /// Returns Poll::err when the channel disconnects (sender dropped).
     pub fn recv(&self) -> Box<Poll> {
@@ -1497,6 +1525,28 @@ struct PreparedPsbt {
 }
 
 impl PsbtResult {
+    pub(crate) fn prepared(bytes: Vec<u8>, bytes_v2: Vec<u8>, txid: String) -> Self {
+        PsbtResult {
+            inner: Ok(PreparedPsbt {
+                bytes,
+                bytes_v2,
+                txid,
+            }),
+        }
+    }
+
+    pub(crate) fn failed(error: String) -> Self {
+        PsbtResult { inner: Err(error) }
+    }
+
+    /// The v2 serialization, or the error the PSBT failed to prepare with.
+    pub(crate) fn v2_bytes(&self) -> Result<&[u8], String> {
+        match &self.inner {
+            Ok(prepared) => Ok(&prepared.bytes_v2),
+            Err(e) => Err(e.clone()),
+        }
+    }
+
     /// Check if result is valid.
     pub fn is_ok(&self) -> bool {
         self.inner.is_ok()
@@ -1566,7 +1616,7 @@ pub enum TemplateError {
 }
 
 /// Parse an outpoint string ("txid:vout") into a bitcoin::OutPoint.
-fn parse_outpoint(s: &str) -> Result<bitcoin::OutPoint, TemplateError> {
+pub(crate) fn parse_outpoint(s: &str) -> Result<bitcoin::OutPoint, TemplateError> {
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() != 2 {
         return Err(TemplateError::OutpointFormat(s.to_string()));

@@ -337,8 +337,35 @@ impl Config {
     }
 
     /// The bwk::Account config of a musig account (plugin id "musig").
+    ///
+    /// The bwk stores sit next to this `config.json` (`dir_name` empty), and bwk's
+    /// default config store writes nothing, so it never overwrites this file.
     pub fn to_musig_config(&self) -> Result<bwk::config::Config, String> {
-        todo!()
+        if self.plugin_id != crate::musig::MUSIG_PLUGIN_ID {
+            return Err(format!(
+                "not a musig account: plugin id is '{}'",
+                self.plugin_id
+            ));
+        }
+        let mut config = bwk::config::Config::new_from_descriptor(
+            None,
+            self.account_name.clone(),
+            self.network.into(),
+            &self.descriptor,
+            self.data_dir.clone(),
+            String::new(),
+            Some(bwk::persist::PersistenceKind::default()),
+        )
+        .map_err(|e| format!("invalid musig descriptor: {e}"))?;
+
+        // An empty or invalid url leaves the endpoint unset: the account stays offline.
+        if !self.electrum_url.is_empty() {
+            if let (Some(host), Some(port)) = parse_electrum_url(&self.electrum_url) {
+                config.scanner.set_electrum(Some(host), Some(port));
+            }
+        }
+
+        Ok(config)
     }
 }
 

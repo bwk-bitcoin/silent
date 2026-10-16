@@ -2037,6 +2037,7 @@ pub use keys::bridge::{
 };
 pub use musig::{
     musig_descriptor_fingerprints, new_musig_account, validate_musig_descriptor, MusigAccount,
+    MUSIG_PLUGIN_ID,
 };
 pub use policy::{bip87_account_path, compile_policy, preview_policy, review_policy};
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};
