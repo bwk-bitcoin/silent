@@ -279,6 +279,11 @@ auto btnSign() -> Button * {
     return make({.role = ButtonRole::Primary, .label = TR("btn-sign"), .width = BtnWidth::M});
 }
 
+auto btnPrepare() -> Button * {
+    return make(
+        {.role = ButtonRole::Primary, .label = TR("musig-send-prepare"), .width = BtnWidth::M});
+}
+
 auto btnSignHot() -> Button * {
     return make({.role = ButtonRole::Primary, .label = TR("btn-sign"), .width = BtnWidth::M});
 }

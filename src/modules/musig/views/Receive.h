@@ -3,10 +3,16 @@
 #include "interfaces/types.h"
 
 #include <QString>
+#include <QWidget>
 #include <Qontrol>
 #include <optional>
 
 class MusigAccountController;
+
+namespace catalog {
+class AddressRow;
+class FoldSection;
+} // namespace catalog
 
 namespace musig::view {
 
@@ -26,6 +32,15 @@ protected:
     void init() override;
     void doConnect() override;
     void view() override;
+    void changeEvent(QEvent *event) override;
+    void retranslateUi();
+
+private:
+    MusigAccountController *m_controller = nullptr;
+    QWidget *m_main_widget = nullptr;
+    catalog::FoldSection *m_section = nullptr;
+    catalog::AddressRow *m_address_row = nullptr;
+    ReqId m_verify_req_id = 0;
 };
 
 } // namespace musig::view

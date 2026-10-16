@@ -112,6 +112,7 @@ auto ComboBox::renderChevron(const QColor &color) -> QString {
 
 auto ComboBox::qss(const Palette &p) -> QString {
     auto chevron = renderChevron(p.text);
+    auto disabledChevron = renderChevron(p.textSecondary);
 
     return QString("QComboBox[class=\"combobox\"] {"
                    "  border: 1px solid %1;"
@@ -122,6 +123,11 @@ auto ComboBox::qss(const Palette &p) -> QString {
                    "}"
                    "QComboBox[class=\"combobox\"]:focus {"
                    "  border: 1px solid %4;"
+                   "}"
+                   "QComboBox[class=\"combobox\"]:disabled {"
+                   "  background: %5;"
+                   "  color: %14;"
+                   "  border-color: %15;"
                    "}"
                    "QComboBox[class=\"combobox\"]::drop-down {"
                    "  border: none;"
@@ -139,12 +145,19 @@ auto ComboBox::qss(const Palette &p) -> QString {
                    "  width: %13px;"
                    "  height: %13px;"
                    "}"
+                   "QComboBox[class=\"combobox\"]::drop-down:disabled {"
+                   "  border-left-color: %15;"
+                   "}"
+                   "QComboBox[class=\"combobox\"]::down-arrow:disabled {"
+                   "  image: url(%16);"
+                   "}"
                    "QComboBox[class=\"combobox\"] QAbstractItemView {"
                    "  background: %2;"
                    "  color: %3;"
                    "  border: 1px solid %1;"
                    "  border-radius: %8px;"
                    "  selection-background-color: %6;"
+                   "  selection-color: %3;"
                    "}")
         .arg(p.inputBorder.name())   // %1
         .arg(p.inputBg.name())       // %2
@@ -158,7 +171,10 @@ auto ComboBox::qss(const Palette &p) -> QString {
         .arg(metric::COMBO_DROPDOWN_WIDTH + resolve(Padding::S)) // %10
         .arg(resolve(Padding::S))    // %11
         .arg(metric::COMBO_DROPDOWN_WIDTH) // %12
-        .arg(metric::COMBO_ARROW_SIZE); // %13
+        .arg(metric::COMBO_ARROW_SIZE) // %13
+        .arg(p.textSecondary.name())   // %14
+        .arg(p.borderLight.name())     // %15
+        .arg(disabledChevron);         // %16
 }
 
 } // namespace catalog

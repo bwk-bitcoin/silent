@@ -47,6 +47,7 @@ auto btnSaveUnsignedPsbt() -> Button *;
 auto btnSealKey() -> Button *;
 auto btnShowMnemonic() -> Button *;
 auto btnSign() -> Button *;
+auto btnPrepare() -> Button *;
 auto btnSignHot() -> Button *;
 auto btnTryAgain() -> Button *;
 auto btnAddAKey() -> Button *;

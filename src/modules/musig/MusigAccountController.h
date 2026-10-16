@@ -58,6 +58,8 @@ signals:
     void signingCancelled();
     // Finalized at Ready.
     void transactionReady(QString tx_hex);
+    // finalize_psbt failed at Ready.
+    void finalizeFailed(QString message);
     void broadcastDone(TxResult result);
     // Background teardown done, the owner may delete the widget.
     void stopped();
@@ -81,7 +83,8 @@ public slots:
     void onKeysSigned(ReqId req_id, const QString &psbt_v2_hex);
     void onKeysError(std::optional<ReqId> req_id, const QString &message, plugin::SignError kind);
     void onKeysCancelled(ReqId req_id);
-    void onBroadcastResult(TxResult result);
+    void onBroadcastResult(const TxResult &result);
+    void onBroadcastThreadFinished();
     void historyClicked();
     void coinsClicked();
     void sendClicked();
@@ -98,6 +101,7 @@ private:
     MusigAccountWidget *m_widget = nullptr;
     std::optional<rust::Box<MusigAccount>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;
+    QThread *m_broadcast_thread = nullptr;
     QString m_prepared_psbt_v2_hex;
     QString m_psbt_v2_hex;
     QString m_tx_hex;

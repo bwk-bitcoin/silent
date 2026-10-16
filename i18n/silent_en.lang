@@ -1021,3 +1021,47 @@ musig-settings-descriptor => "Descriptor"
 musig-settings-cosigners => "Cosigners"
 
 musig-settings-save-failed => "Could not save the Electrum server"
+
+musig-send-prepare => "Prepare"
+
+musig-receive-address => "MuSig2 Address"
+
+musig-receive-verify-mismatch
+=> "The device showed another address: do not use this one";;
+
+musig-send-key-path => "Key path:"
+
+musig-send-after-blocks => "after %1 blocks"
+
+musig-send-from-height => "from block %1"
+
+musig-send-locked => "(locked)"
+
+musig-send-round-1 => "Round 1 of 2: every cosigner adds its nonce"
+
+musig-send-round-2 => "Round 2 of 2: every cosigner adds its partial signature"
+
+musig-send-ready => "Every partial signature is in"
+
+musig-send-single-key => "One key signs this path"
+
+musig-send-sign-round => "Sign Round %1"
+
+musig-send-no-keys => "The keys module is not loaded"
+
+musig-send-session-lost
+=> "A signer no longer holds its round 1 nonce: it restarted, or the transaction changed. Every nonce and partial signature was dropped, sign round 1 again with every cosigner.";;
+
+musig-send-spend-path => "Spend path"
+
+musig-send-no-path => "No spend path for these coins"
+
+musig-send-path-locked => "This spend path is still locked by its timelock"
+
+musig-send-nonces => "Nonces %1/%2"
+
+musig-send-partial-sigs => "Partial signatures %1/%2"
+
+musig-send-no-coins => "No coin to spend yet"
+
+musig-send-finalize-failed => "Could not finalize the transaction: cancel to restart the signing"

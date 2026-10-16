@@ -1,17 +1,32 @@
 #include "modules/musig/MusigAccountController.h"
 
+#include "i18n/Tr.h"
+#include "interfaces/host.h"
+#include "interfaces/keys.h"
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/views/Coins.h"
 #include "modules/musig/views/History.h"
 #include "modules/musig/views/Receive.h"
 #include "modules/musig/views/Send.h"
 #include "modules/musig/views/Settings.h"
+#include "views/utils.h"
 
 #include <QDebug>
 #include <QThread>
 #include <common.h>
 #include <string>
 #include <utility>
+
+namespace {
+
+const char *const NOT_LOADED = "Account not initialized";
+const char *const NO_PSBT = "No transaction in flight";
+
+auto toQString(const rust::String &value) -> QString {
+    return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
+}
+
+} // namespace
 
 MusigAccountController::MusigAccountController(const QString &account, MusigAccountWidget *widget)
     : m_widget(widget) {
@@ -30,6 +45,10 @@ void MusigAccountController::init(const QString &account) {
         return;
     }
     m_account = std::make_optional(std::move(acc));
+
+    // Before any view connects, so the controller state is clear when views react.
+    connect(this, &MusigAccountController::broadcastDone, this,
+            &MusigAccountController::onBroadcastResult, qontrol::UNIQUE);
 
     // Notifications come from a blocking recv() on a dedicated thread.
     connect(this, &MusigAccountController::notificationReceived, this,
@@ -135,22 +154,60 @@ auto MusigAccountController::electrumUrl() -> QString {
 }
 
 auto MusigAccountController::roundStatus() const -> MusigRoundStatus {
-    return {};
+    MusigRoundStatus status;
+    status.is_ok = false;
+    status.round = MusigRound::NotMusig;
+    if (!m_account.has_value()) {
+        status.error = rust::String(NOT_LOADED);
+        return status;
+    }
+    if (m_psbt_v2_hex.isEmpty()) {
+        status.error = rust::String(NO_PSBT);
+        return status;
+    }
+    std::string psbt = m_psbt_v2_hex.toStdString();
+    return m_account.value()->round_status(rust::Str(psbt));
 }
 
 auto MusigAccountController::psbtInFlight() const -> QString {
-    return {};
+    return m_psbt_v2_hex;
 }
 
 auto MusigAccountController::spendLeaves(const QStringList &outpoints) -> MusigSpendLeaves {
-    Q_UNUSED(outpoints);
-    return {};
+    if (!m_account.has_value()) {
+        MusigSpendLeaves leaves;
+        leaves.is_ok = false;
+        leaves.error = rust::String(NOT_LOADED);
+        return leaves;
+    }
+    rust::Vec<rust::String> list;
+    for (const auto &outpoint : outpoints) {
+        list.push_back(rust::String(outpoint.toStdString()));
+    }
+    return m_account.value()->spend_leaves(std::move(list));
 }
 
 void MusigAccountController::finalizeIfReady() {
+    if (!m_account.has_value() || m_psbt_v2_hex.isEmpty()) {
+        return;
+    }
+    // Pure computation, as sp prepares on the GUI thread.
+    std::string psbt = m_psbt_v2_hex.toStdString();
+    auto result = m_account.value()->finalize_psbt(rust::Str(psbt));
+    if (!result.is_ok) {
+        emit finalizeFailed(toQString(result.error));
+        return;
+    }
+    m_tx_hex = toQString(result.value);
+    emit transactionReady(m_tx_hex);
 }
 
+// The prepared PSBT is already restricted to the leaf and holds no nonce and no
+// partial sig.
 void MusigAccountController::restartRounds() {
+    m_psbt_v2_hex = m_prepared_psbt_v2_hex;
+    m_tx_hex.clear();
+    emit roundChanged(roundStatus());
 }
 
 // ===== Slots =====
@@ -247,8 +304,15 @@ void MusigAccountController::stop() {
     m_account.reset();
     QThread *notif = m_notif_thread;
     m_notif_thread = nullptr;
+    // A running broadcast uses the account: it ends before the account drops.
+    QThread *broadcast = m_broadcast_thread;
+    m_broadcast_thread = nullptr;
 
-    auto *teardown = QThread::create([acc = std::move(account), notif]() mutable {
+    auto *teardown = QThread::create([acc = std::move(account), notif, broadcast]() mutable {
+        if (broadcast != nullptr) {
+            broadcast->wait();
+            broadcast->deleteLater();
+        }
         acc->stop_electrum();
         {
             auto dropped = std::move(acc);
@@ -264,42 +328,126 @@ void MusigAccountController::stop() {
 }
 
 auto MusigAccountController::simulateTx(TransactionTemplate tx) -> TransactionSimulation {
-    Q_UNUSED(tx);
-    return {};
+    if (m_account.has_value()) {
+        return m_account.value()->simulate_transaction(std::move(tx));
+    }
+    TransactionSimulation simulation;
+    simulation.is_valid = false;
+    simulation.error = rust::String(NOT_LOADED);
+    return simulation;
 }
 
 void MusigAccountController::prepareTransaction(TransactionTemplate tx, MusigSpendLeaf spend) {
-    Q_UNUSED(tx);
-    Q_UNUSED(spend);
+    if (!m_account.has_value()) {
+        emit prepareFailed(TR("send-no-account-loaded"));
+        return;
+    }
+    auto psbt = m_account.value()->prepare_transaction(std::move(tx), std::move(spend));
+    if (!psbt->is_ok()) {
+        emit prepareFailed(mapBackendErrorSummary(toQString(psbt->get_psbt_error())));
+        return;
+    }
+    m_prepared_psbt_v2_hex = toQString(psbt->bytes_v2_hex());
+    m_psbt_v2_hex = m_prepared_psbt_v2_hex;
+    m_tx_hex.clear();
+    emit prepared(m_psbt_v2_hex, toQString(psbt->get_txid_preview()));
+    emit roundChanged(roundStatus());
 }
 
 void MusigAccountController::signRound() {
+    if (m_psbt_v2_hex.isEmpty() || m_sign_req_id != 0 || !m_account.has_value()) {
+        return;
+    }
+    auto *keys = Host::get()->keys();
+    if (keys == nullptr) {
+        emit signingFailed(TR("musig-send-no-keys"), plugin::SignError::Other);
+        return;
+    }
+    connect(keys, &IKeys::signed_, this, &MusigAccountController::onKeysSigned, qontrol::UNIQUE);
+    connect(keys, &IKeys::error, this, &MusigAccountController::onKeysError, qontrol::UNIQUE);
+    connect(keys, &IKeys::cancelled, this, &MusigAccountController::onKeysCancelled,
+            qontrol::UNIQUE);
+    // The answer may arrive during sign(): the id is stored first.
+    m_sign_req_id = keys->newRequest();
+    keys->sign(m_sign_req_id, network(), m_psbt_v2_hex, QStringList{toQString(getDescriptor())},
+               toQString(m_account.value()->name()));
 }
 
 void MusigAccountController::cancelSigning() {
+    m_prepared_psbt_v2_hex.clear();
+    m_psbt_v2_hex.clear();
+    m_tx_hex.clear();
+    m_sign_req_id = 0;
 }
 
 void MusigAccountController::broadcast() {
+    if (m_tx_hex.isEmpty() || !m_account.has_value() || m_broadcast_thread != nullptr) {
+        return;
+    }
+    // stop() waits on this thread before it drops the account and before stopped()
+    // lets the owner delete this controller, so both outlive the worker.
+    const MusigAccount *account = &*m_account.value();
+    m_broadcast_thread = QThread::create([this, account, tx = m_tx_hex.toStdString()]() {
+        auto result = account->broadcast_transaction(rust::String(tx));
+        emit broadcastDone(result);
+    });
+    connect(m_broadcast_thread, &QThread::finished, this,
+            &MusigAccountController::onBroadcastThreadFinished, qontrol::UNIQUE);
+    m_broadcast_thread->start();
 }
 
 void MusigAccountController::onKeysSigned(ReqId req_id, const QString &psbt_v2_hex) {
-    Q_UNUSED(req_id);
-    Q_UNUSED(psbt_v2_hex);
+    if (req_id != m_sign_req_id) {
+        return;
+    }
+    m_sign_req_id = 0;
+    m_psbt_v2_hex = psbt_v2_hex;
+    auto status = roundStatus();
+    if (!status.is_ok) {
+        emit signingFailed(toQString(status.error), plugin::SignError::Other);
+        return;
+    }
+    emit roundChanged(status);
+    // A single-key leaf signs in one call.
+    if (status.round == MusigRound::Ready || status.round == MusigRound::NotMusig) {
+        finalizeIfReady();
+    }
 }
 
 void MusigAccountController::onKeysError(std::optional<ReqId> req_id, const QString &message,
                                          plugin::SignError kind) {
-    Q_UNUSED(req_id);
-    Q_UNUSED(message);
-    Q_UNUSED(kind);
+    if (!req_id.has_value() || req_id.value() != m_sign_req_id) {
+        return;
+    }
+    m_sign_req_id = 0;
+    if (kind == plugin::SignError::MusigSession) {
+        restartRounds();
+    }
+    emit signingFailed(message, kind);
 }
 
+// The PSBT keeps the round it was at.
 void MusigAccountController::onKeysCancelled(ReqId req_id) {
-    Q_UNUSED(req_id);
+    if (req_id != m_sign_req_id) {
+        return;
+    }
+    m_sign_req_id = 0;
+    emit signingCancelled();
 }
 
-void MusigAccountController::onBroadcastResult(TxResult result) {
-    Q_UNUSED(result);
+void MusigAccountController::onBroadcastResult(const TxResult &result) {
+    if (result.is_ok) {
+        cancelSigning();
+    }
+    pollCoins();
+}
+
+// Once stop() took the thread, its teardown deletes it.
+void MusigAccountController::onBroadcastThreadFinished() {
+    if (m_broadcast_thread != nullptr) {
+        m_broadcast_thread->deleteLater();
+        m_broadcast_thread = nullptr;
+    }
 }
 
 void MusigAccountController::historyClicked() {
