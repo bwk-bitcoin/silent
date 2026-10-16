@@ -47,6 +47,8 @@ signals:
     void updateBalance(uint64_t balance);
     void electrumConnected(QString address);
     void electrumDisconnected();
+    // The Electrum URL was saved.
+    void electrumUrlChanged();
     void notificationReceived(Notification notif);
     // A prepared PSBT entered round 1.
     void prepared(QString psbt_v2_hex, QString txid);
@@ -67,6 +69,7 @@ public slots:
     void updateCoinLabel(const QString &outpoint, const QString &label);
     void setElectrumUrl(const QString &url);
     void startElectrum();
+    void stopElectrum();
     void stop();
     auto simulateTx(TransactionTemplate tx) -> TransactionSimulation;
     // Prepares, then restricts the PSBT to `spend` before round 1.

@@ -6,6 +6,7 @@
 #include <Qontrol>
 
 class MusigAccountController;
+class MusigStatusBar;
 
 // Tab content: menu and panel container.
 class MusigAccountWidget : public QWidget {
@@ -25,4 +26,5 @@ private:
     qontrol::Column *m_menu = nullptr;
     QWidget *m_screen_container = nullptr;
     QPointer<qontrol::Panel> m_current_panel;
+    MusigStatusBar *m_status_bar = nullptr;
 };

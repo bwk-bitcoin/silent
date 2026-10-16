@@ -189,6 +189,8 @@ set(SILENT_APP_SOURCES
     src/modules/musig/MusigAccountController.cpp
     src/modules/musig/MusigAccountWidget.h
     src/modules/musig/MusigAccountWidget.cpp
+    src/modules/musig/MusigStatusBar.h
+    src/modules/musig/MusigStatusBar.cpp
     src/modules/musig/views/Coins.h
     src/modules/musig/views/Coins.cpp
     src/modules/musig/views/History.h
@@ -528,6 +530,12 @@ if(SILENT_BUILD_HOST_SMOKE)
     )
 
     add_dependencies(${SMOKE} RunBeforeBuild qontrol)
+
+    # The catalogs, so TR() returns real text.
+    qt_add_resources(${SMOKE} smoke_i18n_lang
+        PREFIX "/i18n"
+        FILES ${TRANSLATION_LANG_FILES}
+    )
 
     target_include_directories(${SMOKE}
       PRIVATE

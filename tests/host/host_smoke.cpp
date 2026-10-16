@@ -15,19 +15,25 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QList>
+#include <QObject>
+#include <QPair>
 #include <QString>
 #include <QStringList>
 #include <QThread>
 
 #include <Qontrol>
 #include <common.h>
+#include <optional>
+#include <silent.h>
 
 #include <host/Host.h>
 #include <host/PluginRegistry.h>
+#include <i18n/I18nManager.h>
 #include <interfaces/instance.h>
 #include <interfaces/module.h>
 #include <interfaces/signer.h>
 #include <modules/keys/KeysModule.h>
+#include <modules/musig/MusigModule.h>
 
 #include "MockPlugin.h"
 
@@ -103,6 +109,36 @@ auto waitForSignals(const smoke::SignalSpy &spy, int count, int timeout_ms) -> b
     return spy.count() >= count;
 }
 
+// Keeps the last instances() answer of a module and counts its errors.
+class ModuleSpy final : public QObject {
+    Q_OBJECT
+
+public:
+    [[nodiscard]] auto instances() const -> QList<QPair<QString, QString>> {
+        return m_instances;
+    }
+
+    [[nodiscard]] auto errors() const -> int {
+        return m_errors;
+    }
+
+public slots:
+
+    void onInstances([[maybe_unused]] ReqId req_id,
+                     const QList<QPair<QString, QString>> &instances) {
+        m_instances = instances;
+    }
+
+    void onError([[maybe_unused]] std::optional<ReqId> req_id,
+                 [[maybe_unused]] const QString &message) {
+        ++m_errors;
+    }
+
+private:
+    QList<QPair<QString, QString>> m_instances;
+    int m_errors = 0;
+};
+
 auto launcherLists(const PluginRegistry &registry, const IModule *module, const QString &id)
     -> bool {
     for (const auto &entry : registry.launcherInstancesForModule(module)) {
@@ -119,6 +155,7 @@ auto main(int argc, char *argv[]) -> int {
     QApplication app(argc, argv);
     qRegisterMetaType<plugin::SignError>();
     qRegisterMetaType<std::optional<ReqId>>();
+    i18n::I18nManager::get()->init(&app);
 
     // Initialise the host singleton before the registry connects to its events.
     Host::get();
@@ -434,6 +471,39 @@ auto main(int argc, char *argv[]) -> int {
     check(queuedSpy.count() == 1, "a queued receiver should get error once");
     check(queuedSpy.kind() == plugin::SignError::MusigSession,
           "the kind should survive a queued connection");
+    // ===== musig module lists only musig configs =====
+    QString spAccount = QStringLiteral("smoke-sp");
+    QString musigAccount = QStringLiteral("smoke-musig");
+    ::new_config(rust::String(spAccount.toStdString()), Network::Regtest,
+                 rust::String("sp-descriptor"), rust::String(""), rust::String(""), 546,
+                 rust::String("sp"))
+        ->to_file();
+    ::new_config(rust::String(musigAccount.toStdString()), Network::Regtest,
+                 rust::String("musig-descriptor"), rust::String(""), rust::String(""), 546,
+                 rust::String("musig"))
+        ->to_file();
+
+    MusigModule musigModule;
+    ModuleSpy musigSpy;
+    QObject::connect(&musigModule, &IModule::instances, &musigSpy, &ModuleSpy::onInstances,
+                     qontrol::UNIQUE);
+    QObject::connect(&musigModule, &IModule::error, &musigSpy, &ModuleSpy::onError,
+                     qontrol::UNIQUE);
+
+    musigModule.list();
+    QList<QPair<QString, QString>> musigListed{{musigAccount, musigAccount}};
+    check(musigSpy.instances() == musigListed,
+          "the musig module should list exactly the musig account, no sp account, no create entry");
+
+    int musigInstancesBefore = hostInstanceCount();
+    musigModule.startInstance(spAccount);
+    check(musigSpy.errors() == 1, "starting an sp account from the musig module should error");
+    check(hostInstanceCount() == musigInstancesBefore && !hostHasInstance(spAccount),
+          "starting an sp account from the musig module should register no instance");
+
+    check(::delete_config(rust::String(spAccount.toStdString())), "the sp config should delete");
+    check(::delete_config(rust::String(musigAccount.toStdString())),
+          "the musig config should delete");
 
     if (g_ok) {
         std::fprintf(stdout, "host smoke: OK\n");
@@ -442,3 +512,5 @@ auto main(int argc, char *argv[]) -> int {
     std::fprintf(stderr, "host smoke: FAILED\n");
     return 1;
 }
+
+#include "host_smoke.moc"

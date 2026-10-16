@@ -1003,3 +1003,21 @@ settings-plugin-not-silent => "This library is not a Silent plugin."
 musig-create-account => "Create Shared Account"
 
 musig-instance-not-found => "MuSig2 instance not found: %1"
+
+musig-menu-history => "History"
+
+musig-menu-coins => "Coins"
+
+musig-menu-send => "Send"
+
+musig-menu-receive => "Receive"
+
+musig-menu-settings => "Settings"
+
+musig-settings-account => "Account"
+
+musig-settings-descriptor => "Descriptor"
+
+musig-settings-cosigners => "Cosigners"
+
+musig-settings-save-failed => "Could not save the Electrum server"
