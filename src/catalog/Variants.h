@@ -52,6 +52,7 @@ auto btnSignHot() -> Button *;
 auto btnTryAgain() -> Button *;
 auto btnAddAKey() -> Button *;
 auto btnAddPayment() -> Button *;
+auto btnAddPath() -> Button *;
 auto btnClear() -> Button *;
 auto btnCancelSigned() -> Button *;
 auto btnConnectBlindbit() -> Button *;
@@ -85,12 +86,12 @@ auto btnEditLabelRow() -> Button *;
 auto btnMoveDown() -> Button *;
 auto btnMoveUp() -> Button *;
 auto btnRemovePayment() -> Button *;
+auto btnRemovePath() -> Button *;
 auto btnScanAddress() -> Button *;
 auto btnRemoveRoute() -> Button *;
 auto btnRemoveXpub() -> Button *;
 auto btnSaveLabel() -> Button *;
 auto btnVerifyOnDeviceSm() -> Button *;
-auto btnCreateNewWallet() -> Button *;
 
 // A copy button flips to a check and "Copied" for a moment after each click.
 auto btnCopyValue() -> CopyButton *;
@@ -100,6 +101,8 @@ auto btnCopyAddress() -> CopyButton *;
 // Data-labelled entries take their text.
 auto btnAwaitingPayment(int count) -> Button *;
 auto btnOpenWallet(const QString &name) -> Button *;
+// A launcher create button, labelled by its creator entry.
+auto btnCreateEntry(const QString &name) -> Button *;
 
 auto pillDeviceReady() -> Badge *;
 auto pillDeviceLocked() -> Badge *;

@@ -27,8 +27,7 @@ MenuTab::MenuTab(QWidget *parent) : QWidget(parent) {
 }
 
 void MenuTab::init() {
-    m_create_btn = catalog::btnCreateNewWallet();
-    m_create_btn->setVisible(false);
+    m_create_column = new qontrol::Column;
     m_custom_btn = new Button(TR("menu-custom"), ButtonRole::TabOpen);
     // Match the create-account button width so the launcher buttons line up.
     m_custom_btn->setWidth(BtnWidth::LaunchAdd);
@@ -44,7 +43,6 @@ void MenuTab::init() {
 
 void MenuTab::doConnect() {
     auto *controller = AppController::get();
-    connect(m_create_btn, &QPushButton::clicked, this, &MenuTab::onCreateClicked, qontrol::UNIQUE);
     connect(m_custom_btn, &QPushButton::clicked, this, &MenuTab::onCustomClicked, qontrol::UNIQUE);
     connect(controller, &AppController::accountList, this, &MenuTab::onAccountList,
             qontrol::UNIQUE);
@@ -141,7 +139,7 @@ void MenuTab::view() {
     title->setAlignment(Qt::AlignCenter);
 
     auto *titleRow = (new qontrol::Row)->pushSpacer()->push(title)->pushSpacer();
-    auto *createRow = (new qontrol::Row)->pushSpacer()->push(m_create_btn)->pushSpacer();
+    auto *createRow = (new qontrol::Row)->pushSpacer()->push(m_create_column)->pushSpacer();
     auto *btnRow = (new qontrol::Row)->pushSpacer()->push(m_custom_btn)->pushSpacer();
 
     auto *col = (new qontrol::Column)
@@ -266,11 +264,11 @@ void MenuTab::rebuildRows() {
     auto *registry = controller != nullptr ? controller->pluginRegistry() : nullptr;
 
     QList<LauncherEntry> openEntries;
-    std::optional<LauncherEntry> createEntry = std::nullopt;
+    QList<LauncherEntry> createEntries;
 
-    for (auto it = m_items_by_module.constBegin(); it != m_items_by_module.constEnd(); ++it) {
-        auto *module = it.key();
-        for (const auto &item : it.value()) {
+    // Launcher module order, so the built-in creators keep the plugin order (sp first).
+    for (auto *module : m_modules) {
+        for (const auto &item : m_items_by_module.value(module)) {
             QString id = item.first.trimmed();
             bool isCreator = PluginRegistry::isCreatorInstanceId(id);
             // External-plugin creators live in the Custom modal, not the launcher list.
@@ -293,9 +291,7 @@ void MenuTab::rebuildRows() {
             entry.canDelete = isBuiltin ? m_sp_accounts.contains(entry.id) : !isCreator;
 
             if (isCreator) {
-                if (registry == nullptr || registry->isBuiltinModule(module)) {
-                    createEntry = entry;
-                }
+                createEntries.append(entry);
             } else {
                 openEntries.append(entry);
             }
@@ -339,13 +335,19 @@ void MenuTab::rebuildRows() {
         m_rows.append(row);
     }
 
-    if (m_create_btn != nullptr) {
-        m_create_btn->setVisible(createEntry.has_value());
-        if (createEntry.has_value()) {
-            m_create_btn->setProperty("instanceId", createEntry->id);
-            m_create_btn->setProperty("modulePtr", QVariant::fromValue(reinterpret_cast<qulonglong>(
-                                                       createEntry->module)));
+    m_create_column->clear();
+    bool firstCreate = true;
+    for (const auto &entry : createEntries) {
+        auto *btn = catalog::btnCreateEntry(entry.name);
+        btn->setProperty("instanceId", entry.id);
+        btn->setProperty("modulePtr",
+                         QVariant::fromValue(reinterpret_cast<qulonglong>(entry.module)));
+        connect(btn, &QPushButton::clicked, this, &MenuTab::onCreateClicked, qontrol::UNIQUE);
+        if (!firstCreate) {
+            m_create_column->pushSpacer(resolve(Spacing::S));
         }
+        firstCreate = false;
+        m_create_column->push(btn);
     }
     if (m_custom_btn != nullptr) {
         m_custom_btn->setVisible(registry != nullptr &&

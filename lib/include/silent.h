@@ -1989,7 +1989,9 @@ struct PolicyPath final {
 #ifndef CXXBRIDGE1_STRUCT_PolicySpec
 #define CXXBRIDGE1_STRUCT_PolicySpec
 // A policy from the creator. The binding infers the bwk-bup `PolicyType` from
-// the paths (Csv, Cltv, CsvWithMandatoryKey, else Unknown).
+// the paths: PrimaryOnly (one locktime-free path, no recovery), Csv, Cltv,
+// CsvWithMandatoryKey, Unknown (an absolute timelock beside mandatory keys) or
+// Invalid (mixed timelock kinds, or several paths and none timelocked).
 struct PolicySpec final {
   ::Network network;
   ::rust::Vec<::PolicyPath> paths;

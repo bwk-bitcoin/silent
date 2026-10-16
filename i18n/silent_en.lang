@@ -131,7 +131,7 @@ settings-theme => "Theme:"
 settings-theme-dark => "Dark"
 settings-theme-light => "Light"
 settings-title => "Settings"
-sp-create-account => "Create New Account"
+sp-create-account => "Create New Wallet"
 sp-instance-not-found => "SP instance not found: %1"
 status-connected-blindbit => "Connected to blindbit-oracle at %1"
 status-connected-electrum => "Connected to electrum at %1"
@@ -344,7 +344,6 @@ btn-move-up => "Move Up"
 
 btn-remove-payment => "Remove Payment"
 
-btn-create-new-wallet => "+ Create New Wallet"
 
 btn-copy-address => "Copy Address"
 
@@ -1000,7 +999,7 @@ settings-plugin-no-library => "No plugin library found in its folder."
 
 settings-plugin-not-silent => "This library is not a Silent plugin."
 
-musig-create-account => "Create Shared Account"
+musig-create-account => "Create Shared Wallet"
 
 musig-instance-not-found => "MuSig2 instance not found: %1"
 
@@ -1065,3 +1064,96 @@ musig-send-partial-sigs => "Partial signatures %1/%2"
 musig-send-no-coins => "No coin to spend yet"
 
 musig-send-finalize-failed => "Could not finalize the transaction: cancel to restart the signing"
+
+btn-create-entry => "+ %1"
+
+musig-creator-unknown-instance => "Unknown MuSig2 creator entry: %1"
+
+musig-create-title => "Create Shared Account"
+
+musig-create-add-path => "+ Add a Spend Path"
+
+musig-create-path-title => "Spend Path %1"
+
+musig-create-path-words => "Spend Path %1: %2"
+
+musig-create-threshold => "%1 of %2"
+
+musig-create-signs-every-spend => "Signs every spend"
+
+musig-create-shape => "Signers:"
+
+musig-create-timelock => "Timelock:"
+
+musig-create-keys => "Keys"
+
+musig-create-preview => "Policy"
+
+musig-create-blocks-placeholder => "blocks"
+
+musig-create-height-placeholder => "block height"
+
+musig-create-leaves => "%1 of %2 tap leaves"
+
+musig-create-key-path => "The first path spends as one key, with no script"
+
+musig-create-too-many-leaves
+=> "This policy needs %1 tap leaves, at most %2 are allowed: lower a threshold or split the keys over more paths";;
+
+musig-create-path-error => "Path %1: %2"
+
+musig-create-pick-keys => "Pick the keys of each path."
+
+musig-create-reason-keys => "Register a key in the Keys tab first."
+
+musig-create-reason-electrum => "Test the Electrum server first."
+
+musig-create-reason-policy => "Fix the policy first."
+
+musig-shape-single => "One key"
+
+musig-shape-multi => "Several keys"
+
+musig-shape-mandatory => "Mandatory keys and others"
+
+musig-locktime-none => "No timelock"
+
+musig-locktime-relative => "After a number of blocks"
+
+musig-locktime-renewable => "From a block height, renewable"
+
+musig-locktime-absolute => "From a block height"
+
+musig-key-type-internal => "Internal"
+
+musig-key-type-external => "External"
+
+musig-key-type-cosigner => "Cosigner"
+
+musig-key-type-safety-net => "Safety Net"
+
+musig-words-single => "%1 signs alone"
+
+musig-words-all => "%1 sign together"
+
+musig-words-multi => "Any %1 of %2 sign"
+
+musig-words-multi-one => "Any 1 of %1 signs"
+
+musig-words-mandatory => "%1 always sign, with any %2 of %3"
+
+musig-words-mandatory-one => "%1 always signs, with any %2 of %3"
+
+musig-words-other => "A custom set of signers"
+
+musig-words-after-blocks => "once the coins are %1 blocks old"
+
+musig-words-after-blocks-one => "once the coins are 1 block old"
+
+musig-words-from-height-renewable => "from block %1, renewable"
+
+musig-words-from-height => "from block %1"
+
+musig-words-timelocked => "%1, %2"
+
+btn-remove-path => "Remove Path"

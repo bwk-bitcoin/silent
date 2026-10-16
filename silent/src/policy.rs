@@ -56,7 +56,7 @@ pub fn review_policy(descriptor: String) -> PolicyReview {
 fn compile_spec(spec: &PolicySpec, placeholder_keys: bool) -> PolicyCompileResult {
     let (paths, policy_type) = match to_paths(spec, placeholder_keys) {
         Ok(paths) => paths,
-        Err((error_path, error)) => return compile_error(error_path, error, false),
+        Err((error_path, error)) => return compile_error(error_path, error, false, 0),
     };
     let mut policy = match Policy::new(paths, policy_type) {
         Ok(policy) => policy,
@@ -82,22 +82,32 @@ fn compile_spec(spec: &PolicySpec, placeholder_keys: bool) -> PolicyCompileResul
     }
 }
 
-fn compile_error(error_path: i32, error: String, too_many_leaves: bool) -> PolicyCompileResult {
+/// `leaf_count` is the count the policy needs on TooManyLeaves, 0 otherwise.
+fn compile_error(
+    error_path: i32,
+    error: String,
+    too_many_leaves: bool,
+    leaf_count: u32,
+) -> PolicyCompileResult {
     PolicyCompileResult {
         is_ok: false,
         error,
         error_path,
         too_many_leaves,
         descriptor: String::new(),
-        leaf_count: 0,
+        leaf_count,
         max_leaves: MAX_LEAVES as u32,
         has_key_path: false,
     }
 }
 
 fn policy_error(e: PolicyError) -> PolicyCompileResult {
-    let too_many_leaves = matches!(e, PolicyError::TooManyLeaves { .. });
-    compile_error(-1, e.to_string(), too_many_leaves)
+    match e {
+        PolicyError::TooManyLeaves { count, .. } => {
+            compile_error(-1, e.to_string(), true, count as u32)
+        }
+        e => compile_error(-1, e.to_string(), false, 0),
+    }
 }
 
 fn to_paths(

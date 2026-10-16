@@ -301,6 +301,11 @@ auto btnAddPayment() -> Button * {
         {.role = ButtonRole::Default, .label = TR("btn-add-payment"), .width = BtnWidth::L});
 }
 
+auto btnAddPath() -> Button * {
+    return make(
+        {.role = ButtonRole::Default, .label = TR("musig-create-add-path"), .width = BtnWidth::L});
+}
+
 auto btnClear() -> Button * {
     return make({.role = ButtonRole::Default, .label = TR("common-clear"), .width = BtnWidth::M});
 }
@@ -502,6 +507,14 @@ auto btnRemovePayment() -> Button * {
                  .width = BtnWidth::Icon});
 }
 
+auto btnRemovePath() -> Button * {
+    return make({.role = ButtonRole::InlineIcon,
+                 .icon = icon::x,
+                 .iconSize = 16,
+                 .tooltip = TR("btn-remove-path"),
+                 .width = BtnWidth::Icon});
+}
+
 auto btnRemoveRoute() -> Button * {
     return make({.role = ButtonRole::InlineIcon,
                  .icon = icon::trash,
@@ -529,12 +542,6 @@ auto btnVerifyOnDeviceSm() -> Button * {
                  .width = BtnWidth::Icon});
 }
 
-auto btnCreateNewWallet() -> Button * {
-    return make({.role = ButtonRole::TabCreate,
-                 .label = TR("btn-create-new-wallet"),
-                 .width = BtnWidth::LaunchAdd});
-}
-
 auto btnCopyValue() -> CopyButton * {
     return makeCopy(CopyButton::Size::Small, 14, TR("common-copy"));
 }
@@ -555,6 +562,12 @@ auto btnAwaitingPayment(int count) -> Button * {
 
 auto btnOpenWallet(const QString &name) -> Button * {
     return make({.role = ButtonRole::TabOpen, .label = name, .width = BtnWidth::LaunchEntry});
+}
+
+auto btnCreateEntry(const QString &name) -> Button * {
+    return make({.role = ButtonRole::TabCreate,
+                 .label = TR("btn-create-entry").arg(name),
+                 .width = BtnWidth::LaunchAdd});
 }
 
 auto pillDeviceReady() -> Badge * {

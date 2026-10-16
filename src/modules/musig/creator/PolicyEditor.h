@@ -41,6 +41,8 @@ protected:
     void init();
     void doConnect();
     void view();
+    // Titles every path by its position; a lone path cannot be removed.
+    void renumber();
 
 private:
     Network m_network = Network::Regtest;

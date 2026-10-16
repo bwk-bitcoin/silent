@@ -749,7 +749,9 @@ mod ffi {
     }
 
     /// A policy from the creator. The binding infers the bwk-bup `PolicyType` from
-    /// the paths (Csv, Cltv, CsvWithMandatoryKey, else Unknown).
+    /// the paths: PrimaryOnly (one locktime-free path, no recovery), Csv, Cltv,
+    /// CsvWithMandatoryKey, Unknown (an absolute timelock beside mandatory keys) or
+    /// Invalid (mixed timelock kinds, or several paths and none timelocked).
     #[derive(Debug, Clone)]
     pub struct PolicySpec {
         pub network: Network,

@@ -11,7 +11,6 @@
 #include "catalog/feedback/EmptyState.h"
 #include "catalog/form/FieldGroup.h"
 #include "catalog/form/FieldNote.h"
-#include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
 #include "i18n/Tr.h"
@@ -32,7 +31,6 @@ namespace modal {
 
 using catalog::Label;
 using catalog::LabelRole;
-using catalog::ValidationMark;
 
 namespace {
 
@@ -71,65 +69,6 @@ auto accountExists(const QString &name) -> bool {
 }
 
 } // namespace
-
-EndpointRow::EndpointRow() {
-    m_input = new catalog::Input(catalog::InputRole::Mono);
-    m_test = catalog::btnTest();
-    m_testing = catalog::btnTesting();
-    m_testing->setEnabled(false);
-    m_testing->setVisible(false);
-    m_mark = new ValidationMark;
-    m_note = new catalog::FieldNote(QString(), catalog::FieldNote::Tone::Error);
-    m_note->setVisible(false);
-    m_control = (new qontrol::Row)
-                    ->spacing(resolve(Spacing::XS))
-                    ->push(m_input, 1)
-                    ->push(m_test)
-                    ->push(m_testing)
-                    ->push(m_mark);
-}
-
-auto EndpointRow::control() const -> QWidget * {
-    return m_control;
-}
-
-auto EndpointRow::note() const -> catalog::FieldNote * {
-    return m_note;
-}
-
-auto EndpointRow::input() const -> catalog::Input * {
-    return m_input;
-}
-
-auto EndpointRow::testButton() const -> catalog::Button * {
-    return m_test;
-}
-
-auto EndpointRow::state() const -> State {
-    return m_state;
-}
-
-void EndpointRow::setState(State state, const QString &error) {
-    m_state = state;
-    bool testing = state == State::Testing;
-    m_test->setVisible(!testing);
-    m_testing->setVisible(testing);
-    m_test->setEnabled(!m_input->text().trimmed().isEmpty());
-    switch (state) {
-    case State::Ok:
-        m_mark->setState(ValidationMark::State::Valid);
-        break;
-    case State::Failed:
-        m_mark->setState(ValidationMark::State::Invalid);
-        break;
-    case State::Untested:
-    case State::Testing:
-        m_mark->setState(ValidationMark::State::None);
-        break;
-    }
-    m_note->setText(error);
-    m_note->setVisible(state == State::Failed && !error.isEmpty());
-}
 
 CreateAccount::CreateAccount() {
     init();
@@ -277,8 +216,8 @@ auto CreateAccount::disabledReason() const -> QString {
         return TR("create-account-reason-descriptor-network")
             .arg(keys::networkLabel(m_descriptor_network), keys::networkLabel(network()));
     }
-    if (m_blindbit.state() != EndpointRow::State::Ok ||
-        m_electrum.state() != EndpointRow::State::Ok) {
+    if (m_blindbit.state() != catalog::EndpointRow::State::Ok ||
+        m_electrum.state() != catalog::EndpointRow::State::Ok) {
         return TR("create-account-reason-backends");
     }
     return {};
@@ -661,8 +600,8 @@ void CreateAccount::applyNetworkDefaults() {
 
     m_blindbit.input()->setText(blindbit);
     m_electrum.input()->setText(electrum);
-    m_blindbit.setState(EndpointRow::State::Untested);
-    m_electrum.setState(EndpointRow::State::Untested);
+    m_blindbit.setState(catalog::EndpointRow::State::Untested);
+    m_electrum.setState(catalog::EndpointRow::State::Untested);
     if (autoTest) {
         // Test the defaults rather than assume them: only a passing test resolves the
         // scheme that gets saved.
@@ -672,13 +611,13 @@ void CreateAccount::applyNetworkDefaults() {
 }
 
 void CreateAccount::onBlindbitEdited() {
-    m_blindbit.setState(EndpointRow::State::Untested);
+    m_blindbit.setState(catalog::EndpointRow::State::Untested);
     updateActions();
     adjustSize();
 }
 
 void CreateAccount::onElectrumEdited() {
-    m_electrum.setState(EndpointRow::State::Untested);
+    m_electrum.setState(catalog::EndpointRow::State::Untested);
     updateActions();
     adjustSize();
 }
@@ -688,7 +627,7 @@ void CreateAccount::onTestBlindbit() {
     if (url.isEmpty()) {
         return;
     }
-    m_blindbit.setState(EndpointRow::State::Testing);
+    m_blindbit.setState(catalog::EndpointRow::State::Testing);
     updateActions();
     auto *thread = QThread::create([this, url = url.toStdString()]() {
         auto info = ::get_backend_info(rust::String(url));
@@ -700,19 +639,20 @@ void CreateAccount::onTestBlindbit() {
 
 void CreateAccount::onBackendInfoReady(const BackendInfo &info) {
     // An edit or a network change since the test started voids its answer.
-    if (m_blindbit.state() != EndpointRow::State::Testing) {
+    if (m_blindbit.state() != catalog::EndpointRow::State::Testing) {
         return;
     }
     if (!info.is_ok) {
         auto rawError = QString::fromStdString(std::string(info.error));
-        m_blindbit.setState(EndpointRow::State::Failed, mapBackendErrorSummary(rawError));
+        m_blindbit.setState(catalog::EndpointRow::State::Failed, mapBackendErrorSummary(rawError));
     } else if (info.network != network()) {
-        m_blindbit.setState(EndpointRow::State::Failed, TR("create-account-backend-network")
-                                                            .arg(keys::networkLabel(info.network),
-                                                                 keys::networkLabel(network())));
+        m_blindbit.setState(
+            catalog::EndpointRow::State::Failed,
+            TR("create-account-backend-network")
+                .arg(keys::networkLabel(info.network), keys::networkLabel(network())));
     } else {
         m_blindbit.input()->setText(QString::fromStdString(std::string(info.url)));
-        m_blindbit.setState(EndpointRow::State::Ok);
+        m_blindbit.setState(catalog::EndpointRow::State::Ok);
     }
     updateActions();
     adjustSize();
@@ -723,7 +663,7 @@ void CreateAccount::onTestElectrum() {
     if (address.isEmpty()) {
         return;
     }
-    m_electrum.setState(EndpointRow::State::Testing);
+    m_electrum.setState(catalog::EndpointRow::State::Testing);
     updateActions();
     auto *thread = QThread::create([this, address = address.toStdString()]() {
         auto result = ::test_electrum(rust::String(address));
@@ -734,15 +674,15 @@ void CreateAccount::onTestElectrum() {
 }
 
 void CreateAccount::onElectrumTestReady(const ConnectionResult &result) {
-    if (m_electrum.state() != EndpointRow::State::Testing) {
+    if (m_electrum.state() != catalog::EndpointRow::State::Testing) {
         return;
     }
     if (!result.is_ok) {
         auto rawError = QString::fromStdString(std::string(result.error));
-        m_electrum.setState(EndpointRow::State::Failed, mapBackendErrorSummary(rawError));
+        m_electrum.setState(catalog::EndpointRow::State::Failed, mapBackendErrorSummary(rawError));
     } else {
         m_electrum.input()->setText(QString::fromStdString(std::string(result.url)));
-        m_electrum.setState(EndpointRow::State::Ok);
+        m_electrum.setState(catalog::EndpointRow::State::Ok);
     }
     updateActions();
     adjustSize();

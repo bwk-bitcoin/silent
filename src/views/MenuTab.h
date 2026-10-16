@@ -59,7 +59,7 @@ private:
         bool external = false;
     };
 
-    catalog::Button *m_create_btn = nullptr;
+    qontrol::Column *m_create_column = nullptr;
     catalog::Button *m_custom_btn = nullptr;
     qontrol::Column *m_accounts_column = nullptr;
     QList<QWidget *> m_rows;

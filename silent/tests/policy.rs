@@ -356,6 +356,60 @@ fn two_of_three_policy() {
     }
 }
 
+#[test]
+fn primary_only_policy() {
+    let keys = |count: u8| {
+        (1..=count)
+            .map(|seed| key(seed, PolicyKeyType::Cosigner, false))
+            .collect::<Vec<_>>()
+    };
+    let two_of_three = spec(vec![path(
+        PolicySemantic::Multi,
+        2,
+        PolicyLocktime::None,
+        0,
+        keys(3),
+    )]);
+    let result = compiled(&two_of_three);
+    assert!(
+        !result.has_key_path && result.leaf_count == 3,
+        "a lone 2-of-3 should be 3 leaves under a NUMS key, got {} leaves, key path {}",
+        result.leaf_count,
+        result.has_key_path
+    );
+    assert_review_round_trips(&two_of_three);
+
+    let three_of_three = spec(vec![path(
+        PolicySemantic::Multi,
+        3,
+        PolicyLocktime::None,
+        0,
+        keys(3),
+    )]);
+    let result = compiled(&three_of_three);
+    assert!(
+        result.has_key_path && result.leaf_count == 0,
+        "a lone 3-of-3 should be the key path alone, got {} leaves, key path {}",
+        result.leaf_count,
+        result.has_key_path
+    );
+    assert_review_round_trips(&three_of_three);
+
+    let three_of_seven = spec(vec![path(
+        PolicySemantic::Multi,
+        3,
+        PolicyLocktime::None,
+        0,
+        keys(7),
+    )]);
+    let result = preview_policy(three_of_seven);
+    assert!(
+        result.too_many_leaves && result.leaf_count == 35,
+        "a lone 3-of-7 should be 35 leaves, too many, got {:?}",
+        result.error
+    );
+}
+
 // ===== Review Tests =====
 
 #[test]
@@ -430,6 +484,11 @@ fn three_of_seven_is_too_many_leaves() {
         result.too_many_leaves,
         "error should be too many leaves, got {:?}",
         result.error
+    );
+    assert_eq!(
+        result.leaf_count, 36,
+        "3-of-7 and the recovery key need 36 leaves, got {}",
+        result.leaf_count
     );
     assert_eq!(
         result.error_path, -1,

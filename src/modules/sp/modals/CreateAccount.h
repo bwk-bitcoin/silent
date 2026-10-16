@@ -7,6 +7,7 @@
 #include <QStringList>
 
 #include "catalog/containers/Modal.h"
+#include "catalog/form/EndpointRow.h"
 #include <interfaces/keys.h>
 #include <interfaces/types.h>
 #include <silent.h>
@@ -19,7 +20,6 @@ class Input;
 class Label;
 class ModalActions;
 class SelectRow;
-class ValidationMark;
 } // namespace catalog
 
 namespace qontrol {
@@ -28,31 +28,6 @@ class Row;
 } // namespace qontrol
 
 namespace modal {
-
-// A backend endpoint: a mono input, its Test button and mark, and under it the
-// reason the last test failed.
-class EndpointRow {
-public:
-    enum class State { Untested, Testing, Ok, Failed };
-
-    EndpointRow();
-    [[nodiscard]] auto control() const -> QWidget *;
-    [[nodiscard]] auto note() const -> catalog::FieldNote *;
-    [[nodiscard]] auto input() const -> catalog::Input *;
-    [[nodiscard]] auto testButton() const -> catalog::Button *;
-    [[nodiscard]] auto state() const -> State;
-    // `error` is shown under the field in the Failed state.
-    void setState(State state, const QString &error = QString());
-
-private:
-    State m_state = State::Untested;
-    catalog::Input *m_input = nullptr;
-    catalog::Button *m_test = nullptr;
-    catalog::Button *m_testing = nullptr;
-    catalog::ValidationMark *m_mark = nullptr;
-    catalog::FieldNote *m_note = nullptr;
-    QWidget *m_control = nullptr;
-};
 
 class CreateAccount : public catalog::Modal {
     Q_OBJECT
@@ -128,8 +103,8 @@ private:
     catalog::Button *m_get_segwit = nullptr;
     catalog::Label *m_pick_key = nullptr;
     catalog::FieldNote *m_fetch_error = nullptr;
-    EndpointRow m_blindbit;
-    EndpointRow m_electrum;
+    catalog::EndpointRow m_blindbit;
+    catalog::EndpointRow m_electrum;
     catalog::Button *m_create = nullptr;
     catalog::ModalActions *m_actions = nullptr;
 

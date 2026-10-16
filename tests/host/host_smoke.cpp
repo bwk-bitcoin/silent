@@ -34,6 +34,7 @@
 #include <interfaces/signer.h>
 #include <modules/keys/KeysModule.h>
 #include <modules/musig/MusigModule.h>
+#include <modules/musig/creator/MusigCreatorModule.h>
 
 #include "MockPlugin.h"
 
@@ -504,6 +505,26 @@ auto main(int argc, char *argv[]) -> int {
     check(::delete_config(rust::String(spAccount.toStdString())), "the sp config should delete");
     check(::delete_config(rust::String(musigAccount.toStdString())),
           "the musig config should delete");
+
+    // ===== musig creator lists its create entry only =====
+    MusigCreatorModule creatorModule;
+    ModuleSpy creatorSpy;
+    QObject::connect(&creatorModule, &IModule::instances, &creatorSpy, &ModuleSpy::onInstances,
+                     qontrol::UNIQUE);
+    QObject::connect(&creatorModule, &IModule::error, &creatorSpy, &ModuleSpy::onError,
+                     qontrol::UNIQUE);
+
+    check(creatorModule.meta().value(QStringLiteral("id")) == QStringLiteral("musig.creator"),
+          "the musig creator module id should be musig.creator");
+    creatorModule.list();
+    check(creatorSpy.instances().size() == 1 &&
+              creatorSpy.instances().first().first == QStringLiteral("musig.create"),
+          "the musig creator should list exactly the musig.create entry");
+    check(PluginRegistry::isCreatorInstanceId(QStringLiteral("musig.create")),
+          "musig.create should be a creator instance id");
+    // musig.create itself opens a modal, so only the unknown id is started here.
+    creatorModule.startInstance(QStringLiteral("nope"));
+    check(creatorSpy.errors() == 1, "starting an unknown id from the musig creator should error");
 
     if (g_ok) {
         std::fprintf(stdout, "host smoke: OK\n");

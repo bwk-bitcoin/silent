@@ -294,6 +294,8 @@ set(SILENT_APP_SOURCES
     src/catalog/form/FieldGroup.cpp
     src/catalog/form/FieldNote.h
     src/catalog/form/FieldNote.cpp
+    src/catalog/form/EndpointRow.h
+    src/catalog/form/EndpointRow.cpp
     src/catalog/form/WordInputGrid.h
     src/catalog/form/WordInputGrid.cpp
     src/catalog/BalanceHeader.h

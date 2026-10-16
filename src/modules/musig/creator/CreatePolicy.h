@@ -1,20 +1,29 @@
 #pragma once
 
+#include "catalog/containers/Modal.h"
+#include "catalog/form/EndpointRow.h"
 #include "interfaces/types.h"
 
 #include <QString>
-#include <Qontrol>
 #include <cstdint>
 #include <optional>
 #include <silent.h>
 
-class QComboBox;
-class QLabel;
+class QWidget;
 
 namespace catalog {
 class Button;
+class Card;
+class ComboBox;
+class FieldNote;
 class Input;
+class Label;
+class ModalActions;
 } // namespace catalog
+
+namespace qontrol {
+class Column;
+} // namespace qontrol
 
 namespace musig::modal {
 
@@ -22,18 +31,18 @@ class PolicyEditor;
 class ReviewPolicy;
 
 // The 7-step Create flow (decision 10). Steps:
-//  1 Define: name, network, PolicyEditor (paths, thresholds, timelocks, key types,
-//    keys picked from IKeys::keys(), an account index per key, default 0).
+//  1 Define: name, network, Electrum, PolicyEditor (paths, thresholds, timelocks, key
+//    types, keys picked from IKeys::keys()); every key at BIP-87 account' = 0'.
 //  2 Compile: preview_policy() on every edit; leaf count, cap and errors shown,
 //    Next disabled while it fails.
-//  3 FetchXpubs: per key cachedXpub() else xpub() at bip87_account_path(network,
-//    account); then compile_policy() (R derived in Rust).
+//  3 FetchXpubs: per key cachedXpub() else xpub() at bip87_account_path(network, 0);
+//    then compile_policy() (R derived in Rust).
 //  4 Review: review_policy() of the descriptor in plain words, leaf count, descriptor.
 //  5 Register: registerDescriptor() on each own key.
 //  6 VerifyAddress: verifyAddress() of receive address 0 on one own device.
 //  7 Install: new_config(..., "musig")->to_file(), then Host::refreshLauncher(), and
 //    the modal closes. The account is not opened.
-class CreatePolicy : public qontrol::Modal {
+class CreatePolicy : public catalog::Modal {
     Q_OBJECT
 
 public:
@@ -48,6 +57,10 @@ public:
     };
 
     CreatePolicy();
+    auto exec() -> int override;
+
+signals:
+    void electrumTestReady(ConnectionResult result);
 
 public slots:
     void onNetworkChanged(int index);
@@ -55,6 +68,9 @@ public slots:
     void onPolicyEdited();
     void onNextClicked();
     void onBackClicked();
+    void onElectrumEdited();
+    void onTestElectrum();
+    void onElectrumTestReady(const ConnectionResult &result);
     void onXpubReady(ReqId req_id, const QString &xpub, const QString &fingerprint,
                      const QString &path);
     void onDescriptorRegistered(ReqId req_id, const QString &fingerprint);
@@ -68,6 +84,9 @@ protected:
     void view();
     void showStep(Step step);
     [[nodiscard]] auto network() const -> Network;
+    [[nodiscard]] auto disabledReason() const -> QString;
+    void updateActions();
+    void applyNetworkDefaults();
     void previewPolicy();
     void fetchNextXpub();
     void compilePolicy();
@@ -79,12 +98,19 @@ protected:
 private:
     Step m_step = Step::Define;
     catalog::Input *m_name_input = nullptr;
-    QComboBox *m_network_combo = nullptr;
+    catalog::ComboBox *m_network_combo = nullptr;
+    catalog::EndpointRow m_electrum;
     PolicyEditor *m_editor = nullptr;
     ReviewPolicy *m_review = nullptr;
-    QLabel *m_status_label = nullptr;
-    catalog::Button *m_back_btn = nullptr;
+    QWidget *m_define_page = nullptr;
+    catalog::Card *m_preview_card = nullptr;
+    catalog::Label *m_preview_leaves = nullptr;
+    qontrol::Column *m_preview_paths = nullptr;
+    catalog::FieldNote *m_preview_error = nullptr;
+    catalog::Label *m_status_label = nullptr;
+    catalog::ModalActions *m_actions = nullptr;
     catalog::Button *m_next_btn = nullptr;
+    bool m_preview_ok = false;
     PolicySpec m_spec;
     QString m_descriptor;
     int m_next_index = 0;
