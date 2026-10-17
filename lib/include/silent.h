@@ -1020,6 +1020,7 @@ struct MusigCosignerStatus;
 struct MusigRoundStatus;
 struct MusigSpendLeaf;
 struct MusigSpendLeaves;
+struct MusigReceiveAddress;
 enum class PolicyKeyType : ::std::uint8_t;
 enum class PolicySemantic : ::std::uint8_t;
 enum class PolicyLocktime : ::std::uint8_t;
@@ -1913,6 +1914,21 @@ struct MusigSpendLeaves final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_MusigSpendLeaves
+
+#ifndef CXXBRIDGE1_STRUCT_MusigReceiveAddress
+#define CXXBRIDGE1_STRUCT_MusigReceiveAddress
+// First receive address of a musig() descriptor, before any account holds it,
+// with what IKeys::verifyAddress needs (the AddressVerifyInfo of that address).
+struct MusigReceiveAddress final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::String address;
+  ::rust::String descriptor;
+  ::rust::String path;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_MusigReceiveAddress
 
 #ifndef CXXBRIDGE1_ENUM_PolicyKeyType
 #define CXXBRIDGE1_ENUM_PolicyKeyType
@@ -2956,6 +2972,9 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 
 // Every cosigner fingerprint of a musig() descriptor, empty on error.
 ::rust::Vec<::rust::String> musig_descriptor_fingerprints(::rust::String descriptor) noexcept;
+
+// The receive address a new account of a musig() descriptor hands out first.
+::MusigReceiveAddress musig_first_receive_address(::rust::String descriptor, ::Network network) noexcept;
 
 // Loads the account `account_name` (config plugin id "musig").
 // Check is_ok() before use.

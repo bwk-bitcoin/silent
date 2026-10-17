@@ -4,7 +4,9 @@
 #include "catalog/form/EndpointRow.h"
 #include "interfaces/types.h"
 
+#include <QHash>
 #include <QString>
+#include <QStringList>
 #include <cstdint>
 #include <optional>
 #include <silent.h>
@@ -14,11 +16,14 @@ class QWidget;
 namespace catalog {
 class Button;
 class Card;
+class ChunkedAddress;
 class ComboBox;
 class FieldNote;
 class Input;
 class Label;
 class ModalActions;
+class Notice;
+enum class LabelTone;
 } // namespace catalog
 
 namespace qontrol {
@@ -39,8 +44,9 @@ class ReviewPolicy;
 //    then compile_policy() (R derived in Rust).
 //  4 Review: review_policy() of the descriptor in plain words, leaf count, descriptor.
 //  5 Register: registerDescriptor() on each own key.
-//  6 VerifyAddress: verifyAddress() of receive address 0 on one own device.
-//  7 Install: new_config(..., "musig")->to_file(), then Host::refreshLauncher(), and
+//  6 VerifyAddress: verifyAddress() of the first receive address on one own device;
+//    skipped with a warning when no key has a USB or QR route (no device can show it).
+//  7 Install: new_config(..., MUSIG_PLUGIN_ID)->to_file(), then Host::refreshLauncher(), and
 //    the modal closes. The account is not opened.
 class CreatePolicy : public catalog::Modal {
     Q_OBJECT
@@ -57,6 +63,8 @@ public:
     };
 
     CreatePolicy();
+    // A keys-module flow closes this window and runs in its place, then shows this
+    // window again with the answer.
     auto exec() -> int override;
 
 signals:
@@ -68,6 +76,8 @@ public slots:
     void onPolicyEdited();
     void onNextClicked();
     void onBackClicked();
+    // Closes the window to check the address on a device.
+    void onCheckAddressClicked();
     void onElectrumEdited();
     void onTestElectrum();
     void onElectrumTestReady(const ConnectionResult &result);
@@ -79,6 +89,9 @@ public slots:
     void onKeysCancelled(ReqId req_id);
 
 protected:
+    // The keys-module flow this window closed to run.
+    enum class Flow : std::uint8_t { None, Xpubs, Verify };
+
     void init();
     void doConnect();
     void view();
@@ -86,14 +99,26 @@ protected:
     [[nodiscard]] auto network() const -> Network;
     [[nodiscard]] auto disabledReason() const -> QString;
     void updateActions();
+    // Which of next, fetch, register, verify and install the step shows, and the reason.
+    void updateStepActions();
+    // An error or a result under the step, empty `text` hides it.
+    void showStatus(const QString &text, catalog::LabelTone tone);
     void applyNetworkDefaults();
     void previewPolicy();
+    // m/87'/coin'/0' of the picked network.
+    [[nodiscard]] auto accountPath() const -> QString;
+    [[nodiscard]] auto missingXpubs() const -> QStringList;
+    // xpub() of the first key still missing its account xpub.
     void fetchNextXpub();
     void compilePolicy();
     void showReview();
     void registerNext();
+    // Some key of the policy is on a device with a screen (KeyEntry::can_show_address).
+    [[nodiscard]] auto canCheckAddress() const -> bool;
     void verifyAddress();
     void install();
+    // Runs the flow the window closed for, once it has closed.
+    void runFlow();
 
 private:
     Step m_step = Step::Define;
@@ -110,11 +135,36 @@ private:
     catalog::Label *m_status_label = nullptr;
     catalog::ModalActions *m_actions = nullptr;
     catalog::Button *m_next_btn = nullptr;
+    catalog::Button *m_fetch_btn = nullptr;
+    catalog::Button *m_register_btn = nullptr;
+    catalog::Button *m_verify_btn = nullptr;
+    catalog::Button *m_install_btn = nullptr;
+    // m_status_label over m_actions, on every step.
+    QWidget *m_footer = nullptr;
+    QWidget *m_fetch_page = nullptr;
+    // The fetched count and one line per key still missing its xpub.
+    qontrol::Column *m_missing_column = nullptr;
+    // The review, scrolling, for steps Review and Register.
+    QWidget *m_review_page = nullptr;
+    QWidget *m_verify_page = nullptr;
+    catalog::Label *m_verify_lead = nullptr;
+    catalog::ChunkedAddress *m_address_label = nullptr;
+    // Whether the device showed the same address.
+    catalog::Label *m_verify_status = nullptr;
+    // No key can show the address: it is not checked.
+    catalog::Notice *m_skip_notice = nullptr;
     bool m_preview_ok = false;
     PolicySpec m_spec;
     QString m_descriptor;
-    int m_next_index = 0;
     ReqId m_req_id = 0;
+    Flow m_pending_flow = Flow::None;
+    // Distinct keys of m_spec, in path order.
+    QStringList m_fingerprints;
+    // Fingerprint to account xpub.
+    QHash<QString, QString> m_account_xpubs;
+    QStringList m_to_register;
+    MusigReceiveAddress m_address{};
+    bool m_address_verified = false;
 };
 
 } // namespace musig::modal

@@ -73,7 +73,7 @@ void Modal::setVisible(bool visible) {
         }
         // The position is computed from the size at this point: lay the content out
         // first, or the modal is centred at its unlaid size and grows down from there.
-        layout()->activate();
+        activateLayouts();
         refit();
     }
     qontrol::Modal::setVisible(visible);
@@ -87,6 +87,18 @@ void Modal::setVisible(bool visible) {
 void Modal::setWidth(ModalWidth width) {
     setFixedWidth(resolve(width));
     refit();
+}
+
+void Modal::activateLayouts() {
+    // Reversed, every widget comes before its parent: each one hands its new size up
+    // before the parent lays out.
+    auto widgets = findChildren<QWidget *>();
+    for (auto it = widgets.crbegin(); it != widgets.crend(); ++it) {
+        if ((*it)->layout() != nullptr) {
+            (*it)->layout()->activate();
+        }
+    }
+    layout()->activate();
 }
 
 void Modal::refit() {

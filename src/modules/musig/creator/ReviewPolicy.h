@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -7,7 +8,10 @@
 #include <cstdint>
 #include <silent.h>
 
-class QLabel;
+namespace catalog {
+class CopyField;
+class Label;
+} // namespace catalog
 
 namespace qontrol {
 class Column;
@@ -28,17 +32,23 @@ class ReviewPolicy : public QWidget {
 
 public:
     explicit ReviewPolicy(QWidget *parent = nullptr);
+    // Fingerprint to alias, for the names of the signers.
+    void setAliases(const QHash<QString, QString> &aliases);
     void setReview(const PolicyReview &review, const QString &descriptor);
 
 protected:
     void init();
     void view();
-    [[nodiscard]] static auto pathText(const PolicyReviewPath &path) -> QString;
+    [[nodiscard]] auto pathText(const PolicyReviewPath &path) const -> QString;
+    [[nodiscard]] auto keyName(const QString &fingerprint) const -> QString;
+    [[nodiscard]] auto pathCard(int index, const PolicyReviewPath &path) const -> QWidget *;
 
 private:
     qontrol::Column *m_paths_column = nullptr;
-    QLabel *m_leaves_label = nullptr;
-    QLabel *m_descriptor_label = nullptr;
+    catalog::Label *m_leaves_label = nullptr;
+    catalog::CopyField *m_descriptor_field = nullptr;
+    catalog::Label *m_checksum_label = nullptr;
+    QHash<QString, QString> m_aliases;
 };
 
 } // namespace musig::modal

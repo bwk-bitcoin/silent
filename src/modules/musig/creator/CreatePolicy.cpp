@@ -7,25 +7,30 @@
 #include "catalog/containers/ModalActions.h"
 #include "catalog/containers/ScrollArea.h"
 #include "catalog/display/Label.h"
+#include "catalog/feedback/Notice.h"
 #include "catalog/form/FieldGroup.h"
 #include "catalog/form/FieldNote.h"
 #include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
+#include "catalog/panels/receive/ChunkedAddress.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "modules/keys/KeysView.h"
+#include "modules/musig/MusigModule.h"
 #include "modules/musig/creator/PolicyEditor.h"
 #include "modules/musig/creator/ReviewPolicy.h"
 #include "theme/Palette.h"
 #include "views/utils.h"
 
+#include <QDialog>
 #include <QHash>
 #include <QList>
 #include <QRegularExpression>
 #include <QStringList>
 #include <QThread>
 #include <Qontrol>
+#include <algorithm>
 #include <array>
 #include <common.h>
 #include <string>
@@ -36,6 +41,11 @@ namespace {
 
 constexpr std::array<Network, 4> NETWORKS = {Network::Regtest, Network::Signet, Network::Testnet,
                                              Network::Bitcoin};
+
+// exec() result of a window closed to run a keys-module flow in its place.
+constexpr int FLOW_RESULT = QDialog::Accepted + 1;
+
+constexpr std::uint64_t DUST_LIMIT = 546;
 
 auto accountExists(const QString &name) -> bool {
     auto configs = ::list_configs();
@@ -53,6 +63,28 @@ auto networkKeys(Network network) -> QList<KeyEntry> {
     return bus != nullptr ? bus->keys(network) : QList<KeyEntry>{};
 }
 
+// Fingerprint to the name a key is shown by: its alias, else its fingerprint.
+auto keyNames(Network network) -> QHash<QString, QString> {
+    QHash<QString, QString> names;
+    for (const auto &entry : networkKeys(network)) {
+        names.insert(entry.fingerprint, entry.alias.isEmpty() ? entry.fingerprint : entry.alias);
+    }
+    return names;
+}
+
+// Why compile_policy() or preview_policy() refused the policy.
+auto compileError(const PolicyCompileResult &result) -> QString {
+    if (result.too_many_leaves) {
+        return TR("musig-create-too-many-leaves").arg(result.leaf_count).arg(result.max_leaves);
+    }
+    if (result.error_path >= 0) {
+        return TR("musig-create-path-error")
+            .arg(result.error_path + 1)
+            .arg(QString::fromStdString(std::string(result.error)));
+    }
+    return QString::fromStdString(std::string(result.error));
+}
+
 } // namespace
 
 CreatePolicy::CreatePolicy() {
@@ -66,7 +98,12 @@ CreatePolicy::CreatePolicy() {
 }
 
 auto CreatePolicy::exec() -> int {
-    return catalog::Modal::exec();
+    int result = catalog::Modal::exec();
+    while (result == FLOW_RESULT) {
+        runFlow();
+        result = catalog::Modal::exec();
+    }
+    return result;
 }
 
 void CreatePolicy::init() {
@@ -95,11 +132,27 @@ void CreatePolicy::init() {
     m_status_label->setVisible(false);
 
     m_next_btn = catalog::btnContinue();
+    m_fetch_btn = catalog::btnFetchThisXpub();
+    m_register_btn = catalog::btnRegister();
+    m_verify_btn = catalog::btnCheckAddress();
+    m_install_btn = catalog::btnCreate();
     m_actions = new catalog::ModalActions;
-    m_actions->addAction(m_next_btn);
+    for (auto *button : {m_next_btn, m_fetch_btn, m_register_btn, m_install_btn}) {
+        m_actions->addAction(button);
+    }
+
+    m_missing_column = new qontrol::Column;
 
     m_review = new ReviewPolicy;
-    m_review->setVisible(false);
+
+    m_verify_lead = new catalog::Label(TR("musig-create-verify-lead"), catalog::LabelRole::Body);
+    m_verify_lead->setWordWrap(true);
+    m_address_label = new catalog::ChunkedAddress;
+    m_verify_status = new catalog::Label(catalog::LabelRole::Caption);
+    m_verify_status->setVisible(false);
+    m_skip_notice = new catalog::Notice(catalog::Notice::Tone::Warning);
+    m_skip_notice->setTitle(TR("musig-create-skip-verify-title"));
+    m_skip_notice->setText(TR("musig-create-skip-verify"));
 }
 
 void CreatePolicy::doConnect() {
@@ -114,7 +167,11 @@ void CreatePolicy::doConnect() {
             qontrol::UNIQUE);
     connect(this, &CreatePolicy::electrumTestReady, this, &CreatePolicy::onElectrumTestReady,
             qontrol::UNIQUE);
-    connect(m_next_btn, &QPushButton::clicked, this, &CreatePolicy::onNextClicked, qontrol::UNIQUE);
+    for (auto *button : {m_next_btn, m_fetch_btn, m_register_btn, m_install_btn}) {
+        connect(button, &QPushButton::clicked, this, &CreatePolicy::onNextClicked, qontrol::UNIQUE);
+    }
+    connect(m_verify_btn, &QPushButton::clicked, this, &CreatePolicy::onCheckAddressClicked,
+            qontrol::UNIQUE);
     connect(m_actions, &catalog::ModalActions::backClicked, this, &CreatePolicy::onBackClicked,
             qontrol::UNIQUE);
 
@@ -155,8 +212,29 @@ void CreatePolicy::view() {
     m_define_page =
         (new qontrol::Column)->spacing(resolve(Spacing::M))->push(scroll)->push(m_preview_card);
 
-    keep(m_status_label);
-    keep(m_review);
+    m_footer =
+        (new qontrol::Column)->spacing(resolve(Spacing::S))->push(m_status_label)->push(m_actions);
+
+    m_fetch_page = (new qontrol::Column)
+                       ->spacing(resolve(Spacing::M))
+                       ->push(new catalog::Label(TR("musig-create-fetch-lead")))
+                       ->push(m_missing_column);
+    keep(m_fetch_page);
+
+    auto *reviewScroll = new catalog::ScrollArea;
+    reviewScroll->setFitContent(true);
+    reviewScroll->setWidget(m_review);
+    m_review_page = reviewScroll;
+    keep(m_review_page);
+
+    m_verify_page = (new qontrol::Column)
+                        ->spacing(resolve(Spacing::M))
+                        ->push(m_verify_lead)
+                        ->push(m_address_label)
+                        ->push((new qontrol::Row)->push(m_verify_btn)->pushSpacer())
+                        ->push(m_verify_status)
+                        ->push(m_skip_notice);
+    keep(m_verify_page);
 
     setWindowTitle(TR("musig-create-title"));
     setWidth(ModalWidth::XL);
@@ -167,18 +245,49 @@ void CreatePolicy::showStep(Step step) {
     m_step = step;
     switch (step) {
     case Step::Define:
-        setBody(m_define_page);
-        setFooter(m_actions);
-        m_actions->setBack(catalog::ModalActions::Back::None);
-        break;
     case Step::Compile:
-    case Step::FetchXpubs:
+        setBody(m_define_page);
+        break;
+    case Step::FetchXpubs: {
+        auto names = keyNames(network());
+        auto missing = missingXpubs();
+        m_missing_column->clear();
+        m_missing_column->spacing(resolve(Spacing::XS));
+        auto *count = new catalog::Label(TR("musig-create-fetch-status")
+                                             .arg(m_fingerprints.size() - missing.size())
+                                             .arg(m_fingerprints.size()),
+                                         catalog::LabelRole::Caption);
+        count->setTone(catalog::LabelTone::Secondary);
+        m_missing_column->push(count);
+        count->show();
+        for (const auto &fingerprint : missing) {
+            auto *line =
+                new catalog::Label(TR("musig-create-fetch-key")
+                                       .arg(names.value(fingerprint, fingerprint), fingerprint));
+            m_missing_column->push(line);
+            line->show();
+        }
+        setBody(m_fetch_page);
+        break;
+    }
     case Step::Review:
     case Step::Register:
-    case Step::VerifyAddress:
+        setBody(m_review_page);
+        break;
+    case Step::VerifyAddress: {
+        bool checkable = canCheckAddress();
+        m_address_label->setAddress(QString::fromStdString(std::string(m_address.address)));
+        m_verify_lead->setText(checkable ? TR("musig-create-verify-lead")
+                                         : TR("musig-create-verify-lead-unchecked"));
+        m_skip_notice->setVisible(!checkable);
+        setBody(m_verify_page);
+        break;
+    }
     case Step::Install:
         break;
     }
+    setFooter(m_footer);
+    updateStepActions();
 }
 
 auto CreatePolicy::network() const -> Network {
@@ -215,6 +324,50 @@ void CreatePolicy::updateActions() {
     m_actions->setReason(reason);
 }
 
+void CreatePolicy::updateStepActions() {
+    bool define = m_step == Step::Define || m_step == Step::Compile;
+    bool review = m_step == Step::Review || m_step == Step::Register;
+    bool verify = m_step == Step::VerifyAddress;
+    bool checkable = verify && canCheckAddress();
+    m_next_btn->setVisible(define);
+    m_fetch_btn->setVisible(m_step == Step::FetchXpubs);
+    m_register_btn->setVisible(review);
+    m_verify_btn->setVisible(checkable);
+    m_install_btn->setVisible(verify);
+    m_actions->setBack(define ? catalog::ModalActions::Back::None
+                              : catalog::ModalActions::Back::Back);
+    if (define) {
+        updateActions();
+        return;
+    }
+
+    QString reason;
+    bool registering = m_step == Step::Register && m_req_id != 0 && !m_to_register.isEmpty();
+    if (registering) {
+        auto names = keyNames(network());
+        reason = TR("musig-create-registering")
+                     .arg(names.value(m_to_register.first(), m_to_register.first()));
+    }
+    bool installable = !checkable || m_address_verified;
+    if (verify && !installable) {
+        reason = TR("musig-create-reason-verify");
+    }
+    m_fetch_btn->setEnabled(m_req_id == 0);
+    m_register_btn->setEnabled(!registering);
+    m_verify_btn->setEnabled(m_req_id == 0);
+    // Once the address matched, Create is the only primary action.
+    m_verify_btn->setRole(m_address_verified ? catalog::ButtonRole::Default
+                                             : catalog::ButtonRole::Primary);
+    m_install_btn->setEnabled(installable);
+    m_actions->setReason(reason);
+}
+
+void CreatePolicy::showStatus(const QString &text, catalog::LabelTone tone) {
+    m_status_label->setText(text);
+    m_status_label->setTone(tone);
+    m_status_label->setVisible(!text.isEmpty());
+}
+
 void CreatePolicy::applyNetworkDefaults() {
     // The server the last account of this network was created with comes first.
     auto electrum = QString::fromStdString(
@@ -248,10 +401,7 @@ void CreatePolicy::previewPolicy() {
     m_preview_leaves->setText(leaves.join(QLatin1Char('\n')));
     m_preview_leaves->setVisible(result.is_ok);
 
-    QHash<QString, QString> names;
-    for (const auto &entry : networkKeys(network())) {
-        names.insert(entry.fingerprint, entry.alias.isEmpty() ? entry.fingerprint : entry.alias);
-    }
+    auto names = keyNames(network());
     m_preview_paths->clear();
     bool anyKey = false;
     for (std::size_t i = 0; i < spec.paths.size(); ++i) {
@@ -279,40 +429,157 @@ void CreatePolicy::previewPolicy() {
 
     // Before any key is picked, a hint reads better than the compiler error.
     auto tone = anyKey ? catalog::FieldNote::Tone::Error : catalog::FieldNote::Tone::Muted;
-    QString error;
-    if (!anyKey) {
-        error = TR("musig-create-pick-keys");
-    } else if (result.too_many_leaves) {
-        error = TR("musig-create-too-many-leaves").arg(result.leaf_count).arg(result.max_leaves);
-    } else if (result.error_path >= 0) {
-        error = TR("musig-create-path-error")
-                    .arg(result.error_path + 1)
-                    .arg(QString::fromStdString(std::string(result.error)));
-    } else {
-        error = QString::fromStdString(std::string(result.error));
-    }
     m_preview_error->setTone(tone);
-    m_preview_error->setText(error);
+    m_preview_error->setText(anyKey ? compileError(result) : TR("musig-create-pick-keys"));
     m_preview_error->setVisible(!result.is_ok);
     updateActions();
 }
 
+auto CreatePolicy::accountPath() const -> QString {
+    return QString::fromStdString(std::string(::bip87_account_path(network(), 0)));
+}
+
+auto CreatePolicy::missingXpubs() const -> QStringList {
+    QStringList missing;
+    for (const auto &fingerprint : m_fingerprints) {
+        if (!m_account_xpubs.contains(fingerprint)) {
+            missing.append(fingerprint);
+        }
+    }
+    return missing;
+}
+
 void CreatePolicy::fetchNextXpub() {
+    auto *keys = Host::get()->keys();
+    auto missing = missingXpubs();
+    if (keys == nullptr || missing.isEmpty()) {
+        return;
+    }
+    m_req_id = keys->newRequest();
+    // Returns once the flow's window has closed, its answer delivered.
+    keys->xpub(m_req_id, network(), missing.first(), accountPath());
 }
 
 void CreatePolicy::compilePolicy() {
+    for (auto &path : m_spec.paths) {
+        for (auto &key : path.keys) {
+            auto fingerprint = QString::fromStdString(std::string(key.fingerprint));
+            key.account_xpub = rust::String(m_account_xpubs.value(fingerprint).toStdString());
+        }
+    }
+    auto result = ::compile_policy(m_spec);
+    if (!result.is_ok) {
+        m_preview_error->setTone(catalog::FieldNote::Tone::Error);
+        m_preview_error->setText(compileError(result));
+        m_preview_error->setVisible(true);
+        showStep(Step::Define);
+        return;
+    }
+    m_descriptor = QString::fromStdString(std::string(result.descriptor));
+    showReview();
 }
 
 void CreatePolicy::showReview() {
+    auto review = ::review_policy(rust::String(m_descriptor.toStdString()));
+    if (!review.is_ok) {
+        m_preview_error->setTone(catalog::FieldNote::Tone::Error);
+        m_preview_error->setText(QString::fromStdString(std::string(review.error)));
+        m_preview_error->setVisible(true);
+        m_descriptor.clear();
+        showStep(Step::Define);
+        return;
+    }
+    m_review->setAliases(keyNames(network()));
+    m_review->setReview(review, m_descriptor);
+    showStep(Step::Review);
 }
 
 void CreatePolicy::registerNext() {
+    auto *keys = Host::get()->keys();
+    if (keys == nullptr) {
+        return;
+    }
+    if (m_to_register.isEmpty()) {
+        m_address =
+            ::musig_first_receive_address(rust::String(m_descriptor.toStdString()), network());
+        if (!m_address.is_ok) {
+            showStatus(QString::fromStdString(std::string(m_address.error)),
+                       catalog::LabelTone::Error);
+            updateStepActions();
+            return;
+        }
+        showStep(Step::VerifyAddress);
+        return;
+    }
+    m_req_id = keys->newRequest();
+    updateStepActions();
+    // Recorded in place, no window: the answer arrives during the call.
+    keys->registerDescriptor(m_req_id, network(), m_to_register.first(), m_descriptor);
+}
+
+auto CreatePolicy::canCheckAddress() const -> bool {
+    return std::ranges::any_of(networkKeys(network()), [this](const KeyEntry &entry) {
+        return m_fingerprints.contains(entry.fingerprint) && entry.can_show_address;
+    });
 }
 
 void CreatePolicy::verifyAddress() {
+    auto *keys = Host::get()->keys();
+    if (keys == nullptr) {
+        return;
+    }
+    m_req_id = keys->newRequest();
+    // Returns once the flow's window has closed, its answer delivered.
+    keys->verifyAddress(m_req_id, network(),
+                        QString::fromStdString(std::string(m_address.descriptor)),
+                        QString::fromStdString(std::string(m_address.path)),
+                        QString::fromStdString(std::string(m_address.address)));
 }
 
 void CreatePolicy::install() {
+    auto name = m_name_input->text().trimmed();
+    if (accountExists(name)) {
+        showStatus(TR("create-account-reason-exists").arg(name), catalog::LabelTone::Error);
+        return;
+    }
+    auto electrumUrl = m_electrum.input()->text().trimmed();
+    auto config = new_config(
+        rust::String(name.toStdString()), network(), rust::String(m_descriptor.toStdString()),
+        rust::String(), rust::String(electrumUrl.toStdString()), DUST_LIMIT, rust::String(MUSIG_PLUGIN_ID));
+    config->to_file();
+    // Prefilled for the next account of this network.
+    ::app_set_last_endpoint(BackendServer::Electrum, network(),
+                            rust::String(electrumUrl.toStdString()));
+    Host::get()->refreshLauncher();
+    accept();
+}
+
+void CreatePolicy::runFlow() {
+    auto flow = m_pending_flow;
+    m_pending_flow = Flow::None;
+    switch (flow) {
+    case Flow::None:
+        break;
+    case Flow::Xpubs:
+        // One window per key, in order, until a key gives none.
+        while (!missingXpubs().isEmpty()) {
+            auto asked = missingXpubs().first();
+            fetchNextXpub();
+            if (!m_account_xpubs.contains(asked)) {
+                break;
+            }
+        }
+        if (missingXpubs().isEmpty()) {
+            compilePolicy();
+        } else {
+            showStep(Step::FetchXpubs);
+        }
+        break;
+    case Flow::Verify:
+        verifyAddress();
+        updateStepActions();
+        break;
+    }
 }
 
 // ===== Slots =====
@@ -330,13 +597,54 @@ void CreatePolicy::onNextClicked() {
             break;
         }
         m_spec = m_editor->spec();
-        showStep(Step::FetchXpubs);
+        m_fingerprints.clear();
+        for (const auto &path : m_spec.paths) {
+            for (const auto &key : path.keys) {
+                auto fingerprint = QString::fromStdString(std::string(key.fingerprint));
+                if (!m_fingerprints.contains(fingerprint)) {
+                    m_fingerprints.append(fingerprint);
+                }
+            }
+        }
+        m_account_xpubs.clear();
+        if (auto *keys = Host::get()->keys(); keys != nullptr) {
+            for (const auto &fingerprint : m_fingerprints) {
+                auto xpub = keys->cachedXpub(network(), fingerprint, accountPath());
+                if (!xpub.isEmpty()) {
+                    m_account_xpubs.insert(fingerprint, xpub);
+                }
+            }
+        }
+        // Every xpub cached: no window to open.
+        if (missingXpubs().isEmpty()) {
+            compilePolicy();
+        } else {
+            showStep(Step::FetchXpubs);
+        }
         break;
     case Step::Compile:
+        break;
     case Step::FetchXpubs:
+        showStatus({}, catalog::LabelTone::Muted);
+        m_pending_flow = Flow::Xpubs;
+        done(FLOW_RESULT);
+        break;
     case Step::Review:
+        showStatus({}, catalog::LabelTone::Muted);
+        m_to_register = m_fingerprints;
+        showStep(Step::Register);
+        registerNext();
+        break;
     case Step::Register:
+        // Registers what an error left.
+        showStatus({}, catalog::LabelTone::Muted);
+        registerNext();
+        break;
     case Step::VerifyAddress:
+        if (m_install_btn->isEnabled()) {
+            install();
+        }
+        break;
     case Step::Install:
         break;
     }
@@ -352,6 +660,12 @@ void CreatePolicy::onBackClicked() {
     case Step::Register:
     case Step::VerifyAddress:
     case Step::Install:
+        showStatus({}, catalog::LabelTone::Muted);
+        m_descriptor.clear();
+        m_address = MusigReceiveAddress{};
+        m_address_verified = false;
+        m_verify_status->setVisible(false);
+        m_to_register.clear();
         showStep(Step::Define);
         break;
     }
@@ -412,38 +726,70 @@ void CreatePolicy::onElectrumTestReady(const ConnectionResult &result) {
     adjustSize();
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+void CreatePolicy::onCheckAddressClicked() {
+    if (m_step != Step::VerifyAddress) {
+        return;
+    }
+    showStatus({}, catalog::LabelTone::Muted);
+    m_verify_status->setVisible(false);
+    m_pending_flow = Flow::Verify;
+    done(FLOW_RESULT);
+}
+
 void CreatePolicy::onXpubReady(ReqId req_id, const QString &xpub, const QString &fingerprint,
                                const QString &path) {
-    Q_UNUSED(req_id);
-    Q_UNUSED(xpub);
-    Q_UNUSED(fingerprint);
-    Q_UNUSED(path);
+    if (req_id != m_req_id) {
+        return;
+    }
+    m_req_id = 0;
+    // The request was for the first key still missing, at the account path.
+    auto missing = missingXpubs();
+    if (missing.isEmpty() || fingerprint != missing.first() || path != accountPath()) {
+        showStatus(TR("keys-xpub-other-key"), catalog::LabelTone::Error);
+        return;
+    }
+    m_account_xpubs.insert(fingerprint, xpub);
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-void CreatePolicy::onDescriptorRegistered(ReqId req_id, const QString &fingerprint) {
-    Q_UNUSED(req_id);
-    Q_UNUSED(fingerprint);
+void CreatePolicy::onDescriptorRegistered(ReqId req_id,
+                                          [[maybe_unused]] const QString &fingerprint) {
+    if (req_id != m_req_id) {
+        return;
+    }
+    m_req_id = 0;
+    m_to_register.removeFirst();
+    registerNext();
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void CreatePolicy::onAddressVerified(ReqId req_id, bool verified) {
-    Q_UNUSED(req_id);
-    Q_UNUSED(verified);
+    if (req_id != m_req_id) {
+        return;
+    }
+    m_req_id = 0;
+    m_address_verified = verified;
+    m_verify_status->setText(verified ? TR("musig-create-verify-match")
+                                      : TR("musig-receive-verify-mismatch"));
+    m_verify_status->setTone(verified ? catalog::LabelTone::Success : catalog::LabelTone::Error);
+    m_verify_status->setVisible(true);
+    updateStepActions();
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void CreatePolicy::onKeysError(std::optional<ReqId> req_id, const QString &message,
-                               plugin::SignError kind) {
-    Q_UNUSED(req_id);
-    Q_UNUSED(message);
-    Q_UNUSED(kind);
+                               [[maybe_unused]] plugin::SignError kind) {
+    if (!req_id.has_value() || req_id.value() != m_req_id) {
+        return;
+    }
+    m_req_id = 0;
+    showStatus(message, catalog::LabelTone::Error);
+    updateStepActions();
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void CreatePolicy::onKeysCancelled(ReqId req_id) {
-    Q_UNUSED(req_id);
+    if (req_id != m_req_id) {
+        return;
+    }
+    m_req_id = 0;
+    updateStepActions();
 }
 
 } // namespace musig::modal

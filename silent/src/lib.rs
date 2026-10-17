@@ -688,6 +688,17 @@ mod ffi {
         pub leaves: Vec<MusigSpendLeaf>,
     }
 
+    /// First receive address of a musig() descriptor, before any account holds it,
+    /// with what IKeys::verifyAddress needs (the AddressVerifyInfo of that address).
+    #[derive(Debug, Clone)]
+    pub struct MusigReceiveAddress {
+        pub is_ok: bool,
+        pub error: String,
+        pub address: String,
+        pub descriptor: String,
+        pub path: String,
+    }
+
     // ===== Policy =====
 
     /// Role of a key (bwk-bup `KeyType`), stored in its origin's last step R.
@@ -1539,6 +1550,9 @@ mod ffi {
         fn validate_musig_descriptor(descriptor: String) -> MusigDescriptorResult;
         /// Every cosigner fingerprint of a musig() descriptor, empty on error.
         fn musig_descriptor_fingerprints(descriptor: String) -> Vec<String>;
+        /// The receive address a new account of a musig() descriptor hands out first.
+        fn musig_first_receive_address(descriptor: String, network: Network)
+            -> MusigReceiveAddress;
     }
 
     // ===== Musig Account Methods =====
@@ -2041,8 +2055,8 @@ pub use keys::bridge::{
     usb_sign_payload, HotMaterial, KeysModule, QrResponse, SealedHotKey,
 };
 pub use musig::{
-    musig_descriptor_fingerprints, new_musig_account, validate_musig_descriptor, MusigAccount,
-    MUSIG_PLUGIN_ID,
+    musig_descriptor_fingerprints, musig_first_receive_address, new_musig_account,
+    validate_musig_descriptor, MusigAccount, MUSIG_PLUGIN_ID,
 };
 pub use policy::{bip87_account_path, compile_policy, preview_policy, review_policy};
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};

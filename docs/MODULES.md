@@ -645,6 +645,11 @@ void error(std::optional<ReqId> req_id, QString message,
 key, or a USB device reporting it): the caller drops every nonce and partial signature
 and starts again from round 1. It is `Other` for everything else.
 
+`keys(network)` lists the registered keys as `KeyEntry` rows. Before asking
+`verifyAddress()`, a caller checks `can_show_address`: true when the key has a USB or QR
+route, a device with a screen that can show the address. A hot key, an SD card only key
+or a key with no route cannot.
+
 ### Polling is off until a module asks for it
 
 Watching a USB bus is expensive, so it does not run just because the app is open. Any module

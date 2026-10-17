@@ -37,6 +37,10 @@ protected:
     void keep(QWidget *widget);
     // Fits the window to its content at its fixed width.
     void refit();
+    // Lays out every layout of the content, deepest first. A layout lays out on its
+    // LayoutRequest only once its widget is visible, so content set while the modal
+    // is hidden (a body swapped before exec()) is measured at its old size without it.
+    void activateLayouts();
     auto event(QEvent *event) -> bool override;
 
 private:

@@ -541,6 +541,11 @@ menu-custom => "Custom" => "Personalizado"
 musig-create-account => "Create Shared Wallet" => "NONE"
 musig-create-add-path => "+ Add a Spend Path" => "NONE"
 musig-create-blocks-placeholder => "blocks" => "NONE"
+musig-create-fetch-key => "%1 (%2)" => "NONE"
+musig-create-fetch-lead
+=> "These keys still have to give their account xpub, one window per key."
+=> "NONE";;
+musig-create-fetch-status => "%1 of %2 account xpubs fetched" => "NONE"
 musig-create-height-placeholder => "block height" => "NONE"
 musig-create-key-path => "The first path spends as one key, with no script" => "NONE"
 musig-create-keys => "Keys" => "NONE"
@@ -555,20 +560,34 @@ musig-create-preview => "Policy" => "NONE"
 musig-create-reason-electrum => "Test the Electrum server first." => "NONE"
 musig-create-reason-keys => "Register a key in the Keys tab first." => "NONE"
 musig-create-reason-policy => "Fix the policy first." => "NONE"
+musig-create-reason-verify => "Check the address on a device first." => "NONE"
+musig-create-registering => "Registering with %1" => "NONE"
 musig-create-shape => "Signers:" => "NONE"
 musig-create-signs-every-spend => "Signs every spend" => "NONE"
+musig-create-skip-verify
+=> "No key of this wallet is on a device with a screen (USB or QR): none can show this address. Create the wallet only if you trust this computer."
+=> "NONE";;
+musig-create-skip-verify-title => "The address is not checked" => "NONE"
 musig-create-threshold => "%1 of %2" => "NONE"
 musig-create-timelock => "Timelock:" => "NONE"
 musig-create-title => "Create Shared Account" => "NONE"
 musig-create-too-many-leaves
 => "This policy needs %1 tap leaves, at most %2 are allowed: lower a threshold or split the keys over more paths"
 => "NONE";;
+musig-create-verify-lead
+=> "Check this address on one of your devices before using the wallet."
+=> "NONE";;
+musig-create-verify-lead-unchecked
+=> "This is the first receive address of the wallet."
+=> "NONE";;
+musig-create-verify-match => "The device shows the same address." => "NONE"
 musig-creator-unknown-instance => "Unknown MuSig2 creator entry: %1" => "NONE"
 musig-instance-not-found => "MuSig2 instance not found: %1" => "NONE"
 musig-key-type-cosigner => "Cosigner" => "NONE"
 musig-key-type-external => "External" => "NONE"
 musig-key-type-internal => "Internal" => "NONE"
 musig-key-type-safety-net => "Safety Net" => "NONE"
+musig-key-type-unknown => "Unknown" => "NONE"
 musig-locktime-absolute => "From a block height" => "NONE"
 musig-locktime-none => "No timelock" => "NONE"
 musig-locktime-relative => "After a number of blocks" => "NONE"
@@ -582,6 +601,11 @@ musig-receive-address => "MuSig2 Address" => "NONE"
 musig-receive-verify-mismatch
 => "The device showed another address: do not use this one"
 => "NONE";;
+musig-review-checksum => "Checksum" => "NONE"
+musig-review-key-path => "Key path: spends as one key" => "NONE"
+musig-review-leaves => "%1 tap leaves" => "NONE"
+musig-review-mandatory => "signs every spend" => "NONE"
+musig-review-total-leaves => "%1 tap leaves in total" => "NONE"
 musig-send-after-blocks => "after %1 blocks" => "NONE"
 musig-send-finalize-failed
 => "Could not finalize the transaction: cancel to restart the signing"

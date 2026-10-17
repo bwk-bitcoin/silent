@@ -8,7 +8,10 @@
 #include <memory>
 #include <vector>
 
-// One instance per config whose plugin id is "musig".
+// Plugin id of a musig account's config (Rust MUSIG_PLUGIN_ID).
+inline constexpr auto MUSIG_PLUGIN_ID = "musig";
+
+// One instance per config whose plugin id is MUSIG_PLUGIN_ID.
 class MusigModule final : public IModule {
     Q_OBJECT
 

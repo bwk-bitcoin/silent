@@ -15,10 +15,6 @@
 #include <string>
 #include <utility>
 
-namespace {
-constexpr auto K_MUSIG_PLUGIN_ID = "musig";
-} // namespace
-
 MusigModule::MusigModule() : IModule(nullptr) {
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
             &MusigModule::onInstanceRemoved, qontrol::UNIQUE);
@@ -81,7 +77,7 @@ auto MusigModule::isMusigAccount(const QString &account_id) -> bool {
         return false;
     }
     return QString::fromStdString(std::string(config->get_plugin_id().c_str())) ==
-           QString::fromLatin1(K_MUSIG_PLUGIN_ID);
+           QString::fromLatin1(MUSIG_PLUGIN_ID);
 }
 
 auto MusigModule::nextReqId() -> ReqId {

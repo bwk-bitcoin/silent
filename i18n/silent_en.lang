@@ -1157,3 +1157,38 @@ musig-words-from-height => "from block %1"
 musig-words-timelocked => "%1, %2"
 
 btn-remove-path => "Remove Path"
+
+musig-create-fetch-lead
+=> "These keys still have to give their account xpub, one window per key.";;
+
+musig-create-fetch-status => "%1 of %2 account xpubs fetched"
+
+musig-create-fetch-key => "%1 (%2)"
+
+musig-review-leaves => "%1 tap leaves"
+
+musig-review-key-path => "Key path: spends as one key"
+
+musig-review-total-leaves => "%1 tap leaves in total"
+
+musig-review-mandatory => "signs every spend"
+
+musig-review-checksum => "Checksum"
+
+musig-key-type-unknown => "Unknown"
+
+musig-create-registering => "Registering with %1"
+
+musig-create-verify-lead
+=> "Check this address on one of your devices before using the wallet.";;
+
+musig-create-verify-lead-unchecked => "This is the first receive address of the wallet."
+
+musig-create-verify-match => "The device shows the same address."
+
+musig-create-skip-verify-title => "The address is not checked"
+
+musig-create-skip-verify
+=> "No key of this wallet is on a device with a screen (USB or QR): none can show this address. Create the wallet only if you trust this computer.";;
+
+musig-create-reason-verify => "Check the address on a device first."

@@ -8,7 +8,10 @@ use bitcoin::consensus::encode::{deserialize_hex, serialize_hex};
 use bitcoin::taproot::TapLeafHash;
 use bwk::account::{Account as BwkAccount, SpendLeaf, SpendPath};
 use bwk::bwk_coin::{CoinStatus, KeyChain};
-use bwk::bwk_descriptor::{descriptor::Descriptor, wallet::WalletDescriptorExt};
+use bwk::bwk_descriptor::{
+    descriptor::{Descriptor, DescriptorDerivator},
+    wallet::WalletDescriptorExt,
+};
 use bwk::bwk_electrum::notification::Notification as BwkNotification;
 use bwk::bwk_sign::musig::MusigRound as BwkMusigRound;
 use bwk::bwk_tx::{
@@ -22,9 +25,9 @@ use crate::account::{
 };
 use crate::config::{parse_electrum_url, Config};
 use crate::ffi::{
-    AddressVerifyInfo, CoinState, MusigCosignerStatus, MusigDescriptorResult, MusigRound,
-    MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, PsbtValidation, RustCoin, RustTx,
-    TransactionSimulation, TransactionTemplate, TxResult,
+    AddressVerifyInfo, CoinState, MusigCosignerStatus, MusigDescriptorResult, MusigReceiveAddress,
+    MusigRound, MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, PsbtValidation,
+    RustCoin, RustTx, TransactionSimulation, TransactionTemplate, TxResult,
 };
 
 /// A MuSig2 policy account, wrapping bwk::Account.
@@ -41,6 +44,9 @@ struct MusigAccountInner {
 }
 
 pub const MUSIG_PLUGIN_ID: &str = "musig";
+
+/// The receive index a new account hands out first: bwk moves its tip off 0 before use.
+const FIRST_RECEIVE_INDEX: u32 = 1;
 
 const NOT_INITIALIZED: &str = "Account not initialized";
 
@@ -107,6 +113,35 @@ pub fn musig_descriptor_fingerprints(descriptor: String) -> Vec<String> {
         .into_iter()
         .map(|fingerprint| fingerprint.to_string())
         .collect()
+}
+
+pub fn musig_first_receive_address(descriptor: String, network: Network) -> MusigReceiveAddress {
+    let error = |error: String| MusigReceiveAddress {
+        is_ok: false,
+        error,
+        address: String::new(),
+        descriptor: String::new(),
+        path: String::new(),
+    };
+    let parsed = match Descriptor::from_str(&descriptor) {
+        Ok(parsed) => parsed,
+        Err(e) => return error(format!("invalid musig descriptor: {e}")),
+    };
+    let Some(miniscript) = parsed.as_miniscript() else {
+        return error("not a musig account descriptor".to_string());
+    };
+    let derivator = match miniscript.spk_derivator(network.into()) {
+        Ok(derivator) => derivator,
+        Err(e) => return error(format!("cannot derive addresses: {e}")),
+    };
+    let info = verify_info(&parsed, KeyChain::Receive, FIRST_RECEIVE_INDEX);
+    MusigReceiveAddress {
+        is_ok: true,
+        error: String::new(),
+        address: derivator.receive_at(FIRST_RECEIVE_INDEX).to_string(),
+        descriptor: info.descriptor,
+        path: info.path,
+    }
 }
 
 impl MusigAccount {
@@ -321,15 +356,7 @@ impl MusigAccount {
             if entry.address.clone().assume_checked().to_string() != address {
                 continue;
             }
-            let branch: u32 = match entry.account {
-                KeyChain::Receive => 0,
-                KeyChain::Change => 1,
-                KeyChain::Custom(c) => c,
-            };
-            return AddressVerifyInfo {
-                descriptor: inner.account.descriptor().to_string(),
-                path: format!("{branch}/{}", entry.index),
-            };
+            return verify_info(&inner.account.descriptor(), entry.account, entry.index);
         }
         AddressVerifyInfo {
             descriptor: String::new(),
@@ -656,6 +683,19 @@ fn parse_recipient(
     bitcoin::Address::from_str(address)
         .and_then(|address| address.require_network(network))
         .map_err(|e| TemplateError::Address(address.to_string(), e.to_string()))
+}
+
+/// What IKeys::verifyAddress needs for the address at `keychain`/`index` of `descriptor`.
+fn verify_info(descriptor: &Descriptor, keychain: KeyChain, index: u32) -> AddressVerifyInfo {
+    let branch: u32 = match keychain {
+        KeyChain::Receive => 0,
+        KeyChain::Change => 1,
+        KeyChain::Custom(c) => c,
+    };
+    AddressVerifyInfo {
+        descriptor: descriptor.to_string(),
+        path: format!("{branch}/{index}"),
+    }
 }
 
 fn spend_leaf(leaf: SpendLeaf) -> MusigSpendLeaf {
