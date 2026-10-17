@@ -1666,9 +1666,9 @@ void Send::onBroadcastResult(TxResult result) {
 
     if (result.is_ok) {
         auto txid = QString::fromStdString(std::string(result.value.c_str()));
-        AppController::execModal(new catalog::MessageModal(TR("confirm-transaction-title"),
-                                                           TR("confirm-send-success").arg(txid),
-                                                           catalog::MessageModal::Tone::Success));
+        AppController::execModal(
+            new catalog::MessageModal(TR("confirm-transaction-title"), TR("confirm-send-success"),
+                                      catalog::MessageModal::Tone::Success, txid));
     } else {
         auto error = QString::fromStdString(std::string(result.error.c_str()));
         AppController::execModal(

@@ -28,8 +28,10 @@ auto toQString(const rust::String &value) -> QString {
 
 } // namespace
 
+// The widget owns the controller: deleting it on stopped() frees both.
 MusigAccountController::MusigAccountController(const QString &account, MusigAccountWidget *widget)
-    : m_widget(widget) {
+    : QObject(widget),
+      m_widget(widget) {
     init(account);
 }
 
@@ -173,6 +175,10 @@ auto MusigAccountController::psbtInFlight() const -> QString {
     return m_psbt_v2_hex;
 }
 
+auto MusigAccountController::finalizedTx() const -> QString {
+    return m_tx_hex;
+}
+
 auto MusigAccountController::spendLeaves(const QStringList &outpoints) -> MusigSpendLeaves {
     if (!m_account.has_value()) {
         MusigSpendLeaves leaves;
@@ -262,15 +268,21 @@ void MusigAccountController::updateCoinLabel(const QString &outpoint, const QStr
     pollCoins();
 }
 
-void MusigAccountController::setElectrumUrl(const QString &url) {
+auto MusigAccountController::setElectrumUrl(const QString &url) -> MusigElectrumUrlResult {
     if (!m_account.has_value()) {
-        return;
+        return MusigElectrumUrlResult{.saved = false, .started = false};
     }
-    if (!m_account.value()->set_electrum_url(rust::String(url.toStdString()))) {
-        qWarning() << "MusigAccountController: failed to set electrum url" << url;
-        return;
+    auto result = m_account.value()->set_electrum_url(rust::String(url.toStdString()));
+    if (!result.saved) {
+        qWarning() << "MusigAccountController: failed to save electrum url" << url;
+        return result;
     }
     emit electrumUrlChanged();
+    if (!result.started) {
+        // No listener runs on this url, so none reports its state.
+        emit electrumDisconnected();
+    }
+    return result;
 }
 
 void MusigAccountController::startElectrum() {

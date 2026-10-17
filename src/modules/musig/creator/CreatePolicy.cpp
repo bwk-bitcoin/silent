@@ -148,6 +148,8 @@ void CreatePolicy::init() {
     m_verify_lead = new catalog::Label(TR("musig-create-verify-lead"), catalog::LabelRole::Body);
     m_verify_lead->setWordWrap(true);
     m_address_label = new catalog::ChunkedAddress;
+    // Flush with the lead text and the notice, not centred between them.
+    m_address_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     m_verify_status = new catalog::Label(catalog::LabelRole::Caption);
     m_verify_status->setVisible(false);
     m_skip_notice = new catalog::Notice(catalog::Notice::Tone::Warning);
@@ -543,9 +545,10 @@ void CreatePolicy::install() {
         return;
     }
     auto electrumUrl = m_electrum.input()->text().trimmed();
-    auto config = new_config(
-        rust::String(name.toStdString()), network(), rust::String(m_descriptor.toStdString()),
-        rust::String(), rust::String(electrumUrl.toStdString()), DUST_LIMIT, rust::String(MUSIG_PLUGIN_ID));
+    auto config = new_config(rust::String(name.toStdString()), network(),
+                             rust::String(m_descriptor.toStdString()), rust::String(),
+                             rust::String(electrumUrl.toStdString()), DUST_LIMIT,
+                             rust::String(MUSIG_PLUGIN_ID));
     config->to_file();
     // Prefilled for the next account of this network.
     ::app_set_last_endpoint(BackendServer::Electrum, network(),

@@ -108,8 +108,13 @@ protected:
     void setEditable(bool editable);
     void clearPayments();
     void updateRemovable();
+    // The notice title of m_failure, empty for a plain signing error.
+    [[nodiscard]] auto failureTitle() const -> QString;
 
 private:
+    // What the notice reports, so a language change can retitle it.
+    enum class Failure : std::uint8_t { Sign, SessionLost, Finalize };
+
     MusigAccountController *m_controller = nullptr;
     QWidget *m_main_widget = nullptr;
 
@@ -140,6 +145,7 @@ private:
     qontrol::Column *m_cosigners_column = nullptr;
     QList<QWidget *> m_cosigner_rows;
     catalog::Notice *m_notice = nullptr;
+    Failure m_failure = Failure::Sign;
     catalog::Button *m_cancel_btn = nullptr;
     catalog::Button *m_sign_btn = nullptr;
     catalog::Button *m_broadcast_btn = nullptr;

@@ -642,6 +642,15 @@ mod ffi {
         pub descriptor: String,
     }
 
+    /// Result of saving the Electrum endpoint of a MuSig2 account.
+    #[derive(Debug, Clone)]
+    pub struct MusigElectrumUrlResult {
+        /// The url was written to the config.
+        pub saved: bool,
+        /// The listener started on it: false for an empty or unparsable url.
+        pub started: bool,
+    }
+
     /// Signing progress of one cosigner on a PSBT.
     #[derive(Debug, Clone)]
     pub struct MusigCosignerStatus {
@@ -1575,7 +1584,7 @@ mod ffi {
         fn stop_electrum(self: &mut MusigAccount);
         fn electrum_url(self: &MusigAccount) -> String;
         /// Saves the endpoint to the config and restarts the listener.
-        fn set_electrum_url(self: &mut MusigAccount, url: String) -> bool;
+        fn set_electrum_url(self: &mut MusigAccount, url: String) -> MusigElectrumUrlResult;
 
         fn try_recv(self: &mut MusigAccount) -> Box<Poll>;
         fn take_receiver(self: &mut MusigAccount) -> Box<NotificationReceiver>;
@@ -2039,11 +2048,12 @@ pub use config::{
 pub use ffi::{
     BackendInfo, CameraFrameResult, CameraListResult, FingerprintsResult, KeyDescriptor, KeyDevice,
     KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice,
-    LogLevel, MnemonicResult, Network, Notification, NotificationFlag, Output, PolicyCompileResult,
-    PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey,
-    PolicyReviewPath, PolicySemantic, PolicySpec, PsbtFileResult, PsbtPayloadResult,
-    PsbtValidation, QrErrorKind, QrMessageResult, QrResponseKind, RegtestDefaults, SignResult,
-    SigningCandidate, SigningPlan, TransactionSimulation, TransactionTemplate,
+    LogLevel, MnemonicResult, MusigRound, Network, Notification, NotificationFlag, Output,
+    PolicyCompileResult, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicyReview,
+    PolicyReviewKey, PolicyReviewPath, PolicySemantic, PolicySpec, PsbtFileResult,
+    PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult, QrResponseKind,
+    RegtestDefaults, SignResult, SigningCandidate, SigningPlan, TransactionSimulation,
+    TransactionTemplate,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{

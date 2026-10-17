@@ -100,9 +100,12 @@ void Settings::view() {
 
 void Settings::onSaveClicked() {
     QString url = m_electrum_url_input->text().trimmed();
-    m_controller->setElectrumUrl(url);
-    if (m_controller->electrumUrl() != url) {
+    auto result = m_controller->setElectrumUrl(url);
+    if (!result.saved) {
         m_electrum_note->setText(TR("musig-settings-save-failed"));
+        m_electrum_note->setVisible(true);
+    } else if (!url.isEmpty() && !result.started) {
+        m_electrum_note->setText(TR("musig-settings-invalid-url"));
         m_electrum_note->setVisible(true);
     } else {
         m_electrum_note->setVisible(false);

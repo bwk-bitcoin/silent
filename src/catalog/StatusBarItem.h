@@ -14,6 +14,7 @@ public:
     explicit StatusBarItem(QWidget *parent = nullptr);
     void setLabel(const QString &label);
     void setOn(bool on);
+    void setToggleEnabled(bool enabled);
 
 signals:
     void toggled(bool checked);

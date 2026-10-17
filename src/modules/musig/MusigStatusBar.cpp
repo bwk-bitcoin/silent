@@ -50,6 +50,9 @@ void MusigStatusBar::onElectrumConnected(const QString &address) {
 
 void MusigStatusBar::onElectrumDisconnected() {
     m_electrum_item->setOn(false);
+    if (m_electrum_url.isEmpty()) {
+        return;
+    }
     m_electrum_item->setLabel(TR("status-electrum-disconnected"));
 }
 
@@ -65,7 +68,10 @@ void MusigStatusBar::onElectrumToggled(bool checked) {
 
 void MusigStatusBar::onReloadUrl() {
     m_electrum_url = m_controller->electrumUrl();
+    // Nothing to connect to without a url: the switch stays off until one is set.
+    m_electrum_item->setToggleEnabled(!m_electrum_url.isEmpty());
     if (m_electrum_url.isEmpty()) {
+        m_electrum_item->setOn(false);
         m_electrum_item->setLabel(TR("status-not-configured"));
     } else {
         m_electrum_item->setLabel(TR("status-connecting"));

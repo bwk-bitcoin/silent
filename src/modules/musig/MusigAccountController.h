@@ -39,6 +39,8 @@ public:
     auto electrumUrl() -> QString;
     [[nodiscard]] auto roundStatus() const -> MusigRoundStatus;
     [[nodiscard]] auto psbtInFlight() const -> QString;
+    // The finalized transaction hex, empty until the PSBT in flight is finalized.
+    [[nodiscard]] auto finalizedTx() const -> QString;
     // MusigAccount::spend_leaves for the selected coins.
     auto spendLeaves(const QStringList &outpoints) -> MusigSpendLeaves;
 
@@ -69,7 +71,7 @@ public slots:
     void pollCoins();
     void handleNotification(Notification notif);
     void updateCoinLabel(const QString &outpoint, const QString &label);
-    void setElectrumUrl(const QString &url);
+    auto setElectrumUrl(const QString &url) -> MusigElectrumUrlResult;
     void startElectrum();
     void stopElectrum();
     void stop();

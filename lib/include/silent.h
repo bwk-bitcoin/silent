@@ -1016,6 +1016,7 @@ struct CameraFrameResult;
 struct QrDisplayLevels;
 struct PsbtFileResult;
 struct MusigDescriptorResult;
+struct MusigElectrumUrlResult;
 struct MusigCosignerStatus;
 struct MusigRoundStatus;
 struct MusigSpendLeaf;
@@ -1852,6 +1853,19 @@ struct MusigDescriptorResult final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_MusigDescriptorResult
+
+#ifndef CXXBRIDGE1_STRUCT_MusigElectrumUrlResult
+#define CXXBRIDGE1_STRUCT_MusigElectrumUrlResult
+// Result of saving the Electrum endpoint of a MuSig2 account.
+struct MusigElectrumUrlResult final {
+  // The url was written to the config.
+  bool saved CXX_DEFAULT_VALUE(false);
+  // The listener started on it: false for an empty or unparsable url.
+  bool started CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_MusigElectrumUrlResult
 
 #ifndef CXXBRIDGE1_STRUCT_MusigCosignerStatus
 #define CXXBRIDGE1_STRUCT_MusigCosignerStatus
@@ -2731,7 +2745,7 @@ struct MusigAccount final : public ::rust::Opaque {
   ::rust::String electrum_url() const noexcept;
 
   // Saves the endpoint to the config and restarts the listener.
-  bool set_electrum_url(::rust::String url) noexcept;
+  ::MusigElectrumUrlResult set_electrum_url(::rust::String url) noexcept;
 
   ::rust::Box<::Poll> try_recv() noexcept;
   ::rust::Box<::NotificationReceiver> take_receiver() noexcept;

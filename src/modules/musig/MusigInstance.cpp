@@ -17,8 +17,8 @@ MusigInstance::MusigInstance(QString id) : m_id(std::move(id)) {
     m_tab_id = Host::get()->openTab(m_account_widget, this);
     if (m_tab_id == 0) {
         qCritical() << "MusigInstance: failed to open tab for account" << m_id;
-        m_account_widget->deleteLater();
-        m_account_widget = nullptr;
+        // The controller's threads may already run: same teardown as stop().
+        stop();
     } else {
         Host::get()->setTabTitle(m_tab_id, m_id);
     }
@@ -49,6 +49,7 @@ void MusigInstance::stop() {
         m_account_widget->deleteLater();
     }
 
+    m_account.reset();
     m_account_widget = nullptr;
     m_account_controller = nullptr;
 }

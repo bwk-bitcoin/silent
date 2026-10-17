@@ -25,9 +25,10 @@ use crate::account::{
 };
 use crate::config::{parse_electrum_url, Config};
 use crate::ffi::{
-    AddressVerifyInfo, CoinState, MusigCosignerStatus, MusigDescriptorResult, MusigReceiveAddress,
-    MusigRound, MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, PsbtValidation,
-    RustCoin, RustTx, TransactionSimulation, TransactionTemplate, TxResult,
+    AddressVerifyInfo, CoinState, MusigCosignerStatus, MusigDescriptorResult,
+    MusigElectrumUrlResult, MusigReceiveAddress, MusigRound, MusigRoundStatus, MusigSpendLeaf,
+    MusigSpendLeaves, Network, PsbtValidation, RustCoin, RustTx, TransactionSimulation,
+    TransactionTemplate, TxResult,
 };
 
 /// A MuSig2 policy account, wrapping bwk::Account.
@@ -191,6 +192,7 @@ impl MusigAccount {
     }
 
     /// Reload the Electrum endpoint from the config file and start the listener.
+    /// False, and nothing started, when the url is empty or does not parse.
     pub fn start_electrum(&mut self) -> bool {
         let Some(inner) = &mut self.inner else {
             return false;
@@ -202,9 +204,12 @@ impl MusigAccount {
                 return false;
             }
         };
-        if let (Some(host), Some(port)) = parse_electrum_url(&config.electrum_url) {
-            inner.account.set_electrum(host, port.to_string());
-        }
+        let (Some(host), Some(port)) = parse_electrum_url(&config.electrum_url) else {
+            log::error!("start_electrum: no usable electrum url, staying offline");
+            inner.config = config;
+            return false;
+        };
+        inner.account.set_electrum(host, port.to_string());
         inner.config = config;
         inner.account.start_electrum();
         true
@@ -223,15 +228,31 @@ impl MusigAccount {
         }
     }
 
-    /// Save the Electrum endpoint to the config file and restart the listener.
-    pub fn set_electrum_url(&mut self, url: String) -> bool {
+    /// Save the Electrum endpoint to the config file and restart the listener. An empty
+    /// or unparsable url is saved but stops it. A failed write keeps the old url and the
+    /// running listener, and reports `saved` false.
+    pub fn set_electrum_url(&mut self, url: String) -> MusigElectrumUrlResult {
         let Some(inner) = &mut self.inner else {
-            return false;
+            return MusigElectrumUrlResult {
+                saved: false,
+                started: false,
+            };
         };
-        inner.config.electrum_url = url;
-        inner.config.to_file();
+        let previous = std::mem::replace(&mut inner.config.electrum_url, url);
+        if let Err(e) = inner.config.write_file() {
+            log::error!("set_electrum_url: {e}");
+            // Nothing changed on disk: keep the old url and leave Electrum as it runs.
+            inner.config.electrum_url = previous;
+            return MusigElectrumUrlResult {
+                saved: false,
+                started: false,
+            };
+        }
         self.stop_electrum();
-        self.start_electrum()
+        MusigElectrumUrlResult {
+            saved: true,
+            started: self.start_electrum(),
+        }
     }
 
     /// Try to receive a notification (non-blocking).

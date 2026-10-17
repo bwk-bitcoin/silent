@@ -164,19 +164,20 @@ impl Config {
 
     /// Save Config to file.
     pub fn to_file(&self) {
+        if let Err(e) = self.write_file() {
+            log::error!("Config::to_file() {e}");
+        }
+    }
+
+    /// Save Config to file, reporting a failed write.
+    pub(crate) fn write_file(&self) -> Result<(), String> {
         let path = self.config_path();
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-
-        match serde_json::to_string_pretty(self) {
-            Ok(content) => {
-                if let Err(e) = fs::write(&path, content) {
-                    log::error!("Config::to_file() failed to write: {e}");
-                }
-            }
-            Err(e) => log::error!("Config::to_file() failed to serialize: {e}"),
-        }
+        let content =
+            serde_json::to_string_pretty(self).map_err(|e| format!("failed to serialize: {e}"))?;
+        fs::write(&path, content).map_err(|e| format!("failed to write: {e}"))
     }
 
     /// Check if the config was loaded successfully.

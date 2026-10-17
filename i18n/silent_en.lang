@@ -24,7 +24,7 @@ common-testing => "Testing…"
 common-yes => "Yes"
 confirm-send-broadcasting => "Broadcasting…"
 confirm-send-failed => "Broadcast Failed\n\n%1"
-confirm-send-success => "Transaction Sent\n\nTxid: %1"
+confirm-send-success => "Transaction Sent\n\nTxid:"
 confirm-transaction-title => "Confirm Transaction"
 create-account-electrum => "Electrum:"
 create-account-name => "Account Name:"
@@ -1021,6 +1021,8 @@ musig-settings-cosigners => "Cosigners"
 
 musig-settings-save-failed => "Could not save the Electrum server"
 
+musig-settings-invalid-url => "Invalid Electrum server address"
+
 musig-send-prepare => "Prepare"
 
 musig-receive-address => "MuSig2 Address"
@@ -1100,7 +1102,7 @@ musig-create-key-path => "The first path spends as one key, with no script"
 musig-create-too-many-leaves
 => "This policy needs %1 tap leaves, at most %2 are allowed: lower a threshold or split the keys over more paths";;
 
-musig-create-path-error => "Path %1: %2"
+musig-create-path-error => "Spend Path %1: %2"
 
 musig-create-pick-keys => "Pick the keys of each path."
 

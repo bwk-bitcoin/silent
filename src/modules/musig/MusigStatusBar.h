@@ -8,7 +8,7 @@ class MusigAccountController;
 namespace catalog {
 class Separator;
 class StatusBarItem;
-}
+} // namespace catalog
 
 // The Electrum half of sp's StatusBar, a musig account has no scanner.
 class MusigStatusBar : public QWidget {

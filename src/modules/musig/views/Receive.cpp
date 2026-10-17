@@ -52,10 +52,8 @@ void Receive::doConnect() {
 }
 
 void Receive::view() {
-    auto *col = (new qontrol::Column)
-                    ->pushSpacer(resolve(Spacing::XXL))
-                    ->push(m_section)
-                    ->pushSpacer();
+    auto *col =
+        (new qontrol::Column)->pushSpacer(resolve(Spacing::XXL))->push(m_section)->pushSpacer();
     setScreenContent(this, m_main_widget, dashboard(TR("receive-title"), col));
 }
 

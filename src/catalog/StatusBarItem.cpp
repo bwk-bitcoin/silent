@@ -30,4 +30,8 @@ void StatusBarItem::setOn(bool on) {
     m_toggle->setChecked(on);
 }
 
+void StatusBarItem::setToggleEnabled(bool enabled) {
+    m_toggle->setEnabled(enabled);
+}
+
 } // namespace catalog

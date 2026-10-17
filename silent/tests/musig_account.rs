@@ -3,6 +3,7 @@
 
 mod common;
 
+use std::os::unix::fs::PermissionsExt;
 use std::str::FromStr;
 
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpriv, Xpub};
@@ -261,6 +262,73 @@ fn new_musig_account_on_regtest() {
     cleanup_test_account(&account_name);
 }
 
+/// A closed local port: a url that parses, with nothing listening behind it.
+const UNREACHABLE_ELECTRUM_URL: &str = "127.0.0.1:1";
+
+#[test]
+fn musig_account_without_electrum_url_stays_offline() {
+    let account_name = test_account_name();
+    let config = write_musig_config(&account_name, two_of_two());
+    let mut account = new_musig_account(account_name.clone());
+    assert!(
+        account.is_ok(),
+        "account should open: {}",
+        account.get_error()
+    );
+
+    assert!(
+        !account.start_electrum(),
+        "an empty electrum url should not start"
+    );
+    let garbage = account.set_electrum_url("not a url".to_string());
+    assert!(garbage.saved, "a garbage electrum url is still saved");
+    assert!(!garbage.started, "a garbage electrum url should not start");
+    assert_eq!(
+        account.electrum_url(),
+        "not a url",
+        "the url is saved as typed"
+    );
+
+    let parsable = account.set_electrum_url(UNREACHABLE_ELECTRUM_URL.to_string());
+    assert!(parsable.saved, "a parsable electrum url is saved");
+    assert!(parsable.started, "a parsable electrum url should start");
+    let cleared = account.set_electrum_url(String::new());
+    assert!(cleared.saved, "the cleared url is saved");
+    assert!(
+        !cleared.started,
+        "clearing the url should stop electrum, not restart it on the old host"
+    );
+    assert!(
+        account.electrum_url().is_empty(),
+        "the cleared url is saved, got {}",
+        account.electrum_url()
+    );
+    assert!(
+        !account.start_electrum(),
+        "a cleared url should not start on the old host"
+    );
+
+    // A read-only config file makes the write fail.
+    let config_path = config.config_path();
+    let read_only = std::fs::Permissions::from_mode(0o444);
+    std::fs::set_permissions(&config_path, read_only).expect("make config read-only");
+    let unwritable = account.set_electrum_url(UNREACHABLE_ELECTRUM_URL.to_string());
+    let writable = std::fs::Permissions::from_mode(0o644);
+    std::fs::set_permissions(&config_path, writable).expect("make config writable again");
+    assert!(
+        !unwritable.saved && !unwritable.started,
+        "a failed config write is not saved and starts nothing"
+    );
+    assert!(
+        account.electrum_url().is_empty(),
+        "a failed write keeps the previous url, got {}",
+        account.electrum_url()
+    );
+    drop(account);
+
+    cleanup_test_account(&account_name);
+}
+
 #[test]
 fn musig_account_addresses() {
     let account_name = test_account_name();
@@ -346,10 +414,16 @@ fn musig_spend_leaves_key_path_first() {
 
 #[test]
 fn missing_musig_account() {
-    let account = new_musig_account(format!("does_not_exist_{}", std::process::id()));
+    let mut account = new_musig_account(format!("does_not_exist_{}", std::process::id()));
     assert!(!account.is_ok(), "a missing account should not open");
     assert!(
         !account.get_error().is_empty(),
         "a missing account should carry an error"
     );
+    let result = account.set_electrum_url(UNREACHABLE_ELECTRUM_URL.to_string());
+    assert!(
+        !result.saved,
+        "a missing account cannot save an electrum url"
+    );
+    assert!(!result.started, "a missing account cannot start electrum");
 }

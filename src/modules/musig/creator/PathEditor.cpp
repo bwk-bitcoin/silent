@@ -130,7 +130,6 @@ void PathEditor::init() {
     for (const auto &entry : m_keys) {
         auto *check =
             new catalog::Checkbox(entry.alias.isEmpty() ? entry.fingerprint : entry.alias);
-        check->setProperty("fingerprint", entry.fingerprint);
         auto *fingerprint = new catalog::Label(entry.fingerprint, catalog::LabelRole::Mono);
         fingerprint->setTone(catalog::LabelTone::Muted);
         fingerprint->setVisible(!entry.alias.isEmpty());

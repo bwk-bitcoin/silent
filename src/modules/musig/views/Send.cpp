@@ -349,11 +349,24 @@ void Send::retranslateUi() {
     m_txid_caption->setText(TR("history-txid"));
     m_cancel_btn->setText(TR("common-cancel"));
     m_broadcast_btn->setText(TR("common-broadcast"));
+    m_notice->setTitle(failureTitle());
     // Fee estimate and the reason Prepare is off.
     onProcess();
     if (!m_signing_card->isHidden()) {
         onRoundChanged(m_controller->roundStatus());
     }
+}
+
+auto Send::failureTitle() const -> QString {
+    switch (m_failure) {
+    case Failure::SessionLost:
+        return TR("musig-send-session-lost");
+    case Failure::Finalize:
+        return TR("musig-send-finalize-failed");
+    case Failure::Sign:
+        return {};
+    }
+    return {};
 }
 
 void Send::addCoinColumns() {
@@ -402,8 +415,8 @@ void Send::fillCoins() {
     auto coins = m_controller->getCoins();
     for (const auto &coin : coins) {
         auto outpoint = toQString(coin.outpoint);
-        m_coin_table->addRow(outpoint, {shortenOutpoint(outpoint), toQString(coin.label),
-                                        toBitcoin(coin.value)});
+        m_coin_table->addRow(
+            outpoint, {shortenOutpoint(outpoint), toQString(coin.label), toBitcoin(coin.value)});
         if (selected.contains(outpoint)) {
             kept.append(outpoint);
         }
@@ -429,8 +442,7 @@ auto Send::keyEntries() const -> QHash<QString, KeyEntry> {
     return entries;
 }
 
-auto Send::leafText(const MusigSpendLeaf &leaf, const QHash<QString, KeyEntry> &keys)
-    -> QString {
+auto Send::leafText(const MusigSpendLeaf &leaf, const QHash<QString, KeyEntry> &keys) -> QString {
     QStringList names;
     for (const auto &fingerprint : leaf.fingerprints) {
         auto fp = toQString(fingerprint);
@@ -487,6 +499,12 @@ auto Send::chosenLeaf() const -> const MusigSpendLeaf * {
 }
 
 void Send::updatePrepareState() {
+    // A signing session or a transaction ready to broadcast holds the PSBT in flight.
+    if (!m_signing_card->isHidden()) {
+        m_prepare_btn->setEnabled(false);
+        m_prepare_reason_label->setVisible(false);
+        return;
+    }
     const auto *leaf = chosenLeaf();
     QString reason;
     if (m_controller->getCoins().empty()) {
@@ -672,7 +690,9 @@ void Send::onRoundChanged(const MusigRoundStatus &status) {
         delete m_cosigners_column->take(row);
     }
     m_cosigner_rows.clear();
-    m_broadcast_btn->setVisible(false);
+    // Once finalized only Broadcast is left, a single-key leaf included.
+    bool finalized = !m_controller->finalizedTx().isEmpty();
+    m_broadcast_btn->setVisible(finalized);
     if (!status.is_ok) {
         m_round_label->setText(toQString(status.error));
         m_sign_btn->setVisible(false);
@@ -697,24 +717,23 @@ void Send::onRoundChanged(const MusigRoundStatus &status) {
     default:
         break;
     }
-    m_sign_btn->setVisible(status.round != MusigRound::Ready);
+    m_sign_btn->setVisible(!finalized && status.round != MusigRound::Ready);
 
     auto keys = keyEntries();
     for (const auto &cosigner : status.cosigners) {
         auto fp = toQString(cosigner.fingerprint);
         auto entry = keys.value(fp.toLower());
-        auto *row = (new qontrol::Row)
-                        ->spacing(resolve(Spacing::M))
-                        ->push(new Label(entry.alias.isEmpty() ? fp : entry.alias))
-                        ->push(new Label(TR("musig-send-nonces")
-                                             .arg(cosigner.nonces)
-                                             .arg(cosigner.expected),
-                                         LabelRole::Caption))
-                        ->push(new Label(TR("musig-send-partial-sigs")
-                                             .arg(cosigner.partial_sigs)
-                                             .arg(cosigner.expected),
-                                         LabelRole::Caption))
-                        ->pushSpacer();
+        auto *row =
+            (new qontrol::Row)
+                ->spacing(resolve(Spacing::M))
+                ->push(new Label(entry.alias.isEmpty() ? fp : entry.alias))
+                ->push(
+                    new Label(TR("musig-send-nonces").arg(cosigner.nonces).arg(cosigner.expected),
+                              LabelRole::Caption))
+                ->push(new Label(
+                    TR("musig-send-partial-sigs").arg(cosigner.partial_sigs).arg(cosigner.expected),
+                    LabelRole::Caption))
+                ->pushSpacer();
         // Hidden, the pill keeps its size so every row has the same height.
         auto *pill = catalog::pillSignerSigned();
         auto policy = pill->sizePolicy();
@@ -734,12 +753,13 @@ void Send::onSignRoundClicked() {
 
 void Send::onSigningFailed(const QString &message, plugin::SignError kind) {
     if (kind == plugin::SignError::MusigSession) {
+        m_failure = Failure::SessionLost;
         m_notice->setTone(catalog::Notice::Tone::Warning);
-        m_notice->setTitle(TR("musig-send-session-lost"));
     } else {
+        m_failure = Failure::Sign;
         m_notice->setTone(catalog::Notice::Tone::Error);
-        m_notice->setTitle(QString());
     }
+    m_notice->setTitle(failureTitle());
     m_notice->setText(message);
     m_notice->setVisible(true);
 }
@@ -756,8 +776,9 @@ void Send::onTransactionReady([[maybe_unused]] const QString &tx_hex) {
 
 // Finalizing is pure computation over the PSBT: retrying gives the same error.
 void Send::onFinalizeFailed(const QString &message) {
+    m_failure = Failure::Finalize;
     m_notice->setTone(catalog::Notice::Tone::Error);
-    m_notice->setTitle(TR("musig-send-finalize-failed"));
+    m_notice->setTitle(failureTitle());
     m_notice->setText(message);
     m_notice->setVisible(true);
 }
@@ -776,9 +797,9 @@ void Send::onBroadcastDone(const TxResult &result) {
             TR("common-error"), TR("confirm-send-failed").arg(toQString(result.error))));
         return;
     }
-    AppController::execModal(new catalog::MessageModal(
-        TR("confirm-transaction-title"), TR("confirm-send-success").arg(toQString(result.value)),
-        catalog::MessageModal::Tone::Success));
+    AppController::execModal(
+        new catalog::MessageModal(TR("confirm-transaction-title"), TR("confirm-send-success"),
+                                  catalog::MessageModal::Tone::Success, toQString(result.value)));
     m_signing_card->setVisible(false);
     clearPayments();
     m_coin_table->setSelectedIds({});
