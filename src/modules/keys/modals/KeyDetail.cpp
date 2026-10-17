@@ -9,6 +9,8 @@
 #include "modules/keys/DeviceName.h"
 #include "modules/keys/KeysModule.h"
 #include "modules/keys/KeysView.h"
+#include "modules/musig/MusigModule.h"
+#include "modules/sp/SpModule.h"
 
 #include "AppController.h"
 #include "catalog/Button.h"
@@ -55,6 +57,18 @@ namespace {
 const char *const K_ROUTE_INDEX = "routeIndex";
 const char *const K_DESCRIPTOR = "descriptor";
 const char *const K_XPUB_PATH = "xpubPath";
+
+// The module an account's config belongs to, by its plugin id; the id itself for a
+// module without a name here.
+auto accountModuleLabel(const QString &plugin_id) -> QString {
+    if (plugin_id == SP_PLUGIN_ID) {
+        return TR("keys-accounts-module-sp");
+    }
+    if (plugin_id == MUSIG_PLUGIN_ID) {
+        return TR("keys-accounts-module-musig");
+    }
+    return plugin_id;
+}
 
 // The route kinds a key can be reached over, in the order the picker offers them.
 const QList<KeyRouteKind> ROUTE_KINDS = {KeyRouteKind::Hot, KeyRouteKind::Usb, KeyRouteKind::Qr,
@@ -426,7 +440,7 @@ void KeyDetail::refreshAccounts(const KeyInfo &info) {
     syncRegistrations(list, applies);
     m_accounts_table->clearRows();
     for (const auto &account : list) {
-        auto *module = new Label(TR("keys-accounts-module-sp"), LabelRole::Body);
+        auto *module = new Label(accountModuleLabel(account.plugin_id), LabelRole::Body);
         module->setTone(LabelTone::Muted);
         m_accounts_table->addWidgetRow(account.descriptor, {accountName(account.name), module,
                                                             registrationCell(account, applies)});

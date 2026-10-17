@@ -1,8 +1,11 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QHash>
+#include <QList>
 #include <QObject>
 #include <QString>
+#include <QTimer>
 
 #include <interfaces/signer.h>
 #include <interfaces/types.h>
@@ -53,6 +56,12 @@ public:
     // Whether a device of `kind` (the service's kind text) is registered by its stored
     // proof alone: a Ledger, which keeps no wallet list. Every other kind is asked.
     [[nodiscard]] static auto provesRegistrationByHmac(const QString &kind) -> bool;
+    // Whether a device of `kind` accepts a registration before its user approved it on
+    // screen: a Coldcard, whose enroll request answers at once with the story still up.
+    // Its registration is confirmed by asking until the device lists the descriptor. A
+    // refusal on the device reaches the host no other way, so a descriptor still not
+    // listed after 5 minutes answers as refused.
+    [[nodiscard]] static auto registersBeforeApproval(const QString &kind) -> bool;
 
 signals:
     // Queued to itself so a result never lands before the caller has the ReqId.
@@ -66,6 +75,8 @@ private slots:
     void onDeferredInitialized(ReqId req_id);
     void onDeferredError(ReqId req_id, QString message);
     void onDeferredIsRegistered(ReqId req_id, bool registered);
+    // Asks again whether each registration still waiting on its approval is listed.
+    void onConfirmTick();
 
 protected:
     enum class Request { Xpub, IsRegistered, Register, Sign, DisplayAddress };
@@ -82,6 +93,20 @@ protected:
     void storeHmac(const QString &descriptor, const QString &hmac) const;
 
 private:
+    // A registration the device accepted and its user has still to approve.
+    struct PendingApproval {
+        ReqId request = 0; // the registerDescriptor() request it answers
+        QString descriptor;
+        QElapsedTimer since;
+        ReqId check = 0; // the isDescriptorRegistered request in flight, 0 when none
+    };
+    // Answers a pending approval and forgets it.
+    void finishApproval(qsizetype index, bool registered);
+    // The registerDescriptor() request whose check `req_id` is, forgetting its pending
+    // approval; `req_id` itself when it is no check.
+    [[nodiscard]] auto takeApprovalRequest(ReqId req_id) -> ReqId;
+    void removeApproval(qsizetype index);
+
     HwiModule *m_module = nullptr;
     QString m_id;
     QString m_kind;
@@ -92,4 +117,7 @@ private:
     QHash<ReqId, QString> m_display_addresses;
     // The descriptor of each registration in flight, to store the proof it answers with.
     QHash<ReqId, QString> m_register_descriptors;
+    QList<PendingApproval> m_pending_approvals;
+    // Runs while m_pending_approvals is not empty.
+    QTimer m_confirm_timer;
 };

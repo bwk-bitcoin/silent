@@ -1,0 +1,11 @@
+# coldcard_driver.py: ckcc-protocol (CKCC_PROTOCOL_VERSION of versions.env) and what it
+# needs.
+ckcc-protocol==1.6.0
+click==8.5.0
+ecdsa==0.19.2
+hidapi==0.15.0
+pyaes==1.6.1
+six==1.17.0
+# The Coldcard simulator: unix/requirements.txt of the pinned firmware.
+PySDL2==0.9.17
+Pillow==12.3.0

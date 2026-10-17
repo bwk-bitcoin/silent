@@ -33,6 +33,7 @@
 #include <interfaces/module.h>
 #include <interfaces/signer.h>
 #include <modules/hwi/HwiSigner.h>
+#include <modules/keys/DeviceName.h>
 #include <modules/keys/KeysModule.h>
 #include <modules/musig/MusigModule.h>
 #include <modules/musig/creator/MusigCreatorModule.h>
@@ -511,6 +512,16 @@ auto main(int argc, char *argv[]) -> int {
     check(!HwiSigner::provesRegistrationByHmac(QStringLiteral("coldcard")) &&
               !HwiSigner::provesRegistrationByHmac(QStringLiteral("coldcard-simulator")),
           "a Coldcard on the same seed should still be asked");
+    check(HwiSigner::registersBeforeApproval(QStringLiteral("coldcard")) &&
+              HwiSigner::registersBeforeApproval(QStringLiteral("coldcard-simulator")) &&
+              !HwiSigner::registersBeforeApproval(QStringLiteral("ledger")) &&
+              !HwiSigner::registersBeforeApproval(QStringLiteral("jade")),
+          "only a Coldcard registration should wait for its approval to be listed");
+    check(keys::deviceName(QStringLiteral("coldcard-simulator"), QString()) ==
+                  QStringLiteral("Coldcard Simulator") &&
+              keys::deviceName(QStringLiteral("ledger-simulator"), QString()) ==
+                  QStringLiteral("Ledger Simulator"),
+          "both simulators should show their brand name");
     // ===== musig module lists only musig configs =====
     QString spAccount = QStringLiteral("smoke-sp");
     QString musigAccount = QStringLiteral("smoke-musig");

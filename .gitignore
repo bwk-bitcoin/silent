@@ -5,6 +5,7 @@ __pycache__/
 build/
 build-local/
 build-smoke/
+build-e2e/
 compile_commands.json
 i18n/*.ts
 lib/*

@@ -5,6 +5,7 @@ project(${BIN} VERSION 0.1.0 LANGUAGES CXX)
 
 option(SILENT_I18N_TRACE_IDS "Emit i18n ID pragma trace markers" OFF)
 option(SILENT_BUILD_HOST_SMOKE "Build the plugin host smoke test" OFF)
+option(SILENT_BUILD_DEVICE_E2E "Build the device GUI end to end probe" OFF)
 option(SILENT_MOCK_UI "Run the UI on mock account data instead of the real FFI controller" OFF)
 
 # Build silent Rust crate before main project
@@ -583,6 +584,70 @@ if(SILENT_BUILD_HOST_SMOKE)
         target_link_libraries(${SMOKE} PRIVATE ${SMOKE_ELF_LINK_LIBS})
     else()
         target_link_libraries(${SMOKE}
+            PRIVATE
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Widgets
+            Qt6::Svg
+            qontrol
+        )
+    endif()
+endif()
+
+# Opt-in device GUI end to end probe (tests/e2e/devices/run.sh). OFF by default so it
+# never affects the normal build. When ON it links the shared application sources, as
+# host_smoke does, and drives the real app against Speculos and the Coldcard simulator.
+if(SILENT_BUILD_DEVICE_E2E)
+    set(DEVICE_E2E device_e2e)
+
+    qt_add_executable(${DEVICE_E2E}
+        tests/e2e/devices/probe/main.cpp
+        ${SILENT_APP_SOURCES}
+    )
+
+    add_dependencies(${DEVICE_E2E} RunBeforeBuild qontrol)
+
+    # The catalogs, so TR() returns real text.
+    qt_add_resources(${DEVICE_E2E} device_e2e_i18n_lang
+        PREFIX "/i18n"
+        FILES ${TRANSLATION_LANG_FILES}
+    )
+
+    target_include_directories(${DEVICE_E2E}
+      PRIVATE
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/modules/sp>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/lib/include>
+    )
+
+    target_link_libraries(${DEVICE_E2E}
+        PRIVATE
+        silent_rust
+        ssl
+        crypto
+        pthread
+        dl
+        udev
+    )
+
+    if(UNIX AND NOT APPLE AND (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
+        target_link_options(${DEVICE_E2E} PRIVATE
+            "-Wl,--export-dynamic"
+        )
+
+        set(DEVICE_E2E_ELF_LINK_LIBS)
+        foreach(DEVICE_E2E_LIB Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg qontrol)
+            get_target_property(DEVICE_E2E_LIB_TYPE ${DEVICE_E2E_LIB} TYPE)
+            if(DEVICE_E2E_LIB_TYPE STREQUAL "STATIC_LIBRARY")
+                list(APPEND DEVICE_E2E_ELF_LINK_LIBS "$<LINK_LIBRARY:WHOLE_ARCHIVE,${DEVICE_E2E_LIB}>")
+            else()
+                list(APPEND DEVICE_E2E_ELF_LINK_LIBS "${DEVICE_E2E_LIB}")
+            endif()
+        endforeach()
+
+        target_link_libraries(${DEVICE_E2E} PRIVATE ${DEVICE_E2E_ELF_LINK_LIBS})
+    else()
+        target_link_libraries(${DEVICE_E2E}
             PRIVATE
             Qt6::Core
             Qt6::Gui

@@ -13,6 +13,7 @@ auto brandFor(const QString &kind) -> QString {
     static const QHash<QString, QString> brands = {
         {QStringLiteral("bitbox02"), QStringLiteral("BitBox02")},
         {QStringLiteral("coldcard"), QStringLiteral("Coldcard")},
+        {QStringLiteral("coldcard-simulator"), QStringLiteral("Coldcard Simulator")},
         {QStringLiteral("specter"), QStringLiteral("Specter")},
         {QStringLiteral("specter-simulator"), QStringLiteral("Specter Simulator")},
         {QStringLiteral("ledger"), QStringLiteral("Ledger")},

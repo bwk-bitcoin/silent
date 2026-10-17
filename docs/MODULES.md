@@ -668,6 +668,11 @@ wants it. Because the requester is named rather than counted, asking twice is th
 asking once and there is nothing to balance; a module that is disabled has its request
 dropped for it.
 
+The keys module asks while the Keys tab is visible **or** while any key of the current network
+has a USB route: signing, address checks, xpub fetches and registrations with such a key need
+its device already listed when their flow opens, from whatever tab they start. So polling stays
+on for as long as a USB key exists, by design.
+
 When the global flag flips, **every** module is told through `IModule::setSignerPolling`,
 whether or not it asked for anything, and a module enabled later is told the current value as
 it activates. A module that owns a device service starts or stops it there; one that polls

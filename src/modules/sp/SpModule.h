@@ -6,6 +6,9 @@
 #include <memory>
 #include <vector>
 
+// Plugin id of a silent payments account's config.
+inline constexpr auto SP_PLUGIN_ID = "sp";
+
 class SpModule final : public IModule {
     Q_OBJECT
 

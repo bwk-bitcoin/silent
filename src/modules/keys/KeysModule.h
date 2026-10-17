@@ -119,6 +119,9 @@ public:
 
     [[nodiscard]] static Network network();
     void setNetwork(Network network);
+    // The Keys tab shows or hides: devices are polled while it shows, see
+    // updateSignerPolling().
+    void setTabShown(bool shown);
 
     // The keys of the active network: a request's while it runs, else the tab's.
     [[nodiscard]] QList<KeyInfo> keys() const;
@@ -264,6 +267,10 @@ private slots:
     void onInstanceRegistered(const QString &id);
     void onInstanceRemoved(const QString &id);
     void onDevicesChanged();
+    // Asks the host to poll the devices while the Keys tab shows or a key of the
+    // network has a USB route: every flow signing, checking or registering with such a
+    // key needs its device listed, from whatever tab it starts.
+    void updateSignerPolling();
     // The answers of a key's connected device to registerDescriptor().
     void onDeviceIsRegistered(ReqId req_id, bool registered);
     void onDeviceRegistered(ReqId req_id, bool registered);
@@ -338,6 +345,7 @@ private:
     std::unique_ptr<KeysBus> m_bus;
     HwiModule *m_hwi = nullptr;
     QPointer<KeysTab> m_tab;
+    bool m_tab_shown = false;
     ReqId m_next_req_id = 0;
     // The network the Rust manager holds. network() answers from it rather than from
     // ::hwi_config_network(), which is read from disk and can drift from the manager

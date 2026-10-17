@@ -197,13 +197,13 @@ void KeysTab::view() {
 
 void KeysTab::showEvent(QShowEvent *event) {
     qontrol::Screen::showEvent(event);
-    // Nothing polls the bus until someone is looking at it.
-    Host::get()->requestSignerPolling(m_module, true);
+    // Nothing polls the bus until someone is looking at it, or a key needs a device.
+    m_module->setTabShown(true);
 }
 
 void KeysTab::hideEvent(QHideEvent *event) {
     qontrol::Screen::hideEvent(event);
-    Host::get()->requestSignerPolling(m_module, false);
+    m_module->setTabShown(false);
 }
 
 void KeysTab::onNetworkChanged() {

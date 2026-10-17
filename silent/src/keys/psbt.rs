@@ -20,6 +20,7 @@ use bwk_sp::{
             PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE, PSBT_IN_SP_SPEND_BIP32_DERIVATION,
             PSBT_IN_SP_TWEAK, PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL,
         },
+        taproot::is_partial_tap_tree,
         Error as PsbtV2Error, PsbtV2,
     },
 };
@@ -72,7 +73,13 @@ fn scan(psbt: &PsbtV2) -> Result<Scan, Error> {
         for (fingerprint, _) in input.psbt.bip32_derivation.values() {
             required.insert(*fingerprint);
         }
-        for (_, (fingerprint, _)) in input.psbt.tap_key_origins.values() {
+        // A PSBT restricted to one leaf keeps every key origin (bwk_descriptor::restrict),
+        // the keys outside the leaf with no leaf hash: only the leaf's keys sign it.
+        let restricted = is_partial_tap_tree(&input.psbt);
+        for (leaf_hashes, (fingerprint, _)) in input.psbt.tap_key_origins.values() {
+            if restricted && leaf_hashes.is_empty() {
+                continue;
+            }
             required.insert(*fingerprint);
         }
 
@@ -721,6 +728,7 @@ mod tests {
         hashes::Hash,
         key::TweakedPublicKey,
         secp256k1::{All, PublicKey, Scalar, Secp256k1, SecretKey},
+        taproot::{LeafVersion, TapLeafHash, TaprootBuilder},
         transaction, Amount, Network, OutPoint, Sequence, TxOut, Txid,
     };
     use bwk_sp::bwk_tx::bwk_psbt::{
@@ -883,6 +891,67 @@ mod tests {
             "expected {fp} in {:?}",
             artifacts.required
         );
+    }
+
+    /// An input of a two-leaf tree listing `listed` of its leaves, key `inside` on
+    /// leaf 0 and key `outside` with no leaf hash.
+    fn two_leaf_input(listed: &[usize], inside: Fingerprint, outside: Fingerprint) -> PsbtInput {
+        let secp = secp();
+        let internal = public_key(&secp, 0xc1).x_only_public_key().0;
+        let scripts: Vec<bitcoin::ScriptBuf> = (0..2u8)
+            .map(|i| bitcoin::ScriptBuf::from_bytes(vec![0x51, i]))
+            .collect();
+        let mut builder = TaprootBuilder::new();
+        for script in &scripts {
+            builder = builder.add_leaf(1, script.clone()).expect("valid leaf");
+        }
+        let info = builder.finalize(&secp, internal).expect("valid tree");
+        let mut input = blank_input();
+        input.psbt.tap_internal_key = Some(internal);
+        for index in listed {
+            let script = &scripts[*index];
+            let control_block = info
+                .control_block(&(script.clone(), LeafVersion::TapScript))
+                .expect("leaf in the tree");
+            input
+                .psbt
+                .tap_scripts
+                .insert(control_block, (script.clone(), LeafVersion::TapScript));
+        }
+        let leaf = TapLeafHash::from_script(&scripts[0], LeafVersion::TapScript);
+        input.psbt.tap_key_origins.insert(
+            public_key(&secp, 0xc2).x_only_public_key().0,
+            (vec![leaf], key_source(inside)),
+        );
+        input.psbt.tap_key_origins.insert(
+            public_key(&secp, 0xc3).x_only_public_key().0,
+            (Vec::new(), key_source(outside)),
+        );
+        input
+    }
+
+    #[test]
+    fn a_leaf_restriction_requires_only_the_leaf_keys() {
+        let secp = secp();
+        let inside = fingerprint(0x21);
+        let outside = fingerprint(0x22);
+        let mut psbt = empty_psbt();
+        psbt.inputs.push(two_leaf_input(&[0], inside, outside));
+
+        let artifacts = inspect(&psbt, &[], &secp).expect("inspect succeeds");
+        assert_eq!(artifacts.required, BTreeSet::from([inside]));
+    }
+
+    #[test]
+    fn a_whole_tree_requires_every_origin() {
+        let secp = secp();
+        let inside = fingerprint(0x23);
+        let outside = fingerprint(0x24);
+        let mut psbt = empty_psbt();
+        psbt.inputs.push(two_leaf_input(&[0, 1], inside, outside));
+
+        let artifacts = inspect(&psbt, &[], &secp).expect("inspect succeeds");
+        assert_eq!(artifacts.required, BTreeSet::from([inside, outside]));
     }
 
     #[test]

@@ -54,6 +54,11 @@ temp-dir = "0.1"
 [build-dependencies]
 cxx-build = "1.0"
 
+# The regtest chain of the device GUI end to end, built with the dev-dependencies.
+[[example]]
+name = "e2e_chain"
+path = "../tests/e2e/devices/chain.rs"
+
 # During the musig2 work silent builds against the local bwk worktree; a rev pin
 # replaces this section once the bwk side lands.
 [patch."https://github.com/pythcoiner/bwk.git"]

@@ -22,6 +22,8 @@ namespace keys::modal {
 struct KeyAccount {
     QString name;
     QString descriptor;
+    // The plugin of the account's config, empty when no config holds the descriptor.
+    QString plugin_id;
 };
 
 // A key's xpub that an account's taproot or segwit sub-account is built on, as the

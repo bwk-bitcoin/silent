@@ -687,6 +687,8 @@ keys-accounts-empty => "No account uses this key."
 
 keys-accounts-module-sp => "SP Accounts"
 
+keys-accounts-module-musig => "MuSig2 Accounts"
+
 keys-fetch-title => "Fetch Xpub"
 
 keys-path-type => "Path Type:"

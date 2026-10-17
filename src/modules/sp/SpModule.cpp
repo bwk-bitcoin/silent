@@ -15,7 +15,6 @@
 #include <vector>
 
 namespace {
-constexpr auto K_SP_PLUGIN_ID = "sp";
 const QString K_CREATE_INSTANCE_ID = QStringLiteral("sp.create");
 } // namespace
 
@@ -39,7 +38,7 @@ bool SpModule::isSpAccount(const QString &account_id) {
         return false;
     }
     return QString::fromStdString(std::string(config->get_plugin_id().c_str()))
-           == QString::fromLatin1(K_SP_PLUGIN_ID);
+           == QString::fromLatin1(SP_PLUGIN_ID);
 }
 
 ReqId SpModule::list() {

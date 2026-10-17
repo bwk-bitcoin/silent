@@ -8,6 +8,8 @@
 #include <QDebug>
 #include <QMap>
 
+#include <algorithm>
+
 #include <common.h>
 #include <silent.h>
 
@@ -26,6 +28,10 @@ auto toState(HwiDeviceState state) -> plugin::SignerState {
 auto toQt(const rust::String &value) -> QString {
     return HwiModule::toQt(value);
 }
+
+// How often a registration waiting on its approval is asked again, and for how long.
+constexpr int CONFIRM_INTERVAL_MS = 1000;
+constexpr qint64 CONFIRM_TIMEOUT_MS = 300000;
 } // namespace
 
 HwiSigner::HwiSigner(HwiModule *module, const HwiDevice &device, QObject *parent)
@@ -45,6 +51,8 @@ HwiSigner::HwiSigner(HwiModule *module, const HwiDevice &device, QObject *parent
     connect(this, &HwiSigner::deferredError, this, &HwiSigner::onDeferredError, deferred);
     connect(this, &HwiSigner::deferredIsRegistered, this, &HwiSigner::onDeferredIsRegistered,
             deferred);
+    m_confirm_timer.setInterval(CONFIRM_INTERVAL_MS);
+    connect(&m_confirm_timer, &QTimer::timeout, this, &HwiSigner::onConfirmTick, qontrol::UNIQUE);
 }
 
 bool HwiSigner::implemented() const {
@@ -102,6 +110,11 @@ bool HwiSigner::ready() const {
 auto HwiSigner::provesRegistrationByHmac(const QString &kind) -> bool {
     // bwk_hwi::DeviceKind's Display of Ledger and LedgerSimulator.
     return kind == QStringLiteral("ledger") || kind == QStringLiteral("ledger-simulator");
+}
+
+auto HwiSigner::registersBeforeApproval(const QString &kind) -> bool {
+    // bwk_hwi::DeviceKind's Display of Coldcard and ColdcardSimulator.
+    return kind == QStringLiteral("coldcard") || kind == QStringLiteral("coldcard-simulator");
 }
 
 auto HwiSigner::storedHmac(const QString &descriptor) const -> QString {
@@ -225,25 +238,44 @@ void HwiSigner::deliver(const HwiEvent &event) {
         if (!event.hmac.empty()) {
             storeHmac(descriptor, toQt(event.hmac));
         }
+        if (event.ok && registersBeforeApproval(m_kind)) {
+            PendingApproval pending{.request = reqId, .descriptor = descriptor};
+            pending.since.start();
+            m_pending_approvals.append(pending);
+            m_confirm_timer.start();
+            break;
+        }
         emit descriptorRegistered(reqId, event.ok);
         break;
     }
-    case HwiEventFlag::WalletIsRegistered:
-        emit descriptorIsRegistered(reqId, event.ok);
+    case HwiEventFlag::WalletIsRegistered: {
+        auto pending = std::ranges::find(m_pending_approvals, reqId, &PendingApproval::check);
+        if (pending == m_pending_approvals.end()) {
+            emit descriptorIsRegistered(reqId, event.ok);
+            break;
+        }
+        pending->check = 0;
+        if (event.ok) {
+            finishApproval(pending - m_pending_approvals.begin(), true);
+        }
         break;
+    }
     case HwiEventFlag::TransactionSigned:
         emit signed_(reqId, toQt(event.payload));
         break;
     case HwiEventFlag::AddressDisplayed:
         emit addressDisplayed(reqId, m_display_addresses.take(reqId));
         break;
-    case HwiEventFlag::Error:
+    case HwiEventFlag::Error: {
         m_display_addresses.remove(reqId);
         m_register_descriptors.remove(reqId);
+        // A failed check answers the registration it confirms.
+        reqId = takeApprovalRequest(reqId);
         emit error(reqId, toQt(event.error),
                    event.error_kind == HwiErrorKind::MusigSession ? plugin::SignError::MusigSession
                                                                   : plugin::SignError::Other);
         break;
+    }
     default:
         break;
     }
@@ -272,7 +304,46 @@ void HwiSigner::onDeferredError(ReqId req_id, QString message) {
     // the maps cannot grow there either; a no-op for every other request kind.
     m_display_addresses.remove(req_id);
     m_register_descriptors.remove(req_id);
-    emit error(req_id, std::move(message));
+    // A check refused before dispatch (the device went away) fails its registration.
+    emit error(takeApprovalRequest(req_id), std::move(message));
+}
+
+void HwiSigner::onConfirmTick() {
+    for (qsizetype i = m_pending_approvals.size() - 1; i >= 0; --i) {
+        auto &pending = m_pending_approvals[i];
+        if (pending.check != 0) {
+            continue;
+        }
+        // Never approved within the time: the device refused or the user left it.
+        if (pending.since.elapsed() > CONFIRM_TIMEOUT_MS) {
+            finishApproval(i, false);
+            continue;
+        }
+        pending.check = dispatch(Request::IsRegistered, pending.descriptor);
+    }
+}
+
+void HwiSigner::finishApproval(qsizetype index, bool registered) {
+    ReqId request = m_pending_approvals.at(index).request;
+    removeApproval(index);
+    emit descriptorRegistered(request, registered);
+}
+
+auto HwiSigner::takeApprovalRequest(ReqId req_id) -> ReqId {
+    auto pending = std::ranges::find(m_pending_approvals, req_id, &PendingApproval::check);
+    if (pending == m_pending_approvals.end()) {
+        return req_id;
+    }
+    ReqId request = pending->request;
+    removeApproval(pending - m_pending_approvals.begin());
+    return request;
+}
+
+void HwiSigner::removeApproval(qsizetype index) {
+    m_pending_approvals.removeAt(index);
+    if (m_pending_approvals.isEmpty()) {
+        m_confirm_timer.stop();
+    }
 }
 
 void HwiSigner::onDeferredIsRegistered(ReqId req_id, bool registered) {

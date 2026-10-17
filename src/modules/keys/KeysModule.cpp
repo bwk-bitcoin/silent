@@ -163,8 +163,11 @@ KeysModule::KeysModule(QObject *parent) : IModule(parent) {
     createModule();
     m_bus = std::make_unique<KeysBus>(this);
     Host::get()->setKeys(m_bus.get(), this);
+    connect(this, &KeysModule::keysChanged, this, &KeysModule::updateSignerPolling,
+            qontrol::UNIQUE);
     bindHwiModule();
     refreshLiveDevices();
+    updateSignerPolling();
 }
 
 KeysModule::~KeysModule() {
@@ -232,6 +235,18 @@ void KeysModule::setNetwork(Network network) {
     }
     s_network = network;
     emit keysChanged();
+}
+
+void KeysModule::setTabShown(bool shown) {
+    m_tab_shown = shown;
+    updateSignerPolling();
+}
+
+void KeysModule::updateSignerPolling() {
+    bool usbKey = std::ranges::any_of(tabKeys(), [](const KeyInfo &info) {
+        return std::ranges::find(info.routes, KeyRouteKind::Usb) != info.routes.end();
+    });
+    Host::get()->requestSignerPolling(this, m_tab_shown || usbKey);
 }
 
 QList<KeyInfo> KeysModule::keys() const {
@@ -1099,6 +1114,9 @@ void KeysModule::bindHwiModule() {
         m_hwi = hwi;
         connect(m_hwi, &HwiModule::devicesChanged, this, &KeysModule::onDevicesChanged,
                 qontrol::UNIQUE);
+        // A network picked in the Keys tab before any device was seen reached only the
+        // keys module: the hwi module follows it now.
+        m_hwi->setNetwork(s_network);
         return;
     }
 }
