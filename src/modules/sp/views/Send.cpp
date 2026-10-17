@@ -1468,13 +1468,12 @@ void Send::onSendTransaction() {
 
     // Run PSBT validation on background thread before showing confirm modal
     setSendEnabled(false);
-    auto *thread = QThread::create([this]() {
-        auto result =
-            m_controller->getAccount().value()->validate_before_sign(*m_psbt_result.value());
+    const Account *workerAccount = &*account.value();
+    auto *thread = QThread::create([this, workerAccount]() {
+        auto result = workerAccount->validate_before_sign(*m_psbt_result.value());
         emit validationReady(result);
     });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    thread->start();
+    m_controller->startWorker(thread);
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
@@ -1576,13 +1575,16 @@ void Send::onSignerSigned(ReqId req_id, const QString &psbt_v2_hex) {
     // handed back, exactly as prepare_transaction's own bytes_hex() used to.
     auto signedPsbtBase64 =
         QString::fromLatin1(QByteArray::fromHex(psbt_v2_hex.toLatin1()).toBase64()).toStdString();
-    auto *thread = QThread::create([this, signedPsbtBase64]() {
-        auto result =
-            m_controller->getAccount().value()->finalize_psbt(rust::String(signedPsbtBase64));
+    auto &account = m_controller->getAccount();
+    if (!account.has_value()) {
+        return;
+    }
+    const Account *workerAccount = &*account.value();
+    auto *thread = QThread::create([this, workerAccount, signedPsbtBase64]() {
+        auto result = workerAccount->finalize_psbt(rust::String(signedPsbtBase64));
         emit signReady(result);
     });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    thread->start();
+    m_controller->startWorker(thread);
 }
 
 void Send::onSignerError(std::optional<ReqId> req_id, const QString &message) {
@@ -1640,13 +1642,16 @@ void Send::onBroadcastConfirmed() {
     m_warning_label->setText(TR("confirm-send-broadcasting"));
     m_warning_label->setVisible(true);
     auto signedHex = m_signed_tx_hex.toStdString();
-    auto *thread = QThread::create([this, signedHex]() {
-        auto broadcastResult =
-            m_controller->getAccount().value()->broadcast_transaction(rust::String(signedHex));
+    auto &account = m_controller->getAccount();
+    if (!account.has_value()) {
+        return;
+    }
+    const Account *workerAccount = &*account.value();
+    auto *thread = QThread::create([this, workerAccount, signedHex]() {
+        auto broadcastResult = workerAccount->broadcast_transaction(rust::String(signedHex));
         emit broadcastReady(broadcastResult);
     });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    thread->start();
+    m_controller->startWorker(thread);
 }
 
 void Send::onBroadcastResult(TxResult result) {

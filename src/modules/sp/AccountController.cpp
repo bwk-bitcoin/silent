@@ -12,12 +12,14 @@
 #include <string>
 #include <utility>
 
-AccountController::AccountController(const QString &account, AccountWidget *widget) {
+// The widget owns the controller: deleting it on stopped() frees both.
+AccountController::AccountController(const QString &account, AccountWidget *widget)
+    : QObject(widget) {
     m_widget = widget;
     init(account);
 }
 
-AccountController::AccountController(AccountWidget *widget) {
+AccountController::AccountController(AccountWidget *widget) : QObject(widget) {
     m_widget = widget;
 }
 
@@ -49,7 +51,6 @@ auto AccountController::init(const QString &account) -> void {
             emit notificationReceived(notif);
         }
     });
-    connect(m_notif_thread, &QThread::finished, m_notif_thread, &QThread::deleteLater);
     m_notif_thread->start();
 
     m_init = true;
@@ -252,35 +253,62 @@ auto AccountController::stop() -> void {
     }
     m_stopping = true;
 
-    if (!m_account.has_value()) {
+    if (!m_account.has_value() && m_workers.isEmpty()) {
         // Nothing to tear down (mock controller or never initialized).
         emit stopped();
         return;
     }
 
-    // Hand the account and notification thread to a background thread so the GUI
-    // thread never blocks. Dropping the account disconnects the notification
-    // channel, which unblocks the notification thread's recv(); the teardown
-    // thread then waits for it to exit and emits stopped() so the owner can
-    // delete the widget once everything is gone.
-    auto account = std::move(m_account.value());
+    // Hand the account and the threads to a background thread so the GUI thread
+    // never blocks. The workers use the account and the views: they end first.
+    // Dropping the account disconnects the notification channel, which unblocks
+    // the notification thread's recv(). Each thread is deleted only after the
+    // wait, so none can be gone before the teardown waits on it, and stopped()
+    // lets the owner delete the widget once everything is gone.
+    auto account = std::move(m_account);
     m_account.reset();
     QThread *notif = m_notif_thread;
     m_notif_thread = nullptr;
+    auto workers = std::move(m_workers);
+    m_workers.clear();
 
-    auto *teardown = QThread::create([acc = std::move(account), notif]() mutable {
-        acc->stop_scanner();
-        acc->stop_electrum();
-        {
-            auto dropped = std::move(acc);
-        } // drop the account, disconnecting the channel
+    auto *teardown = QThread::create([acc = std::move(account), notif, workers]() mutable {
+        for (auto *worker : workers) {
+            worker->wait();
+            worker->deleteLater();
+        }
+        if (acc.has_value()) {
+            acc.value()->stop_scanner();
+            acc.value()->stop_electrum();
+            acc.reset(); // drop the account, disconnecting the channel
+        }
         if (notif != nullptr) {
             notif->wait();
+            notif->deleteLater();
         }
     });
     connect(teardown, &QThread::finished, this, &AccountController::stopped, qontrol::UNIQUE);
     connect(teardown, &QThread::finished, teardown, &QThread::deleteLater);
     teardown->start();
+}
+
+void AccountController::startWorker(QThread *worker) {
+    m_workers.append(worker);
+    connect(worker, &QThread::finished, this, &AccountController::onWorkerFinished,
+            qontrol::UNIQUE);
+    worker->start();
+}
+
+// Once stop() took the workers, its teardown deletes them.
+void AccountController::onWorkerFinished() {
+    for (auto it = m_workers.begin(); it != m_workers.end();) {
+        if ((*it)->isFinished()) {
+            (*it)->deleteLater();
+            it = m_workers.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)

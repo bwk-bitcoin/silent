@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QHash>
+#include <QList>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -32,6 +33,9 @@ public:
     virtual auto addressVerifyInfo(const QString &address) -> AddressVerifyInfo;
     auto coins() -> qontrol::Screen *;
     auto getAccount() -> std::optional<rust::Box<Account>> &;
+    // Starts a worker thread that uses the account or a view: stop() waits for it
+    // before it drops the account and before stopped() lets the owner delete them.
+    void startWorker(QThread *worker);
 
 signals:
     void updateCoins(CoinState coins);
@@ -57,6 +61,7 @@ public slots:
     auto updateCoinLabel(const QString &outpoint, const QString &label) -> void;
     auto startScanner() -> void;
     auto stop() -> void;
+    void onWorkerFinished();
 
     // Screen button actions
     auto historyClicked() -> void;
@@ -81,6 +86,7 @@ private:
     AccountWidget *m_widget;
     std::optional<rust::Box<Account>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;
+    QList<QThread *> m_workers;
     rust::Box<SyncEstimator> m_estimator = new_sync_estimator();
     bool m_init = false;
     bool m_stopping = false;

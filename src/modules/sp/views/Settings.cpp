@@ -261,8 +261,7 @@ void Settings::onActionTestBackend() {
         auto info = ::get_backend_info(rust::String(url));
         emit backendInfoReady(info);
     });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    thread->start();
+    m_controller->startWorker(thread);
 }
 
 void Settings::showTestState(Button *test, Button *testing, Button *test_ok, TestState state) {
@@ -285,8 +284,7 @@ void Settings::fetchBackendInfo() {
         auto info = ::get_backend_info(rust::String(url));
         emit backendInfoReady(info);
     });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    thread->start();
+    m_controller->startWorker(thread);
 }
 
 void Settings::onBackendInfoReady(const BackendInfo &info) {
@@ -368,8 +366,7 @@ void Settings::onActionTestElectrum() {
         auto result = ::test_electrum(rust::String(addr));
         emit electrumTestReady(result);
     });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    thread->start();
+    m_controller->startWorker(thread);
 }
 
 void Settings::onElectrumTestReady(const ConnectionResult &result) {

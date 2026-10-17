@@ -99,8 +99,8 @@ SpInstance::SpInstance(QString id) : m_id(std::move(id)) {
     m_tab_id = Host::get()->openTab(m_account_widget, this);
     if (m_tab_id == 0) {
         qCritical() << "SpInstance: failed to open tab for account" << m_id;
-        m_account_widget->deleteLater();
-        m_account_widget = nullptr;
+        // The controller's threads may already run: same teardown as stop().
+        stop();
     } else {
         Host::get()->setTabTitle(m_tab_id, m_id);
     }
@@ -134,6 +134,7 @@ void SpInstance::stop() {
     }
 
     // The widget now owns its own teardown; drop our non-owning references.
+    m_account.reset();
     m_account_widget = nullptr;
     m_account_controller = nullptr;
 }
