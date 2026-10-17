@@ -32,6 +32,7 @@
 #include <interfaces/instance.h>
 #include <interfaces/module.h>
 #include <interfaces/signer.h>
+#include <modules/hwi/HwiSigner.h>
 #include <modules/keys/KeysModule.h>
 #include <modules/musig/MusigModule.h>
 #include <modules/musig/creator/MusigCreatorModule.h>
@@ -472,6 +473,44 @@ auto main(int argc, char *argv[]) -> int {
     check(queuedSpy.count() == 1, "a queued receiver should get error once");
     check(queuedSpy.kind() == plugin::SignError::MusigSession,
           "the kind should survive a queued connection");
+
+    // ===== HwiSigner error kind =====
+    // deliver() of an error never touches the module, so the signer needs none.
+    HwiDevice smokeDevice;
+    smokeDevice.id = rust::String("smoke-ledger");
+    smokeDevice.kind = rust::String("ledger");
+    smokeDevice.fingerprint = rust::String(K_FINGERPRINT.toStdString());
+    smokeDevice.version = rust::String("2.4.6");
+    smokeDevice.state = HwiDeviceState::Supported;
+    smokeDevice.detail = rust::String("");
+    HwiSigner smokeSigner(nullptr, smokeDevice);
+    smoke::ErrorKindSpy signerSpy;
+    QObject::connect(&smokeSigner, &ISigner::error, &signerSpy, &smoke::ErrorKindSpy::onError,
+                     qontrol::UNIQUE);
+
+    HwiEvent lostEvent;
+    lostEvent.flag = HwiEventFlag::Error;
+    lostEvent.req_id = 11;
+    lostEvent.error = rust::String("lost");
+    lostEvent.error_kind = HwiErrorKind::MusigSession;
+    smokeSigner.deliver(lostEvent);
+    check(signerSpy.count() == 1, "a device error should emit error once");
+    check(signerSpy.kind() == plugin::SignError::MusigSession,
+          "a lost MuSig2 session should reach ISigner::error as MusigSession");
+    check(signerSpy.reqId() == std::optional<ReqId>(11), "the device request id should be carried");
+    check(signerSpy.message() == QStringLiteral("lost"), "the device message should be carried");
+
+    HwiEvent otherEvent = lostEvent;
+    otherEvent.error_kind = HwiErrorKind::Other;
+    smokeSigner.deliver(otherEvent);
+    check(signerSpy.count() == 2 && signerSpy.kind() == plugin::SignError::Other,
+          "any other device error should reach ISigner::error as Other");
+    check(HwiSigner::provesRegistrationByHmac(QStringLiteral("ledger")) &&
+              HwiSigner::provesRegistrationByHmac(QStringLiteral("ledger-simulator")),
+          "a Ledger's stored proof should answer its registration check");
+    check(!HwiSigner::provesRegistrationByHmac(QStringLiteral("coldcard")) &&
+              !HwiSigner::provesRegistrationByHmac(QStringLiteral("coldcard-simulator")),
+          "a Coldcard on the same seed should still be asked");
     // ===== musig module lists only musig configs =====
     QString spAccount = QStringLiteral("smoke-sp");
     QString musigAccount = QStringLiteral("smoke-musig");

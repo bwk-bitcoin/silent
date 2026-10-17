@@ -363,6 +363,7 @@ mod tests {
         record.descriptors.push(DescriptorEntry {
             alias: "descriptor alias".to_string(),
             descriptor: "descriptor string".to_string(),
+            hmac: None,
         });
         record.secret = Some(SecretEnvelope {
             version: 1,

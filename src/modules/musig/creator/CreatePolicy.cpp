@@ -515,7 +515,8 @@ void CreatePolicy::registerNext() {
     }
     m_req_id = keys->newRequest();
     updateStepActions();
-    // Recorded in place, no window: the answer arrives during the call.
+    // No window: the answer comes once the key's device, if connected, has registered
+    // it, and may come during the call otherwise.
     keys->registerDescriptor(m_req_id, network(), m_to_register.first(), m_descriptor);
 }
 

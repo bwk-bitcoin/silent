@@ -529,6 +529,7 @@ version = "0.0.30"
 dependencies = [
  "bitbox-api",
  "bitcoin",
+ "bwk-psbt",
  "coldcard",
  "crossbeam",
  "hex",
@@ -608,6 +609,7 @@ dependencies = [
  "bip39",
  "bwk-descriptor",
  "bwk-error",
+ "bwk-hwi",
  "bwk-keys",
  "bwk-musig",
  "bwk-psbt",
@@ -851,8 +853,6 @@ dependencies = [
 [[package]]
 name = "coldcard"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1178252cca421753b1024d240d43e502b019f51ca8022652587cdad4347d58b7"
 dependencies = [
  "aes",
  "base58",
@@ -1965,7 +1965,7 @@ dependencies = [
 
 [[package]]
 name = "ledger-bitcoin-client"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bitcoin",
  "miniscript",

@@ -417,6 +417,7 @@ mod tests {
             record.descriptors.push(DescriptorEntry {
                 alias: "acct".to_string(),
                 descriptor,
+                hmac: None,
             });
         }
 

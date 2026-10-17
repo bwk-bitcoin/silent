@@ -167,6 +167,11 @@ pub struct XpubEntry {
 pub struct DescriptorEntry {
     pub alias: String,
     pub descriptor: String,
+    /// The proof the device returned when the descriptor was registered on it (Ledger's
+    /// wallet HMAC), 64 lowercase hex characters. One per (fingerprint, descriptor):
+    /// the Ledger derives it from the seed, so every device of the seed shares it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hmac: Option<String>,
 }
 
 /// An encrypted secret at rest. This task only declares the shape; a later task fills
@@ -365,6 +370,7 @@ mod tests {
         record.descriptors.push(DescriptorEntry {
             alias: "descriptor alias".to_string(),
             descriptor: "descriptor string".to_string(),
+            hmac: Some("ab".repeat(32)),
         });
 
         let json = serde_json::to_string(&record).expect("serialize key record");
@@ -376,6 +382,35 @@ mod tests {
         assert_eq!(
             round_tripped, record,
             "round tripped record {round_tripped:?} differs from original {record:?}"
+        );
+    }
+
+    #[test]
+    fn descriptor_entry_without_hmac_deserializes() {
+        let json = r#"{"alias":"a","descriptor":"d"}"#;
+        let entry: DescriptorEntry = serde_json::from_str(json).expect("deserialize entry");
+        assert_eq!(
+            entry,
+            DescriptorEntry {
+                alias: "a".to_string(),
+                descriptor: "d".to_string(),
+                hmac: None,
+            },
+            "an entry stored before the hmac field should load without one"
+        );
+    }
+
+    #[test]
+    fn descriptor_entry_omits_an_absent_hmac() {
+        let entry = DescriptorEntry {
+            alias: "a".to_string(),
+            descriptor: "d".to_string(),
+            hmac: None,
+        };
+        let json = serde_json::to_string(&entry).expect("serialize entry");
+        assert!(
+            !json.contains("hmac"),
+            "serialized entry should omit an absent hmac, got {json}"
         );
     }
 

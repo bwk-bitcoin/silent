@@ -1,6 +1,7 @@
 #include "KeysModule.h"
 
 #include "KeysTab.h"
+#include "KeysView.h"
 #include "modules/hwi/HwiModule.h"
 #include "modules/keys/flow/SigningFlow.h"
 #include "modules/keys/signers/OfflineSigner.h"
@@ -92,6 +93,18 @@ auto KeysBus::cachedXpub(Network network, const QString &fingerprint, const QStr
     -> QString {
     NetworkScope scope(m_module, network);
     return m_module->cachedXpub(fingerprint, path);
+}
+
+auto KeysBus::registrationHmac(Network network, const QString &fingerprint,
+                               const QString &descriptor) const -> QString {
+    NetworkScope scope(m_module, network);
+    return m_module->registrationHmac(fingerprint, descriptor);
+}
+
+auto KeysBus::storeRegistrationHmac(Network network, const QString &fingerprint,
+                                    const QString &descriptor, const QString &hmac) -> bool {
+    NetworkScope scope(m_module, network);
+    return m_module->storeRegistrationHmac(fingerprint, descriptor, hmac);
 }
 
 void KeysBus::registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
@@ -466,6 +479,36 @@ auto KeysModule::cachedXpub(const QString &fingerprint, const QString &path) con
     return {};
 }
 
+auto KeysModule::registrationHmac(const QString &fingerprint, const QString &descriptor) const
+    -> QString {
+    if (rust() == nullptr) {
+        return {};
+    }
+    for (const auto &entry : rust()->key_descriptors(rust::String(fingerprint.toStdString()))) {
+        if (toQt(entry.descriptor) == descriptor) {
+            return toQt(entry.hmac);
+        }
+    }
+    return {};
+}
+
+auto KeysModule::storeRegistrationHmac(const QString &fingerprint, const QString &descriptor,
+                                       const QString &hmac) -> bool {
+    if (rust() == nullptr) {
+        qWarning() << "keys: registration proof not stored, module not ready";
+        return false;
+    }
+    auto result = rust()->set_descriptor_hmac(rust::String(fingerprint.toStdString()),
+                                              rust::String(descriptor.toStdString()),
+                                              rust::String(hmac.toStdString()));
+    if (!result.is_ok) {
+        qWarning() << "keys: registration proof not stored:" << toQt(result.error);
+        return false;
+    }
+    emit keysChanged();
+    return true;
+}
+
 void KeysModule::registerDescriptor(ReqId req_id, const QString &fingerprint,
                                     const QString &descriptor) {
     if (rust() == nullptr) {
@@ -479,7 +522,63 @@ void KeysModule::registerDescriptor(ReqId req_id, const QString &fingerprint,
         return;
     }
     emit keysChanged();
-    m_bus->deliverDescriptorRegistered(req_id, fingerprint);
+    auto device = registrationDevice(fingerprint);
+    if (!device.has_value()) {
+        m_bus->deliverDescriptorRegistered(req_id, fingerprint);
+        return;
+    }
+    connect(device->signer, &ISigner::descriptorIsRegistered, this,
+            &KeysModule::onDeviceIsRegistered, qontrol::UNIQUE);
+    connect(device->signer, &ISigner::descriptorRegistered, this, &KeysModule::onDeviceRegistered,
+            qontrol::UNIQUE);
+    connect(device->signer, &ISigner::error, this, &KeysModule::onDeviceRegisterError,
+            qontrol::UNIQUE);
+    sendDeviceRegistration({.bus_req = req_id,
+                            .fingerprint = fingerprint,
+                            .descriptor = descriptor,
+                            .instance_id = device->instanceId,
+                            .signer = device->signer});
+}
+
+auto KeysModule::registrationDevice(const QString &fingerprint) const
+    -> std::optional<plugin::SignerEntry> {
+    auto infos = keys();
+    auto found = std::ranges::find_if(infos, [&fingerprint](const KeyInfo &info) {
+        return QString::compare(toQt(info.fingerprint), fingerprint, Qt::CaseInsensitive) == 0;
+    });
+    if (found == infos.end() ||
+        std::ranges::find(found->routes, KeyRouteKind::Usb) == found->routes.end()) {
+        return std::nullopt;
+    }
+    return readyDevice(fingerprint);
+}
+
+void KeysModule::sendDeviceRegistration(const DeviceRegistration &registration) {
+    ReqId deviceReq = registration.checking
+                          ? registration.signer->isDescriptorRegistered(registration.descriptor)
+                          : registration.signer->registerDescriptor(registration.descriptor);
+    m_device_registrations.insert(deviceReq, registration);
+}
+
+void KeysModule::finishDeviceRegistration(const DeviceRegistration &registration,
+                                          const std::optional<QString> &error) {
+    if (error.has_value()) {
+        m_bus->deliverError(registration.bus_req, error.value());
+    } else {
+        m_bus->deliverDescriptorRegistered(registration.bus_req, registration.fingerprint);
+    }
+    ISigner *signer = registration.signer.data();
+    if (signer == nullptr) {
+        return;
+    }
+    for (const auto &pending : std::as_const(m_device_registrations)) {
+        if (pending.signer == signer) {
+            return;
+        }
+    }
+    disconnect(signer, &ISigner::descriptorIsRegistered, this, &KeysModule::onDeviceIsRegistered);
+    disconnect(signer, &ISigner::descriptorRegistered, this, &KeysModule::onDeviceRegistered);
+    disconnect(signer, &ISigner::error, this, &KeysModule::onDeviceRegisterError);
 }
 
 void KeysModule::generateMnemonic(ReqId req_id, std::uint32_t word_count) {
@@ -1018,13 +1117,59 @@ void KeysModule::onInstanceRegistered(const QString &id) {
 }
 
 void KeysModule::onInstanceRemoved(const QString &id) {
-    Q_UNUSED(id);
+    for (auto it = m_device_registrations.begin(); it != m_device_registrations.end();) {
+        if (it->instance_id == id) {
+            m_bus->deliverError(it->bus_req, TR("keys-register-disconnected"));
+            it = m_device_registrations.erase(it);
+        } else {
+            ++it;
+        }
+    }
     bindHwiModule();
     refreshLiveDevices();
 }
 
 void KeysModule::onDevicesChanged() {
     refreshLiveDevices();
+}
+
+void KeysModule::onDeviceIsRegistered(ReqId req_id, bool registered) {
+    auto found = m_device_registrations.find(req_id);
+    if (found == m_device_registrations.end() || found->signer != sender() || !found->checking) {
+        return;
+    }
+    auto registration = m_device_registrations.take(req_id);
+    if (registered) {
+        finishDeviceRegistration(registration, std::nullopt);
+        return;
+    }
+    registration.checking = false;
+    sendDeviceRegistration(registration);
+}
+
+void KeysModule::onDeviceRegistered(ReqId req_id, bool registered) {
+    auto found = m_device_registrations.find(req_id);
+    if (found == m_device_registrations.end() || found->signer != sender() || found->checking) {
+        return;
+    }
+    auto registration = m_device_registrations.take(req_id);
+    if (registered) {
+        finishDeviceRegistration(registration, std::nullopt);
+    } else {
+        finishDeviceRegistration(registration, TR("keys-register-account-refused"));
+    }
+}
+
+void KeysModule::onDeviceRegisterError(std::optional<ReqId> req_id, const QString &message,
+                                       [[maybe_unused]] plugin::SignError kind) {
+    if (!req_id.has_value()) {
+        return;
+    }
+    auto found = m_device_registrations.find(req_id.value());
+    if (found == m_device_registrations.end() || found->signer != sender()) {
+        return;
+    }
+    finishDeviceRegistration(m_device_registrations.take(req_id.value()), message);
 }
 
 } // namespace keys

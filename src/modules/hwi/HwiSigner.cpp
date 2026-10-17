@@ -2,6 +2,10 @@
 
 #include "HwiModule.h"
 
+#include "interfaces/host.h"
+#include "interfaces/keys.h"
+
+#include <QDebug>
 #include <QMap>
 
 #include <common.h>
@@ -39,6 +43,8 @@ HwiSigner::HwiSigner(HwiModule *module, const HwiDevice &device, QObject *parent
     connect(this, &HwiSigner::deferredInitialized, this, &HwiSigner::onDeferredInitialized,
             deferred);
     connect(this, &HwiSigner::deferredError, this, &HwiSigner::onDeferredError, deferred);
+    connect(this, &HwiSigner::deferredIsRegistered, this, &HwiSigner::onDeferredIsRegistered,
+            deferred);
 }
 
 bool HwiSigner::implemented() const {
@@ -93,6 +99,30 @@ bool HwiSigner::ready() const {
     return m_state == plugin::SignerState::Ready;
 }
 
+auto HwiSigner::provesRegistrationByHmac(const QString &kind) -> bool {
+    // bwk_hwi::DeviceKind's Display of Ledger and LedgerSimulator.
+    return kind == QStringLiteral("ledger") || kind == QStringLiteral("ledger-simulator");
+}
+
+auto HwiSigner::storedHmac(const QString &descriptor) const -> QString {
+    auto *keys = Host::get()->keys();
+    if (keys == nullptr) {
+        return {};
+    }
+    return keys->registrationHmac(HwiModule::network(), m_fingerprint, descriptor);
+}
+
+void HwiSigner::storeHmac(const QString &descriptor, const QString &hmac) const {
+    auto *keys = Host::get()->keys();
+    // The device did register: a proof not stored only costs a registration later.
+    if (keys == nullptr ||
+        !keys->storeRegistrationHmac(HwiModule::network(), m_fingerprint, descriptor, hmac)) {
+        qWarning() << "hwi: registration proof of" << m_fingerprint << "not stored";
+        return;
+    }
+    qDebug() << "hwi: registration proof of" << m_fingerprint << "stored";
+}
+
 ReqId HwiSigner::init() {
     ReqId reqId = m_module->nextReqId();
     if (ready()) {
@@ -116,16 +146,23 @@ ReqId HwiSigner::getXpub(const QString &path) {
 }
 
 ReqId HwiSigner::isDescriptorRegistered(const QString &descriptor) {
+    // A Ledger keeps no wallet list to ask: its stored proof is the registration. The
+    // proof is per seed, so a Coldcard on the same seed is still asked.
+    if (ready() && provesRegistrationByHmac(m_kind) && !storedHmac(descriptor).isEmpty()) {
+        ReqId reqId = m_module->nextReqId();
+        emit deferredIsRegistered(reqId, true);
+        return reqId;
+    }
     return dispatch(Request::IsRegistered, descriptor);
 }
 
 ReqId HwiSigner::registerDescriptor(const QString &descriptor) {
-    return dispatch(Request::Register, descriptor);
+    ReqId reqId = dispatch(Request::Register, descriptor);
+    m_register_descriptors.insert(reqId, descriptor);
+    return reqId;
 }
 
 ReqId HwiSigner::signWithDescriptor(const QString &psbt_base64, const QString &descriptor) {
-    // The descriptor is not forwarded: bwk's sign_tx takes only the PSBT, and the device
-    // matches it against a wallet registered beforehand.
     return dispatch(Request::Sign, psbt_base64, descriptor);
 }
 
@@ -162,11 +199,10 @@ ReqId HwiSigner::dispatch(Request request, const QString &first, const QString &
         sent = m_module->sendRegister(reqId, m_id, first);
         break;
     case Request::Sign:
-        // second carries the descriptor, unused: bwk's sign_tx takes only the PSBT.
-        sent = m_module->sendSign(reqId, m_id, first);
+        sent = m_module->sendSign(reqId, m_id, first, second, storedHmac(second));
         break;
     case Request::DisplayAddress:
-        sent = m_module->sendDisplayAddress(reqId, m_id, first, second);
+        sent = m_module->sendDisplayAddress(reqId, m_id, first, second, storedHmac(first));
         break;
     }
 
@@ -184,9 +220,14 @@ void HwiSigner::deliver(const HwiEvent &event) {
     case HwiEventFlag::Xpub:
         emit xpub(reqId, toQt(event.payload));
         break;
-    case HwiEventFlag::WalletRegistered:
+    case HwiEventFlag::WalletRegistered: {
+        QString descriptor = m_register_descriptors.take(reqId);
+        if (!event.hmac.empty()) {
+            storeHmac(descriptor, toQt(event.hmac));
+        }
         emit descriptorRegistered(reqId, event.ok);
         break;
+    }
     case HwiEventFlag::WalletIsRegistered:
         emit descriptorIsRegistered(reqId, event.ok);
         break;
@@ -198,7 +239,10 @@ void HwiSigner::deliver(const HwiEvent &event) {
         break;
     case HwiEventFlag::Error:
         m_display_addresses.remove(reqId);
-        emit error(reqId, toQt(event.error));
+        m_register_descriptors.remove(reqId);
+        emit error(reqId, toQt(event.error),
+                   event.error_kind == HwiErrorKind::MusigSession ? plugin::SignError::MusigSession
+                                                                  : plugin::SignError::Other);
         break;
     default:
         break;
@@ -224,8 +268,13 @@ void HwiSigner::onDeferredInitialized(ReqId req_id) {
 }
 
 void HwiSigner::onDeferredError(ReqId req_id, QString message) {
-    // Covers a displayAddress() refused before dispatch, so the map cannot grow there
-    // either; a no-op for every other request kind.
+    // Covers a displayAddress() or registerDescriptor() refused before dispatch, so
+    // the maps cannot grow there either; a no-op for every other request kind.
     m_display_addresses.remove(req_id);
+    m_register_descriptors.remove(req_id);
     emit error(req_id, std::move(message));
+}
+
+void HwiSigner::onDeferredIsRegistered(ReqId req_id, bool registered) {
+    emit descriptorIsRegistered(req_id, registered);
 }

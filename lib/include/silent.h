@@ -971,6 +971,7 @@ enum class LogLevel : ::std::uint8_t;
 enum class NotificationFlag : ::std::uint8_t;
 enum class HwiDeviceState : ::std::uint8_t;
 enum class HwiEventFlag : ::std::uint8_t;
+enum class HwiErrorKind : ::std::uint8_t;
 enum class KeyRouteKind : ::std::uint8_t;
 enum class KeyUnusableReason : ::std::uint8_t;
 enum class QrResponseKind : ::std::uint8_t;
@@ -1134,6 +1135,16 @@ enum class HwiEventFlag : ::std::uint8_t {
   Error = 7,
 };
 #endif // CXXBRIDGE1_ENUM_HwiEventFlag
+
+#ifndef CXXBRIDGE1_ENUM_HwiErrorKind
+#define CXXBRIDGE1_ENUM_HwiErrorKind
+// Why a device request failed, beyond its message.
+enum class HwiErrorKind : ::std::uint8_t {
+  Other = 0,
+  // The device has no MuSig2 session for the PSBT: restart from round 1.
+  MusigSession = 1,
+};
+#endif // CXXBRIDGE1_ENUM_HwiErrorKind
 
 #ifndef CXXBRIDGE1_ENUM_KeyRouteKind
 #define CXXBRIDGE1_ENUM_KeyRouteKind
@@ -1497,6 +1508,10 @@ struct HwiEvent final {
   ::rust::String error;
   // WalletIsRegistered answers with it; other kinds set it on success.
   bool ok CXX_DEFAULT_VALUE(false);
+  // Error events only, `Other` otherwise.
+  ::HwiErrorKind error_kind;
+  // WalletRegistered only: the device's proof, hex, empty when it returned none.
+  ::rust::String hmac;
 
   using IsRelocatable = ::std::true_type;
 };
@@ -1598,6 +1613,8 @@ struct KeyDescriptor final {
   // The sha256-prefix alias the device knows this descriptor by.
   ::rust::String alias;
   bool registered CXX_DEFAULT_VALUE(false);
+  // The proof the device returned for the registration, hex, empty when none.
+  ::rust::String hmac;
 
   using IsRelocatable = ::std::true_type;
 };
@@ -2416,12 +2433,16 @@ struct HwiService final : public ::rust::Opaque {
 
   bool is_descriptor_registered(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str descriptor) const noexcept;
   bool register_descriptor(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str descriptor) const noexcept;
-  bool sign_psbt(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str psbt_base64) const noexcept;
 
-  // Asks the device to show the address at `path`. `descriptor` picks the script
-  // kind: a taproot single key path is shown directly, anything else needs the
-  // wallet to be registered first.
-  bool display_address(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str descriptor, ::rust::Str path) const noexcept;
+  // Signs for the registered wallet of `descriptor`. `hmac` is the stored proof
+  // of the descriptor on this key, hex, empty when none.
+  bool sign_psbt(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str psbt_base64, ::rust::Str descriptor, ::rust::Str hmac) const noexcept;
+
+  // Asks the device to show the address at `path`. A single key BIP-86 path is
+  // shown directly, any other descriptor is shown as the registered wallet's
+  // address at `change/index`. `hmac` is the stored proof of the descriptor on
+  // this key, hex, empty when none.
+  bool display_address(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str descriptor, ::rust::Str path, ::rust::Str hmac) const noexcept;
 
   ~HwiService() = delete;
 
@@ -2518,6 +2539,11 @@ struct KeysModule final : public ::rust::Opaque {
 
   ::rust::Vec<::KeyXpub> key_xpubs(::rust::Str fingerprint) const noexcept;
   ::KeyOpResult register_descriptor(::rust::Str fingerprint, ::rust::Str descriptor) noexcept;
+
+  // Records `descriptor` as registered with the key, with the proof the device
+  // returned (`hmac`, 32 bytes of hex).
+  ::KeyOpResult set_descriptor_hmac(::rust::Str fingerprint, ::rust::Str descriptor, ::rust::Str hmac) noexcept;
+
   ::KeyOpResult unregister_descriptor(::rust::Str fingerprint, ::rust::Str descriptor) noexcept;
   ::rust::Vec<::KeyDescriptor> key_descriptors(::rust::Str fingerprint) const noexcept;
 
@@ -2963,7 +2989,11 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 // Converts a v2 PSBT into its v0 base64 payload for a USB signing device.
 // Cheap; safe to call from the GUI thread. Refuses a PSBT with a pending SP
 // output: a signing device only ever signs its own bip32 inputs, and the
-// signing plan already blocks every other candidate while one is pending.
+// signing plan already blocks every other candidate while one is pending. In
+// MuSig2 round 1 every nonce and partial signature is dropped, as the QR route
+// does, because a device takes any nonce in the PSBT as round 2;
+// `usb_merge_signed` merges into the unstripped original, so the nonces
+// already gathered stay.
 ::PsbtPayloadResult usb_sign_payload(::rust::Str psbt_v2_hex) noexcept;
 
 // Merges a USB device's v0 signed answer back into the original v2 PSBT,

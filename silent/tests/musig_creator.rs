@@ -152,6 +152,13 @@ fn musig_first_receive_address_matches_the_account() {
         "account should open: {}",
         account.get_error()
     );
+    // The Ledger HMAC is looked up and the wallet named by this exact string, so the
+    // installed account must sign with the text the creator registered.
+    assert_eq!(
+        account.descriptor(),
+        compiled.descriptor,
+        "the account should keep the descriptor string the creator compiled"
+    );
 
     let first = account.new_addr();
     assert_eq!(

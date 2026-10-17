@@ -1,10 +1,12 @@
 //! MuSig2 PSBTs through the keys module: the required signers, the round helpers,
-//! the signature merge, a QR round 1 request and the 0x0D response error.
+//! the signature merge, a QR round 1 request, the 0x0D response error and the USB
+//! round 1 payload.
 //!
 //! None of these cases touch a key record, so no datadir override is needed here.
 
 use std::collections::BTreeSet;
 
+use base64::{prelude::BASE64_STANDARD, Engine};
 use bitcoin::{
     absolute::LockTime,
     bip32::{DerivationPath, Fingerprint},
@@ -421,5 +423,72 @@ fn qr_0x0d_is_a_musig_session_error() {
         kind,
         QrErrorKind::MusigSession,
         "expected QrErrorKind::MusigSession, got {kind:?}"
+    );
+}
+
+// ===== USB =====
+
+/// The v0 PSBT of a `usb_sign_payload` answer.
+fn usb_payload_psbt(original: &PsbtV2) -> Psbt {
+    let payload = silent::usb_sign_payload(&hex::encode(v2_bytes(original)));
+    assert!(payload.is_ok, "usb payload refused: {}", payload.error);
+    let bytes = BASE64_STANDARD
+        .decode(&payload.psbt_base64)
+        .expect("payload is base64");
+    Psbt::deserialize(&bytes).expect("payload parses as v0")
+}
+
+#[test]
+fn usb_round1_payload_carries_no_nonce() {
+    let mut original = musig_psbt();
+    add_nonce(&mut original, key_b(), 2);
+    add_partial_sig(&mut original, key_a(), 3);
+
+    let payload = usb_payload_psbt(&original);
+    let input = &payload.inputs[0];
+    assert!(
+        nonces_of(input).is_empty(),
+        "expected no 0x1b in a round 1 payload, got {:?}",
+        nonces_of(input)
+    );
+    assert_eq!(
+        partial_sig_count(input),
+        0,
+        "expected no 0x1c in a round 1 payload"
+    );
+}
+
+#[test]
+fn usb_round2_payload_keeps_every_nonce() {
+    let mut original = musig_psbt();
+    add_nonce(&mut original, key_a(), 1);
+    add_nonce(&mut original, key_b(), 2);
+
+    let payload = usb_payload_psbt(&original);
+    assert_eq!(
+        nonces_of(&payload.inputs[0]),
+        BTreeSet::from([(key_a(), 1), (key_b(), 2)]),
+        "expected both nonces in a round 2 payload"
+    );
+}
+
+#[test]
+fn usb_merge_keeps_the_gathered_nonces() {
+    let mut original = musig_psbt();
+    add_nonce(&mut original, key_b(), 2);
+
+    let mut answer =
+        PsbtV2::from_bitcoin_psbt(usb_payload_psbt(&original)).expect("payload psbt to v2");
+    add_nonce(&mut answer, key_a(), 1);
+    let signed = BASE64_STANDARD.encode(v0_bytes(&answer));
+
+    let merged = silent::usb_merge_signed(&hex::encode(v2_bytes(&original)), &signed);
+    assert!(merged.is_ok, "usb merge refused: {}", merged.error);
+    let merged = PsbtV2::deserialize(&hex::decode(&merged.psbt_v2_hex).expect("merged hex"))
+        .expect("merged psbt parses as v2");
+    assert_eq!(
+        nonces_of(&merged.inputs[0].psbt),
+        BTreeSet::from([(key_a(), 1), (key_b(), 2)]),
+        "expected the device's nonce merged next to the one already gathered"
     );
 }

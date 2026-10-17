@@ -197,21 +197,24 @@ bool HwiModule::sendRegister(ReqId req_id, const QString &device_id, const QStri
                                                   descriptor.toStdString());
 }
 
-bool HwiModule::sendSign(ReqId req_id, const QString &device_id, const QString &psbt_base64) {
+bool HwiModule::sendSign(ReqId req_id, const QString &device_id, const QString &psbt_base64,
+                         const QString &descriptor, const QString &hmac) {
     if (!m_service.has_value()) {
         return false;
     }
-    return m_service.value()->sign_psbt(req_id, device_id.toStdString(),
-                                        psbt_base64.toStdString());
+    return m_service.value()->sign_psbt(req_id, device_id.toStdString(), psbt_base64.toStdString(),
+                                        descriptor.toStdString(), hmac.toStdString());
 }
 
 bool HwiModule::sendDisplayAddress(ReqId req_id, const QString &device_id,
-                                   const QString &descriptor, const QString &path) {
+                                   const QString &descriptor, const QString &path,
+                                   const QString &hmac) {
     if (!m_service.has_value()) {
         return false;
     }
     return m_service.value()->display_address(req_id, device_id.toStdString(),
-                                              descriptor.toStdString(), path.toStdString());
+                                              descriptor.toStdString(), path.toStdString(),
+                                              hmac.toStdString());
 }
 
 QString HwiModule::instanceIdFor(const QString &device_id) {

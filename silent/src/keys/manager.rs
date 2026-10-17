@@ -183,6 +183,17 @@ pub trait KeyManagerImpl {
         alias: String,
         descriptor: String,
     ) -> Result<(), Error>;
+    /// Records `descriptor` as registered for the key, as `set_descriptor_registered`
+    /// does, with the proof the device returned for it.
+    fn set_descriptor_hmac(
+        &mut self,
+        fingerprint: Fingerprint,
+        alias: String,
+        descriptor: String,
+        hmac: [u8; 32],
+    ) -> Result<(), Error>;
+    /// The stored proof of `descriptor` on the key, None when absent or unreadable.
+    fn descriptor_hmac(&self, fingerprint: Fingerprint, descriptor: &str) -> Option<[u8; 32]>;
     fn clear_descriptor_registration(
         &mut self,
         fingerprint: Fingerprint,
@@ -243,6 +254,18 @@ impl KeyManager {
         let saved = self.store.update(fingerprint, apply)?;
         self.records.insert(fingerprint, saved);
         Ok(())
+    }
+
+    /// An sp() descriptor carrying its spend secret is never stored in a record.
+    fn refuse_sp_spend_descriptor(&self, descriptor: &str) -> Result<(), Error> {
+        let Ok(parsed) = SpDescriptor::from_str(descriptor) else {
+            return Ok(());
+        };
+        match parsed.spend_secret_key(&self.secp) {
+            Ok(Some(_)) => Err(Error::SpSpendDescriptor),
+            Ok(None) => Ok(()),
+            Err(e) => Err(Error::DescriptorParse(e.to_string())),
+        }
     }
 
     fn route_is_usable(&self, record: &KeyRecord, kind: RouteKind) -> bool {
@@ -629,34 +652,42 @@ impl KeyManagerImpl for KeyManager {
         alias: String,
         descriptor: String,
     ) -> Result<(), Error> {
-        if let Ok(parsed) = SpDescriptor::from_str(&descriptor) {
-            match parsed.spend_secret_key(&self.secp) {
-                Ok(Some(_)) => return Err(Error::SpSpendDescriptor),
-                Ok(None) => {}
-                Err(e) => return Err(Error::DescriptorParse(e.to_string())),
-            }
-        }
+        self.refuse_sp_spend_descriptor(&descriptor)?;
         self.mutate(fingerprint, |record| {
-            if let Some(entry) = record
-                .descriptors
-                .iter_mut()
-                .find(|entry| entry.descriptor == descriptor)
-            {
-                if entry.alias != alias {
-                    entry.alias = alias;
-                }
-                return Ok(());
-            }
-            let index = record
-                .descriptors
-                .iter()
-                .position(|entry| entry.descriptor > descriptor)
-                .unwrap_or(record.descriptors.len());
-            record
-                .descriptors
-                .insert(index, DescriptorEntry { alias, descriptor });
+            upsert_descriptor_entry(record, alias, descriptor);
             Ok(())
         })
+    }
+
+    fn set_descriptor_hmac(
+        &mut self,
+        fingerprint: Fingerprint,
+        alias: String,
+        descriptor: String,
+        hmac: [u8; 32],
+    ) -> Result<(), Error> {
+        self.refuse_sp_spend_descriptor(&descriptor)?;
+        self.mutate(fingerprint, |record| {
+            upsert_descriptor_entry(record, alias, descriptor).hmac = Some(hex::encode(hmac));
+            Ok(())
+        })
+    }
+
+    fn descriptor_hmac(&self, fingerprint: Fingerprint, descriptor: &str) -> Option<[u8; 32]> {
+        let hmac = self
+            .registered_descriptors(fingerprint)
+            .iter()
+            .find(|entry| entry.descriptor == descriptor)?
+            .hmac
+            .as_ref()?;
+        let mut bytes = [0u8; 32];
+        match hex::decode_to_slice(hmac, &mut bytes) {
+            Ok(()) => Some(bytes),
+            Err(e) => {
+                log::warn!("malformed stored hmac for key {fingerprint}: {e}");
+                None
+            }
+        }
     }
 
     fn clear_descriptor_registration(
@@ -723,6 +754,42 @@ impl KeyManagerImpl for KeyManager {
         let artifacts = inspect_bytes(psbt_bytes, &descriptors, &self.secp)?;
         Ok(self.plan_from_artifacts(&artifacts))
     }
+}
+
+/// The entry of `descriptor` in `record`, inserted in sorted order when missing. An
+/// existing entry takes `alias` and keeps its hmac.
+fn upsert_descriptor_entry(
+    record: &mut KeyRecord,
+    alias: String,
+    descriptor: String,
+) -> &mut DescriptorEntry {
+    let index = match record
+        .descriptors
+        .iter()
+        .position(|entry| entry.descriptor == descriptor)
+    {
+        Some(index) => {
+            record.descriptors[index].alias = alias;
+            index
+        }
+        None => {
+            let index = record
+                .descriptors
+                .iter()
+                .position(|entry| entry.descriptor > descriptor)
+                .unwrap_or(record.descriptors.len());
+            record.descriptors.insert(
+                index,
+                DescriptorEntry {
+                    alias,
+                    descriptor,
+                    hmac: None,
+                },
+            );
+            index
+        }
+    };
+    &mut record.descriptors[index]
 }
 
 /// The fingerprint of `key`'s origin, None for a key without one.
@@ -992,6 +1059,7 @@ mod tests {
         record.descriptors.push(DescriptorEntry {
             alias: "descriptor alias".to_string(),
             descriptor: "descriptor string".to_string(),
+            hmac: None,
         });
         manager.add_key(record).expect("add key");
 
@@ -1707,6 +1775,7 @@ mod tests {
             &[DescriptorEntry {
                 alias: "first alias".to_string(),
                 descriptor: "descriptor".to_string(),
+                hmac: None,
             }],
             "expected a single entry after registering twice with the same alias, got {descriptors:?}"
         );
@@ -1724,6 +1793,7 @@ mod tests {
             &[DescriptorEntry {
                 alias: "new alias".to_string(),
                 descriptor: "descriptor".to_string(),
+                hmac: None,
             }],
             "expected the alias to update in place, got {descriptors:?}"
         );
@@ -1895,6 +1965,161 @@ mod tests {
         assert!(
             descriptors.is_empty(),
             "expected an empty slice for an unknown fingerprint, got {descriptors:?}"
+        );
+    }
+
+    const TEST_HMAC: [u8; 32] = [0xab; 32];
+
+    /// A manager over `root` holding the key `fingerprint(1)`.
+    fn manager_with_key(root: &std::path::Path) -> KeyManager {
+        let mut manager = manager_over(root, Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+        manager
+    }
+
+    #[test]
+    fn set_descriptor_hmac_persists_across_a_reload() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_with_key(tmp.path());
+        manager
+            .set_descriptor_hmac(
+                fingerprint(1),
+                "alias".to_string(),
+                "descriptor".to_string(),
+                TEST_HMAC,
+            )
+            .expect("set hmac");
+
+        let reloaded = manager_over(tmp.path(), Network::Regtest);
+        let hmac = reloaded.descriptor_hmac(fingerprint(1), "descriptor");
+        assert_eq!(
+            hmac,
+            Some(TEST_HMAC),
+            "expected the stored hmac after a reload, got {hmac:?}"
+        );
+    }
+
+    #[test]
+    fn set_descriptor_hmac_inserts_a_missing_entry() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_with_key(tmp.path());
+        manager
+            .set_descriptor_hmac(
+                fingerprint(1),
+                "alias".to_string(),
+                "descriptor".to_string(),
+                TEST_HMAC,
+            )
+            .expect("set hmac");
+
+        let descriptors = manager.registered_descriptors(fingerprint(1));
+        assert_eq!(
+            descriptors,
+            &[DescriptorEntry {
+                alias: "alias".to_string(),
+                descriptor: "descriptor".to_string(),
+                hmac: Some("ab".repeat(32)),
+            }],
+            "expected one entry carrying the hmac, got {descriptors:?}"
+        );
+    }
+
+    #[test]
+    fn set_descriptor_registered_keeps_the_hmac() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_with_key(tmp.path());
+        manager
+            .set_descriptor_hmac(
+                fingerprint(1),
+                "alias".to_string(),
+                "descriptor".to_string(),
+                TEST_HMAC,
+            )
+            .expect("set hmac");
+        manager
+            .set_descriptor_registered(
+                fingerprint(1),
+                "new alias".to_string(),
+                "descriptor".to_string(),
+            )
+            .expect("re-register");
+
+        let descriptors = manager.registered_descriptors(fingerprint(1));
+        assert_eq!(
+            descriptors,
+            &[DescriptorEntry {
+                alias: "new alias".to_string(),
+                descriptor: "descriptor".to_string(),
+                hmac: Some("ab".repeat(32)),
+            }],
+            "expected the alias updated and the hmac kept, got {descriptors:?}"
+        );
+    }
+
+    #[test]
+    fn clear_descriptor_registration_drops_the_hmac() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_with_key(tmp.path());
+        manager
+            .set_descriptor_hmac(
+                fingerprint(1),
+                "alias".to_string(),
+                "descriptor".to_string(),
+                TEST_HMAC,
+            )
+            .expect("set hmac");
+        manager
+            .clear_descriptor_registration(fingerprint(1), "descriptor")
+            .expect("clear registration");
+
+        let hmac = manager.descriptor_hmac(fingerprint(1), "descriptor");
+        assert_eq!(hmac, None, "expected no hmac after clearing, got {hmac:?}");
+        let descriptors = manager.registered_descriptors(fingerprint(1));
+        assert!(
+            descriptors.is_empty(),
+            "expected no descriptors after clearing, got {descriptors:?}"
+        );
+    }
+
+    #[test]
+    fn descriptor_hmac_is_none_for_an_unknown_key_or_descriptor() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_with_key(tmp.path());
+        manager
+            .set_descriptor_hmac(
+                fingerprint(1),
+                "alias".to_string(),
+                "descriptor".to_string(),
+                TEST_HMAC,
+            )
+            .expect("set hmac");
+
+        let unknown_key = manager.descriptor_hmac(fingerprint(99), "descriptor");
+        assert_eq!(
+            unknown_key, None,
+            "expected no hmac for an unknown key, got {unknown_key:?}"
+        );
+        let unknown_descriptor = manager.descriptor_hmac(fingerprint(1), "other");
+        assert_eq!(
+            unknown_descriptor, None,
+            "expected no hmac for an unknown descriptor, got {unknown_descriptor:?}"
+        );
+    }
+
+    #[test]
+    fn set_descriptor_hmac_on_an_unknown_key_is_refused() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_with_key(tmp.path());
+        let result = manager.set_descriptor_hmac(
+            fingerprint(99),
+            "alias".to_string(),
+            "descriptor".to_string(),
+            TEST_HMAC,
+        );
+        assert!(
+            matches!(result, Err(Error::UnknownKey(fp)) if fp == fingerprint(99)),
+            "expected UnknownKey from set_descriptor_hmac, got {result:?}"
         );
     }
 
@@ -2454,6 +2679,7 @@ mod tests {
             &[DescriptorEntry {
                 alias: "alias".to_string(),
                 descriptor: watch_only_descriptor,
+                hmac: None,
             }],
             "expected the watch-only descriptor to register"
         );

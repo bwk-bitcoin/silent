@@ -650,6 +650,15 @@ and starts again from round 1. It is `Other` for everything else.
 route, a device with a screen that can show the address. A hot key, an SD card only key
 or a key with no route cannot.
 
+`registerDescriptor()` records the descriptor on the key and also registers it on the
+key's connected USB device (checked first, registered when the device does not have it);
+it answers once the device has, or at once when no device is connected. The proof a
+device returns for a registration (the Ledger's wallet HMAC) lives on the key record, per
+key and descriptor: `storeRegistrationHmac()` writes it, called by the device module when
+a registration answers with one, and `registrationHmac()` reads it back, called by the
+device module for every request scoped to that wallet (sign, show an address, and the
+registration check, which a stored proof answers without asking a Ledger).
+
 ### Polling is off until a module asks for it
 
 Watching a USB bus is expensive, so it does not run just because the app is open. Any module
@@ -672,8 +681,9 @@ sits over the lower-level `HWI` device trait). It is **descriptor-based**:
   guarantee, `fingerprint()` is shared by every device holding the seed, and `walletName()`
   is a label. Address an entry by its `instanceId`;
 - requests `init()`, `info()` (device kind / version), `getXpub(path)`,
-  `isDescriptorRegistered(descriptor)`, `registerDescriptor(descriptor)`, and
-  `signWithDescriptor(psbt, descriptor)`.
+  `isDescriptorRegistered(descriptor)`, `registerDescriptor(descriptor)`,
+  `signWithDescriptor(psbt, descriptor)` and `displayAddress(descriptor, path, address)`.
+  The last two are scoped to the registered wallet of `descriptor`.
 
 Every request talks to a physical device, so (per the Threading Model) it returns a
 `ReqId` and the result arrives on the matching signal. The C++ interface is the

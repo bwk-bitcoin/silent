@@ -51,9 +51,12 @@ public:
                                         const QString &descriptor);
     [[nodiscard]] bool sendRegister(ReqId req_id, const QString &device_id,
                                     const QString &descriptor);
-    [[nodiscard]] bool sendSign(ReqId req_id, const QString &device_id, const QString &psbt_base64);
+    // `hmac` is the stored registration proof of `descriptor` on the key, empty when none.
+    [[nodiscard]] bool sendSign(ReqId req_id, const QString &device_id, const QString &psbt_base64,
+                                const QString &descriptor, const QString &hmac);
     [[nodiscard]] bool sendDisplayAddress(ReqId req_id, const QString &device_id,
-                                          const QString &descriptor, const QString &path);
+                                          const QString &descriptor, const QString &path,
+                                          const QString &hmac);
     ReqId nextReqId();
     void trackRequest(ReqId req_id, HwiSigner *signer);
 

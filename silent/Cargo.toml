@@ -13,7 +13,7 @@ doctest = false
 bwk = { git = "https://github.com/pythcoiner/bwk.git", rev = "ac015d99e1f4701ee434297c6188b10d921c8c4c", features = ["musig"] }
 bwk-bup = { git = "https://github.com/pythcoiner/bwk.git", rev = "ac015d99e1f4701ee434297c6188b10d921c8c4c", features = ["musig"] }
 bwk-sp = { git = "https://github.com/pythcoiner/bwk.git", rev = "ac015d99e1f4701ee434297c6188b10d921c8c4c" }
-bwk-hwi = { git = "https://github.com/pythcoiner/bwk.git", rev = "ac015d99e1f4701ee434297c6188b10d921c8c4c", features = ["service"] }
+bwk-hwi = { git = "https://github.com/pythcoiner/bwk.git", rev = "ac015d99e1f4701ee434297c6188b10d921c8c4c", features = ["service", "musig"] }
 bwk-qr = { git = "https://github.com/pythcoiner/bwk.git", rev = "ac015d99e1f4701ee434297c6188b10d921c8c4c" }
 bwk-qr-protocol = { git = "https://github.com/pythcoiner/bwk.git", rev = "ac015d99e1f4701ee434297c6188b10d921c8c4c", features = ["bitcoin"] }
 crossbeam = "0.8"

@@ -40,6 +40,17 @@ using RustKeys = ::KeysModule;
 class KeysModule;
 class KeysTab;
 
+// One registerDescriptor() waiting on the key's connected device: its bus request,
+// the device instance and signer, and whether the device is checking or registering.
+struct DeviceRegistration {
+    ReqId bus_req = 0;
+    QString fingerprint;
+    QString descriptor;
+    QString instance_id;
+    QPointer<ISigner> signer;
+    bool checking = true;
+};
+
 // An xpub and the path it was derived at, as a key caches it.
 struct PathXpub {
     QString path;
@@ -66,6 +77,10 @@ public:
               const QString &path) override;
     [[nodiscard]] auto cachedXpub(Network network, const QString &fingerprint,
                                   const QString &path) const -> QString override;
+    [[nodiscard]] auto registrationHmac(Network network, const QString &fingerprint,
+                                        const QString &descriptor) const -> QString override;
+    auto storeRegistrationHmac(Network network, const QString &fingerprint,
+                               const QString &descriptor, const QString &hmac) -> bool override;
     void registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
                             const QString &descriptor) override;
 
@@ -180,8 +195,16 @@ public:
     void fetchXpub(ReqId req_id, const QString &fingerprint, const QString &path);
     // The key's cached xpub at `path`, empty when not cached.
     [[nodiscard]] auto cachedXpub(const QString &fingerprint, const QString &path) const -> QString;
-    // Records `descriptor` as registered with `fingerprint`'s key and answers
-    // `req_id` through the bus's descriptorRegistered or error signal.
+    // The stored registration proof of `descriptor` on the key, empty when none.
+    [[nodiscard]] auto registrationHmac(const QString &fingerprint, const QString &descriptor) const
+        -> QString;
+    // Stores it with the registration of `descriptor`; false when refused.
+    auto storeRegistrationHmac(const QString &fingerprint, const QString &descriptor,
+                               const QString &hmac) -> bool;
+    // Records `descriptor` as registered with `fingerprint`'s key, then registers it on
+    // the key's connected USB device (checked first, registered when not), and
+    // answers `req_id` through the bus's descriptorRegistered or error signal once the
+    // device has. With no connected device it answers at once.
     void registerDescriptor(ReqId req_id, const QString &fingerprint, const QString &descriptor);
 
     // Worker jobs owned by this module, so a thread never outlives the modal that asked
@@ -241,6 +264,11 @@ private slots:
     void onInstanceRegistered(const QString &id);
     void onInstanceRemoved(const QString &id);
     void onDevicesChanged();
+    // The answers of a key's connected device to registerDescriptor().
+    void onDeviceIsRegistered(ReqId req_id, bool registered);
+    void onDeviceRegistered(ReqId req_id, bool registered);
+    void onDeviceRegisterError(std::optional<ReqId> req_id, const QString &message,
+                               plugin::SignError kind);
     void onMnemonicGenerationFinished(ReqId req_id, const MnemonicResult &result);
     void onHotKeySealed(ReqId req_id, SealedHotKey *sealed, const QString &alias);
     void onMnemonicRevealFinished(ReqId req_id, const MnemonicResult &result);
@@ -280,6 +308,15 @@ protected:
         -> ISigner *;
     // A cached signer's key: the fingerprint on the active network.
     [[nodiscard]] auto signerKey(const QString &fingerprint) const -> QString;
+    // The ready device of `fingerprint`'s key when the key has a USB route.
+    [[nodiscard]] auto registrationDevice(const QString &fingerprint) const
+        -> std::optional<plugin::SignerEntry>;
+    // Sends the next device request of `registration`: the check first, then the
+    // registration. Tracked under the device's request id.
+    void sendDeviceRegistration(const DeviceRegistration &registration);
+    // Answers the bus request of `registration` and lets go of its signer.
+    void finishDeviceRegistration(const DeviceRegistration &registration,
+                                  const std::optional<QString> &error);
 
 private:
     friend class NetworkScope;
@@ -311,6 +348,8 @@ private:
     // on every network). Reused while a key's chosen route stays the same; replaced,
     // never mutated, when it changes.
     QHash<QString, ISigner *> m_signers;
+    // Device registrations in flight, by the device's request id.
+    QHash<ReqId, DeviceRegistration> m_device_registrations;
 };
 
 // Makes `network` the keys module's network while it lives: rust(), keys() and the

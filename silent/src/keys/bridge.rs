@@ -17,7 +17,7 @@ use zeroize::Zeroizing;
 
 use crate::config::datadir;
 use crate::ffi;
-use crate::hwi::wallet_name;
+use crate::hwi::{parse_hmac, wallet_name};
 use crate::keys::{
     crypto::{open_mnemonic, Password},
     hot::{seal_mnemonic, sign_hot, sp_descriptor, xpub_at},
@@ -384,29 +384,39 @@ impl KeysModule {
         let Some(manager) = self.inner.as_mut() else {
             return failed_op(&self.error);
         };
-        let fp = match parse_fingerprint(fingerprint) {
+        let fp = match registration_key(fingerprint, descriptor) {
             Ok(fp) => fp,
             Err(e) => return failed_op(&e),
         };
-        let parsed = match Descriptor::from_str(descriptor) {
-            Ok(parsed) => parsed,
-            Err(e) => return failed_op(&format!("invalid descriptor: {e}")),
-        };
-        // `Descriptor::fingerprint()` returns only one arbitrary key's origin (the
-        // first one miniscript's traversal visits), so it cannot be used to check
-        // membership in a multi-key (e.g. multisig) descriptor. For the Miniscript
-        // variant, walk every key origin instead; SP descriptors are inherently
-        // single-key so `fingerprint()` is still exact there.
-        if !descriptor_has_key(&parsed, fp) {
-            return failed_op(&format!(
-                "descriptor's key origins do not include key '{fingerprint}'"
-            ));
-        }
-
         let alias = wallet_name(descriptor);
         match manager.set_descriptor_registered(fp, alias, descriptor.to_string()) {
             Ok(()) => ok_op(),
             Err(e) => failed_op(&format!("register_descriptor {fingerprint}: {e}")),
+        }
+    }
+
+    pub fn set_descriptor_hmac(
+        &mut self,
+        fingerprint: &str,
+        descriptor: &str,
+        hmac: &str,
+    ) -> ffi::KeyOpResult {
+        let Some(manager) = self.inner.as_mut() else {
+            return failed_op(&self.error);
+        };
+        let fp = match registration_key(fingerprint, descriptor) {
+            Ok(fp) => fp,
+            Err(e) => return failed_op(&e),
+        };
+        let hmac = match parse_hmac(hmac) {
+            Ok(Some(hmac)) => hmac,
+            Ok(None) => return failed_op("invalid hmac: empty"),
+            Err(e) => return failed_op(&format!("invalid hmac: {e}")),
+        };
+        let alias = wallet_name(descriptor);
+        match manager.set_descriptor_hmac(fp, alias, descriptor.to_string(), hmac) {
+            Ok(()) => ok_op(),
+            Err(e) => failed_op(&format!("set_descriptor_hmac {fingerprint}: {e}")),
         }
     }
 
@@ -445,6 +455,7 @@ impl KeysModule {
                 descriptor: entry.descriptor.clone(),
                 alias: entry.alias.clone(),
                 registered: true,
+                hmac: entry.hmac.clone().unwrap_or_default(),
             })
             .collect()
     }
@@ -756,19 +767,44 @@ pub fn hot_xpub(material: &HotMaterial, password: &str, path: &str) -> ffi::HotX
     }
 }
 
+/// The key `fingerprint` of a registration of `descriptor`, refused when the
+/// descriptor does not parse or its key origins do not name the key.
+fn registration_key(fingerprint: &str, descriptor: &str) -> Result<Fingerprint, String> {
+    let fp = parse_fingerprint(fingerprint)?;
+    let parsed =
+        Descriptor::from_str(descriptor).map_err(|e| format!("invalid descriptor: {e}"))?;
+    // `Descriptor::fingerprint()` returns only one arbitrary key's origin (the
+    // first one miniscript's traversal visits), so it cannot be used to check
+    // membership in a multi-key (e.g. multisig) descriptor. For the Miniscript
+    // variant, walk every key origin instead; SP descriptors are inherently
+    // single-key so `fingerprint()` is still exact there.
+    if !descriptor_has_key(&parsed, fp) {
+        return Err(format!(
+            "descriptor's key origins do not include key '{fingerprint}'"
+        ));
+    }
+    Ok(fp)
+}
+
 /// Converts `psbt_v2_hex` into its v0 base64 payload for a USB signing device.
 /// Cheap; safe to call from the GUI thread. Refuses a PSBT with a pending SP
 /// output: a signing device only ever signs its own bip32 inputs, and the signing
-/// plan already blocks every other candidate while one is pending.
+/// plan already blocks every other candidate while one is pending. In MuSig2 round 1
+/// every nonce and partial signature is dropped, as the QR route does, because a
+/// device takes any nonce in the PSBT as round 2 (Ledger's rule); `usb_merge_signed`
+/// merges into the unstripped original, so the nonces already gathered stay.
 pub fn usb_sign_payload(psbt_v2_hex: &str) -> ffi::PsbtPayloadResult {
     let bytes = match hex::decode(psbt_v2_hex) {
         Ok(bytes) => bytes,
         Err(e) => return failed_psbt_payload(&format!("invalid psbt hex: {e}")),
     };
-    let parsed = match psbt::parse_v2(&bytes) {
+    let mut parsed = match psbt::parse_v2(&bytes) {
         Ok(parsed) => parsed,
         Err(e) => return failed_psbt_payload(&e.to_string()),
     };
+    if let Err(e) = psbt::strip_musig_round1(&mut parsed) {
+        return failed_psbt_payload(&e.to_string());
+    }
     let v0 = match parsed.into_bitcoin_psbt() {
         Ok(v0) => v0,
         Err(PsbtV2Error::MissingOutputScript) => {

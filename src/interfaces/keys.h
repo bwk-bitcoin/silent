@@ -69,6 +69,14 @@ public:
     // request, so a caller can skip xpub() and the window it opens.
     [[nodiscard]] virtual auto cachedXpub(Network network, const QString &fingerprint,
                                           const QString &path) const -> QString = 0;
+    // The proof the device returned when `descriptor` was registered on the key
+    // `fingerprint` (Ledger's wallet HMAC, hex), empty when none is stored. No request.
+    [[nodiscard]] virtual auto registrationHmac(Network network, const QString &fingerprint,
+                                                const QString &descriptor) const -> QString = 0;
+    // Stores it, recording `descriptor` as registered with the key. False when the key
+    // is unknown or `hmac` is not 32 bytes of hex.
+    virtual auto storeRegistrationHmac(Network network, const QString &fingerprint,
+                                       const QString &descriptor, const QString &hmac) -> bool = 0;
     // Records that `descriptor` is registered with this key, and registers it on the
     // devices that need it.
     virtual void registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,

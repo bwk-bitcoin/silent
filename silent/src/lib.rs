@@ -94,6 +94,14 @@ mod ffi {
         Error,
     }
 
+    /// Why a device request failed, beyond its message.
+    #[derive(Debug, Clone, Copy)]
+    pub enum HwiErrorKind {
+        Other,
+        /// The device has no MuSig2 session for the PSBT: restart from round 1.
+        MusigSession,
+    }
+
     /// How a key can be reached, in priority order. Hot always outranks the others.
     /// `Unknown` never appears in `add_route`/`remove_route`/`set_route_order` calls;
     /// it only shows up in a `SigningCandidate.route` for a fingerprint with no
@@ -379,6 +387,10 @@ mod ffi {
         pub error: String,
         /// WalletIsRegistered answers with it; other kinds set it on success.
         pub ok: bool,
+        /// Error events only, `Other` otherwise.
+        pub error_kind: HwiErrorKind,
+        /// WalletRegistered only: the device's proof, hex, empty when it returned none.
+        pub hmac: String,
     }
 
     /// A registered key as the Keys tab shows it.
@@ -456,6 +468,8 @@ mod ffi {
         /// The sha256-prefix alias the device knows this descriptor by.
         pub alias: String,
         pub registered: bool,
+        /// The proof the device returned for the registration, hex, empty when none.
+        pub hmac: String,
     }
 
     /// Result of a keys module operation carrying no response data.
@@ -1272,17 +1286,28 @@ mod ffi {
             device_id: &str,
             descriptor: &str,
         ) -> bool;
-        fn sign_psbt(self: &HwiService, req_id: u64, device_id: &str, psbt_base64: &str) -> bool;
+        /// Signs for the registered wallet of `descriptor`. `hmac` is the stored proof
+        /// of the descriptor on this key, hex, empty when none.
+        fn sign_psbt(
+            self: &HwiService,
+            req_id: u64,
+            device_id: &str,
+            psbt_base64: &str,
+            descriptor: &str,
+            hmac: &str,
+        ) -> bool;
 
-        /// Asks the device to show the address at `path`. `descriptor` picks the script
-        /// kind: a taproot single key path is shown directly, anything else needs the
-        /// wallet to be registered first.
+        /// Asks the device to show the address at `path`. A single key BIP-86 path is
+        /// shown directly, any other descriptor is shown as the registered wallet's
+        /// address at `change/index`. `hmac` is the stored proof of the descriptor on
+        /// this key, hex, empty when none.
         fn display_address(
             self: &HwiService,
             req_id: u64,
             device_id: &str,
             descriptor: &str,
             path: &str,
+            hmac: &str,
         ) -> bool;
     }
 
@@ -1365,6 +1390,14 @@ mod ffi {
             fingerprint: &str,
             descriptor: &str,
         ) -> KeyOpResult;
+        /// Records `descriptor` as registered with the key, with the proof the device
+        /// returned (`hmac`, 32 bytes of hex).
+        fn set_descriptor_hmac(
+            self: &mut KeysModule,
+            fingerprint: &str,
+            descriptor: &str,
+            hmac: &str,
+        ) -> KeyOpResult;
         fn unregister_descriptor(
             self: &mut KeysModule,
             fingerprint: &str,
@@ -1437,7 +1470,11 @@ mod ffi {
         /// Converts a v2 PSBT into its v0 base64 payload for a USB signing device.
         /// Cheap; safe to call from the GUI thread. Refuses a PSBT with a pending SP
         /// output: a signing device only ever signs its own bip32 inputs, and the
-        /// signing plan already blocks every other candidate while one is pending.
+        /// signing plan already blocks every other candidate while one is pending. In
+        /// MuSig2 round 1 every nonce and partial signature is dropped, as the QR route
+        /// does, because a device takes any nonce in the PSBT as round 2;
+        /// `usb_merge_signed` merges into the unstripped original, so the nonces
+        /// already gathered stay.
         fn usb_sign_payload(psbt_v2_hex: &str) -> PsbtPayloadResult;
 
         /// Merges a USB device's v0 signed answer back into the original v2 PSBT,

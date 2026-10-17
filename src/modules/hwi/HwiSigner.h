@@ -50,17 +50,22 @@ public:
     // Whether the device record still describes this signer. A change means a new
     // instance, because the accessors are immutable.
     [[nodiscard]] bool matches(const HwiDevice &device) const;
+    // Whether a device of `kind` (the service's kind text) is registered by its stored
+    // proof alone: a Ledger, which keeps no wallet list. Every other kind is asked.
+    [[nodiscard]] static auto provesRegistrationByHmac(const QString &kind) -> bool;
 
 signals:
     // Queued to itself so a result never lands before the caller has the ReqId.
     void deferredInfo(ReqId req_id);
     void deferredInitialized(ReqId req_id);
     void deferredError(ReqId req_id, QString message);
+    void deferredIsRegistered(ReqId req_id, bool registered);
 
 private slots:
     void onDeferredInfo(ReqId req_id);
     void onDeferredInitialized(ReqId req_id);
     void onDeferredError(ReqId req_id, QString message);
+    void onDeferredIsRegistered(ReqId req_id, bool registered);
 
 protected:
     enum class Request { Xpub, IsRegistered, Register, Sign, DisplayAddress };
@@ -69,6 +74,12 @@ protected:
     // take it. Either way the caller gets an id and an answer on a signal.
     ReqId dispatch(Request request, const QString &first, const QString &second = QString());
     [[nodiscard]] bool ready() const;
+    // The stored registration proof of `descriptor` on this device's key, empty when
+    // none (or no keys module).
+    [[nodiscard]] auto storedHmac(const QString &descriptor) const -> QString;
+    // Stores the proof a registration of `descriptor` answered with, a warning when the
+    // keys module refuses it.
+    void storeHmac(const QString &descriptor, const QString &hmac) const;
 
 private:
     HwiModule *m_module = nullptr;
@@ -79,4 +90,6 @@ private:
     QString m_detail;
     plugin::SignerState m_state = plugin::SignerState::Unsupported;
     QHash<ReqId, QString> m_display_addresses;
+    // The descriptor of each registration in flight, to store the proof it answers with.
+    QHash<ReqId, QString> m_register_descriptors;
 };
