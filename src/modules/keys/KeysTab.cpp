@@ -414,16 +414,26 @@ void KeysTab::onRegisterConfirmed(const QString &alias) {
         return;
     }
     m_register_alias = alias;
-    m_register_path = KeysModule::defaultXpubPath();
+    m_register_paths = KeysModule::deviceXpubPaths();
+    m_register_xpubs.clear();
     m_register_signer = entry->signer;
     connect(entry->signer, &ISigner::xpub, this, &KeysTab::onRegisterXpub, qontrol::UNIQUE);
     connect(entry->signer, &ISigner::error, this, &KeysTab::onRegisterError, qontrol::UNIQUE);
-    m_register_req = entry->signer->getXpub(m_register_path);
+    requestRegisterXpub();
     rebuildDevices();
+}
+
+void KeysTab::requestRegisterXpub() {
+    m_register_req = m_register_signer->getXpub(m_register_paths.at(m_register_xpubs.size()));
 }
 
 void KeysTab::onRegisterXpub(ReqId req_id, const QString &xpub) {
     if (m_register_req == 0 || req_id != m_register_req) {
+        return;
+    }
+    m_register_xpubs.append({.path = m_register_paths.at(m_register_xpubs.size()), .xpub = xpub});
+    if (m_register_xpubs.size() < m_register_paths.size()) {
+        requestRegisterXpub();
         return;
     }
     finishRegistering();
@@ -432,7 +442,7 @@ void KeysTab::onRegisterXpub(ReqId req_id, const QString &xpub) {
         showRegisterError(TR("keys-register-disconnected"));
         return;
     }
-    auto result = m_module->addDeviceKey(entry.value(), m_register_alias, m_register_path, xpub);
+    auto result = m_module->addDeviceKey(entry.value(), m_register_alias, m_register_xpubs);
     if (!result.is_ok) {
         showRegisterError(KeysModule::toQt(result.error));
     }

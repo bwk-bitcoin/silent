@@ -2,12 +2,16 @@
 
 #include <optional>
 
+#include <QList>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 
 #include <Qontrol>
 #include <interfaces/types.h>
 #include <silent.h>
+
+#include "KeysModule.h"
 
 class ISigner;
 
@@ -21,8 +25,6 @@ class SelectRow;
 } // namespace catalog
 
 namespace keys {
-
-class KeysModule;
 
 // The Keys tab: the devices on the bus and the keys of the network, each in its own
 // foldable section that scrolls on its own. Polling runs only while the tab is
@@ -61,6 +63,8 @@ protected:
     [[nodiscard]] auto keyRow(const KeyInfo &info) const -> catalog::SelectRow *;
     // The alias of the key `fingerprint` is registered as, empty when none is.
     [[nodiscard]] auto keyAlias(const QString &fingerprint) const -> QString;
+    // Asks the registering device for the first path it has not given an xpub for yet.
+    void requestRegisterXpub();
     void finishRegistering();
     void showRegisterError(const QString &message);
 
@@ -81,7 +85,8 @@ private:
     QString m_register_instance;
     QString m_register_name;
     QString m_register_alias;
-    QString m_register_path;
+    QStringList m_register_paths;
+    QList<PathXpub> m_register_xpubs;
     QPointer<ISigner> m_register_signer;
     ReqId m_register_req = 0;
 };

@@ -738,7 +738,13 @@ void addDeviceKeySteps(const QString &id, const QString &alias, QString *fp,
          });
     step(alias + " added with a USB route",
          [fp] { return visible<keys::modal::RegisterDevice>() == nullptr && hasUsbRoute(*fp); },
-         [alias] { check(true, alias + " is a key with a USB route"); });
+         [alias, fp] {
+             check(true, alias + " is a key with a USB route");
+             for (const auto &path : keys::KeysModule::deviceXpubPaths()) {
+                 check(!g_keys->cachedXpub(*fp, path).isEmpty(),
+                       alias + " has its xpub at " + path);
+             }
+         });
 }
 
 struct RoundSigner {

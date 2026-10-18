@@ -930,10 +930,9 @@ auto KeysModule::insertKey(const QString &fingerprint, const QString &alias,
 }
 
 auto KeysModule::addDeviceKey(const plugin::SignerEntry &entry, const QString &alias,
-                              const QString &path, const QString &xpub) -> KeyOpResult {
+                              const QList<PathXpub> &xpubs) -> KeyOpResult {
     QString fingerprint = entry.signer->fingerprint();
-    auto result =
-        insertKey(fingerprint, alias, {KeyRouteKind::Usb}, {{.path = path, .xpub = xpub}});
+    auto result = insertKey(fingerprint, alias, {KeyRouteKind::Usb}, xpubs);
     if (!result.is_ok) {
         return result;
     }
@@ -1019,6 +1018,12 @@ auto KeysModule::accountXpubPaths() -> QStringList {
     int coin = coinType();
     return {defaultXpubPath(), QStringLiteral("m/86'/%1'/0'").arg(coin),
             QStringLiteral("m/48'/%1'/0'/2'").arg(coin), QStringLiteral("m/87'/%1'/0'").arg(coin)};
+}
+
+auto KeysModule::deviceXpubPaths() -> QStringList {
+    int coin = coinType();
+    return {defaultXpubPath(), QStringLiteral("m/86'/%1'/0'").arg(coin),
+            QStringLiteral("m/87'/%1'/0'").arg(coin), QStringLiteral("m/352'/%1'/0'").arg(coin)};
 }
 
 auto KeysModule::toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice {

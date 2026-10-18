@@ -154,9 +154,9 @@ public:
                               const QList<KeyRouteKind> &routes, const QList<PathXpub> &xpubs)
         -> KeyOpResult;
     // Registers the key of a ready device: the key with `alias`, its USB route, the
-    // xpub the device gave at `path` and the device itself, or none of them.
+    // xpubs the device gave and the device itself, or none of them.
     [[nodiscard]] auto addDeviceKey(const plugin::SignerEntry &entry, const QString &alias,
-                                    const QString &path, const QString &xpub) -> KeyOpResult;
+                                    const QList<PathXpub> &xpubs) -> KeyOpResult;
     [[nodiscard]] auto cacheXpub(const QString &fingerprint, const QString &path,
                                  const QString &xpub) -> KeyOpResult;
     [[nodiscard]] auto removeXpub(const QString &fingerprint, const QString &path) -> KeyOpResult;
@@ -171,6 +171,9 @@ public:
     // The paths a key added over QR has its xpubs fetched at: account 0 of BIP84,
     // BIP86, BIP48 P2WSH and BIP87, at the coin type of the network.
     [[nodiscard]] static auto accountXpubPaths() -> QStringList;
+    // The paths a device turned into a key has its xpubs fetched at: account 0 of BIP84,
+    // BIP86, BIP87 and the BIP352 silent payment account, at the coin type of the network.
+    [[nodiscard]] static auto deviceXpubPaths() -> QStringList;
     // 0 on Bitcoin, 1 on every test network.
     [[nodiscard]] static auto coinType() -> int;
     // The Rust handle, for the tab and the modals of this module only. Null until the
