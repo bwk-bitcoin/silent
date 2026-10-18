@@ -436,6 +436,11 @@ void CreatePolicy::initReview() {
     m_backed_up_label->setTone(catalog::LabelTone::Success);
     m_backup_primary_btn = catalog::btnBackupDescriptorPrimary();
     m_backup_btn = catalog::btnBackupDescriptor();
+    m_privacy_check = new catalog::Checkbox(TR("musig-review-privacy-mode"));
+    m_backup_note = new catalog::Label(catalog::LabelRole::Caption);
+    m_backup_note->setTone(catalog::LabelTone::Warning);
+    m_backup_note->setWordWrap(true);
+    m_backup_note->setVisible(false);
     m_review_next_btn = catalog::btnContinue();
     m_review_actions = new catalog::ModalActions;
     m_review_actions->setBack(catalog::ModalActions::Back::Back);
@@ -459,12 +464,17 @@ auto CreatePolicy::viewReview() -> QWidget * {
                        ->push(m_backed_up_label)
                        ->push(m_backup_primary_btn)
                        ->push(m_backup_btn);
+    auto *privacy = (new qontrol::Row)->pushSpacer()->push(m_privacy_check);
     m_review_footer = m_review_actions;
     return (new qontrol::Column)
         ->spacing(resolve(Spacing::M))
         ->push(name)
         ->push(m_review_cards)
-        ->push(backup)
+        ->push((new qontrol::Column)
+                   ->spacing(resolve(Spacing::S))
+                   ->push(backup)
+                   ->push(privacy)
+                   ->push(m_backup_note))
         ->pushSpacer();
 }
 
@@ -1138,12 +1148,25 @@ void CreatePolicy::onBackupClicked() {
     if (path.isEmpty()) {
         return;
     }
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text) ||
-        file.write(m_descriptor.toUtf8()) < 0) {
-        showStatus(TR("musig-review-backup-failed").arg(path), catalog::LabelTone::Error);
+    // BIP138: the descriptor encrypted to its keys, any one of their xpubs decrypts it.
+    auto descriptor = m_descriptor.toStdString();
+    auto file = path.toStdString();
+    auto written = ::save_descriptor_backup(rust::Str(descriptor), rust::Str(file),
+                                            !m_privacy_check->isChecked());
+    if (!written.is_ok) {
+        showStatus(TR("musig-review-backup-failed")
+                       .arg(path, QString::fromStdString(std::string(written.error))),
+                   catalog::LabelTone::Error);
         return;
     }
+    // The BIP asks that the user knows which key cannot decrypt the backup.
+    QStringList excluded;
+    for (const auto &key : written.excluded) {
+        excluded.append(QString::fromStdString(std::string(key)));
+    }
+    m_backup_note->setText(
+        TR("musig-review-backup-excluded").arg(excluded.join(QStringLiteral(", "))));
+    m_backup_note->setVisible(!excluded.isEmpty());
     m_backed_up = true;
     refreshReviewActions();
 }

@@ -678,14 +678,20 @@ musig-register-skip
 => "Skip: continue without registering every device (register them later from the Keys tab)"
 => "Skip: continue without registering every device (register them later from the Keys tab)";;
 musig-review-backed-up => "Descriptor backed up." => "Descriptor backed up."
-musig-review-backup-failed => "Could not write %1." => "Could not write %1."
-musig-review-backup-file => "%1-descriptor.txt" => "%1-descriptor.txt"
-musig-review-backup-filter => "Text files (*.txt)" => "Text files (*.txt)"
+musig-review-backup-excluded
+=> "Left out of the backup, so their holders cannot decrypt it with them: %1"
+=> "Left out of the backup, so their holders cannot decrypt it with them: %1";;
+musig-review-backup-failed => "Could not back the descriptor up to %1: %2" => "NONE"
+musig-review-backup-file => "%1.bip138" => "NONE"
+musig-review-backup-filter => "BIP138 backups (*.bip138)" => "NONE"
 musig-review-checksum => "Checksum" => "NONE"
 musig-review-key-path => "Key path: spends as one key" => "NONE"
 musig-review-leaves => "%1 tap leaves" => "NONE"
 musig-review-mandatory => "signs every spend" => "NONE"
 musig-review-path => "%1: %2" => "%1: %2"
+musig-review-privacy-mode
+=> "Privacy mode: leave the common derivation paths out of the backup"
+=> "Privacy mode: leave the common derivation paths out of the backup";;
 musig-review-reason-backup
 => "Back up the descriptor first."
 => "Back up the descriptor first.";;

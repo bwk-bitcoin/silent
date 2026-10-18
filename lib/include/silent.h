@@ -1017,6 +1017,7 @@ struct CameraListResult;
 struct CameraFrameResult;
 struct QrDisplayLevels;
 struct PsbtFileResult;
+struct DescriptorBackupResult;
 struct MusigDescriptorResult;
 struct MusigElectrumUrlResult;
 struct MusigCosignerStatus;
@@ -1877,6 +1878,20 @@ struct PsbtFileResult final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_PsbtFileResult
+
+#ifndef CXXBRIDGE1_STRUCT_DescriptorBackupResult
+#define CXXBRIDGE1_STRUCT_DescriptorBackupResult
+// Result of writing a descriptor's BIP138 backup.
+struct DescriptorBackupResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  // The key expressions left out of the encryption keys: their holders cannot
+  // decrypt the backup with them.
+  ::rust::Vec<::rust::String> excluded;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_DescriptorBackupResult
 
 #ifndef CXXBRIDGE1_STRUCT_MusigDescriptorResult
 #define CXXBRIDGE1_STRUCT_MusigDescriptorResult
@@ -2956,6 +2971,11 @@ void app_set_last_endpoint(::BackendServer server, ::Network network, ::rust::St
 ::PsbtFileResult sd_save_psbt(::rust::Str path, ::rust::Str psbt_hex) noexcept;
 
 ::PsbtFileResult sd_load_psbt(::rust::Str path) noexcept;
+
+// Writes the BIP138 backup of the musig() `descriptor` to `path`, replacing
+// any file there. `store_common_paths` false is the privacy mode: the common
+// derivation paths stay out of the clear part.
+::DescriptorBackupResult save_descriptor_backup(::rust::Str descriptor, ::rust::Str path, bool store_common_paths) noexcept;
 
 // Create a new config.
 ::rust::Box<::Config> new_config(::rust::String account_name, ::Network network, ::rust::String descriptor, ::rust::String blindbit_url, ::rust::String electrum_url, ::std::uint64_t dust_limit, ::rust::String plugin_id) noexcept;

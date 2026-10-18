@@ -4,6 +4,7 @@
 
 pub mod account;
 pub mod app_state;
+pub mod backup;
 pub mod bbqr;
 pub mod camera;
 pub mod config;
@@ -662,6 +663,16 @@ mod ffi {
         pub psbt_hex: String,
     }
 
+    /// Result of writing a descriptor's BIP138 backup.
+    #[derive(Debug, Clone)]
+    pub struct DescriptorBackupResult {
+        pub is_ok: bool,
+        pub error: String,
+        /// The key expressions left out of the encryption keys: their holders cannot
+        /// decrypt the backup with them.
+        pub excluded: Vec<String>,
+    }
+
     /// Result of validating a musig() descriptor.
     #[derive(Debug, Clone)]
     pub struct MusigDescriptorResult {
@@ -1032,6 +1043,15 @@ mod ffi {
         /// Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
         fn sd_save_psbt(path: &str, psbt_hex: &str) -> PsbtFileResult;
         fn sd_load_psbt(path: &str) -> PsbtFileResult;
+
+        /// Writes the BIP138 backup of the musig() `descriptor` to `path`, replacing
+        /// any file there. `store_common_paths` false is the privacy mode: the common
+        /// derivation paths stay out of the clear part.
+        fn save_descriptor_backup(
+            descriptor: &str,
+            path: &str,
+            store_common_paths: bool,
+        ) -> DescriptorBackupResult;
     }
 
     // ===== Config Methods =====
@@ -2141,6 +2161,29 @@ pub fn sd_save_psbt(path: &str, psbt_hex: &str) -> ffi::PsbtFileResult {
             psbt_hex: String::new(),
         },
         Err(e) => failed_psbt_file(e.to_string()),
+    }
+}
+
+pub fn save_descriptor_backup(
+    descriptor: &str,
+    path: &str,
+    store_common_paths: bool,
+) -> ffi::DescriptorBackupResult {
+    match backup::write_descriptor_backup(
+        descriptor,
+        std::path::Path::new(path),
+        store_common_paths,
+    ) {
+        Ok(written) => ffi::DescriptorBackupResult {
+            is_ok: true,
+            error: String::new(),
+            excluded: written.excluded,
+        },
+        Err(e) => ffi::DescriptorBackupResult {
+            is_ok: false,
+            error: e,
+            excluded: Vec::new(),
+        },
     }
 }
 

@@ -1325,11 +1325,15 @@ musig-review-backed-up => "Descriptor backed up."
 
 musig-review-reason-backup => "Back up the descriptor first."
 
-musig-review-backup-file => "%1-descriptor.txt"
+musig-review-backup-file => "%1.bip138"
 
-musig-review-backup-filter => "Text files (*.txt)"
+musig-review-backup-filter => "BIP138 backups (*.bip138)"
 
-musig-review-backup-failed => "Could not write %1."
+musig-review-backup-failed => "Could not back the descriptor up to %1: %2"
+
+musig-review-backup-excluded => "Left out of the backup, so their holders cannot decrypt it with them: %1"
+
+musig-review-privacy-mode => "Privacy mode: leave the common derivation paths out of the backup"
 
 musig-register-lead => "Click a device to register the account on it."
 

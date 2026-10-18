@@ -22,6 +22,7 @@ crossbeam = "0.8"
 # that fails to enumerate is dropped silently.
 tracing = { version = "0.1", features = ["log"] }
 fs2 = "0.4"
+bip138 = { version = "=0.2.0", default-features = false, features = ["miniscript_12", "rand"] }
 bitcoin = { version = "0.32", features = ["serde"] }
 base64 = "0.22"
 hex = "0.4"

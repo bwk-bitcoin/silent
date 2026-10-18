@@ -229,6 +229,10 @@ private:
     catalog::Label *m_backed_up_label = nullptr;
     catalog::Button *m_backup_primary_btn = nullptr;
     catalog::Button *m_backup_btn = nullptr;
+    // Privacy mode: the backup leaves the common derivation paths out of its clear part.
+    catalog::Checkbox *m_privacy_check = nullptr;
+    // The keys BIP138 left out of the backup's encryption keys, when there are any.
+    catalog::Label *m_backup_note = nullptr;
     catalog::ModalActions *m_review_actions = nullptr;
     catalog::Button *m_review_next_btn = nullptr;
     QWidget *m_review_page = nullptr;
