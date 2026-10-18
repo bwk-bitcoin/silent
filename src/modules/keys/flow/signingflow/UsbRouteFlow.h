@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "modules/keys/flow/SigningFlow.h"
+#include "modules/keys/flow/signingflow/DeviceSign.h"
 
 #include <interfaces/types.h>
 
@@ -32,8 +33,6 @@ class UsbRouteFlow final : public SigningRouteFlow {
     Q_OBJECT
 
 public:
-    enum class UsbError : std::uint8_t { Rejected, Disconnected, Failed };
-
     UsbRouteFlow(KeysModule *module, SigningFlow::Request request, FlowRow row, QString psbt);
     ~UsbRouteFlow() override;
     // Asks the device, found again by fingerprint when it came back with a new id.
@@ -42,7 +41,8 @@ public:
 public slots:
     void onBackClicked();
     void onNextClicked();
-    void onDeviceSigned(ReqId req_id, const QString &psbt_base64);
+    void onDeviceSignedPsbt(const QString &psbt_v2_hex);
+    void onDeviceSignFailed(UsbError error, const QString &message, plugin::SignError kind);
     void onDeviceXpub(ReqId req_id, const QString &xpub);
     void onDeviceAddressDisplayed(ReqId req_id, const QString &address);
     void onDeviceError(std::optional<ReqId> req_id, const QString &message, plugin::SignError kind);

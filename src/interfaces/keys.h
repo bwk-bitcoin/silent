@@ -19,7 +19,9 @@ class ISigner;
 // `descriptor_route` is the route spDescriptor() fetches over (QR or hot), Unknown
 // when the key has neither. `can_show_address` is true when the key has a USB or QR
 // route, a device with a screen verifyAddress() can show an address on. `route` is the
-// key's first route, connected or not, Unknown when it has none.
+// key's first route, connected or not, Unknown when it has none. `on_device` is true
+// when the key's best route is its connected USB device: signOnDevice() can sign
+// with it without a window.
 struct KeyEntry {
     QString fingerprint;
     QString alias;
@@ -30,6 +32,7 @@ struct KeyEntry {
     KeyRouteKind route = KeyRouteKind::Unknown;
     // Signs MuSig2: a hot key, or a device reporting the MuSig2 capability.
     bool can_musig{};
+    bool on_device{};
 };
 
 // The keys module, as accounts and plugins see it. An account never picks a signer:
@@ -60,6 +63,11 @@ public:
     virtual void sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
                       const QStringList &descriptors, const QString &wallet_name,
                       const QString &fingerprint) = 0;
+    // Signs the PSBT with the key `fingerprint` on its connected USB device (a key
+    // whose entry is `on_device`), opening no window: for a caller that shows the wait
+    // itself. Answers as sign() does, signed_() or error(), never cancelled().
+    virtual void signOnDevice(ReqId req_id, Network network, const QString &psbt_v2_hex,
+                              const QString &descriptor, const QString &fingerprint) = 0;
     // Shows `address` on the device holding the key `descriptor` belongs to.
     virtual void verifyAddress(ReqId req_id, Network network, const QString &descriptor,
                                const QString &path, const QString &address) = 0;

@@ -643,6 +643,10 @@ auto pillMusigNonceAdded() -> Badge * {
     return pill;
 }
 
+auto pillMusigOnDevice() -> Badge * {
+    return makePill(Badge::Role::Off, TR("pill-on-device"), PillWidth::L);
+}
+
 auto pillSignerWaiting() -> Badge * {
     return makePill(Badge::Role::Off, TR("pill-waiting"), PillWidth::L);
 }

@@ -1,10 +1,13 @@
 #include "KeysModule.h"
 
+#include "DeviceName.h"
 #include "KeysTab.h"
 #include "KeysView.h"
 #include "modules/hwi/HwiModule.h"
 #include "modules/hwi/HwiSigner.h"
 #include "modules/keys/flow/SigningFlow.h"
+#include "modules/keys/flow/signingflow/DeviceSign.h"
+#include "modules/keys/flow/signingflow/LiveDevice.h"
 #include "modules/keys/signers/OfflineSigner.h"
 #include "modules/keys/signers/RouteSigner.h"
 
@@ -73,6 +76,12 @@ void KeysBus::sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
                    const QString &fingerprint) {
     NetworkScope scope(m_module, network);
     m_module->sign(req_id, psbt_v2_hex, descriptors, wallet_name, fingerprint);
+}
+
+void KeysBus::signOnDevice(ReqId req_id, Network network, const QString &psbt_v2_hex,
+                           const QString &descriptor, const QString &fingerprint) {
+    NetworkScope scope(m_module, network);
+    m_module->signOnDevice(req_id, psbt_v2_hex, descriptor, fingerprint);
 }
 
 void KeysBus::verifyAddress(ReqId req_id, Network network, const QString &descriptor,
@@ -327,6 +336,7 @@ auto KeysModule::buildKeyEntry(const KeyInfo &info) -> KeyEntry {
             if (deviceSigner != nullptr) {
                 entry.can_sign = true;
                 entry.signer = deviceSigner;
+                entry.on_device = true;
                 return entry;
             }
             break;
@@ -454,6 +464,23 @@ void KeysModule::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringLis
                .descriptor = descriptors.isEmpty() ? QString() : descriptors.first(),
                .wallet_name = wallet_name,
                .fingerprint = fingerprint}));
+}
+
+void KeysModule::signOnDevice(ReqId req_id, const QString &psbt_v2_hex, const QString &descriptor,
+                              const QString &fingerprint) {
+    auto device = flow::liveDevice(fingerprint);
+    if (!device.has_value()) {
+        m_bus->deliverError(req_id, TR("flow-usb-disconnected-body").arg(fingerprint));
+        return;
+    }
+    // Deleted once it answers, or with this module.
+    auto *sign = new flow::DeviceSign(device->signer, device->instanceId, psbt_v2_hex, this);
+    m_device_signs.insert(sign, {.bus_req = req_id, .device = deviceName(*device->signer)});
+    connect(sign, &flow::DeviceSign::signedPsbt, this, &KeysModule::onDeviceSignedPsbt,
+            qontrol::UNIQUE);
+    connect(sign, &flow::DeviceSign::failed, this, &KeysModule::onDeviceSignFailed,
+            qontrol::UNIQUE);
+    sign->start(descriptor);
 }
 
 void KeysModule::verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
@@ -790,6 +817,37 @@ void KeysModule::fetchHotXpub(ReqId req_id, const QString &fingerprint, const QS
 void KeysModule::onHotXpubFinished(ReqId req_id, bool is_ok, QString xpub, QString error,
                                    bool wrong_password) {
     emit hotXpubFetched(req_id, is_ok, std::move(xpub), std::move(error), wrong_password);
+}
+
+void KeysModule::onDeviceSignedPsbt(const QString &psbt_v2_hex) {
+    auto request = m_device_signs.take(qobject_cast<flow::DeviceSign *>(sender()));
+    m_bus->deliverSigned(request.bus_req, psbt_v2_hex);
+}
+
+void KeysModule::onDeviceSignFailed(flow::UsbError error, const QString &message,
+                                    plugin::SignError kind) {
+    auto request = m_device_signs.take(qobject_cast<flow::DeviceSign *>(sender()));
+    if (!message.isEmpty()) {
+        qWarning() << "keys: device:" << message;
+    }
+    // A lost MuSig2 session keeps its kind: the caller restarts the session.
+    if (kind == plugin::SignError::MusigSession) {
+        m_bus->deliverError(request.bus_req, message, kind);
+        return;
+    }
+    QString text;
+    switch (error) {
+    case flow::UsbError::Rejected:
+        text = TR("flow-usb-rejected-body").arg(request.device);
+        break;
+    case flow::UsbError::Disconnected:
+        text = TR("flow-usb-disconnected-body").arg(request.device);
+        break;
+    case flow::UsbError::Failed:
+        text = TR("flow-usb-failed-body").arg(request.device);
+        break;
+    }
+    m_bus->deliverError(request.bus_req, text, kind);
 }
 
 void KeysModule::onFlowXpubFetched(ReqId req_id, const QString &xpub, const QString &fingerprint,

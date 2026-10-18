@@ -481,6 +481,22 @@ auto signModal() -> musig::SignModal * {
     return visible<musig::SignModal>();
 }
 
+// The cosigner `fp` signing on its USB device in place: the Sign modal stays up, no
+// signing window opens, its row shows On Device.
+auto onDeviceShown(const QString &fp) -> bool {
+    auto *m = signModal();
+    if (m == nullptr || visible<SigningFlow>() != nullptr ||
+        QString::compare(m->m_on_device, fp, Qt::CaseInsensitive) != 0) {
+        return false;
+    }
+    for (auto *label : m->findChildren<QLabel *>()) {
+        if (label->isVisibleTo(m) && label->text() == TR("pill-on-device")) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // The Sign modal's row of the cosigner `fp`, clickable while its part is needed.
 auto cosignerRow(const QString &fp) -> catalog::SelectRow * {
     auto *m = signModal();
@@ -827,14 +843,16 @@ void signRoundSteps(const QString &tag, const std::vector<RoundSigner> &signers,
             });
             break;
         case RoundSigner::Kind::Ledger:
-            step(tag + ": on the Ledger", [fp] { return usbWaiting(*fp); }, [name] {
+            step(tag + ": on the Ledger", [fp] { return onDeviceShown(*fp); }, [tag, name] {
+                check(true, tag + ": the Ledger's row shows On Device in the Sign modal");
                 if (!name.isEmpty()) {
                     shot(name);
                 }
             });
             break;
         case RoundSigner::Kind::Coldcard:
-            step(tag + ": on the Coldcard", [fp] { return usbWaiting(*fp); }, [name] {
+            step(tag + ": on the Coldcard", [fp] { return onDeviceShown(*fp); }, [tag, name] {
+                check(true, tag + ": the Coldcard's row shows On Device in the Sign modal");
                 if (!name.isEmpty()) {
                     shot(name);
                 }
@@ -846,8 +864,9 @@ void signRoundSteps(const QString &tag, const std::vector<RoundSigner> &signers,
         }
         step(tag + ": back on the Sign modal",
              [] {
+                 auto *m = signModal();
                  return visible<SigningFlow>() == nullptr && unsealShown() == nullptr &&
-                        signModal() != nullptr;
+                        m != nullptr && m->m_on_device.isEmpty();
              },
              [] {});
     }

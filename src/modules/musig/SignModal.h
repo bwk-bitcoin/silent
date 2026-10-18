@@ -26,9 +26,11 @@ namespace musig {
 
 // Sign on a Multikey Send: the MuSig2 rounds of the prepared transaction. Nonces, then
 // Partial Signatures, which ends on Broadcast. Each round lists the cosigners of the
-// spend path; a click on one signs with its key alone, the modal hidden while its
-// route runs. A round cannot go back (a nonce is spent), so there is no Back; closing
-// keeps the session, Sign on the Send panel opens it again.
+// spend path; a click on one signs with its key alone. A key on its connected USB
+// device signs in place, its row "On Device…" until the device answers; any other
+// route runs its own window, this modal hidden meanwhile. A round cannot go back (a
+// nonce is spent), so there is no Back; closing keeps the session, Sign on the Send
+// panel opens it again.
 class SignModal final : public catalog::Modal {
     Q_OBJECT
 
@@ -63,6 +65,8 @@ protected:
     void render(const MusigRoundStatus &status);
     void showFailure(Failure failure, const QString &text);
     [[nodiscard]] auto failureTitle() const -> QString;
+    // Whether the key `fingerprint` signs on its connected USB device.
+    [[nodiscard]] auto onDevice(const QString &fingerprint) const -> bool;
 
 private:
     MusigAccountController *m_controller = nullptr;
@@ -78,6 +82,8 @@ private:
     bool m_partial = false;
     Failure m_failure = Failure::None;
     QString m_flow_fingerprint;
+    // The cosigner signing on its device right now, empty when none.
+    QString m_on_device;
 };
 
 } // namespace musig

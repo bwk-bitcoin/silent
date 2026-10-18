@@ -26,23 +26,6 @@
 
 namespace keys::flow {
 
-namespace {
-
-// bwk-hwi folds its error kinds into text at the device service boundary, so the kind
-// is read back from its own messages (bwk hwi Error's Display).
-auto usbErrorFor(const QString &message) -> UsbRouteFlow::UsbError {
-    if (message.contains(QStringLiteral("User refused"), Qt::CaseInsensitive)) {
-        return UsbRouteFlow::UsbError::Rejected;
-    }
-    if (message.contains(QStringLiteral("Device disconnected"), Qt::CaseInsensitive) ||
-        message.contains(QStringLiteral("Device not found"), Qt::CaseInsensitive)) {
-        return UsbRouteFlow::UsbError::Disconnected;
-    }
-    return UsbRouteFlow::UsbError::Failed;
-}
-
-} // namespace
-
 UsbRouteFlow::UsbRouteFlow(KeysModule *module, SigningFlow::Request request, FlowRow row,
                            QString psbt)
     : SigningRouteFlow(module, std::move(request), std::move(row), std::move(psbt)) {
@@ -71,15 +54,13 @@ void UsbRouteFlow::start() {
     QString address;
     switch (request().context) {
     case Context::Sign: {
-        auto payload = ::usb_sign_payload(rust::String(psbt().toStdString()));
-        if (!payload.is_ok) {
-            emit failed(KeysModule::toQt(payload.error));
-            return;
-        }
-        connect(m_device, &ISigner::signed_, this, &UsbRouteFlow::onDeviceSigned, qontrol::UNIQUE);
-        connect(m_device, &ISigner::error, this, &UsbRouteFlow::onDeviceError, qontrol::UNIQUE);
-        m_device_req = m_device->signWithDescriptor(KeysModule::toQt(payload.psbt_base64),
-                                                    request().descriptor);
+        // Deleted once it answers, or with this flow.
+        auto *sign = new DeviceSign(m_device, m_device_instance, psbt(), this);
+        connect(sign, &DeviceSign::signedPsbt, this, &UsbRouteFlow::onDeviceSignedPsbt,
+                qontrol::UNIQUE);
+        connect(sign, &DeviceSign::failed, this, &UsbRouteFlow::onDeviceSignFailed,
+                qontrol::UNIQUE);
+        sign->start(request().descriptor);
         break;
     }
     case Context::Verify:
@@ -258,18 +239,23 @@ void UsbRouteFlow::onNextClicked() {
     }
 }
 
-void UsbRouteFlow::onDeviceSigned(ReqId req_id, const QString &psbt_base64) {
-    if (m_device_req == 0 || req_id != m_device_req) {
-        return;
-    }
+void UsbRouteFlow::onDeviceSignedPsbt(const QString &psbt_v2_hex) {
     releaseDevice();
-    auto merged = ::usb_merge_signed(rust::String(psbt().toStdString()),
-                                     rust::String(psbt_base64.toStdString()));
-    if (!merged.is_ok) {
-        emit failed(KeysModule::toQt(merged.error));
+    emit psbtSigned(psbt_v2_hex);
+}
+
+void UsbRouteFlow::onDeviceSignFailed(UsbError error, const QString &message,
+                                      plugin::SignError kind) {
+    releaseDevice();
+    if (!message.isEmpty()) {
+        qWarning() << "keys: device:" << message;
+    }
+    // A retry over the same MuSig2 session cannot succeed: the caller restarts.
+    if (kind == plugin::SignError::MusigSession) {
+        emit failed(message, kind);
         return;
     }
-    emit psbtSigned(KeysModule::toQt(merged.psbt_v2_hex));
+    showUsbError(error);
 }
 
 void UsbRouteFlow::onDeviceXpub(ReqId req_id, const QString &xpub) {

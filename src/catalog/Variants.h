@@ -123,6 +123,7 @@ auto pillSignerSigned() -> Badge *;
 // The MuSig2 Sign modal: a cosigner's part still needed, its round 1 nonce added.
 auto pillMusigNeeded() -> Badge *;
 auto pillMusigNonceAdded() -> Badge *;
+auto pillMusigOnDevice() -> Badge *;
 auto pillSignerWaiting() -> Badge *;
 auto pillSignerDisconnected() -> Badge *;
 auto pillSignerNoHot() -> Badge *;

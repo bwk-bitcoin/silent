@@ -13,6 +13,7 @@
 #include <optional>
 #include <silent.h>
 
+class IKeys;
 class MusigAccountWidget;
 class QThread;
 
@@ -98,6 +99,9 @@ public slots:
     // keys()->sign() with the key `fingerprint` alone, for the current round of the PSBT
     // in flight.
     void signRound(const QString &fingerprint);
+    // The same over the key's connected USB device, with no window: the caller shows
+    // the wait.
+    void signRoundOnDevice(const QString &fingerprint);
     void cancelSigning();
     void broadcast();
     void onKeysSigned(ReqId req_id, const QString &psbt_v2_hex);
@@ -113,6 +117,9 @@ public slots:
     void settingsClicked();
 
 protected:
+    // Listens to the keys module and allocates the request of a round's signature, null
+    // when no round can be signed now.
+    [[nodiscard]] auto beginSignRequest() -> IKeys *;
     void finalizeIfReady();
     void restartRounds();
 

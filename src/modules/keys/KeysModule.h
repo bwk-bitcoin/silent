@@ -23,7 +23,9 @@ class QThread;
 class QWidget;
 
 namespace keys::flow {
+class DeviceSign;
 class SigningFlow;
+enum class UsbError : std::uint8_t;
 } // namespace keys::flow
 
 namespace qr {
@@ -51,6 +53,13 @@ struct DeviceRegistration {
     bool checking = true;
 };
 
+// One signOnDevice() waiting on the key's connected device: its bus request and the
+// device's name, for the error it may answer with.
+struct DeviceSignRequest {
+    ReqId bus_req = 0;
+    QString device;
+};
+
 // An xpub and the path it was derived at, as a key caches it.
 struct PathXpub {
     QString path;
@@ -71,6 +80,8 @@ public:
     void sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
               const QStringList &descriptors, const QString &wallet_name,
               const QString &fingerprint) override;
+    void signOnDevice(ReqId req_id, Network network, const QString &psbt_v2_hex,
+                      const QString &descriptor, const QString &fingerprint) override;
     void verifyAddress(ReqId req_id, Network network, const QString &descriptor,
                        const QString &path, const QString &address) override;
     void spDescriptor(ReqId req_id, Network network, const QString &fingerprint) override;
@@ -196,6 +207,10 @@ public:
     // `fingerprint` alone when it is set.
     void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors,
               const QString &wallet_name, const QString &fingerprint);
+    // Signs `psbt_v2_hex` with the key `fingerprint` on its connected USB device, no
+    // window; answers `req_id` through the bus.
+    void signOnDevice(ReqId req_id, const QString &psbt_v2_hex, const QString &descriptor,
+                      const QString &fingerprint);
     // Shows `address` on a device of a key `descriptor` is registered against.
     void verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
                        const QString &address);
@@ -303,6 +318,9 @@ private slots:
     // then the descriptor handed to the caller.
     void onFlowDescriptorFetched(ReqId req_id, const QString &descriptor,
                                  const QString &fingerprint, const QList<qr::QrXpub> &xpubs);
+    // A signOnDevice() request answered by its device.
+    void onDeviceSignedPsbt(const QString &psbt_v2_hex);
+    void onDeviceSignFailed(flow::UsbError error, const QString &message, plugin::SignError kind);
 
 protected:
     void createModule();
@@ -369,6 +387,8 @@ private:
     QHash<QString, ISigner *> m_signers;
     // Device registrations in flight, by the device's request id.
     QHash<ReqId, DeviceRegistration> m_device_registrations;
+    // signOnDevice() requests in flight, by the exchange signing them.
+    QHash<const flow::DeviceSign *, DeviceSignRequest> m_device_signs;
 };
 
 // Makes `network` the keys module's network while it lives: rust(), keys() and the

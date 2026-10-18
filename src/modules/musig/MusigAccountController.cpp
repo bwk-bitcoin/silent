@@ -443,23 +443,40 @@ void MusigAccountController::prepareTransaction(TransactionTemplate tx, MusigSpe
     emit roundChanged(roundStatus());
 }
 
-void MusigAccountController::signRound(const QString &fingerprint) {
+auto MusigAccountController::beginSignRequest() -> IKeys * {
     if (m_psbt_v2_hex.isEmpty() || m_sign_req_id != 0 || !m_account.has_value()) {
-        return;
+        return nullptr;
     }
     auto *keys = Host::get()->keys();
     if (keys == nullptr) {
         emit signingFailed(TR("musig-send-no-keys"), plugin::SignError::Other);
-        return;
+        return nullptr;
     }
     connect(keys, &IKeys::signed_, this, &MusigAccountController::onKeysSigned, qontrol::UNIQUE);
     connect(keys, &IKeys::error, this, &MusigAccountController::onKeysError, qontrol::UNIQUE);
     connect(keys, &IKeys::cancelled, this, &MusigAccountController::onKeysCancelled,
             qontrol::UNIQUE);
-    // The answer may arrive during sign(): the id is stored first.
+    // The answer may arrive during the request: the id is stored first.
     m_sign_req_id = keys->newRequest();
+    return keys;
+}
+
+void MusigAccountController::signRound(const QString &fingerprint) {
+    auto *keys = beginSignRequest();
+    if (keys == nullptr) {
+        return;
+    }
     keys->sign(m_sign_req_id, network(), m_psbt_v2_hex, QStringList{toQString(getDescriptor())},
                toQString(m_account.value()->name()), fingerprint);
+}
+
+void MusigAccountController::signRoundOnDevice(const QString &fingerprint) {
+    auto *keys = beginSignRequest();
+    if (keys == nullptr) {
+        return;
+    }
+    keys->signOnDevice(m_sign_req_id, network(), m_psbt_v2_hex, toQString(getDescriptor()),
+                       fingerprint);
 }
 
 void MusigAccountController::cancelSigning() {

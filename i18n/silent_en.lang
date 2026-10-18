@@ -366,6 +366,7 @@ pill-signed => "Signed"
 pill-needed => "Needed"
 
 pill-nonce => "Nonce"
+pill-on-device => "On Device…"
 
 pill-waiting => "Waiting"
 
@@ -1080,6 +1081,7 @@ musig-sign-lead-partial => "Click each cosigner to add its partial signature."
 musig-sign-lead-single => "Click the cosigner to add its signature."
 
 musig-sign-reason-one => "1 cosigner still to go."
+musig-sign-reason-on-device => "On the device…"
 
 musig-sign-reason => "%1 cosigners still to go."
 

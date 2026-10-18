@@ -20,6 +20,7 @@
 #include <QHash>
 #include <QPushButton>
 #include <Qontrol>
+#include <algorithm>
 #include <common.h>
 
 namespace musig {
@@ -171,8 +172,11 @@ void SignModal::render(const MusigRoundStatus &status) {
         if (!in) {
             ++left;
         }
+        bool onDevice = !in && fingerprint.compare(m_on_device, Qt::CaseInsensitive) == 0;
         catalog::Badge *pill = nullptr;
-        if (!in) {
+        if (onDevice) {
+            pill = catalog::pillMusigOnDevice();
+        } else if (!in) {
             pill = catalog::pillMusigNeeded();
         } else if (partial) {
             pill = catalog::pillSignerSigned();
@@ -185,7 +189,8 @@ void SignModal::render(const MusigRoundStatus &status) {
         row->setSub(fingerprint);
         row->setStatus(pill);
         row->setChevron(false);
-        row->setClickable(!in);
+        // One cosigner at a time: none is clicked while a device signs.
+        row->setClickable(!in && m_on_device.isEmpty());
         row->setProperty(K_FINGERPRINT, fingerprint);
         connect(row, &catalog::SelectRow::clicked, this, &SignModal::onCosignerClicked,
                 qontrol::UNIQUE);
@@ -194,16 +199,19 @@ void SignModal::render(const MusigRoundStatus &status) {
     }
 
     QString reason;
-    if (left == 1) {
+    if (!m_on_device.isEmpty()) {
+        reason = TR("musig-sign-reason-on-device");
+    } else if (left == 1) {
         reason = TR("musig-sign-reason-one");
     } else if (left > 1) {
         reason = TR("musig-sign-reason").arg(left);
     }
     m_actions->setReason(reason);
+    bool idle = m_on_device.isEmpty();
     m_continue_btn->setVisible(!partial);
-    m_continue_btn->setEnabled(left == 0);
+    m_continue_btn->setEnabled(idle && left == 0);
     m_broadcast_btn->setVisible(partial);
-    m_broadcast_btn->setEnabled(left == 0 && finalized);
+    m_broadcast_btn->setEnabled(idle && left == 0 && finalized);
 }
 
 void SignModal::showFailure(Failure failure, const QString &text) {
@@ -213,6 +221,17 @@ void SignModal::showFailure(Failure failure, const QString &text) {
     m_notice->setTitle(failureTitle());
     m_notice->setText(text);
     m_notice->setVisible(true);
+}
+
+auto SignModal::onDevice(const QString &fingerprint) const -> bool {
+    auto *keys = Host::get()->keys();
+    if (keys == nullptr) {
+        return false;
+    }
+    auto entries = keys->keys(m_controller->network());
+    return std::ranges::any_of(entries, [&fingerprint](const KeyEntry &entry) {
+        return entry.on_device && entry.fingerprint.compare(fingerprint, Qt::CaseInsensitive) == 0;
+    });
 }
 
 auto SignModal::failureTitle() const -> QString {
@@ -231,8 +250,15 @@ auto SignModal::failureTitle() const -> QString {
 // ===== Slots =====
 
 void SignModal::onCosignerClicked() {
-    m_flow_fingerprint = sender()->property(K_FINGERPRINT).toString();
+    auto fingerprint = sender()->property(K_FINGERPRINT).toString();
     m_notice->setVisible(false);
+    if (onDevice(fingerprint)) {
+        m_on_device = fingerprint;
+        refresh();
+        m_controller->signRoundOnDevice(fingerprint);
+        return;
+    }
+    m_flow_fingerprint = fingerprint;
     done(FLOW_RESULT);
 }
 
@@ -247,6 +273,7 @@ void SignModal::onBroadcastClicked() {
 }
 
 void SignModal::onRoundChanged(const MusigRoundStatus &status) {
+    m_on_device.clear();
     render(status);
 }
 
@@ -256,6 +283,7 @@ void SignModal::onTransactionReady([[maybe_unused]] const QString &tx_hex) {
 }
 
 void SignModal::onSigningFailed(const QString &message, plugin::SignError kind) {
+    m_on_device.clear();
     if (kind == plugin::SignError::MusigSession) {
         // The controller dropped every nonce: the session starts over at round 1.
         m_partial = false;
