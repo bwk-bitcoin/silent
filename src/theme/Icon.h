@@ -53,5 +53,6 @@ auto info(IconColor color = IconColor::Default) -> QIcon;
 auto circleCheck(IconColor color = IconColor::Default) -> QIcon;
 auto circleX(IconColor color = IconColor::Default) -> QIcon;
 auto puzzle(IconColor color = IconColor::Default) -> QIcon;
+auto users(IconColor color = IconColor::Default) -> QIcon;
 
 } // namespace icon

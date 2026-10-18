@@ -19,6 +19,7 @@ MusigCreatorModule::MusigCreatorModule() : IModule(nullptr) {
 auto MusigCreatorModule::meta() const -> QMap<QString, QString> {
     return {{QStringLiteral("id"), QStringLiteral("musig.creator")},
             {QStringLiteral("name"), QStringLiteral("MuSig2 Account Creator")},
+            {QStringLiteral("icon"), QStringLiteral("users")},
             {QStringLiteral("version"), QStringLiteral("1.0.0")}};
 }
 

@@ -26,6 +26,7 @@ SpModule::SpModule() : IModule(nullptr) {
 QMap<QString, QString> SpModule::meta() const {
     return {{QStringLiteral("id"), QStringLiteral("sp.module")},
             {QStringLiteral("name"), QStringLiteral("Silent Payments Accounts")},
+            {QStringLiteral("icon"), QStringLiteral("silent")},
             {QStringLiteral("version"), QStringLiteral("1.0.0")}};
 }
 

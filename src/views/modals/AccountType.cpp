@@ -4,6 +4,7 @@
 #include "catalog/SelectRow.h"
 #include "i18n/Tr.h"
 #include "interfaces/module.h"
+#include "theme/Icon.h"
 
 #include <Qontrol>
 #include <common.h>
@@ -13,6 +14,18 @@ namespace modal {
 namespace {
 
 const char *const K_CREATOR = "creatorIndex";
+
+// The icon a creator's module names in meta(), a puzzle piece for any other.
+auto creatorIcon(const IModule *module) -> IconFn {
+    auto name = module->meta().value(QStringLiteral("icon"));
+    if (name == QStringLiteral("silent")) {
+        return icon::silentMark;
+    }
+    if (name == QStringLiteral("users")) {
+        return icon::users;
+    }
+    return icon::puzzle;
+}
 
 } // namespace
 
@@ -26,7 +39,9 @@ AccountType::AccountType(const QList<PluginRegistry::CreatorLauncher> &creators)
 void AccountType::init() {
     for (int i = 0; i < m_creators.size(); ++i) {
         auto *row = new catalog::SelectRow;
+        row->setIcon(creatorIcon(m_creators.at(i).module));
         row->setTitle(m_creators.at(i).name);
+        row->setTwoLine(true);
         row->setProperty(K_CREATOR, i);
         m_rows.append(row);
     }

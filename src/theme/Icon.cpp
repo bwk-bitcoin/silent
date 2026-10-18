@@ -33,6 +33,7 @@
 #include "resources/icon/triangle_alert.h"
 #include "resources/icon/upload.h"
 #include "resources/icon/usb.h"
+#include "resources/icon/users.h"
 #include "resources/icon/x.h"
 #include <QIconEngine>
 #include <QImage>
@@ -290,6 +291,10 @@ auto circleX(IconColor color) -> QIcon {
 
 auto puzzle(IconColor color) -> QIcon {
     return renderIcon(embedded_icon::PUZZLE, defaultStroke(), color);
+}
+
+auto users(IconColor color) -> QIcon {
+    return renderIcon(embedded_icon::USERS, defaultStroke(), color);
 }
 
 } // namespace icon

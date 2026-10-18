@@ -232,6 +232,9 @@ An instance is brought up by one of:
   Once the new instance is on disk the wizard calls `Host::get()->refreshLauncher()`:
   the host asks every enabled module to `list()` again and the launcher shows the new
   entry. The new instance is not started; the user opens it from the launcher.
+  The launcher lists every "create" entry in its Account Type picker, one row each with
+  the icon its module names in `meta()` under `icon` (`silent`, `users`), a puzzle
+  piece when it names none.
 - **Another instance**: an instance may ask a module to start further instances.
 
 Because instances appear and disappear at runtime, **discovery is dynamic**:
