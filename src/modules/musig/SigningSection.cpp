@@ -68,7 +68,8 @@ auto SigningSection::estimatesFee() const -> bool {
 void SigningSection::init() {
     m_leaf_title = new Label(TR("musig-send-spend-path"), LabelRole::Eyebrow);
     m_leaf_combo = new catalog::ComboBox;
-    m_leaf_combo->setWidth(Size::XL);
+    // As wide as the coins table above it, which fills the same column.
+    m_leaf_combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_leaf_widget =
         (new qontrol::Column)->spacing(resolve(Spacing::S))->push(m_leaf_title)->push(m_leaf_combo);
 
