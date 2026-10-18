@@ -2,6 +2,7 @@
 
 #include <optional>
 
+#include <QHash>
 #include <QList>
 #include <QPointer>
 #include <QString>
@@ -29,6 +30,17 @@ namespace keys {
 // The Keys tab: the devices on the bus and the keys of the network, each in its own
 // foldable section that scrolls on its own. Polling runs only while the tab is
 // visible, so an idle USB bus costs nothing when the user is elsewhere.
+// One device being turned into a key: its name and alias, the paths it gives xpubs at,
+// the xpubs it gave so far and the request it is answering.
+struct KeyCreation {
+    QString name;
+    QString alias;
+    QStringList paths;
+    QList<PathXpub> xpubs;
+    QPointer<ISigner> signer;
+    ReqId req = 0;
+};
+
 class KeysTab final : public qontrol::Screen {
     Q_OBJECT
 
@@ -63,10 +75,16 @@ protected:
     [[nodiscard]] auto keyRow(const KeyInfo &info) const -> catalog::SelectRow *;
     // The alias of the key `fingerprint` is registered as, empty when none is.
     [[nodiscard]] auto keyAlias(const QString &fingerprint) const -> QString;
-    // Asks the registering device for the first path it has not given an xpub for yet.
-    void requestRegisterXpub();
-    void finishRegistering();
-    void showRegisterError(const QString &message);
+    // Asks the device of `creation` for the first path it has not given an xpub for yet.
+    static void requestRegisterXpub(KeyCreation &creation);
+    // The device `instance_id` is no longer being turned into a key.
+    void finishRegistering(const QString &instance_id);
+    // The creation the device `signer` answers `req_id` for, its instance id; empty when
+    // none.
+    [[nodiscard]] auto creationFor(const QObject *signer, ReqId req_id) const -> QString;
+    // Whether a device holding `fingerprint` is being turned into a key.
+    [[nodiscard]] auto creating(const QString &fingerprint) const -> bool;
+    void showRegisterError(const QString &device, const QString &message);
 
 private:
     KeysModule *m_module = nullptr;
@@ -81,14 +99,10 @@ private:
     catalog::ScrollArea *m_key_scroll = nullptr;
     qontrol::Column *m_key_column = nullptr;
     QWidget *m_main_widget = nullptr;
-    // The device the register modal was opened for, then the one registering.
+    // The device the register modal was opened for.
     QString m_register_instance;
-    QString m_register_name;
-    QString m_register_alias;
-    QStringList m_register_paths;
-    QList<PathXpub> m_register_xpubs;
-    QPointer<ISigner> m_register_signer;
-    ReqId m_register_req = 0;
+    // The devices being turned into keys, by device instance id: each runs on its own.
+    QHash<QString, KeyCreation> m_creations;
 };
 
 } // namespace keys

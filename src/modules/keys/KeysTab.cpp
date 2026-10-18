@@ -34,6 +34,7 @@
 #include <QLabel>
 #include <QStringList>
 #include <QVariant>
+#include <algorithm>
 
 #include <common.h>
 
@@ -281,8 +282,9 @@ auto KeysTab::deviceRow(const plugin::SignerEntry &entry) const -> catalog::Sele
     QString alias = keyAlias(fingerprint);
     bool known = !alias.isEmpty();
     bool ready = signer->state() == plugin::SignerState::Ready;
-    bool registering = m_register_req != 0 && entry.instanceId == m_register_instance;
-    bool canRegister = ready && !fingerprint.isEmpty() && !known;
+    bool registering = m_creations.contains(entry.instanceId);
+    // Two devices of one seed would make the same key: one at a time per fingerprint.
+    bool canRegister = ready && !fingerprint.isEmpty() && !known && !creating(fingerprint);
 
     QString sub;
     if (registering) {
@@ -313,7 +315,7 @@ auto KeysTab::deviceRow(const plugin::SignerEntry &entry) const -> catalog::Sele
     row->setStatusWidth(metric::LIST_STATUS_WIDTH);
     row->setChevron(false);
     row->setEnabled(!known);
-    if (canRegister && m_register_req == 0) {
+    if (canRegister) {
         row->setProperty(K_DEVICE_INSTANCE_ID, entry.instanceId);
         connect(row, &catalog::SelectRow::clicked, this, &KeysTab::onDeviceClicked,
                 qontrol::UNIQUE);
@@ -384,7 +386,7 @@ auto KeysTab::keyAlias(const QString &fingerprint) const -> QString {
 
 void KeysTab::onDeviceClicked() {
     auto *row = sender();
-    if (row == nullptr || m_register_req != 0) {
+    if (row == nullptr) {
         return;
     }
     // Re-query rather than capturing the signer pointer: a device can vanish between the
@@ -397,10 +399,13 @@ void KeysTab::onDeviceClicked() {
     for (const auto &info : m_module->tabKeys()) {
         aliases.append(KeysModule::toQt(info.alias));
     }
+    if (creating(entry->signer->fingerprint())) {
+        return;
+    }
     m_register_instance = entry->instanceId;
-    m_register_name = deviceName(*entry->signer);
-    auto *modal = new modal::RegisterDevice(m_register_name, entry->signer->fingerprint(),
-                                            networkLabel(KeysModule::network()), aliases);
+    auto *modal =
+        new modal::RegisterDevice(deviceName(*entry->signer), entry->signer->fingerprint(),
+                                  networkLabel(KeysModule::network()), aliases);
     connect(modal, &modal::RegisterDevice::registerConfirmed, this, &KeysTab::onRegisterConfirmed,
             qontrol::UNIQUE);
     AppController::execModal(modal);
@@ -410,71 +415,104 @@ void KeysTab::onRegisterConfirmed(const QString &alias) {
     dismissError();
     auto entry = liveDevice(m_register_instance);
     if (!entry.has_value()) {
-        showRegisterError(TR("keys-register-disconnected"));
+        showRegisterError(QString(), TR("keys-register-disconnected"));
         return;
     }
-    m_register_alias = alias;
-    m_register_paths = KeysModule::deviceXpubPaths(KeysModule::deviceCapabilities(*entry));
-    m_register_xpubs.clear();
-    m_register_signer = entry->signer;
+    if (m_creations.contains(entry->instanceId) || creating(entry->signer->fingerprint())) {
+        return;
+    }
+    KeyCreation creation{
+        .name = deviceName(*entry->signer),
+        .alias = alias,
+        .paths = KeysModule::deviceXpubPaths(KeysModule::deviceCapabilities(*entry)),
+        .xpubs = {},
+        .signer = entry->signer,
+        .req = 0,
+    };
     connect(entry->signer, &ISigner::xpub, this, &KeysTab::onRegisterXpub, qontrol::UNIQUE);
     connect(entry->signer, &ISigner::error, this, &KeysTab::onRegisterError, qontrol::UNIQUE);
-    requestRegisterXpub();
+    auto &stored = m_creations.insert(entry->instanceId, creation).value();
+    requestRegisterXpub(stored);
     rebuildDevices();
 }
 
-void KeysTab::requestRegisterXpub() {
-    m_register_req = m_register_signer->getXpub(m_register_paths.at(m_register_xpubs.size()));
+void KeysTab::requestRegisterXpub(KeyCreation &creation) {
+    creation.req = creation.signer->getXpub(creation.paths.at(creation.xpubs.size()));
+}
+
+auto KeysTab::creationFor(const QObject *signer, ReqId req_id) const -> QString {
+    for (auto it = m_creations.cbegin(); it != m_creations.cend(); ++it) {
+        if (it->req != 0 && it->req == req_id && it->signer.data() == signer) {
+            return it.key();
+        }
+    }
+    return {};
+}
+
+auto KeysTab::creating(const QString &fingerprint) const -> bool {
+    return std::ranges::any_of(m_creations, [&fingerprint](const KeyCreation &creation) {
+        return !creation.signer.isNull() &&
+               creation.signer->fingerprint().compare(fingerprint, Qt::CaseInsensitive) == 0;
+    });
 }
 
 void KeysTab::onRegisterXpub(ReqId req_id, const QString &xpub) {
-    if (m_register_req == 0 || req_id != m_register_req) {
+    auto instance = creationFor(sender(), req_id);
+    if (instance.isEmpty()) {
         return;
     }
-    m_register_xpubs.append({.path = m_register_paths.at(m_register_xpubs.size()), .xpub = xpub});
-    if (m_register_xpubs.size() < m_register_paths.size()) {
-        requestRegisterXpub();
+    auto &creation = m_creations[instance];
+    creation.xpubs.append({.path = creation.paths.at(creation.xpubs.size()), .xpub = xpub});
+    if (creation.xpubs.size() < creation.paths.size()) {
+        requestRegisterXpub(creation);
         return;
     }
-    finishRegistering();
-    auto entry = liveDevice(m_register_instance);
+    auto done = m_creations.value(instance);
+    finishRegistering(instance);
+    auto entry = liveDevice(instance);
     if (!entry.has_value()) {
-        showRegisterError(TR("keys-register-disconnected"));
+        showRegisterError(done.name, TR("keys-register-disconnected"));
         return;
     }
-    auto result = m_module->addDeviceKey(entry.value(), m_register_alias, m_register_xpubs);
+    auto result = m_module->addDeviceKey(entry.value(), done.alias, done.xpubs);
     if (!result.is_ok) {
-        showRegisterError(KeysModule::toQt(result.error));
+        showRegisterError(done.name, KeysModule::toQt(result.error));
     }
 }
 
 void KeysTab::onRegisterError(std::optional<ReqId> req_id, const QString &message) {
-    if (m_register_req == 0 || !req_id.has_value() || req_id.value() != m_register_req) {
+    if (!req_id.has_value()) {
         return;
     }
-    finishRegistering();
-    showRegisterError(message);
+    auto instance = creationFor(sender(), req_id.value());
+    if (instance.isEmpty()) {
+        return;
+    }
+    auto name = m_creations.value(instance).name;
+    finishRegistering(instance);
+    showRegisterError(name, message);
 }
 
 void KeysTab::onInstanceRemoved(const QString &id) {
-    if (m_register_req == 0 || id != m_register_instance) {
+    if (!m_creations.contains(id)) {
         return;
     }
-    finishRegistering();
-    showRegisterError(TR("keys-register-disconnected"));
+    auto name = m_creations.value(id).name;
+    finishRegistering(id);
+    showRegisterError(name, TR("keys-register-disconnected"));
 }
 
-void KeysTab::finishRegistering() {
-    if (!m_register_signer.isNull()) {
-        disconnect(m_register_signer, nullptr, this, nullptr);
+void KeysTab::finishRegistering(const QString &instance_id) {
+    auto creation = m_creations.take(instance_id);
+    // One creation per device: its signer serves no other.
+    if (!creation.signer.isNull()) {
+        disconnect(creation.signer, nullptr, this, nullptr);
     }
-    m_register_signer = nullptr;
-    m_register_req = 0;
     rebuildDevices();
 }
 
-void KeysTab::showRegisterError(const QString &message) {
-    m_error->setTitle(TR("keys-register-failed-title").arg(m_register_name));
+void KeysTab::showRegisterError(const QString &device, const QString &message) {
+    m_error->setTitle(TR("keys-register-failed-title").arg(device));
     m_error->setText(message);
     m_error->setVisible(true);
 }

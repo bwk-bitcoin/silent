@@ -744,8 +744,9 @@ auto wizardAt(CreatePolicy::View view) -> CreatePolicy * {
 }
 
 // Registers the live device `id` as a key named `alias` from its Keys tab row.
-void addDeviceKeySteps(const QString &id, const QString &alias, QString *fp,
-                       const QString &modal_shot) {
+// Starts turning the live device `id` into a key named `alias` from its Keys tab row.
+void startDeviceKeySteps(const QString &id, const QString &alias, QString *fp,
+                         const QString &modal_shot) {
     step("click the " + alias + " device row",
          [id] {
              auto entry = signerById(id);
@@ -772,9 +773,15 @@ void addDeviceKeySteps(const QString &id, const QString &alias, QString *fp,
              if (!modal_shot.isEmpty()) {
                  shot(modal_shot);
              }
-             markLedgerScreens();
+             if (alias == QStringLiteral("Ledger")) {
+                 markLedgerScreens();
+             }
              later([m] { m->onRegisterClicked(); });
          });
+}
+
+// Waits for the device `id` to be the key `alias`, then checks what it holds.
+void checkDeviceKeySteps(const QString &id, const QString &alias, QString *fp) {
     step(alias + " added with a USB route",
          [fp] { return visible<keys::modal::RegisterDevice>() == nullptr && hasUsbRoute(*fp); },
          [id, alias, fp] {
@@ -952,9 +959,29 @@ void addSteps() {
         g_fp_a = keys::KeysModule::toQt(g_keys->tabKeys().first().fingerprint);
         std::printf("A %s\n", g_fp_a.toStdString().c_str());
     });
-    addDeviceKeySteps(LEDGER_ID, QStringLiteral("Ledger"), &g_fp_b,
-                      QStringLiteral("02-register-ledger"));
-    addDeviceKeySteps(COLDCARD_ID, QStringLiteral("Coldcard"), &g_fp_c, QString());
+    // Both devices are turned into keys at once: the Coldcard starts while the Ledger
+    // is still giving its xpubs.
+    startDeviceKeySteps(LEDGER_ID, QStringLiteral("Ledger"), &g_fp_b,
+                        QStringLiteral("02-register-ledger"));
+    step("the Ledger creating its key",
+         [] { return keysTab() != nullptr && keysTab()->m_creations.size() == 1; },
+         [] { check(true, "the Ledger is being turned into a key"); });
+    startDeviceKeySteps(COLDCARD_ID, QStringLiteral("Coldcard"), &g_fp_c, QString());
+    // The Coldcard gives its xpubs at once, the Ledger waits for its 87' approval: the
+    // Coldcard is a key while the Ledger is still creating its own.
+    step("the Coldcard a key while the Ledger still creates its own",
+         [] { return visible<keys::modal::RegisterDevice>() == nullptr && hasUsbRoute(g_fp_c); },
+         [] {
+             auto ledger = signerById(LEDGER_ID);
+             bool ledgerCreating =
+                 ledger.has_value() && keysTab()->m_creations.contains(ledger->instanceId);
+             check(ledgerCreating && !hasUsbRoute(g_fp_b),
+                   "the Ledger and the Coldcard create their keys in parallel: the Coldcard "
+                   "is a key while the Ledger still creates its own");
+             shot("02b-keys-two-devices-creating");
+         });
+    checkDeviceKeySteps(LEDGER_ID, QStringLiteral("Ledger"), &g_fp_b);
+    checkDeviceKeySteps(COLDCARD_ID, QStringLiteral("Coldcard"), &g_fp_c);
     step("keys tab", [] { return g_keys->tabKeys().size() == 3; }, [] {
         check(!g_fp_b.isEmpty() && !g_fp_c.isEmpty() &&
                   QString::compare(g_fp_b, g_fp_a, Qt::CaseInsensitive) != 0 &&
