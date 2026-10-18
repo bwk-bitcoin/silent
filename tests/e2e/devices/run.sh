@@ -54,8 +54,9 @@ echo "==> Run directory $RUN_DIR"
 CONTAINER=silent-e2e-speculos
 COLDCARD_SOCKET=/tmp/ckcc-simulator.sock
 SPECULOS_API=http://127.0.0.1:5000
-# GCC 14 turns these warnings of the pinned firmware into errors.
-COLDCARD_CFLAGS="-Wno-error=dangling-pointer -Wno-error=enum-int-mismatch -Wno-unterminated-string-initialization -Wno-error=array-bounds -Wno-error=unused-but-set-variable"
+# GCC 14 turns these warnings of the pinned firmware into errors. MicroPython's x86-64
+# assembly non-local returns crash the simulator at boot when built with it: setjmp ones.
+COLDCARD_CFLAGS="-Wno-error=dangling-pointer -Wno-error=enum-int-mismatch -Wno-unterminated-string-initialization -Wno-error=array-bounds -Wno-error=unused-but-set-variable -DMICROPY_NLR_SETJMP=1"
 
 fail() {
     echo "$*" >&2
