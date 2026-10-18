@@ -3,7 +3,7 @@
 #include "AppController.h"
 #include "account/views/Coins.h"
 #include "account/views/History.h"
-#include "views/Receive.h"
+#include "account/views/Receive.h"
 #include "views/Send.h"
 #include "views/Settings.h"
 #include <Qontrol>
@@ -192,7 +192,7 @@ auto AccountController::loadPanels() -> void {
     this->insertPanel(coinsPanel);
 
     // Create Receive screen panel
-    auto *receiveScreen = new view::Receive(this);
+    auto *receiveScreen = new account::view::Receive(this);
     auto *receivePanel = new qontrol::Panel(receiveScreen, "receive");
     this->insertPanel(receivePanel);
 
@@ -369,6 +369,33 @@ auto AccountController::hasSegwit() -> bool {
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 auto AccountController::hasTaproot() -> bool {
     return m_account.has_value() && m_account.value()->has_taproot();
+}
+
+auto AccountController::addressKinds() -> QList<AddressKind> {
+    QList<AddressKind> kinds{AddressKind::SilentPayment};
+    if (hasSegwit()) {
+        kinds.append(AddressKind::Segwit);
+    }
+    if (hasTaproot()) {
+        kinds.append(AddressKind::Taproot);
+    }
+    return kinds;
+}
+
+auto AccountController::newAddress(AddressKind kind) -> QString {
+    rust::String address;
+    switch (kind) {
+    case AddressKind::SilentPayment:
+        address = getSpAddress();
+        break;
+    case AddressKind::Segwit:
+        address = newSegwitAddr();
+        break;
+    case AddressKind::Taproot:
+        address = newTaprootAddr();
+        break;
+    }
+    return QString::fromStdString(std::string(address.c_str()));
 }
 
 auto AccountController::getDescriptor() -> rust::String {

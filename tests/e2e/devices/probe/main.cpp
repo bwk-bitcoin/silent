@@ -51,7 +51,6 @@
 #include "modules/musig/creator/CreatePolicy.h"
 #include "modules/musig/creator/PathEditor.h"
 #include "modules/musig/creator/PolicyEditor.h"
-#include "modules/musig/views/Receive.h"
 #include "modules/musig/views/Send.h"
 #include "modules/sp/SpPlugin.h"
 #include "qr/QrTypes.h"
@@ -60,6 +59,8 @@
 #include "resources/font/noto_sans_mono.h"
 #include "resources/font/noto_sans_mono_bold.h"
 #include "theme/Theme.h"
+#include "account/views/Receive.h"
+#include "catalog/panels/receive/AddressRow.h"
 #include "views/modals/AccountType.h"
 #undef private
 #undef protected
@@ -468,9 +469,14 @@ auto send() -> musig::view::Send * {
     return w == nullptr ? nullptr : w->findChild<musig::view::Send *>();
 }
 
-auto receive() -> musig::view::Receive * {
+auto receive() -> account::view::Receive * {
     auto *w = widget();
-    return w == nullptr ? nullptr : w->findChild<musig::view::Receive *>();
+    return w == nullptr ? nullptr : w->findChild<account::view::Receive *>();
+}
+
+// The taproot address row, the only section of a musig account's Receive.
+auto receiveRow() -> catalog::AddressRow * {
+    return receive()->m_sections.first().row;
 }
 
 auto roundName(MusigRound r) -> const char * {
@@ -1061,11 +1067,11 @@ void addSteps() {
     step("account open", [] { return widget() != nullptr; },
          [] { widget()->controller()->receiveClicked(); });
     step("receive shown", [] { return receive() != nullptr; },
-         [] { later([] { receive()->onNewAddressClicked(); }); });
-    step("address generated", [] { return !receive()->m_address_row->address().isEmpty(); }, [] {
-        std::printf("receive %s\n", receive()->m_address_row->address().toStdString().c_str());
+         [] { later([] { emit receiveRow()->generateRequested(); }); });
+    step("address generated", [] { return !receiveRow()->address().isEmpty(); }, [] {
+        std::printf("receive %s\n", receiveRow()->address().toStdString().c_str());
         shot("13-receive-generated");
-        later([] { receive()->onVerifyAddressClicked(); });
+        later([] { emit receiveRow()->verifyRequested(); });
     });
     step("receive verify picker", [] { return visible<SigningFlow>() != nullptr; },
          [] { pickRow(g_fp_c, "the Coldcard, to show the address"); });
@@ -1091,7 +1097,7 @@ void addSteps() {
         later([] { visible<SigningFlow>()->accept(); });
     });
     step("fund", [] { return visible<SigningFlow>() == nullptr; }, [] {
-        auto address = receive()->m_address_row->address();
+        auto address = receiveRow()->address();
         check(!chain("send " + address + " 0.02").isEmpty(), "funded");
         chain("mine 1");
     });

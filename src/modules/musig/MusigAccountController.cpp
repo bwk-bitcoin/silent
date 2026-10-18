@@ -2,11 +2,11 @@
 
 #include "account/views/Coins.h"
 #include "account/views/History.h"
+#include "account/views/Receive.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "modules/musig/MusigAccountWidget.h"
-#include "modules/musig/views/Receive.h"
 #include "modules/musig/views/Send.h"
 #include "modules/musig/views/Settings.h"
 #include "views/utils.h"
@@ -73,7 +73,7 @@ void MusigAccountController::init(const QString &account) {
 void MusigAccountController::loadPanels() {
     m_panels.insert("history", new qontrol::Panel(new account::view::History(this), "history"));
     m_panels.insert("coins", new qontrol::Panel(new account::view::Coins(this), "coins"));
-    m_panels.insert("receive", new qontrol::Panel(new musig::view::Receive(this), "receive"));
+    m_panels.insert("receive", new qontrol::Panel(new account::view::Receive(this), "receive"));
     m_panels.insert("send", new qontrol::Panel(new musig::view::Send(this), "send"));
     m_panels.insert("settings", new qontrol::Panel(new musig::view::Settings(this), "settings"));
 }
@@ -111,9 +111,13 @@ auto MusigAccountController::getPaymentHistory() -> rust::Vec<RustTx> {
     return {};
 }
 
-auto MusigAccountController::newAddress() -> rust::String {
+auto MusigAccountController::addressKinds() -> QList<AddressKind> {
+    return {AddressKind::Taproot};
+}
+
+auto MusigAccountController::newAddress([[maybe_unused]] AddressKind kind) -> QString {
     if (m_account.has_value()) {
-        return m_account.value()->new_addr();
+        return toQString(m_account.value()->new_addr());
     }
     return {};
 }

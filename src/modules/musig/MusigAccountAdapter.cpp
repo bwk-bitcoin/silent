@@ -86,7 +86,7 @@ auto MusigAccountAdapter::newReceiveAddress() -> ReqId {
     if (!accountReady(reqId)) {
         return reqId;
     }
-    emit receiveAddress(reqId, toQString(m_controller->newAddress()));
+    emit receiveAddress(reqId, m_controller->newAddress(AddressKind::Taproot));
     return reqId;
 }
 

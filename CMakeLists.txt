@@ -192,8 +192,6 @@ set(SILENT_APP_SOURCES
     src/modules/musig/MusigAccountWidget.cpp
     src/modules/musig/MusigStatusBar.h
     src/modules/musig/MusigStatusBar.cpp
-    src/modules/musig/views/Receive.h
-    src/modules/musig/views/Receive.cpp
     src/modules/musig/views/Send.h
     src/modules/musig/views/Send.cpp
     src/modules/musig/views/Settings.h
@@ -229,8 +227,8 @@ set(SILENT_APP_SOURCES
     src/account/views/Coins.cpp
     src/account/views/History.h
     src/account/views/History.cpp
-    src/modules/sp/views/Receive.h
-    src/modules/sp/views/Receive.cpp
+    src/account/views/Receive.h
+    src/account/views/Receive.cpp
     src/modules/sp/views/Send.h
     src/modules/sp/views/Send.cpp
     src/modules/sp/views/Settings.h

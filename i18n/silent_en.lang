@@ -1027,8 +1027,6 @@ musig-settings-invalid-url => "Invalid Electrum server address"
 
 musig-send-prepare => "Prepare"
 
-musig-receive-address => "MuSig2 Address"
-
 musig-receive-verify-mismatch
 => "The device showed another address: do not use this one";;
 

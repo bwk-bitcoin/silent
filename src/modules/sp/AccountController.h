@@ -26,12 +26,14 @@ public:
     virtual auto getSpAddress() -> rust::String;
     virtual auto newSegwitAddr() -> rust::String;
     virtual auto newTaprootAddr() -> rust::String;
-    // The account's network, the one the keys it signs with are registered on.
-    virtual auto network() -> Network;
+    auto network() -> Network override;
     virtual auto hasSegwit() -> bool;
     virtual auto hasTaproot() -> bool;
+    // The silent payment address, then the segwit and taproot sub-accounts it has.
+    auto addressKinds() -> QList<AddressKind> override;
+    auto newAddress(AddressKind kind) -> QString override;
     virtual auto getDescriptor() -> rust::String;
-    virtual auto addressVerifyInfo(const QString &address) -> AddressVerifyInfo;
+    auto addressVerifyInfo(const QString &address) -> AddressVerifyInfo override;
     auto coins() -> qontrol::Screen *;
     auto getAccount() -> std::optional<rust::Box<Account>> &;
     // Starts a worker thread that uses the account or a view: stop() waits for it

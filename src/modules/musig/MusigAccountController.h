@@ -31,11 +31,13 @@ public:
     auto getAccount() -> std::optional<rust::Box<MusigAccount>> &;
     auto getCoins() -> rust::Vec<RustCoin> override;
     auto getPaymentHistory() -> rust::Vec<RustTx> override;
-    auto newAddress() -> rust::String;
-    auto network() -> Network;
+    auto network() -> Network override;
+    // A taproot address only.
+    auto addressKinds() -> QList<AddressKind> override;
+    auto newAddress(AddressKind kind) -> QString override;
     auto getDescriptor() -> rust::String;
     auto cosignerFingerprints() -> QStringList;
-    auto addressVerifyInfo(const QString &address) -> AddressVerifyInfo;
+    auto addressVerifyInfo(const QString &address) -> AddressVerifyInfo override;
     auto electrumUrl() -> QString;
     [[nodiscard]] auto roundStatus() const -> MusigRoundStatus;
     [[nodiscard]] auto psbtInFlight() const -> QString;

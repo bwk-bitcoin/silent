@@ -596,7 +596,6 @@ musig-menu-history => "History" => "NONE"
 musig-menu-receive => "Receive" => "NONE"
 musig-menu-send => "Send" => "NONE"
 musig-menu-settings => "Settings" => "NONE"
-musig-receive-address => "MuSig2 Address" => "NONE"
 musig-receive-verify-mismatch
 => "The device showed another address: do not use this one"
 => "NONE";;
