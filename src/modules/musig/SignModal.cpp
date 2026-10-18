@@ -30,9 +30,6 @@ namespace musig {
 
 namespace {
 
-// exec() result of the modal closed to run a cosigner's signing flow in its place.
-constexpr int FLOW_RESULT = QDialog::Accepted + 1;
-
 const char *const K_FINGERPRINT = "fingerprint";
 
 auto toQString(const rust::String &value) -> QString {
@@ -76,15 +73,6 @@ SignModal::SignModal(MusigAccountController *controller) : m_controller(controll
     auto round = m_controller->roundStatus().round;
     m_partial = round == MusigRound::PartialSigs || round == MusigRound::Ready;
     refresh();
-}
-
-auto SignModal::exec() -> int {
-    int result = catalog::Modal::exec();
-    while (result == FLOW_RESULT) {
-        runFlow();
-        result = catalog::Modal::exec();
-    }
-    return result;
 }
 
 void SignModal::init() {
@@ -149,12 +137,6 @@ void SignModal::retranslateUi() {
     m_continue_btn->setText(TR("btn-continue"));
     m_broadcast_btn->setText(TR("common-broadcast"));
     m_notice->setTitle(failureTitle());
-    refresh();
-}
-
-void SignModal::runFlow() {
-    // Returns once the flow's window has closed, its answer delivered.
-    m_controller->signRound(m_flow_fingerprint);
     refresh();
 }
 
@@ -349,14 +331,15 @@ void SignModal::onCosignerClicked() {
     auto fingerprint = sender()->property(K_FINGERPRINT).toString();
     m_notice->setVisible(false);
     // A key on its connected USB device signs in place, its row On Device while every
-    // other key can be asked too; another route runs in its own window.
+    // other key can be asked too; another route runs in its own window, over this one.
     if (onDevice(fingerprint)) {
         m_controller->signRoundOnDevice(fingerprint);
         refresh();
         return;
     }
-    m_flow_fingerprint = fingerprint;
-    done(FLOW_RESULT);
+    // Returns once the flow's window has closed, its answer delivered.
+    m_controller->signRound(fingerprint);
+    refresh();
 }
 
 void SignModal::onContinueClicked() {

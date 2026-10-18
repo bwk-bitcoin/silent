@@ -874,7 +874,9 @@ void signRoundSteps(const QString &tag, const std::vector<RoundSigner> &signers,
         QString name = signer.shot;
         switch (signer.kind) {
         case RoundSigner::Kind::Hot:
-            step(tag + ": hot password", [] { return unsealShown() != nullptr; }, [name] {
+            step(tag + ": hot password", [] { return unsealShown() != nullptr; }, [tag, name] {
+                check(signModal() != nullptr,
+                      tag + ": the Sign modal stays shown under the password window");
                 if (!name.isEmpty()) {
                     shot(name);
                 }

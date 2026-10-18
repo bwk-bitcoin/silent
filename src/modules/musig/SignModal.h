@@ -32,7 +32,7 @@ namespace musig {
 // out. A click on a signer signs with its key alone. A single-key path (a timelocked
 // one) signs once, with no rounds. A key on its connected USB
 // device signs in place, its row "On Device…" until the device answers; any other
-// route runs its own window, this modal hidden meanwhile. A round cannot go back (a
+// route runs its own window over this modal, which stays under it. A round cannot go back (a
 // nonce is spent), so there is no Back; closing keeps the session, Sign on the Send
 // panel opens it again.
 class SignModal final : public catalog::Modal {
@@ -40,7 +40,6 @@ class SignModal final : public catalog::Modal {
 
 public:
     explicit SignModal(MusigAccountController *controller);
-    auto exec() -> int override;
 
 public slots:
     void onCosignerClicked();
@@ -62,8 +61,6 @@ protected:
     void view();
     void changeEvent(QEvent *event) override;
     void retranslateUi();
-    // Signs with the cosigner clicked, the modal hidden while the flow runs.
-    void runFlow();
     // Rebuilds the rows, the step and the action from the controller's round.
     void refresh();
     // The same from `status`.
@@ -86,7 +83,6 @@ private:
     // on a session past its nonces.
     bool m_partial = false;
     Failure m_failure = Failure::None;
-    QString m_flow_fingerprint;
     // The keys of a single-key path that signed, lowercased.
     QSet<QString> m_signed;
 };
