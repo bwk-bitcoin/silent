@@ -118,6 +118,8 @@ signals:
 
 public slots:
     void onRowClicked();
+    // A device came, went or changed state: the picker on display lists it as it is.
+    void onDevicesChanged();
     void onFlowViewChanged(const QString &title, ModalWidth width);
     void onFlowBack();
     void onPsbtSigned(const QString &psbt_v2_hex);

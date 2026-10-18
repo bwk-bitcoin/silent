@@ -393,6 +393,20 @@ auto signerById(const QString &id) -> std::optional<plugin::SignerEntry> {
     return std::nullopt;
 }
 
+// The status of `fp`'s row in the signer picker on display, NoRoute when none shows.
+auto pickerStatus(const QString &fp) -> keys::flow::SignerStatus {
+    auto *f = visible<SigningFlow>();
+    if (f == nullptr || f->m_flow != nullptr) {
+        return keys::flow::SignerStatus::NoRoute;
+    }
+    for (const auto &row : f->m_rows) {
+        if (QString::compare(row.fingerprint, fp, Qt::CaseInsensitive) == 0) {
+            return row.status;
+        }
+    }
+    return keys::flow::SignerStatus::NoRoute;
+}
+
 auto signerReady(const QString &id) -> bool {
     auto entry = signerById(id);
     return entry.has_value() && entry->signer->state() == plugin::SignerState::Ready &&
@@ -1275,6 +1289,23 @@ void addSteps() {
         shot("14-receive-verified-coldcard");
         later([] { visible<SigningFlow>()->accept(); });
     });
+    // The same address on the Ledger, from Receive's picker.
+    step("receive verify on the Ledger", [] { return visible<SigningFlow>() == nullptr; }, [] {
+        markLedgerScreens();
+        later([] { emit receiveRow()->verifyRequested(); });
+    });
+    step("receive verify picker 2", [] { return visible<SigningFlow>() != nullptr; },
+         [] { pickRow(g_fp_b, "the Ledger, to show the address"); });
+    step("receive verified on the Ledger", [] {
+        auto *f = visible<SigningFlow>();
+        return f != nullptr && f->m_verify_result.has_value();
+    }, [] {
+        auto *f = visible<SigningFlow>();
+        check(f->m_verify_result.value() == SigningFlow::VerifyResult::Matched,
+              "the Ledger matched the receive address");
+        shot("14b-receive-verified-ledger");
+        later([f] { f->accept(); });
+    });
     step("fund", [] { return visible<SigningFlow>() == nullptr; }, [] {
         auto address = receiveRow()->address();
         check(!chain("send " + address + " 0.02").isEmpty(), "funded");
@@ -1345,14 +1376,38 @@ void addSteps() {
         shot("19-after-round1");
         // Closed, the modal keeps the session: Sign opens it again at its round.
         later([] { signModal()->reject(); });
-        // phase 29's lost session: the simulator restarts with the same seed and
-        // nothing enrolled (--eff)
-        g_coldcard.stop();
-        g_coldcard.start();
     });
+    // phase 29's lost session: the simulator restarts with the same seed and nothing
+    // enrolled (--eff). Receive's verify picker stays open meanwhile: its Coldcard row
+    // follows the device, gone then back.
+    step("verify picker open", [] { return signModal() == nullptr; }, [] {
+        widget()->controller()->receiveClicked();
+        later([] { emit receiveRow()->verifyRequested(); });
+    });
+    step("verify picker lists the Coldcard",
+         [] { return pickerStatus(g_fp_c) == keys::flow::SignerStatus::Ready; }, [] {
+             check(true, "the verify picker lists the Coldcard ready");
+             g_coldcard.stop();
+         });
     step("Coldcard dropped",
-         [] { return signModal() == nullptr && !signerById(COLDCARD_ID).has_value(); },
-         [] { check(true, "the hwi service dropped the restarted Coldcard"); });
+         [] {
+             return !signerById(COLDCARD_ID).has_value() &&
+                    pickerStatus(g_fp_c) == keys::flow::SignerStatus::Disconnected;
+         },
+         [] {
+             check(true, "the hwi service dropped the Coldcard, its picker row Not Connected");
+             shot("19b-verify-picker-coldcard-gone");
+             g_coldcard.start();
+         });
+    step("picker sees the Coldcard back",
+         [] { return pickerStatus(g_fp_c) == keys::flow::SignerStatus::Ready; }, [] {
+             check(true, "the restarted Coldcard is ready again in the picker");
+             shot("19c-verify-picker-coldcard-back");
+             later([] {
+                 visible<SigningFlow>()->reject();
+                 widget()->controller()->sendClicked();
+             });
+         });
     step("Coldcard reacquired", [] { return signerReady(COLDCARD_ID); }, [] {
         auto fp = signerById(COLDCARD_ID)->signer->fingerprint();
         check(QString::compare(fp, g_fp_c, Qt::CaseInsensitive) == 0,

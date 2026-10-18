@@ -120,6 +120,8 @@ SigningFlow::SigningFlow(KeysModule *module, Request request)
       m_psbt(m_request.psbt_v2_hex) {
     init();
     view();
+    connect(m_module, &KeysModule::liveDevicesChanged, this, &SigningFlow::onDevicesChanged,
+            qontrol::UNIQUE);
 }
 
 void SigningFlow::begin() {
@@ -460,6 +462,30 @@ void SigningFlow::closeFlow() {
 }
 
 // ===== Slots =====
+
+void SigningFlow::onDevicesChanged() {
+    // Only the picker lists devices: a route on display keeps its own device.
+    if (m_flow != nullptr || m_answered) {
+        return;
+    }
+    switch (m_request.context) {
+    case Context::Sign: {
+        auto rows = signRows();
+        if (!rows.has_value()) {
+            return;
+        }
+        m_rows = rows.value();
+        break;
+    }
+    case Context::Verify:
+        m_rows = verifyRows();
+        break;
+    case Context::Fetch:
+    case Context::FetchXpub:
+        return;
+    }
+    showPicker();
+}
 
 void SigningFlow::onRowClicked() {
     auto *row = sender();
