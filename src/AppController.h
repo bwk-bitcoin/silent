@@ -20,9 +20,11 @@ class PluginRegistry;
 class QWidget;
 class IThemeProvider;
 
+// The Electrum server every new regtest account starts with.
+constexpr auto REGTEST_ELECTRUM_URL = "minta.wizardsardine.com:60001";
+
 struct RegtestDefaultsInfo {
     QString blindbit_url;
-    QString electrum_url;
 };
 
 class AppController : public qontrol::Controller {
@@ -42,7 +44,7 @@ public:
 
 signals:
     void accountList(QList<QString>);
-    void regtestDefaultsReady(const QString &blindbit, const QString &electrum);
+    void regtestDefaultsReady(const QString &blindbit);
 
 public slots:
     auto initState() -> void;
@@ -58,7 +60,7 @@ public slots:
     auto onDeleteConfirmed(const QString &account) -> void;
     auto onHostInstanceRemoved(const QString &id) -> void;
     auto onHostInstanceRegistered(const QString &id) -> void;
-    auto onRegtestDefaultsReady(const QString &blindbit, const QString &electrum) -> void;
+    auto onRegtestDefaultsReady(const QString &blindbit) -> void;
     auto onHostSettingsSectionsChanged() -> void;
     auto onPluginRegistryChanged() -> void;
 

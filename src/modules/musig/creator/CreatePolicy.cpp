@@ -375,10 +375,7 @@ void CreatePolicy::applyNetworkDefaults() {
     auto electrum = QString::fromStdString(
         std::string(::app_last_endpoint(BackendServer::Electrum, network())));
     if (electrum.isEmpty() && network() == Network::Regtest) {
-        auto defaults = AppController::get()->regtestDefaults();
-        if (defaults.has_value()) {
-            electrum = defaults.value().electrum_url;
-        }
+        electrum = REGTEST_ELECTRUM_URL;
     }
     m_electrum.input()->setText(electrum);
     m_electrum.setState(catalog::EndpointRow::State::Untested);

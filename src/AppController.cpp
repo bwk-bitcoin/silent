@@ -84,8 +84,7 @@ auto AppController::initState() -> void {
         auto defaults = ::get_regtest_defaults();
         if (defaults.is_ok) {
             auto blindbit = QString::fromStdString(std::string(defaults.blindbit_url.c_str()));
-            auto electrum = QString::fromStdString(std::string(defaults.electrum_url.c_str()));
-            emit regtestDefaultsReady(blindbit, electrum);
+            emit regtestDefaultsReady(blindbit);
         }
     });
     connect(thread, &QThread::finished, thread, &QThread::deleteLater);
@@ -305,9 +304,8 @@ auto AppController::isAccountOpen(const QString &name) const -> bool {
     return m_open_accounts.contains(name);
 }
 
-auto AppController::onRegtestDefaultsReady(const QString &blindbit, const QString &electrum)
-    -> void {
-    m_regtest_defaults = RegtestDefaultsInfo{.blindbit_url = blindbit, .electrum_url = electrum};
+auto AppController::onRegtestDefaultsReady(const QString &blindbit) -> void {
+    m_regtest_defaults = RegtestDefaultsInfo{.blindbit_url = blindbit};
 }
 
 auto AppController::regtestDefaults() const -> std::optional<RegtestDefaultsInfo> {

@@ -317,8 +317,6 @@ mod ffi {
         pub error: String,
         /// BlindBit server URL (with http:// prefix).
         pub blindbit_url: String,
-        /// Electrum server address (host:port).
-        pub electrum_url: String,
     }
 
     /// Result of PSBT pre-signing validation via Electrum.
@@ -1982,7 +1980,6 @@ pub fn get_regtest_defaults() -> RegtestDefaults {
                 is_ok: false,
                 error: format!("HTTP request failed: {e}"),
                 blindbit_url: String::new(),
-                electrum_url: String::new(),
             };
         }
     };
@@ -1995,7 +1992,6 @@ pub fn get_regtest_defaults() -> RegtestDefaults {
                 is_ok: false,
                 error: format!("Failed to read response: {e}"),
                 blindbit_url: String::new(),
-                electrum_url: String::new(),
             };
         }
     };
@@ -2008,20 +2004,17 @@ pub fn get_regtest_defaults() -> RegtestDefaults {
                 is_ok: false,
                 error: format!("JSON parse failed: {e}"),
                 blindbit_url: String::new(),
-                electrum_url: String::new(),
             };
         }
     };
 
     let blindbit_connect = json["blindbit_connect"].as_str().unwrap_or_default();
-    let electrum_connect = json["electrum_connect"].as_str().unwrap_or_default();
 
     if blindbit_connect.is_empty() {
         return RegtestDefaults {
             is_ok: false,
             error: "Missing fields in API response".to_string(),
             blindbit_url: String::new(),
-            electrum_url: String::new(),
         };
     }
 
@@ -2029,7 +2022,6 @@ pub fn get_regtest_defaults() -> RegtestDefaults {
         is_ok: true,
         error: String::new(),
         blindbit_url: format!("http://{blindbit_connect}"),
-        electrum_url: electrum_connect.to_string(),
     }
 }
 

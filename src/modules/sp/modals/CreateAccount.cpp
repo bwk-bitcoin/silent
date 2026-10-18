@@ -568,12 +568,8 @@ void CreateAccount::applyNetworkDefaults() {
     switch (network()) {
     case Network::Regtest: {
         auto defaults = AppController::get()->regtestDefaults();
-        if (defaults.has_value()) {
-            blindbit = defaults.value().blindbit_url;
-            electrum = defaults.value().electrum_url;
-        } else {
-            blindbit = REGTEST_BLINDBIT_URL;
-        }
+        blindbit = defaults.has_value() ? defaults.value().blindbit_url : REGTEST_BLINDBIT_URL;
+        electrum = REGTEST_ELECTRUM_URL;
         autoTest = true;
         break;
     }
