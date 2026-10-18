@@ -13,6 +13,7 @@ use bitcoin::{
     Network as BtcNetwork,
 };
 use bwk_sp::account::config::{Config as SpConfig, SubAccountConfig};
+use bwk_sp::bwk::bwk_electrum::raw_client::CertificateCheck;
 use bwk_sp::bwk_sign::bwk_descriptor::{
     descriptor::{tr_path, wpkh_path},
     sp_descriptor::SpDescriptor,
@@ -82,6 +83,10 @@ pub struct Config {
     /// Electrum server address (host:port) for sub-account syncing
     #[serde(default)]
     pub electrum_url: String,
+    /// Whether the Electrum server's TLS certificate is checked. Off only to reach a
+    /// self-signed server: anyone on the path can then impersonate it.
+    #[serde(default = "default_verify_certificate")]
+    pub verify_certificate: bool,
     /// Optional dust limit in satoshis
     pub dust_limit: Option<u64>,
     /// Plugin/module identifier that owns this account
@@ -97,6 +102,19 @@ pub struct Config {
 
 fn default_plugin_id() -> String {
     "sp".into()
+}
+
+fn default_verify_certificate() -> bool {
+    true
+}
+
+/// The bwk certificate policy for `verify_certificate`.
+pub(crate) fn certificate_check(verify_certificate: bool) -> CertificateCheck {
+    if verify_certificate {
+        CertificateCheck::Validate
+    } else {
+        CertificateCheck::DangerAcceptInvalid
+    }
 }
 
 /// Birthday for new mainnet accounts. Scanning from block 1 costs ~958k blocks,
@@ -143,6 +161,7 @@ impl Config {
             taproot_descriptor: String::new(),
             blindbit_url,
             electrum_url,
+            verify_certificate: default_verify_certificate(),
             dust_limit,
             plugin_id: default_plugin_id(),
             data_dir,
@@ -235,6 +254,7 @@ impl Config {
             let (electrum_host, electrum_port) = parse_electrum_url(&self.electrum_url);
             if let (Some(host), Some(port)) = (electrum_host, electrum_port) {
                 config.set_electrum_endpoint(host, port);
+                config.set_certificate_check(certificate_check(self.verify_certificate));
             }
         }
 
@@ -312,9 +332,24 @@ impl Config {
         self.electrum_url.clone()
     }
 
-    /// Set Electrum URL.
+    /// Set Electrum URL. Another server checks its certificate again: skipping the
+    /// check was a choice made for one self-signed server (bwk's `Endpoint::set` does
+    /// the same).
     pub fn set_electrum_url(&mut self, url: String) {
+        if url != self.electrum_url {
+            self.verify_certificate = true;
+        }
         self.electrum_url = url;
+    }
+
+    /// Whether the Electrum server's TLS certificate is checked.
+    pub fn get_verify_certificate(&self) -> bool {
+        self.verify_certificate
+    }
+
+    /// Check the Electrum server's TLS certificate, or not (a self-signed server).
+    pub fn set_verify_certificate(&mut self, verify: bool) {
+        self.verify_certificate = verify;
     }
 
     /// Get dust limit.
@@ -363,6 +398,9 @@ impl Config {
         if !self.electrum_url.is_empty() {
             if let (Some(host), Some(port)) = parse_electrum_url(&self.electrum_url) {
                 config.scanner.set_electrum(Some(host), Some(port));
+                config
+                    .scanner
+                    .set_certificate_check(certificate_check(self.verify_certificate));
             }
         }
 

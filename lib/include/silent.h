@@ -989,6 +989,7 @@ struct SpDescriptorResult;
 struct QrPayload;
 struct BbqrScanResult;
 struct QrImageResult;
+struct ElectrumTipResult;
 struct ConnectionResult;
 struct RegtestDefaults;
 struct PsbtValidation;
@@ -1396,6 +1397,19 @@ struct QrImageResult final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_QrImageResult
+
+#ifndef CXXBRIDGE1_STRUCT_ElectrumTipResult
+#define CXXBRIDGE1_STRUCT_ElectrumTipResult
+// The chain tip height an Electrum server follows.
+struct ElectrumTipResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Error message (empty if is_ok is true).
+  ::rust::String error;
+  ::std::uint32_t height CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_ElectrumTipResult
 
 #ifndef CXXBRIDGE1_STRUCT_ConnectionResult
 #define CXXBRIDGE1_STRUCT_ConnectionResult
@@ -2165,6 +2179,12 @@ struct Config final : public ::rust::Opaque {
   // Set Electrum URL.
   void set_electrum_url(::rust::String url) noexcept;
 
+  // Whether the Electrum server's TLS certificate is checked.
+  bool get_verify_certificate() const noexcept;
+
+  // Check the Electrum server's TLS certificate, or not (a self-signed server).
+  void set_verify_certificate(bool verify) noexcept;
+
   // Get dust limit (0 means not set).
   ::std::uint64_t get_dust_limit() const noexcept;
 
@@ -2779,6 +2799,9 @@ struct MusigAccount final : public ::rust::Opaque {
   void stop_electrum() noexcept;
   ::rust::String electrum_url() const noexcept;
 
+  // Whether the Electrum server's TLS certificate is checked.
+  bool verify_certificate() const noexcept;
+
   // Saves the endpoint to the config and restarts the listener.
   ::MusigElectrumUrlResult set_electrum_url(::rust::String url) noexcept;
 
@@ -2876,7 +2899,11 @@ bool validate_sp_descriptor(::rust::String descriptor) noexcept;
 
 // Test Electrum server connectivity.
 // Blocking call - attempts TCP connect and server.version handshake.
-::ConnectionResult test_electrum(::rust::String address) noexcept;
+::ConnectionResult test_electrum(::rust::String address, bool verify_certificate) noexcept;
+
+// The height of the chain tip the Electrum server at `address` follows.
+// Blocking: call it off the GUI thread.
+::ElectrumTipResult electrum_tip_height(::rust::String address, bool verify_certificate) noexcept;
 
 // Fetch default regtest infrastructure addresses from minta API.
 // Blocking HTTP call - should be called from a background thread.

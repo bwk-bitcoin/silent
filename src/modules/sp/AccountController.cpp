@@ -425,6 +425,14 @@ auto AccountController::endpoints() -> QList<Endpoint> {
     return {Endpoint::Blindbit, Endpoint::Electrum};
 }
 
+auto AccountController::verifiesCertificate() const -> bool {
+    if (!m_account.has_value()) {
+        return true;
+    }
+    auto config = config_from_file(m_account.value()->name());
+    return !config->is_ok() || config->get_verify_certificate();
+}
+
 auto AccountController::endpointUrl(Endpoint endpoint) -> QString {
     if (!m_account.has_value()) {
         return {};

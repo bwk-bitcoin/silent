@@ -228,6 +228,14 @@ impl MusigAccount {
         }
     }
 
+    /// Whether the Electrum server's TLS certificate is checked, true when the account
+    /// did not load.
+    pub fn verify_certificate(&self) -> bool {
+        self.inner
+            .as_ref()
+            .is_none_or(|inner| inner.config.verify_certificate)
+    }
+
     /// Save the Electrum endpoint to the config file and restart the listener. An empty
     /// or unparsable url is saved but stops it. A failed write keeps the old url and the
     /// running listener, and reports `saved` false.
@@ -238,11 +246,12 @@ impl MusigAccount {
                 started: false,
             };
         };
-        let previous = std::mem::replace(&mut inner.config.electrum_url, url);
+        let previous = inner.config.clone();
+        inner.config.set_electrum_url(url);
         if let Err(e) = inner.config.write_file() {
             log::error!("set_electrum_url: {e}");
             // Nothing changed on disk: keep the old url and leave Electrum as it runs.
-            inner.config.electrum_url = previous;
+            inner.config = previous;
             return MusigElectrumUrlResult {
                 saved: false,
                 started: false,
@@ -662,7 +671,11 @@ impl MusigAccount {
             Ok(tx) => tx,
             Err(e) => return tx_error(format!("Invalid transaction hex: {e}")),
         };
-        if let Err(e) = broadcast_via_electrum(&inner.config.electrum_url, &tx) {
+        if let Err(e) = broadcast_via_electrum(
+            &inner.config.electrum_url,
+            inner.config.verify_certificate,
+            &tx,
+        ) {
             return tx_error(e);
         }
         // Reflect the spend locally so the spent coins drop from spendable at once.
@@ -677,7 +690,11 @@ impl MusigAccount {
     /// Validate a prepared transaction via Electrum before signing. Blocking.
     pub fn validate_before_sign(&self, psbt_result: &PsbtResult) -> PsbtValidation {
         match &self.inner {
-            Some(inner) => psbt_validation(psbt_result, &inner.config.electrum_url),
+            Some(inner) => psbt_validation(
+                psbt_result,
+                &inner.config.electrum_url,
+                inner.config.verify_certificate,
+            ),
             None => PsbtValidation {
                 is_ok: false,
                 error: NOT_INITIALIZED.to_string(),

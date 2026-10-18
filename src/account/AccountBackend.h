@@ -47,6 +47,9 @@ public:
     virtual auto endpoints() -> QList<Endpoint> = 0;
     // The url saved for `endpoint`, empty when none is.
     virtual auto endpointUrl(Endpoint endpoint) -> QString = 0;
+    // Whether the Electrum server's TLS certificate is checked: off only for a
+    // self-signed server the account was created against.
+    [[nodiscard]] virtual auto verifiesCertificate() const -> bool = 0;
     [[nodiscard]] virtual auto isEndpointRunning(Endpoint endpoint) const -> bool = 0;
     // false when it could not start.
     virtual auto startEndpoint(Endpoint endpoint) -> bool = 0;

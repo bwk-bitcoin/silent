@@ -297,6 +297,15 @@ mod ffi {
         pub height: u32,
     }
 
+    /// The chain tip height an Electrum server follows.
+    #[derive(Debug, Clone)]
+    pub struct ElectrumTipResult {
+        pub is_ok: bool,
+        /// Error message (empty if is_ok is true).
+        pub error: String,
+        pub height: u32,
+    }
+
     /// Result of a connection test.
     #[derive(Debug, Clone)]
     pub struct ConnectionResult {
@@ -968,7 +977,11 @@ mod ffi {
 
         /// Test Electrum server connectivity.
         /// Blocking call - attempts TCP connect and server.version handshake.
-        fn test_electrum(address: String) -> ConnectionResult;
+        fn test_electrum(address: String, verify_certificate: bool) -> ConnectionResult;
+
+        /// The height of the chain tip the Electrum server at `address` follows.
+        /// Blocking: call it off the GUI thread.
+        fn electrum_tip_height(address: String, verify_certificate: bool) -> ElectrumTipResult;
 
         /// Fetch default regtest infrastructure addresses from minta API.
         /// Blocking HTTP call - should be called from a background thread.
@@ -1091,6 +1104,12 @@ mod ffi {
 
         /// Set Electrum URL.
         fn set_electrum_url(self: &mut Config, url: String);
+
+        /// Whether the Electrum server's TLS certificate is checked.
+        fn get_verify_certificate(self: &Config) -> bool;
+
+        /// Check the Electrum server's TLS certificate, or not (a self-signed server).
+        fn set_verify_certificate(self: &mut Config, verify: bool);
 
         /// Get dust limit (0 means not set).
         fn get_dust_limit(self: &Config) -> u64;
@@ -1629,6 +1648,8 @@ mod ffi {
         fn start_electrum(self: &mut MusigAccount) -> bool;
         fn stop_electrum(self: &mut MusigAccount);
         fn electrum_url(self: &MusigAccount) -> String;
+        /// Whether the Electrum server's TLS certificate is checked.
+        fn verify_certificate(self: &MusigAccount) -> bool;
         /// Saves the endpoint to the config and restarts the listener.
         fn set_electrum_url(self: &mut MusigAccount, url: String) -> MusigElectrumUrlResult;
 
@@ -1881,14 +1902,22 @@ pub fn validate_address(address: String) -> String {
     }
 }
 
-/// Attempt a connect and server.version handshake over the given scheme.
-fn electrum_handshake(host: &str, port: u16, scheme: ElectrumScheme) -> Result<(), String> {
+/// Connect over `scheme` and answer a server.version handshake, the client ready for
+/// the next request.
+fn electrum_connect(
+    host: &str,
+    port: u16,
+    scheme: ElectrumScheme,
+    verify_certificate: bool,
+) -> Result<bwk_sp::bwk::bwk_electrum::raw_client::Client, String> {
     use std::time::Duration;
 
     let ssl = matches!(scheme, ElectrumScheme::Ssl);
     let mut client = bwk_sp::bwk::bwk_electrum::raw_client::Client::new_ssl_maybe(host, port, ssl)
         .read_timeout(Some(Duration::from_secs(5)))
-        .write_timeout(Some(Duration::from_secs(5)));
+        .write_timeout(Some(Duration::from_secs(5)))
+        .certificate_check(config::certificate_check(verify_certificate))
+        .map_err(|e| format!("Invalid address: {e}"))?;
 
     client
         .try_connect(Some(Duration::from_secs(5)))
@@ -1910,7 +1939,7 @@ fn electrum_handshake(host: &str, port: u16, scheme: ElectrumScheme) -> Result<(
     // bwk reads a closed connection back as an empty line, so recv_str returning
     // Ok proves nothing. Only a JSON-RPC reply means the transport is right.
     match serde_json::from_str::<serde_json::Value>(response.trim()) {
-        Ok(serde_json::Value::Object(_)) => Ok(()),
+        Ok(serde_json::Value::Object(_)) => Ok(client),
         _ => Err("No electrum response from server".to_string()),
     }
 }
@@ -1924,12 +1953,39 @@ fn electrum_url(host: &str, port: u16, scheme: ElectrumScheme) -> String {
     }
 }
 
-/// Test Electrum server connectivity with a server.version handshake.
+/// The host, port and schemes to try for `address`: the stated scheme as-is, else
+/// plaintext then SSL.
+fn electrum_candidates(address: &str) -> Result<(String, u16, Vec<ElectrumScheme>), String> {
+    let (host, port, scheme) = bwk_sp::bwk::bwk_electrum::url::parse_electrum_url(address)
+        .map_err(|e| format!("Invalid address '{address}': {e}"))?;
+    let Some(host) = host else {
+        return Err(format!(
+            "Invalid address format '{address}': expected host:port"
+        ));
+    };
+    let Some(port) = port else {
+        // A port that is not a u16 is kept on the host rather than reported, so a
+        // leftover ':' means the port is bad and not simply missing.
+        return Err(match host.rsplit_once(':') {
+            Some((_, bad)) => format!("Invalid port '{bad}' in '{address}': must be 1 to 65535"),
+            None => format!("Invalid address format '{address}': expected host:port"),
+        });
+    };
+    let schemes = if address.contains("://") {
+        vec![scheme]
+    } else {
+        vec![ElectrumScheme::Tcp, ElectrumScheme::Ssl]
+    };
+    Ok((host, port, schemes))
+}
+
+/// Test Electrum server connectivity with a server.version handshake, checking the
+/// server's TLS certificate unless `verify_certificate` is false (a self-signed one).
 ///
 /// When the address states a scheme it is used as-is, otherwise plaintext then
 /// SSL are tried and the first to answer wins. Returns the URL that connected,
 /// so the caller can store the resolved scheme.
-pub fn test_electrum(address: String) -> ffi::ConnectionResult {
+pub fn test_electrum(address: String, verify_certificate: bool) -> ffi::ConnectionResult {
     log::info!("test_electrum()");
 
     let err_conn = |error: String| ffi::ConnectionResult {
@@ -1938,45 +1994,76 @@ pub fn test_electrum(address: String) -> ffi::ConnectionResult {
         url: String::new(),
     };
 
-    let (host, port, scheme) = match bwk_sp::bwk::bwk_electrum::url::parse_electrum_url(&address) {
+    let (host, port, candidates) = match electrum_candidates(&address) {
         Ok(parsed) => parsed,
-        Err(e) => return err_conn(format!("Invalid address '{address}': {e}")),
-    };
-    let Some(host) = host else {
-        return err_conn(format!(
-            "Invalid address format '{address}': expected host:port"
-        ));
-    };
-    let Some(port) = port else {
-        // A port that is not a u16 is kept on the host rather than reported, so a
-        // leftover ':' means the port is bad and not simply missing.
-        return err_conn(match host.rsplit_once(':') {
-            Some((_, bad)) => format!("Invalid port '{bad}' in '{address}': must be 1 to 65535"),
-            None => format!("Invalid address format '{address}': expected host:port"),
-        });
-    };
-
-    // An explicit scheme is honored as-is; a bare host:port probes both.
-    let candidates: &[ElectrumScheme] = if address.contains("://") {
-        &[scheme]
-    } else {
-        &[ElectrumScheme::Tcp, ElectrumScheme::Ssl]
+        Err(e) => return err_conn(e),
     };
 
     let mut last_error = String::new();
     for candidate in candidates {
-        match electrum_handshake(&host, port, *candidate) {
-            Ok(()) => {
+        match electrum_connect(&host, port, candidate, verify_certificate) {
+            Ok(_) => {
                 return ffi::ConnectionResult {
                     is_ok: true,
                     error: String::new(),
-                    url: electrum_url(&host, port, *candidate),
+                    url: electrum_url(&host, port, candidate),
                 }
             }
             Err(e) => last_error = e,
         }
     }
     err_conn(last_error)
+}
+
+/// The height of the chain tip the Electrum server at `address` follows, from its
+/// blockchain.headers.subscribe answer. Blocking.
+pub fn electrum_tip_height(address: String, verify_certificate: bool) -> ffi::ElectrumTipResult {
+    let err_tip = |error: String| ffi::ElectrumTipResult {
+        is_ok: false,
+        error,
+        height: 0,
+    };
+    let (host, port, candidates) = match electrum_candidates(&address) {
+        Ok(parsed) => parsed,
+        Err(e) => return err_tip(e),
+    };
+
+    let mut last_error = String::new();
+    for candidate in candidates {
+        let mut client = match electrum_connect(&host, port, candidate, verify_certificate) {
+            Ok(client) => client,
+            Err(e) => {
+                last_error = e;
+                continue;
+            }
+        };
+        let request =
+            bwk_sp::bwk::bwk_electrum::electrum::request::Request::subscribe_headers().id(1);
+        if let Err(e) = client.try_send(&request) {
+            last_error = format!("Failed to send headers request: {e}");
+            continue;
+        }
+        return match client.recv_str() {
+            Ok(response) => match tip_height(&response) {
+                Some(height) => ffi::ElectrumTipResult {
+                    is_ok: true,
+                    error: String::new(),
+                    height,
+                },
+                None => err_tip(format!("No tip height in the answer: {}", response.trim())),
+            },
+            Err(e) => err_tip(format!("No response from server: {e}")),
+        };
+    }
+    err_tip(last_error)
+}
+
+/// `result.height` of a blockchain.headers.subscribe answer.
+fn tip_height(response: &str) -> Option<u32> {
+    let value: serde_json::Value = serde_json::from_str(response.trim()).ok()?;
+    value["result"]["height"]
+        .as_u64()
+        .and_then(|height| u32::try_from(height).ok())
 }
 
 /// Fetch default regtest infrastructure addresses from minta.pythcoiner.dev.
@@ -2132,7 +2219,7 @@ mod tests {
 
     #[test]
     fn test_electrum_without_port_is_rejected() {
-        let result = test_electrum("electrum.pythcoiner.dev".to_string());
+        let result = test_electrum("electrum.pythcoiner.dev".to_string(), true);
         assert!(!result.is_ok);
         assert!(result.url.is_empty());
         assert!(
@@ -2144,7 +2231,7 @@ mod tests {
 
     #[test]
     fn test_electrum_reports_an_out_of_range_port() {
-        let result = test_electrum("electrum.pythcoiner.dev:500002".to_string());
+        let result = test_electrum("electrum.pythcoiner.dev:500002".to_string(), true);
         assert!(!result.is_ok);
         assert!(result.url.is_empty());
         assert!(
@@ -2156,7 +2243,7 @@ mod tests {
 
     #[test]
     fn test_electrum_rejects_unsupported_scheme() {
-        let result = test_electrum("wss://electrum.pythcoiner.dev:443".to_string());
+        let result = test_electrum("wss://electrum.pythcoiner.dev:443".to_string(), true);
         assert!(!result.is_ok);
         assert!(result.url.is_empty());
         assert!(
@@ -2164,6 +2251,19 @@ mod tests {
             "unexpected error: {}",
             result.error
         );
+    }
+
+    #[test]
+    fn tip_height_reads_a_headers_subscribe_answer() {
+        assert_eq!(
+            tip_height(r#"{"jsonrpc":"2.0","id":1,"result":{"height":905210,"hex":"00"}}"#),
+            Some(905210)
+        );
+        assert_eq!(
+            tip_height(r#"{"jsonrpc":"2.0","id":1,"error":"busy"}"#),
+            None
+        );
+        assert_eq!(tip_height("not json"), None);
     }
 
     #[test]

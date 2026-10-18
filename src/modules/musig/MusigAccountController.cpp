@@ -162,6 +162,10 @@ auto MusigAccountController::endpointUrl([[maybe_unused]] Endpoint endpoint) -> 
     return electrumUrl();
 }
 
+auto MusigAccountController::verifiesCertificate() const -> bool {
+    return !m_account.has_value() || m_account.value()->verify_certificate();
+}
+
 auto MusigAccountController::isEndpointRunning([[maybe_unused]] Endpoint endpoint) const -> bool {
     return m_electrum_running;
 }

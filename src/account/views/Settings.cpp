@@ -247,10 +247,11 @@ void Settings::testEndpoint(const EndpointRow &row) {
             emit backendInfoReady(info);
         });
     } else {
-        thread = QThread::create([this, url = url.toStdString()]() -> void {
-            auto result = ::test_electrum(rust::String(url));
-            emit electrumTestReady(result);
-        });
+        thread = QThread::create(
+            [this, url = url.toStdString(), verify = m_backend->verifiesCertificate()]() -> void {
+                auto result = ::test_electrum(rust::String(url), verify);
+                emit electrumTestReady(result);
+            });
     }
     m_backend->startWorker(thread);
 }

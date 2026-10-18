@@ -662,7 +662,7 @@ void CreateAccount::onTestElectrum() {
     m_electrum.setState(catalog::EndpointRow::State::Testing);
     updateActions();
     auto *thread = QThread::create([this, address = address.toStdString()]() {
-        auto result = ::test_electrum(rust::String(address));
+        auto result = ::test_electrum(rust::String(address), true);
         emit electrumTestReady(result);
     });
     connect(thread, &QThread::finished, thread, &QThread::deleteLater);

@@ -28,6 +28,7 @@ struct AccountInner {
     receiver: Option<mpsc::Receiver<BwkNotification>>,
     network: bitcoin::Network,
     electrum_url: String,
+    verify_certificate: bool,
 }
 
 /// Account wrapping bwk-sp::Account.
@@ -83,6 +84,7 @@ impl Account {
             receiver,
             network,
             electrum_url: config.electrum_url.clone(),
+            verify_certificate: config.verify_certificate,
         })
     }
 
@@ -149,6 +151,7 @@ impl Account {
         let (host, port) = crate::config::parse_electrum_url(&config.electrum_url);
         inner.account.set_electrum_settings(host, port);
         inner.electrum_url = config.electrum_url;
+        inner.verify_certificate = config.verify_certificate;
         inner.account.start_electrum();
         true
     }
@@ -693,7 +696,7 @@ impl Account {
 
         let txid = tx.compute_txid();
 
-        if let Err(e) = broadcast_via_electrum(&inner.electrum_url, &tx) {
+        if let Err(e) = broadcast_via_electrum(&inner.electrum_url, inner.verify_certificate, &tx) {
             return TxResult {
                 is_ok: false,
                 error: e,
@@ -792,7 +795,7 @@ impl Account {
             return err_validation("Account not initialized".to_string());
         };
 
-        psbt_validation(psbt_result, &inner.electrum_url)
+        psbt_validation(psbt_result, &inner.electrum_url, inner.verify_certificate)
     }
 
     /// Log all details of a failed broadcast for debugging/reproduction.
@@ -854,6 +857,7 @@ pub(crate) fn rust_txs(payments: Vec<Payment>) -> Vec<RustTx> {
 pub(crate) fn psbt_validation(
     psbt_result: &PsbtResult,
     electrum_url: &str,
+    verify_certificate: bool,
 ) -> crate::ffi::PsbtValidation {
     let err_validation = |error: String| crate::ffi::PsbtValidation {
         is_ok: false,
@@ -874,7 +878,7 @@ pub(crate) fn psbt_validation(
         Err(e) => return err_validation(format!("Invalid PSBT: {e}")),
     };
 
-    match validate_psbt_via_electrum(&psbt, electrum_url) {
+    match validate_psbt_via_electrum(&psbt, electrum_url, verify_certificate) {
         Ok(issue) => {
             let mut issues = Vec::new();
             for (idx, addr) in &issue.reused_outputs {
@@ -1059,6 +1063,7 @@ fn inputs_to_check(psbt: &bwk_sp::bwk_tx::bwk_psbt::PsbtV2) -> Vec<(usize, bitco
 fn validate_psbt_via_electrum(
     psbt: &bwk_sp::bwk_tx::bwk_psbt::PsbtV2,
     electrum_url: &str,
+    verify_certificate: bool,
 ) -> Result<PsbtValidationIssue, String> {
     use std::collections::HashMap;
 
@@ -1070,14 +1075,10 @@ fn validate_psbt_via_electrum(
     let host = host.ok_or("Invalid electrum URL: missing host")?;
     let port = port.ok_or("Invalid electrum URL: missing port")?;
 
-    // AccountInner does not carry the account's configured CertificateCheck policy,
-    // so this always validates the certificate chain. Accounts pointed at a
-    // self-signed or onion electrum server (DangerAcceptInvalid) will not be able
-    // to run this check until that policy is threaded through from the config.
     let mut client = bwk_sp::bwk::bwk_electrum::client::Client::new(
         &host,
         port,
-        bwk_sp::bwk::bwk_electrum::raw_client::CertificateCheck::Validate,
+        crate::config::certificate_check(verify_certificate),
     )
     .map_err(|e| format!("Connection to {electrum_url} failed: {e}"))?;
 
@@ -1196,6 +1197,7 @@ fn fetch_or_cache_tx(
 /// Broadcast a transaction via Electrum server.
 pub(crate) fn broadcast_via_electrum(
     electrum_url: &str,
+    verify_certificate: bool,
     tx: &bitcoin::Transaction,
 ) -> Result<(), String> {
     use bitcoin::consensus::encode::serialize_hex;
@@ -1212,7 +1214,9 @@ pub(crate) fn broadcast_via_electrum(
     let port = port.ok_or("Invalid electrum URL: missing port")?;
 
     let ssl = matches!(scheme, bwk_sp::bwk::bwk_electrum::url::ElectrumScheme::Ssl);
-    let mut client = bwk_sp::bwk::bwk_electrum::raw_client::Client::new_ssl_maybe(&host, port, ssl);
+    let mut client = bwk_sp::bwk::bwk_electrum::raw_client::Client::new_ssl_maybe(&host, port, ssl)
+        .certificate_check(crate::config::certificate_check(verify_certificate))
+        .map_err(|e| format!("Invalid electrum URL '{electrum_url}': {e}"))?;
     client
         .try_connect(Some(Duration::from_secs(10)))
         .map_err(|e| {

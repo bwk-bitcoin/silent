@@ -37,6 +37,7 @@ public:
     // BlindBit, then Electrum.
     auto endpoints() -> QList<Endpoint> override;
     auto endpointUrl(Endpoint endpoint) -> QString override;
+    [[nodiscard]] auto verifiesCertificate() const -> bool override;
     [[nodiscard]] auto isEndpointRunning(Endpoint endpoint) const -> bool override;
     auto startEndpoint(Endpoint endpoint) -> bool override;
     void stopEndpoint(Endpoint endpoint) override;
