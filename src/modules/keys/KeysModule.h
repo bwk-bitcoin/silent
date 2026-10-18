@@ -69,7 +69,8 @@ public:
     [[nodiscard]] QList<KeyEntry> keys(Network network) const override;
     auto newRequest() -> ReqId override;
     void sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
-              const QStringList &descriptors, const QString &wallet_name) override;
+              const QStringList &descriptors, const QString &wallet_name,
+              const QString &fingerprint) override;
     void verifyAddress(ReqId req_id, Network network, const QString &descriptor,
                        const QString &path, const QString &address) override;
     void spDescriptor(ReqId req_id, Network network, const QString &fingerprint) override;
@@ -191,9 +192,10 @@ public:
     [[nodiscard]] auto tab() -> QWidget *;
     // Each request below opens one signing flow modal and returns once it has closed;
     // the flow answers `req_id` through the bus exactly once.
-    // Signs `psbt_v2_hex` with every key it needs, one after the other.
+    // Signs `psbt_v2_hex` with every key it needs, one after the other, or with the key
+    // `fingerprint` alone when it is set.
     void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors,
-              const QString &wallet_name);
+              const QString &wallet_name, const QString &fingerprint);
     // Shows `address` on a device of a key `descriptor` is registered against.
     void verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
                        const QString &address);

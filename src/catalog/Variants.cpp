@@ -279,11 +279,6 @@ auto btnSign() -> Button * {
     return make({.role = ButtonRole::Primary, .label = TR("btn-sign"), .width = BtnWidth::M});
 }
 
-auto btnPrepare() -> Button * {
-    return make(
-        {.role = ButtonRole::Primary, .label = TR("musig-send-prepare"), .width = BtnWidth::M});
-}
-
 auto btnSignHot() -> Button * {
     return make({.role = ButtonRole::Primary, .label = TR("btn-sign"), .width = BtnWidth::M});
 }
@@ -634,6 +629,16 @@ auto pillSignerReady() -> Badge * {
 
 auto pillSignerSigned() -> Badge * {
     auto *pill = makePill(Badge::Role::Success, TR("pill-signed"), PillWidth::L);
+    pill->setIcon(icon::check(IconColor::Success));
+    return pill;
+}
+
+auto pillMusigNeeded() -> Badge * {
+    return makePill(Badge::Role::Warning, TR("pill-needed"), PillWidth::L);
+}
+
+auto pillMusigNonceAdded() -> Badge * {
+    auto *pill = makePill(Badge::Role::Success, TR("pill-nonce"), PillWidth::L);
     pill->setIcon(icon::check(IconColor::Success));
     return pill;
 }

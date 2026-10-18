@@ -443,7 +443,7 @@ void MusigAccountController::prepareTransaction(TransactionTemplate tx, MusigSpe
     emit roundChanged(roundStatus());
 }
 
-void MusigAccountController::signRound() {
+void MusigAccountController::signRound(const QString &fingerprint) {
     if (m_psbt_v2_hex.isEmpty() || m_sign_req_id != 0 || !m_account.has_value()) {
         return;
     }
@@ -459,7 +459,7 @@ void MusigAccountController::signRound() {
     // The answer may arrive during sign(): the id is stored first.
     m_sign_req_id = keys->newRequest();
     keys->sign(m_sign_req_id, network(), m_psbt_v2_hex, QStringList{toQString(getDescriptor())},
-               toQString(m_account.value()->name()));
+               toQString(m_account.value()->name()), fingerprint);
 }
 
 void MusigAccountController::cancelSigning() {

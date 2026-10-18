@@ -14,8 +14,7 @@ class MessageModal : public Modal {
 public:
     enum class Tone { Error, Success };
 
-    MessageModal(const QString &title, const QString &message, Tone tone = Tone::Error,
-                 const QString &value = QString());
+    MessageModal(const QString &title, const QString &message, Tone tone = Tone::Error);
 };
 
 } // namespace catalog

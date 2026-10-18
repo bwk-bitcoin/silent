@@ -862,6 +862,9 @@ auto Send::inputsView() -> QWidget * {
     auto *col = new qontrol::Column;
     col->push(titleRow)->pushSpacer(resolve(Spacing::S))->push(m_auto_summary)->push(m_coin_table);
     col->pushSpacer(resolve(Spacing::XS))->push(m_inputs_amounts_row);
+    if (auto *coinsExtra = m_signing->coinsWidget(); coinsExtra != nullptr) {
+        col->pushSpacer(resolve(Spacing::M))->push(coinsExtra);
+    }
     // No trailing stretch here: in two-column mode it would inflate and push the
     // separator far below the table. The outputs frame carries the trailing stretch.
 

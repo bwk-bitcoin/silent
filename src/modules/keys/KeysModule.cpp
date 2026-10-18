@@ -69,9 +69,10 @@ auto KeysBus::newRequest() -> ReqId {
 }
 
 void KeysBus::sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
-                   const QStringList &descriptors, const QString &wallet_name) {
+                   const QStringList &descriptors, const QString &wallet_name,
+                   const QString &fingerprint) {
     NetworkScope scope(m_module, network);
-    m_module->sign(req_id, psbt_v2_hex, descriptors, wallet_name);
+    m_module->sign(req_id, psbt_v2_hex, descriptors, wallet_name, fingerprint);
 }
 
 void KeysBus::verifyAddress(ReqId req_id, Network network, const QString &descriptor,
@@ -434,7 +435,7 @@ void KeysModule::runFlow(flow::SigningFlow *flow) {
 }
 
 void KeysModule::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors,
-                      const QString &wallet_name) {
+                      const QString &wallet_name, const QString &fingerprint) {
     if (rust() == nullptr) {
         m_bus->deliverError(req_id, TR("keys-module-not-ready"));
         return;
@@ -451,7 +452,8 @@ void KeysModule::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringLis
                .req_id = req_id,
                .psbt_v2_hex = psbt_v2_hex,
                .descriptor = descriptors.isEmpty() ? QString() : descriptors.first(),
-               .wallet_name = wallet_name}));
+               .wallet_name = wallet_name,
+               .fingerprint = fingerprint}));
 }
 
 void KeysModule::verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,

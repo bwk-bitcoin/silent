@@ -89,7 +89,8 @@ public:
         QString path;
         // Verify.
         QString address;
-        // Fetch and FetchXpub: the one key asked, so there is no picker.
+        // Fetch and FetchXpub: the one key asked, so there is no picker. Sign: when set,
+        // only this key signs, with no picker, and the flow answers once it has.
         QString fingerprint;
     };
 
@@ -145,6 +146,8 @@ protected:
     // Shared
     // Embeds the route of the key picked.
     void startRoute();
+    // Sign for the one key the request names: its route, or a failure saying why not.
+    void startRequestedRow();
     void closeFlow();
 
 private:

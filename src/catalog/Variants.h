@@ -47,7 +47,6 @@ auto btnSaveUnsignedPsbt() -> Button *;
 auto btnSealKey() -> Button *;
 auto btnShowMnemonic() -> Button *;
 auto btnSign() -> Button *;
-auto btnPrepare() -> Button *;
 auto btnSignHot() -> Button *;
 auto btnTryAgain() -> Button *;
 auto btnAddAKey() -> Button *;
@@ -121,6 +120,9 @@ auto pillAccountRegistered() -> Badge *;
 auto pillSignerFirst() -> Badge *;
 auto pillSignerReady() -> Badge *;
 auto pillSignerSigned() -> Badge *;
+// The MuSig2 Sign modal: a cosigner's part still needed, its round 1 nonce added.
+auto pillMusigNeeded() -> Badge *;
+auto pillMusigNonceAdded() -> Badge *;
 auto pillSignerWaiting() -> Badge *;
 auto pillSignerDisconnected() -> Badge *;
 auto pillSignerNoHot() -> Badge *;

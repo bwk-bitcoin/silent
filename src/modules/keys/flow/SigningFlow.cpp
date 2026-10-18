@@ -130,6 +130,10 @@ void SigningFlow::begin() {
             return;
         }
         m_rows = rows.value();
+        if (!m_request.fingerprint.isEmpty()) {
+            startRequestedRow();
+            return;
+        }
         showPicker();
         return;
     }
@@ -422,6 +426,22 @@ void SigningFlow::startRoute() {
     m_flow->start();
 }
 
+void SigningFlow::startRequestedRow() {
+    auto found = std::ranges::find_if(m_rows, [this](const FlowRow &row) {
+        return sameFingerprint(row.fingerprint, m_request.fingerprint);
+    });
+    if (found == m_rows.end()) {
+        onFailed(TR("flow-signer-not-needed"));
+        return;
+    }
+    if (!found->usable()) {
+        onFailed(statusSub(*found));
+        return;
+    }
+    m_current = *found;
+    startRoute();
+}
+
 void SigningFlow::closeFlow() {
     if (m_flow == nullptr) {
         return;
@@ -466,9 +486,11 @@ void SigningFlow::onPsbtSigned(const QString &psbt_v2_hex) {
         return;
     }
     m_rows = rows.value();
-    bool pending = std::ranges::any_of(m_rows, [](const FlowRow &row) {
-        return row.usable() || row.status == SignerStatus::Waiting;
-    });
+    // A request for one key is done once that key has signed.
+    bool pending =
+        m_request.fingerprint.isEmpty() && std::ranges::any_of(m_rows, [](const FlowRow &row) {
+            return row.usable() || row.status == SignerStatus::Waiting;
+        });
     if (pending) {
         showPicker();
         return;
@@ -547,7 +569,8 @@ auto SigningRouteFlow::psbt() const -> const QString & {
 }
 
 auto SigningRouteFlow::hasPicker() const -> bool {
-    return m_request.context != Context::Fetch && m_request.context != Context::FetchXpub;
+    // Fetch and FetchXpub always name their key, and so does a Sign request for one key.
+    return m_request.fingerprint.isEmpty();
 }
 
 auto SigningRouteFlow::deviceLabel() const -> QString {

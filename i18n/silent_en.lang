@@ -24,8 +24,6 @@ common-testing => "Testing…"
 common-yes => "Yes"
 confirm-send-broadcasting => "Broadcasting…"
 confirm-send-failed => "Broadcast Failed\n\n%1"
-confirm-send-success => "Transaction Sent\n\nTxid:"
-confirm-transaction-title => "Confirm Transaction"
 create-account-electrum => "Electrum:"
 create-account-name => "Account Name:"
 create-account-title => "Create Account"
@@ -365,6 +363,10 @@ pill-signs-first => "Signs First"
 
 pill-signed => "Signed"
 
+pill-needed => "Needed"
+
+pill-nonce => "Nonce"
+
 pill-waiting => "Waiting"
 
 pill-not-connected => "Not Connected"
@@ -522,6 +524,8 @@ flow-signer-no-hot-sub => "The mnemonic of this key is not stored on this comput
 
 flow-signer-no-route-sub
 => "None of this key’s routes can sign. Add one in the Keys tab.";;
+
+flow-signer-not-needed => "This key does not sign this transaction."
 
 flow-signer-unregistered-sub
 => "This fingerprint is not a key on this computer. Add it in the Keys tab.";;
@@ -1039,8 +1043,6 @@ musig-settings-save-failed => "Could not save the Electrum server"
 
 musig-settings-invalid-url => "Invalid Electrum server address"
 
-musig-send-prepare => "Prepare"
-
 musig-receive-verify-mismatch
 => "The device showed another address: do not use this one";;
 
@@ -1051,16 +1053,6 @@ musig-send-after-blocks => "after %1 blocks"
 musig-send-from-height => "from block %1"
 
 musig-send-locked => "(locked)"
-
-musig-send-round-1 => "Round 1 of 2: every cosigner adds its nonce"
-
-musig-send-round-2 => "Round 2 of 2: every cosigner adds its partial signature"
-
-musig-send-ready => "Every partial signature is in"
-
-musig-send-single-key => "One key signs this path"
-
-musig-send-sign-round => "Sign Round %1"
 
 musig-send-no-keys => "The keys module is not loaded"
 
@@ -1073,11 +1065,29 @@ musig-send-no-path => "No spend path for these coins"
 
 musig-send-path-locked => "This spend path is still locked by its timelock"
 
-musig-send-nonces => "Nonces %1/%2"
-
-musig-send-partial-sigs => "Partial signatures %1/%2"
-
 musig-send-no-coins => "No coin to spend yet"
+
+musig-sign-title => "Sign"
+
+musig-sign-step-nonces => "Nonces"
+
+musig-sign-step-partial => "Partial Signatures"
+
+musig-sign-lead-nonce => "Click each cosigner to add its nonce."
+
+musig-sign-lead-partial => "Click each cosigner to add its partial signature."
+
+musig-sign-lead-single => "Click the cosigner to add its signature."
+
+musig-sign-reason-one => "1 cosigner still to go."
+
+musig-sign-reason => "%1 cosigners still to go."
+
+musig-sign-session-lost-title => "MuSig2 session missing or mismatch"
+
+send-sent-title => "Transaction Sent"
+
+send-sent-message => "The transaction was broadcast."
 
 musig-send-finalize-failed => "Could not finalize the transaction: cancel to restart the signing"
 

@@ -36,6 +36,11 @@ auto SpSigning::actions() -> QWidget * {
     return m_actions;
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+auto SpSigning::coinsWidget() -> QWidget * {
+    return nullptr;
+}
+
 void SpSigning::setTransaction(const std::optional<TransactionTemplate> &tx,
                                [[maybe_unused]] const QStringList &outpoints) {
     m_tx = tx;
@@ -125,7 +130,7 @@ void SpSigning::showSignerStep() {
     auto walletName = QString::fromStdString(std::string(account.value()->name()));
     m_sign_req_id = Host::get()->keys()->newRequest();
     Host::get()->keys()->sign(m_sign_req_id, m_controller->network(), psbtV2Hex,
-                              QStringList{descriptor}, walletName);
+                              QStringList{descriptor}, walletName, QString());
 }
 
 void SpSigning::disconnectSigner() const {
@@ -330,10 +335,8 @@ void SpSigning::onBroadcastResult(TxResult result) {
     dropSigned();
 
     if (result.is_ok) {
-        auto txid = QString::fromStdString(std::string(result.value.c_str()));
-        AppController::execModal(
-            new catalog::MessageModal(TR("confirm-transaction-title"), TR("confirm-send-success"),
-                                      catalog::MessageModal::Tone::Success, txid));
+        AppController::execModal(new catalog::MessageModal(
+            TR("send-sent-title"), TR("send-sent-message"), catalog::MessageModal::Tone::Success));
     } else {
         auto error = QString::fromStdString(std::string(result.error.c_str()));
         AppController::execModal(

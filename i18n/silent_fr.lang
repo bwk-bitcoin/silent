@@ -93,8 +93,6 @@ common-testing => "Testing…" => "Test en cours..."
 common-yes => "Yes" => "Oui"
 confirm-send-broadcasting => "Broadcasting…" => "Diffusion..."
 confirm-send-failed => "Broadcast Failed\n\n%1" => "Echec de diffusion\n\n%1"
-confirm-send-success => "Transaction Sent\n\nTxid:" => "Transaction envoyee\n\nTxid:"
-confirm-transaction-title => "Confirm Transaction" => "Confirmer la transaction"
 create-account-backend-network => "The server runs on %1, not %2." => "NONE"
 create-account-backends-section => "Backends" => "NONE"
 create-account-electrum => "Electrum:" => "Electrum:"
@@ -250,6 +248,9 @@ flow-signer-no-hot-sub
 flow-signer-no-route-sub
 => "None of this key’s routes can sign. Add one in the Keys tab."
 => "NONE";;
+flow-signer-not-needed
+=> "This key does not sign this transaction."
+=> "This key does not sign this transaction.";;
 flow-signer-ready-sub => "Signs with %1." => "NONE"
 flow-signer-signed-sub => "Signature added." => "NONE"
 flow-signer-unregistered-sub
@@ -690,20 +691,10 @@ musig-send-locked => "(locked)" => "NONE"
 musig-send-no-coins => "No coin to spend yet" => "NONE"
 musig-send-no-keys => "The keys module is not loaded" => "NONE"
 musig-send-no-path => "No spend path for these coins" => "NONE"
-musig-send-nonces => "Nonces %1/%2" => "NONE"
-musig-send-partial-sigs => "Partial signatures %1/%2" => "NONE"
 musig-send-path-locked => "This spend path is still locked by its timelock" => "NONE"
-musig-send-prepare => "Prepare" => "NONE"
-musig-send-ready => "Every partial signature is in" => "NONE"
-musig-send-round-1 => "Round 1 of 2: every cosigner adds its nonce" => "NONE"
-musig-send-round-2
-=> "Round 2 of 2: every cosigner adds its partial signature"
-=> "NONE";;
 musig-send-session-lost
 => "A signer no longer holds its round 1 nonce: it restarted, or the transaction changed. Every nonce and partial signature was dropped, sign round 1 again with every cosigner."
 => "NONE";;
-musig-send-sign-round => "Sign Round %1" => "NONE"
-musig-send-single-key => "One key signs this path" => "NONE"
 musig-send-spend-path => "Spend path" => "NONE"
 musig-settings-account => "Account" => "NONE"
 musig-settings-cosigners => "Cosigners" => "NONE"
@@ -713,6 +704,23 @@ musig-settings-save-failed => "Could not save the Electrum server" => "NONE"
 musig-shape-mandatory => "Mandatory keys and others" => "NONE"
 musig-shape-multi => "Several keys" => "NONE"
 musig-shape-single => "One key" => "NONE"
+musig-sign-lead-nonce
+=> "Click each cosigner to add its nonce."
+=> "Click each cosigner to add its nonce.";;
+musig-sign-lead-partial
+=> "Click each cosigner to add its partial signature."
+=> "Click each cosigner to add its partial signature.";;
+musig-sign-lead-single
+=> "Click the cosigner to add its signature."
+=> "Click the cosigner to add its signature.";;
+musig-sign-reason => "%1 cosigners still to go." => "%1 cosigners still to go."
+musig-sign-reason-one => "1 cosigner still to go." => "1 cosigner still to go."
+musig-sign-session-lost-title
+=> "MuSig2 session missing or mismatch"
+=> "MuSig2 session missing or mismatch";;
+musig-sign-step-nonces => "Nonces" => "Nonces"
+musig-sign-step-partial => "Partial Signatures" => "Partial Signatures"
+musig-sign-title => "Sign" => "Sign"
 musig-span-days => "about %1 days" => "about %1 days"
 musig-span-hours => "about %1 hours" => "about %1 hours"
 musig-span-months => "about %1 months" => "about %1 months"
@@ -757,9 +765,11 @@ pill-fetched => "Fetched" => "Fetched"
 pill-hot-key => "Hot Key" => "NONE"
 pill-locked => "Locked" => "NONE"
 pill-missing => "Missing" => "Missing"
+pill-needed => "Needed" => "Needed"
 pill-no-hot-secret => "No Hot Secret" => "NONE"
 pill-no-screen => "No Screen" => "No Screen"
 pill-no-usable-route => "No Usable Route" => "NONE"
+pill-nonce => "Nonce" => "Nonce"
 pill-not-checked => "Not Checked" => "Not Checked"
 pill-not-connected => "Not Connected" => "NONE"
 pill-not-needed => "Not Needed" => "Not Needed"
@@ -837,6 +847,10 @@ send-scan-address-hint
 => "Show the address QR code to the camera."
 => "Show the address QR code to the camera.";;
 send-scan-address-title => "Scan Address" => "Scan Address"
+send-sent-message
+=> "The transaction was broadcast."
+=> "The transaction was broadcast.";;
+send-sent-title => "Transaction Sent" => "Transaction Sent"
 send-signing-failed => "Signing failed." => "Echec de signature."
 send-summary-change => "Change" => "Monnaie"
 send-summary-fee => "Network Fee" => "Frais reseau"

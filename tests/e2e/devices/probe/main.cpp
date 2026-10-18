@@ -23,6 +23,7 @@
 #include "catalog/containers/Modal.h"
 #include "catalog/containers/Tabs.h"
 #include "catalog/display/Label.h"
+#include "catalog/feedback/MessageModal.h"
 #include "catalog/feedback/Notice.h"
 #include "catalog/form/EndpointRow.h"
 #include "catalog/inputs/Checkbox.h"
@@ -49,6 +50,7 @@
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigPlugin.h"
 #include "modules/musig/creator/CreatePolicy.h"
+#include "modules/musig/SignModal.h"
 #include "modules/musig/SigningSection.h"
 #include "modules/sp/SpPlugin.h"
 #include "qr/QrTypes.h"
@@ -468,10 +470,31 @@ auto sendScreen() -> account::view::Send * {
     return w == nullptr ? nullptr : w->findChild<account::view::Send *>();
 }
 
-// The Multikey signing step of Send: spend path, Prepare, the rounds, Broadcast.
+// The Multikey signing step of Send: the spend path, Sign, Cancel.
 auto section() -> musig::SigningSection * {
     auto *w = widget();
     return w == nullptr ? nullptr : w->findChild<musig::SigningSection *>();
+}
+
+// The MuSig2 rounds, open over Send.
+auto signModal() -> musig::SignModal * {
+    return visible<musig::SignModal>();
+}
+
+// The Sign modal's row of the cosigner `fp`, clickable while its part is needed.
+auto cosignerRow(const QString &fp) -> catalog::SelectRow * {
+    auto *m = signModal();
+    if (m == nullptr) {
+        return nullptr;
+    }
+    for (auto *row : m->findChildren<catalog::SelectRow *>()) {
+        if (row->isVisible() &&
+            QString::compare(row->property("fingerprint").toString(), fp, Qt::CaseInsensitive) ==
+                0) {
+            return row;
+        }
+    }
+    return nullptr;
 }
 
 auto receive() -> account::view::Receive * {
@@ -770,23 +793,29 @@ struct RoundSigner {
     QString shot;
 };
 
-// One sign() of the Send view: each signer picked in order and approved.
+// One round in the Sign modal: each cosigner clicked in order, its route approved.
+// Opens the modal from Send's Sign first when it is closed.
 void signRoundSteps(const QString &tag, const std::vector<RoundSigner> &signers, bool lost) {
-    step(tag + ": sign", [] { return section()->m_sign_btn->isEnabled(); }, [tag] {
-        std::printf("[%s] round %s\n", tag.toStdString().c_str(),
-                    currentRound().toStdString().c_str());
-        later([] { section()->m_sign_btn->click(); });
-    });
-    const QString *previous = nullptr;
+    step(tag + ": sign modal", [] { return signModal() != nullptr || section()->m_sign_btn->isEnabled(); },
+         [tag] {
+             std::printf("[%s] round %s\n", tag.toStdString().c_str(),
+                         currentRound().toStdString().c_str());
+             if (signModal() == nullptr) {
+                 later([] { section()->m_sign_btn->click(); });
+             }
+         });
     for (const auto &signer : signers) {
         const QString *fp = signer.fp;
-        step(tag + ": pick the next signer",
-             [previous] {
-                 auto *f = visible<SigningFlow>();
-                 return f != nullptr && unsealShown() == nullptr && f->m_flow == nullptr &&
-                        (previous == nullptr || f->m_signed.contains(*previous));
+        step(tag + ": click the next cosigner",
+             [fp] {
+                 auto *row = cosignerRow(*fp);
+                 return visible<SigningFlow>() == nullptr && unsealShown() == nullptr &&
+                        row != nullptr && row->isEnabled();
              },
-             [fp] { pickRow(*fp, "signer " + *fp); });
+             [fp] {
+                 check(true, "signer " + *fp + " can be picked");
+                 later([fp] { emit cosignerRow(*fp)->clicked(); });
+             });
         QString name = signer.shot;
         switch (signer.kind) {
         case RoundSigner::Kind::Hot:
@@ -815,33 +844,44 @@ void signRoundSteps(const QString &tag, const std::vector<RoundSigner> &signers,
                  [tag] { checkColdcardApproved(tag + ": Coldcard approved"); });
             break;
         }
-        previous = fp;
+        step(tag + ": back on the Sign modal",
+             [] {
+                 return visible<SigningFlow>() == nullptr && unsealShown() == nullptr &&
+                        signModal() != nullptr;
+             },
+             [] {});
     }
-    step(tag + ": round done",
-         [] { return visible<SigningFlow>() == nullptr && unsealShown() == nullptr; },
-         [tag, lost] {
-             auto *s = section();
-             bool notice = s->m_notice->isVisibleTo(s);
-             auto title = s->m_notice->m_title != nullptr ? s->m_notice->m_title->text()
-                                                          : QString();
-             auto text = s->m_notice->m_text != nullptr ? s->m_notice->m_text->text() : QString();
-             std::printf("[%s] after: round %s, notice %d '%s' '%s'\n", tag.toStdString().c_str(),
-                         currentRound().toStdString().c_str(), notice,
-                         title.toStdString().c_str(), text.toStdString().c_str());
-             if (lost) {
-                 check(notice && currentRound() == "Nonces",
-                       "lost session: notice shown, back to round 1");
-                 check(text.contains(QString::fromLatin1(
-                           "MuSig2 session lost on the device, start again from round 1")),
-                       "lost session: the MuSig2 session error reached the Send view");
-             } else {
-                 check(!notice, tag + ": no notice");
-             }
-         });
+    step(tag + ": round done", always(), [tag, lost] {
+        auto *m = signModal();
+        bool notice = m->m_notice->isVisibleTo(m);
+        auto title = m->m_notice->m_title != nullptr ? m->m_notice->m_title->text() : QString();
+        auto text = m->m_notice->m_text != nullptr ? m->m_notice->m_text->text() : QString();
+        std::printf("[%s] after: round %s, notice %d '%s' '%s'\n", tag.toStdString().c_str(),
+                    currentRound().toStdString().c_str(), notice, title.toStdString().c_str(),
+                    text.toStdString().c_str());
+        if (lost) {
+            check(notice && currentRound() == "Nonces" && !m->m_partial,
+                  "lost session: notice shown, back to the Nonces step");
+            check(title == TR("musig-sign-session-lost-title"),
+                  "lost session: the session lost notice reached the Sign modal");
+        } else {
+            check(!notice, tag + ": no notice");
+        }
+        // Every nonce in: Continue moves to the partial signatures.
+        if (!lost && !m->m_partial && currentRound() == "PartialSigs") {
+            check(m->m_continue_btn->isEnabled(), tag + ": Continue enabled");
+            later([m] { m->m_continue_btn->click(); });
+        }
+    });
 }
 
 void broadcastSteps(const QString &ready_shot, const QString &success_shot) {
-    step("ready to broadcast", [] { return section()->m_broadcast_btn->isVisible(); },
+    step("ready to broadcast",
+         [] {
+             auto *m = signModal();
+             return m != nullptr && m->m_broadcast_btn->isVisible() &&
+                    m->m_broadcast_btn->isEnabled();
+         },
          [ready_shot] {
              check(currentRound() == "Ready", "round 2 done: ready");
              if (!ready_shot.isEmpty()) {
@@ -850,21 +890,21 @@ void broadcastSteps(const QString &ready_shot, const QString &success_shot) {
              g_broadcast_answered = false;
              QObject::connect(widget()->controller(), &MusigAccountController::broadcastDone,
                               g_driver, &Driver::onBroadcastDone, qontrol::UNIQUE);
-             later([] { section()->m_broadcast_btn->click(); });
+             later([] { signModal()->m_broadcast_btn->click(); });
          });
     step("broadcast", [] { return g_broadcast_answered; }, [] {
         check(g_last_error.isEmpty(), "broadcast: " +
                                           (g_txids.isEmpty() ? QString() : g_txids.last()) +
                                           g_last_error);
     });
-    step("success message", [] { return visible<catalog::Modal>() != nullptr; },
+    step("success message", [] { return visible<catalog::MessageModal>() != nullptr; },
          [success_shot] {
              shot(success_shot);
              chain("mine 1");
              auto txid = g_txids.last();
              auto conf = chain("conf " + txid);
              check(conf.toInt() >= 1, "spend " + txid + " confirmations " + conf);
-             later([] { visible<catalog::Modal>()->accept(); });
+             later([] { visible<catalog::MessageModal>()->accept(); });
          });
 }
 
@@ -1167,26 +1207,29 @@ void addSteps() {
         shot("15-send-leaf-picker");
         section()->m_leaf_combo->hidePopup();
     });
-    step("prepare", [] { return section()->m_prepare_btn->isEnabled(); },
-         [] { later([] { section()->m_prepare_btn->click(); }); });
-    step("prepared", [] { return section()->m_signing_card->isVisible(); }, [] {
+    step("sign", [] { return section()->m_sign_btn->isEnabled(); },
+         [] { later([] { section()->m_sign_btn->click(); }); });
+    step("prepared", [] { return signModal() != nullptr; }, [] {
         check(currentRound() == "Nonces", "prepared: round 1");
-        shot("16-signing-card-round1");
+        shot("16-sign-modal-round1");
     });
     using Kind = RoundSigner::Kind;
     signRoundSteps("round 1",
                    {{&g_fp_b, Kind::Ledger, "17-round1-ledger-usb"},
                     {&g_fp_c, Kind::Coldcard, "18-round1-coldcard-usb"}},
                    false);
-    step("after round 1", always(), [] {
+    step("after round 1", [] { return signModal() != nullptr && signModal()->m_partial; }, [] {
         check(currentRound() == "PartialSigs", "round 1 done: round 2 next");
         shot("19-after-round1");
+        // Closed, the modal keeps the session: Sign opens it again at its round.
+        later([] { signModal()->reject(); });
         // phase 29's lost session: the simulator restarts with the same seed and
         // nothing enrolled (--eff)
         g_coldcard.stop();
         g_coldcard.start();
     });
-    step("Coldcard dropped", [] { return !signerById(COLDCARD_ID).has_value(); },
+    step("Coldcard dropped",
+         [] { return signModal() == nullptr && !signerById(COLDCARD_ID).has_value(); },
          [] { check(true, "the hwi service dropped the restarted Coldcard"); });
     step("Coldcard reacquired", [] { return signerReady(COLDCARD_ID); }, [] {
         auto fp = signerById(COLDCARD_ID)->signer->fingerprint();
@@ -1275,10 +1318,10 @@ void addSteps() {
     broadcastSteps("25-ready-to-broadcast", "26-broadcast-success");
 
     // ===== Spend 2: the Ledger + hot leaf =====
-    step("change confirmed", [] { return visible<catalog::Modal>() == nullptr && confirmedCoin(); },
+    step("change confirmed",
+         [] { return visible<catalog::Modal>() == nullptr && confirmedCoin(); },
          [] { widget()->controller()->sendClicked(); });
-    step("send again",
-         [] { return section() != nullptr && !section()->m_signing_card->isVisible(); }, [] {
+    step("send again", [] { return section() != nullptr && !section()->m_session; }, [] {
              auto *payment = sendScreen()->m_outputs.begin().value();
              payment->m_address_input->setText(chain("newaddr"));
              payment->m_amount_input->setText("0.004");
@@ -1290,11 +1333,11 @@ void addSteps() {
         s->m_leaf_combo->setCurrentIndex(ab);
         sendScreen()->onProcess();
     });
-    step("prepare 2", [] { return section()->m_prepare_btn->isEnabled(); }, [] {
+    step("sign 2", [] { return section()->m_sign_btn->isEnabled(); }, [] {
         shot("27-send-ledger-hot-leaf");
-        later([] { section()->m_prepare_btn->click(); });
+        later([] { section()->m_sign_btn->click(); });
     });
-    step("prepared 2", [] { return section()->m_signing_card->isVisible(); },
+    step("prepared 2", [] { return signModal() != nullptr; },
          [] { check(currentRound() == "Nonces", "prepared 2: round 1"); });
     signRoundSteps("spend 2 round 1",
                    {{&g_fp_a, Kind::Hot, "28-round1-hot-password"},

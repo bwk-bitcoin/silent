@@ -24,6 +24,7 @@ public:
     explicit SpSigning(AccountController *controller);
 
     [[nodiscard]] auto actions() -> QWidget * override;
+    [[nodiscard]] auto coinsWidget() -> QWidget * override;
     void setTransaction(const std::optional<TransactionTemplate> &tx,
                         const QStringList &outpoints) override;
     [[nodiscard]] auto estimatesFee() const -> bool override;

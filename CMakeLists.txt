@@ -198,6 +198,8 @@ set(SILENT_APP_SOURCES
     src/modules/musig/SettingsExtras.cpp
     src/modules/musig/SigningSection.h
     src/modules/musig/SigningSection.cpp
+    src/modules/musig/SignModal.h
+    src/modules/musig/SignModal.cpp
     src/modules/musig/creator/MusigCreatorModule.h
     src/modules/musig/creator/MusigCreatorModule.cpp
     src/modules/musig/creator/CreatePolicy.h

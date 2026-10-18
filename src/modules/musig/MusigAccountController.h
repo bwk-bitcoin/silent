@@ -95,8 +95,9 @@ public slots:
     void stop();
     // Prepares, then restricts the PSBT to `spend` before round 1.
     void prepareTransaction(TransactionTemplate tx, MusigSpendLeaf spend);
-    // keys()->sign() for the current round of the PSBT in flight.
-    void signRound();
+    // keys()->sign() with the key `fingerprint` alone, for the current round of the PSBT
+    // in flight.
+    void signRound(const QString &fingerprint);
     void cancelSigning();
     void broadcast();
     void onKeysSigned(ReqId req_id, const QString &psbt_v2_hex);
