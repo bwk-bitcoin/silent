@@ -414,7 +414,7 @@ void KeysTab::onRegisterConfirmed(const QString &alias) {
         return;
     }
     m_register_alias = alias;
-    m_register_paths = KeysModule::deviceXpubPaths();
+    m_register_paths = KeysModule::deviceXpubPaths(KeysModule::deviceCapabilities(*entry));
     m_register_xpubs.clear();
     m_register_signer = entry->signer;
     connect(entry->signer, &ISigner::xpub, this, &KeysTab::onRegisterXpub, qontrol::UNIQUE);

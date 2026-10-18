@@ -1486,6 +1486,9 @@ struct HwiDevice final {
   ::rust::String fingerprint;
   // Empty when the device did not report one.
   ::rust::String version;
+  // The capability bits it supports (bit 2 silent payments, bit 3 MuSig2), 0
+  // unless the device is Supported.
+  ::std::uint32_t capabilities CXX_DEFAULT_VALUE(0);
   ::HwiDeviceState state;
   // Pairing code when Locked, the reason when Unsupported, else empty.
   ::rust::String detail;
@@ -2952,6 +2955,9 @@ bool delete_config(::rust::String account_name) noexcept;
 ::Network hwi_config_network() noexcept;
 
 void hwi_set_config_network(::Network network) noexcept;
+
+// Whether a device's capability bits include silent payments.
+bool supports_silent_payments(::std::uint32_t capabilities) noexcept;
 
 ::rust::Box<::KeysModule> new_keys_module(::Network network) noexcept;
 

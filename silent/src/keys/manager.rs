@@ -26,6 +26,7 @@ use crate::keys::{
     psbt::{inspect_bytes, PsbtArtifacts},
     record::{DescriptorEntry, DeviceRecord, KeyRecord, RouteKind, SecretEnvelope, XpubEntry},
     store::KeyStore,
+    supports_silent_payments,
 };
 
 /// One signing device as currently seen by a hardware backend, for example HWI.
@@ -40,7 +41,7 @@ pub struct LiveDevice {
     pub module: String,
     /// Firmware version, empty when the module does not report one (hwi).
     pub version: String,
-    /// bwk-qr capability bits, 0 when the module does not report them (hwi).
+    /// bwk-qr capability bits (`CAPABILITY_*`), as the QR signer or bwk-hwi reports them.
     pub capabilities: u32,
     /// None until the device reports one: a locked or unsupported device has none.
     pub fingerprint: Option<Fingerprint>,
@@ -281,6 +282,19 @@ impl KeyManager {
         }
     }
 
+    /// The first usable route of the key that can sign its silent payment inputs: a
+    /// USB device only when it reports the silent payments capability.
+    fn best_sp_route(&self, fingerprint: Fingerprint) -> Option<RouteKind> {
+        let record = self.records.get(&fingerprint)?;
+        record.routes.as_slice().iter().copied().find(|kind| {
+            self.route_is_usable(record, *kind)
+                && (*kind != RouteKind::Usb
+                    || self
+                        .live_device_for(fingerprint)
+                        .is_some_and(|device| supports_silent_payments(device.capabilities)))
+        })
+    }
+
     /// Derived from the record and the live device list, never stored.
     pub fn is_connected(&self, fingerprint: Fingerprint) -> bool {
         self.live_device_for(fingerprint).is_some()
@@ -338,7 +352,12 @@ impl KeyManager {
             };
         }
 
-        match self.best_route(fingerprint) {
+        let route = if is_sp {
+            self.best_sp_route(fingerprint)
+        } else {
+            self.best_route(fingerprint)
+        };
+        match route {
             Some(route) => {
                 let device_id = if route == RouteKind::Usb {
                     self.live_device_for(fingerprint)
@@ -1515,6 +1534,50 @@ mod tests {
             "expected no duplicate device on disk, got {:?}",
             on_disk.devices
         );
+    }
+
+    #[test]
+    fn best_sp_route_takes_usb_only_on_a_device_with_silent_payments() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+        manager
+            .add_route(fingerprint(1), RouteKind::Usb)
+            .expect("add usb");
+        manager
+            .add_route(fingerprint(1), RouteKind::Qr)
+            .expect("add qr");
+        let device = |capabilities| LiveDevice {
+            id: "dev-1".to_string(),
+            kind: "ledger".to_string(),
+            model: "model".to_string(),
+            serial: "serial".to_string(),
+            module: "hwi".to_string(),
+            version: String::new(),
+            capabilities,
+            fingerprint: Some(fingerprint(1)),
+        };
+
+        for (capabilities, expected) in [
+            (0, RouteKind::Qr),
+            (crate::keys::CAPABILITY_MUSIG, RouteKind::Qr),
+            (crate::keys::CAPABILITY_SILENT_PAYMENTS, RouteKind::Usb),
+        ] {
+            manager.set_live_devices(vec![device(capabilities)]);
+            let route = manager.best_sp_route(fingerprint(1));
+            assert_eq!(
+                route,
+                Some(expected),
+                "capabilities {capabilities:#x}: expected {expected:?}, got {route:?}"
+            );
+            let plain = manager.best_route(fingerprint(1));
+            assert_eq!(
+                plain,
+                Some(RouteKind::Usb),
+                "a non-sp input keeps the connected USB device, got {plain:?}"
+            );
+        }
     }
 
     #[test]

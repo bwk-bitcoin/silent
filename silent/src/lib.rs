@@ -369,6 +369,9 @@ mod ffi {
         pub fingerprint: String,
         /// Empty when the device did not report one.
         pub version: String,
+        /// The capability bits it supports (bit 2 silent payments, bit 3 MuSig2), 0
+        /// unless the device is Supported.
+        pub capabilities: u32,
         pub state: HwiDeviceState,
         /// Pairing code when Locked, the reason when Unsupported, else empty.
         pub detail: String,
@@ -1336,6 +1339,8 @@ mod ffi {
     // ===== Keys Module Methods =====
 
     extern "Rust" {
+        /// Whether a device's capability bits include silent payments.
+        fn supports_silent_payments(capabilities: u32) -> bool;
         fn new_keys_module(network: Network) -> Box<KeysModule>;
         fn is_ok(self: &KeysModule) -> bool;
         fn get_error(self: &KeysModule) -> String;
@@ -2095,9 +2100,12 @@ pub use hwi_config::{
     hwi_config_network, hwi_set_config_network, BitboxSettings, HwiConfig, NoiseConfig,
     NoiseConfigData, PersistedBitboxNoiseConfig,
 };
-pub use keys::bridge::{
-    hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, hot_xpub, new_keys_module, usb_merge_signed,
-    usb_sign_payload, HotMaterial, KeysModule, QrResponse, SealedHotKey,
+pub use keys::{
+    bridge::{
+        hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, hot_xpub, new_keys_module,
+        usb_merge_signed, usb_sign_payload, HotMaterial, KeysModule, QrResponse, SealedHotKey,
+    },
+    supports_silent_payments,
 };
 pub use musig::{
     musig_descriptor_fingerprints, musig_first_receive_address, new_musig_account,

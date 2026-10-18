@@ -3,6 +3,7 @@
 #include "KeysTab.h"
 #include "KeysView.h"
 #include "modules/hwi/HwiModule.h"
+#include "modules/hwi/HwiSigner.h"
 #include "modules/keys/flow/SigningFlow.h"
 #include "modules/keys/signers/OfflineSigner.h"
 #include "modules/keys/signers/RouteSigner.h"
@@ -1036,10 +1037,19 @@ auto KeysModule::accountXpubPaths() -> QStringList {
             QStringLiteral("m/48'/%1'/0'/2'").arg(coin), QStringLiteral("m/87'/%1'/0'").arg(coin)};
 }
 
-auto KeysModule::deviceXpubPaths() -> QStringList {
+auto KeysModule::deviceXpubPaths(quint32 capabilities) -> QStringList {
     int coin = coinType();
-    return {defaultXpubPath(), QStringLiteral("m/86'/%1'/0'").arg(coin),
-            QStringLiteral("m/87'/%1'/0'").arg(coin), QStringLiteral("m/352'/%1'/0'").arg(coin)};
+    QStringList paths = {defaultXpubPath(), QStringLiteral("m/86'/%1'/0'").arg(coin),
+                         QStringLiteral("m/87'/%1'/0'").arg(coin)};
+    if (::supports_silent_payments(capabilities)) {
+        paths.append(QStringLiteral("m/352'/%1'/0'").arg(coin));
+    }
+    return paths;
+}
+
+auto KeysModule::deviceCapabilities(const plugin::SignerEntry &entry) -> quint32 {
+    auto *device = qobject_cast<HwiSigner *>(entry.signer);
+    return device != nullptr ? device->capabilities() : 0;
 }
 
 auto KeysModule::toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice {
@@ -1051,8 +1061,8 @@ auto KeysModule::toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice {
     device.brand = rust::String(entry.signer->brand().toStdString());
     device.model = rust::String(entry.signer->model().toStdString());
     device.serial = rust::String(entry.signer->serial().toStdString());
-    // USB reports no firmware version nor capabilities.
-    device.capabilities = 0;
+    // USB reports no firmware version.
+    device.capabilities = deviceCapabilities(entry);
     if (entry.module != nullptr) {
         device.module =
             rust::String(entry.module->meta().value(QStringLiteral("id")).toStdString());

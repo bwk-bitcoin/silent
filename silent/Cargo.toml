@@ -10,12 +10,12 @@ doctest = false
 [dependencies]
 # When changing rev, also update flake.lock:
 #   nix --extra-experimental-features 'nix-command flakes' flake update bwk
-bwk = { git = "https://github.com/pythcoiner/bwk.git", rev = "adbe5f15948e9001cdd27df0245eac77691e328d", features = ["musig"] }
-bwk-bup = { git = "https://github.com/pythcoiner/bwk.git", rev = "adbe5f15948e9001cdd27df0245eac77691e328d", features = ["musig"] }
-bwk-sp = { git = "https://github.com/pythcoiner/bwk.git", rev = "adbe5f15948e9001cdd27df0245eac77691e328d" }
-bwk-hwi = { git = "https://github.com/pythcoiner/bwk.git", rev = "adbe5f15948e9001cdd27df0245eac77691e328d", features = ["service", "musig"] }
-bwk-qr = { git = "https://github.com/pythcoiner/bwk.git", rev = "adbe5f15948e9001cdd27df0245eac77691e328d" }
-bwk-qr-protocol = { git = "https://github.com/pythcoiner/bwk.git", rev = "adbe5f15948e9001cdd27df0245eac77691e328d", features = ["bitcoin"] }
+bwk = { git = "https://github.com/pythcoiner/bwk.git", rev = "dc419ad1e667dc6076323391fe77e0700756ddef", features = ["musig"] }
+bwk-bup = { git = "https://github.com/pythcoiner/bwk.git", rev = "dc419ad1e667dc6076323391fe77e0700756ddef", features = ["musig"] }
+bwk-sp = { git = "https://github.com/pythcoiner/bwk.git", rev = "dc419ad1e667dc6076323391fe77e0700756ddef" }
+bwk-hwi = { git = "https://github.com/pythcoiner/bwk.git", rev = "dc419ad1e667dc6076323391fe77e0700756ddef", features = ["service", "musig"] }
+bwk-qr = { git = "https://github.com/pythcoiner/bwk.git", rev = "dc419ad1e667dc6076323391fe77e0700756ddef" }
+bwk-qr-protocol = { git = "https://github.com/pythcoiner/bwk.git", rev = "dc419ad1e667dc6076323391fe77e0700756ddef", features = ["bitcoin"] }
 crossbeam = "0.8"
 # `log` feature: bwk-hwi reports device detection through `tracing`, and this forwards
 # those events into the `log` crate so env_logger prints them. Without it every device
@@ -48,7 +48,7 @@ v4l = "0.14"
 
 [dev-dependencies]
 blindbitd = { git = "https://github.com/pythcoiner/blindbitd.git", features = ["electrum"] }
-bwk-utils = { git = "https://github.com/pythcoiner/bwk.git", rev = "adbe5f15948e9001cdd27df0245eac77691e328d", features = ["test"] }
+bwk-utils = { git = "https://github.com/pythcoiner/bwk.git", rev = "dc419ad1e667dc6076323391fe77e0700756ddef", features = ["test"] }
 temp-dir = "0.1"
 
 [build-dependencies]

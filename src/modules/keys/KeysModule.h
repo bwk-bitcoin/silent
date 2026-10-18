@@ -172,8 +172,11 @@ public:
     // BIP86, BIP48 P2WSH and BIP87, at the coin type of the network.
     [[nodiscard]] static auto accountXpubPaths() -> QStringList;
     // The paths a device turned into a key has its xpubs fetched at: account 0 of BIP84,
-    // BIP86, BIP87 and the BIP352 silent payment account, at the coin type of the network.
-    [[nodiscard]] static auto deviceXpubPaths() -> QStringList;
+    // BIP86 and BIP87, plus the BIP352 silent payment account when its `capabilities`
+    // include silent payments, at the coin type of the network.
+    [[nodiscard]] static auto deviceXpubPaths(quint32 capabilities) -> QStringList;
+    // The capability bits `entry`'s device reports, 0 for a signer that is no USB device.
+    [[nodiscard]] static auto deviceCapabilities(const plugin::SignerEntry &entry) -> quint32;
     // 0 on Bitcoin, 1 on every test network.
     [[nodiscard]] static auto coinType() -> int;
     // The Rust handle, for the tab and the modals of this module only. Null until the

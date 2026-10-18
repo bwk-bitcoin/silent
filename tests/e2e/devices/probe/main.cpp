@@ -748,18 +748,25 @@ void addDeviceKeySteps(const QString &id, const QString &alias, QString *fp,
          [fp] { return visible<keys::modal::RegisterDevice>() == nullptr && hasUsbRoute(*fp); },
          [id, alias, fp] {
              check(true, alias + " is a key with a USB route");
-             for (const auto &path : keys::KeysModule::deviceXpubPaths()) {
+             auto capabilities = keys::KeysModule::deviceCapabilities(signerById(id).value());
+             // Both simulators sign MuSig2 (bit 3) and no USB device silent payments (bit 2).
+             check(capabilities == (1U << 3),
+                   alias + " reports MuSig2 and no silent payments: " +
+                       QString::number(capabilities, 16));
+             for (const auto &path : keys::KeysModule::deviceXpubPaths(capabilities)) {
                  check(!g_keys->cachedXpub(*fp, path).isEmpty(),
                        alias + " has its xpub at " + path);
              }
+             check(g_keys->cachedXpub(*fp, QStringLiteral("m/352'/1'/0'")).isEmpty(),
+                   alias + " has no silent payment xpub: it does not support them");
              if (id == LEDGER_ID) {
                  // The Ledger asks to approve the paths it does not export silently.
                  auto screens = ledgerScreensSinceMark().join('\n');
                  std::printf("Ledger screens while registering:\n  %s\n",
                              screens.toStdString().c_str());
-                 check(screens.contains("87'/1'/0'") && screens.contains("352'/1'/0'") &&
+                 check(screens.contains("87'/1'/0'") && !screens.contains("352'") &&
                            screens.contains("Approve public key"),
-                       "the Ledger's 87' and 352' xpub exports were approved on its screen");
+                       "the Ledger's 87' xpub export was approved on its screen, no 352' asked");
              }
          });
 }

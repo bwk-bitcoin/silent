@@ -50,6 +50,8 @@ public:
 
     [[nodiscard]] QString kind() const;
     [[nodiscard]] QString version() const;
+    // The capability bits the device reports (bit 2 silent payments, bit 3 MuSig2).
+    [[nodiscard]] quint32 capabilities() const;
     // Whether the device record still describes this signer. A change means a new
     // instance, because the accessors are immutable.
     [[nodiscard]] bool matches(const HwiDevice &device) const;
@@ -112,6 +114,7 @@ private:
     QString m_kind;
     QString m_fingerprint;
     QString m_version;
+    quint32 m_capabilities = 0;
     QString m_detail;
     plugin::SignerState m_state = plugin::SignerState::Unsupported;
     QHash<ReqId, QString> m_display_addresses;

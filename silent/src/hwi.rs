@@ -23,6 +23,7 @@ use crossbeam::channel;
 
 use crate::ffi::{HwiDevice, HwiDeviceState, HwiErrorKind, HwiEvent, HwiEventFlag, Network};
 use crate::hwi_config::PersistedBitboxNoiseConfig;
+use crate::keys::hwi_capabilities;
 
 /// The service is generic over its message type; this is ours. `Shutdown` is ours
 /// alone: it wakes the blocking recv on the C++ side, which dropping the sender cannot
@@ -298,18 +299,20 @@ pub(crate) fn wallet_name(descriptor: &str) -> String {
 }
 
 fn to_device(id: String, device: &SigningDevice<HwiMessage, u64>) -> HwiDevice {
-    let (state, version, detail) = match device {
+    let (state, version, capabilities, detail) = match device {
         SigningDevice::Supported(supported) => (
             HwiDeviceState::Supported,
             supported
                 .version()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
+            hwi_capabilities(supported.capabilities()),
             String::new(),
         ),
         SigningDevice::Locked { pairing_code, .. } => (
             HwiDeviceState::Locked,
             String::new(),
+            0,
             pairing_code.clone().unwrap_or_default(),
         ),
         SigningDevice::Unsupported {
@@ -320,6 +323,7 @@ fn to_device(id: String, device: &SigningDevice<HwiMessage, u64>) -> HwiDevice {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
+            0,
             unsupported_reason(reason),
         ),
     };
@@ -332,6 +336,7 @@ fn to_device(id: String, device: &SigningDevice<HwiMessage, u64>) -> HwiDevice {
             .map(|f| f.to_string())
             .unwrap_or_default(),
         version,
+        capabilities,
         state,
         detail,
     }

@@ -41,6 +41,7 @@ HwiSigner::HwiSigner(HwiModule *module, const HwiDevice &device, QObject *parent
     , m_kind(toQt(device.kind))
     , m_fingerprint(toQt(device.fingerprint))
     , m_version(toQt(device.version))
+    , m_capabilities(device.capabilities)
     , m_detail(toQt(device.detail))
     , m_state(toState(device.state)) {
     // Queued on purpose: a result must not land before the caller holds the ReqId.
@@ -101,6 +102,10 @@ QString HwiSigner::kind() const {
 
 QString HwiSigner::version() const {
     return m_version;
+}
+
+quint32 HwiSigner::capabilities() const {
+    return m_capabilities;
 }
 
 bool HwiSigner::ready() const {
@@ -283,8 +288,8 @@ void HwiSigner::deliver(const HwiEvent &event) {
 
 bool HwiSigner::matches(const HwiDevice &device) const {
     return m_kind == toQt(device.kind) && m_fingerprint == toQt(device.fingerprint) &&
-           m_version == toQt(device.version) && m_detail == toQt(device.detail) &&
-           m_state == toState(device.state);
+           m_version == toQt(device.version) && m_capabilities == device.capabilities &&
+           m_detail == toQt(device.detail) && m_state == toState(device.state);
 }
 
 void HwiSigner::onDeferredInfo(ReqId req_id) {
