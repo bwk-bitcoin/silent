@@ -256,7 +256,9 @@ void CreatePolicy::showPaths() {
 }
 
 void CreatePolicy::refreshPathRows() {
+    // clear() also resets the layout spacing.
     m_path_rows->clear();
+    m_path_rows->spacing(resolve(Spacing::XS));
     auto names = keyNames();
     for (int i = 0; i < m_paths.size(); ++i) {
         const auto &path = m_paths.at(i);
@@ -391,7 +393,9 @@ void CreatePolicy::showXpubs() {
     m_xpubs_count->setText(TR("musig-create-fetch-status")
                                .arg(m_fingerprints.size() - missing.size())
                                .arg(m_fingerprints.size()));
+    // clear() also resets the layout spacing.
     m_xpub_rows->clear();
+    m_xpub_rows->spacing(resolve(Spacing::XS));
     for (const auto &fingerprint : m_fingerprints) {
         auto entry = keyEntry(fingerprint).value_or(KeyEntry{.fingerprint = fingerprint});
         bool fetched = !missing.contains(fingerprint);
@@ -467,7 +471,9 @@ auto CreatePolicy::viewReview() -> QWidget * {
 void CreatePolicy::showReview() {
     m_view = View::Review;
     showStep(2);
+    // clear() also resets the layout spacing.
     m_review_cards->clear();
+    m_review_cards->spacing(resolve(Spacing::S));
     auto names = keyNames();
     for (int i = 0; i < m_paths.size(); ++i) {
         auto *card = policyCard(m_paths.at(i), i, names, m_tip);
@@ -551,7 +557,9 @@ void CreatePolicy::hideRegister() {
 }
 
 void CreatePolicy::refreshRegisterRows() {
+    // clear() also resets the layout spacing.
     m_register_rows->clear();
+    m_register_rows->spacing(resolve(Spacing::XS));
     int left = 0;
     for (const auto &fingerprint : m_fingerprints) {
         auto entry = keyEntry(fingerprint).value_or(KeyEntry{.fingerprint = fingerprint});
@@ -652,7 +660,9 @@ void CreatePolicy::hideVerify() {
 }
 
 void CreatePolicy::refreshVerifyRows() {
+    // clear() also resets the layout spacing.
     m_verify_rows->clear();
+    m_verify_rows->spacing(resolve(Spacing::XS));
     bool checkable = false;
     for (const auto &fingerprint : m_fingerprints) {
         auto entry = keyEntry(fingerprint).value_or(KeyEntry{.fingerprint = fingerprint});
