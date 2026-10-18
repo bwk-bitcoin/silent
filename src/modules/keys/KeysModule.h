@@ -267,6 +267,9 @@ signals:
     void sdLoaded(ReqId req_id, bool is_ok, QString psbt_hex, QString error);
 
 private slots:
+    // Records as used every key xpub the network's accounts are built on, so it stays
+    // used once its account is deleted.
+    void markAccountXpubsUsed();
     void onInstanceRegistered(const QString &id);
     void onInstanceRemoved(const QString &id);
     void onDevicesChanged();

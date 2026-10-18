@@ -368,42 +368,23 @@ void KeyDetail::showRouteResult(const KeyOpResult &result) {
 
 void KeyDetail::refreshXpubs() {
     auto fingerprint = rust::String(m_fingerprint.toStdString());
-    auto descriptors = m_module->rust()->key_descriptors(fingerprint);
-    // The xpubs the accounts' taproot and segwit sub-accounts are built on.
-    QList<AccountXpub> held = accountXpubs(m_fingerprint, KeysModule::network());
-    QList<AccountXpub> rows;
-    for (const auto &entry : m_module->rust()->key_xpubs(fingerprint)) {
-        rows.append({.path = KeysModule::toQt(entry.path), .xpub = KeysModule::toQt(entry.xpub)});
-    }
-    // One an account holds is listed even when the cache lacks it.
-    for (const auto &entry : held) {
-        if (std::ranges::none_of(
-                rows, [&entry](const AccountXpub &row) { return row.xpub == entry.xpub; })) {
-            rows.append(entry);
-        }
-    }
+    // Every xpub an account was built on is cached and marked used by KeysModule.
+    auto rows = m_module->rust()->key_xpubs(fingerprint);
     m_xpubs_table->clearRows();
     for (const auto &entry : rows) {
-        // An xpub is used once an account holds it, or a descriptor of this key carries it.
-        bool used = std::ranges::any_of(
-            held, [&entry](const AccountXpub &account) { return account.xpub == entry.xpub; });
-        for (const auto &descriptor : descriptors) {
-            if (!used && KeysModule::toQt(descriptor.descriptor).contains(entry.xpub)) {
-                used = true;
-            }
-        }
-        auto *path = new Label(xpubPath(entry.path), LabelRole::Mono);
+        auto xpub = KeysModule::toQt(entry.xpub);
+        auto *path = new Label(xpubPath(KeysModule::toQt(entry.path)), LabelRole::Mono);
         path->setTone(LabelTone::Secondary);
-        // An unused xpub can leave the cache; a used one is held by its account.
+        // An unused xpub can leave the cache; a used one stays, its account deleted or not.
         auto *remove = catalog::btnRemoveXpub();
-        remove->setProperty(K_XPUB_PATH, entry.path);
-        remove->setEnabled(!used);
-        remove->setToolTip(used ? TR("keys-xpub-used") : TR("keys-remove-xpub"));
+        remove->setProperty(K_XPUB_PATH, KeysModule::toQt(entry.path));
+        remove->setEnabled(!entry.used);
+        remove->setToolTip(entry.used ? TR("keys-xpub-used") : TR("keys-remove-xpub"));
         connect(remove, &QPushButton::clicked, this, &KeyDetail::onRemoveXpubClicked,
                 qontrol::UNIQUE);
         m_xpubs_table->addWidgetRow(
-            entry.xpub, {path, new catalog::ShortValue(entry.xpub),
-                         used ? catalog::pillXpubUsed() : catalog::pillXpubUnused(), remove});
+            xpub, {path, new catalog::ShortValue(xpub),
+                   entry.used ? catalog::pillXpubUsed() : catalog::pillXpubUnused(), remove});
     }
 
     auto device = readyDevice(m_fingerprint);
@@ -414,7 +395,7 @@ void KeyDetail::refreshXpubs() {
     bool qr = info.has_value() && hasRoute(*info, KeyRouteKind::Qr);
     bool fetchable = device.has_value() || hot || qr;
     Label *empty = nullptr;
-    if (rows.isEmpty()) {
+    if (rows.empty()) {
         empty = emptyLine(fetchable ? TR("keys-xpubs-empty") : TR("keys-xpubs-empty-offline"));
     }
     auto *fetch = catalog::btnFetchXpub();

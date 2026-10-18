@@ -175,10 +175,12 @@ fn test_record_round_trip_every_field() {
     record.xpubs.push(XpubEntry {
         path: DerivationPath::from_str("m/86'/1'/0'").expect("valid path"),
         xpub: test_xpub(1),
+        used: true,
     });
     record.xpubs.push(XpubEntry {
         path: DerivationPath::from_str("m/86'/1'/1'").expect("valid path"),
         xpub: test_xpub(2),
+        used: false,
     });
     record.descriptors.push(DescriptorEntry {
         alias: "descriptor one".to_string(),

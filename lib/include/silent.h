@@ -1584,6 +1584,8 @@ struct KeyXpub final {
   ::rust::String fingerprint;
   ::rust::String path;
   ::rust::String xpub;
+  // An account or a registered descriptor carried it, even one since deleted.
+  bool used CXX_DEFAULT_VALUE(false);
 
   using IsRelocatable = ::std::true_type;
 };
@@ -2532,10 +2534,16 @@ struct KeysModule final : public ::rust::Opaque {
   ::rust::Vec<::KeyDevice> key_devices(::rust::Str fingerprint) const noexcept;
   ::KeyOpResult cache_xpub(::rust::Str fingerprint, ::rust::Str path, ::rust::Str xpub) noexcept;
 
-  // Drops a cached xpub that no registered descriptor carries.
+  // Drops a cached xpub that is not used and that no registered descriptor
+  // carries.
   ::KeyOpResult remove_xpub(::rust::Str fingerprint, ::rust::Str path) noexcept;
 
   ::rust::Vec<::KeyXpub> key_xpubs(::rust::Str fingerprint) const noexcept;
+
+  // Marks used every key xpub the accounts of the network are built on, caching
+  // it when the key's cache lacks it.
+  ::KeyOpResult mark_account_xpubs_used() noexcept;
+
   ::KeyOpResult register_descriptor(::rust::Str fingerprint, ::rust::Str descriptor) noexcept;
 
   // Records `descriptor` as registered with the key, with the proof the device

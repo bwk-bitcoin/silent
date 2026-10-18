@@ -447,6 +447,8 @@ mod ffi {
         pub fingerprint: String,
         pub path: String,
         pub xpub: String,
+        /// An account or a registered descriptor carried it, even one since deleted.
+        pub used: bool,
     }
 
     /// Descriptor and derivation path needed to verify a generated address on a
@@ -1380,9 +1382,13 @@ mod ffi {
             path: &str,
             xpub: &str,
         ) -> KeyOpResult;
-        /// Drops a cached xpub that no registered descriptor carries.
+        /// Drops a cached xpub that is not used and that no registered descriptor
+        /// carries.
         fn remove_xpub(self: &mut KeysModule, fingerprint: &str, path: &str) -> KeyOpResult;
         fn key_xpubs(self: &KeysModule, fingerprint: &str) -> Vec<KeyXpub>;
+        /// Marks used every key xpub the accounts of the network are built on, caching
+        /// it when the key's cache lacks it.
+        fn mark_account_xpubs_used(self: &mut KeysModule) -> KeyOpResult;
         fn register_descriptor(
             self: &mut KeysModule,
             fingerprint: &str,

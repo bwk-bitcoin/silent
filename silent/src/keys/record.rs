@@ -159,6 +159,10 @@ impl DeviceRecord {
 pub struct XpubEntry {
     pub path: DerivationPath,
     pub xpub: Xpub,
+    /// Set once an account or a registered descriptor carried this xpub, and kept after
+    /// that account is deleted: a used xpub is never offered as a fresh one again.
+    #[serde(default)]
+    pub used: bool,
 }
 
 /// A descriptor this key participates in. Presence in `KeyRecord::descriptors` is the
@@ -366,6 +370,7 @@ mod tests {
         record.xpubs.push(XpubEntry {
             path: DerivationPath::from_str("m/86'/1'/0'").expect("valid path"),
             xpub: test_xpub(),
+            used: false,
         });
         record.descriptors.push(DescriptorEntry {
             alias: "descriptor alias".to_string(),
@@ -429,6 +434,22 @@ mod tests {
                 capabilities: 0,
             },
             "a record stored before version and capabilities should load with them empty"
+        );
+    }
+
+    #[test]
+    fn xpub_entry_without_used_deserializes_unused() {
+        let xpub = test_xpub();
+        let json = format!(r#"{{"path":"m/86'/1'/0'","xpub":"{xpub}"}}"#);
+        let entry: XpubEntry = serde_json::from_str(&json).expect("deserialize entry");
+        assert_eq!(
+            entry,
+            XpubEntry {
+                path: DerivationPath::from_str("m/86'/1'/0'").expect("valid path"),
+                xpub,
+                used: false,
+            },
+            "an xpub cached before the used flag should load unused"
         );
     }
 

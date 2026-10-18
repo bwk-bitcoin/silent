@@ -15,7 +15,7 @@ use bwk_sp::bwk_sign::bwk_descriptor::descriptor::Descriptor;
 use bwk_sp::bwk_tx::bwk_psbt::Error as PsbtV2Error;
 use zeroize::Zeroizing;
 
-use crate::config::datadir;
+use crate::config::{datadir, list_configs, Config};
 use crate::ffi;
 use crate::hwi::{parse_hmac, wallet_name};
 use crate::keys::{
@@ -376,8 +376,39 @@ impl KeysModule {
                 fingerprint: fingerprint.to_string(),
                 path: entry.path.to_string(),
                 xpub: entry.xpub.to_string(),
+                used: entry.used,
             })
             .collect()
+    }
+
+    /// Marks used every key xpub the accounts of the network are built on.
+    pub fn mark_account_xpubs_used(&mut self) -> ffi::KeyOpResult {
+        let Some(manager) = self.inner.as_mut() else {
+            return failed_op(&self.error);
+        };
+        let mut result = ok_op();
+        for name in list_configs() {
+            let config = match Config::from_file(name.clone()) {
+                Ok(config) => config,
+                Err(e) => {
+                    log::error!("mark_account_xpubs_used: account '{name}': {e}");
+                    continue;
+                }
+            };
+            if BtcNetwork::from(config.get_network()) != manager.network() {
+                continue;
+            }
+            for descriptor in [
+                config.get_descriptor(),
+                config.get_segwit_descriptor(),
+                config.get_taproot_descriptor(),
+            ] {
+                if let Err(e) = manager.mark_xpubs_used(&descriptor) {
+                    result = failed_op(&format!("mark_account_xpubs_used: account '{name}': {e}"));
+                }
+            }
+        }
+        result
     }
 
     pub fn register_descriptor(&mut self, fingerprint: &str, descriptor: &str) -> ffi::KeyOpResult {
@@ -954,6 +985,8 @@ impl QrResponse {
                     fingerprint: fingerprint.to_string(),
                     path: path.to_string(),
                     xpub: xpub.to_string(),
+                    // Answered by the signer, not cached yet.
+                    used: false,
                 })
                 .collect(),
             _ => Vec::new(),

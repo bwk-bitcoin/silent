@@ -165,9 +165,13 @@ KeysModule::KeysModule(QObject *parent) : IModule(parent) {
     Host::get()->setKeys(m_bus.get(), this);
     connect(this, &KeysModule::keysChanged, this, &KeysModule::updateSignerPolling,
             qontrol::UNIQUE);
+    // Every account created, by any creator, lists the accounts again.
+    connect(AppController::get(), &AppController::accountList, this,
+            &KeysModule::markAccountXpubsUsed, qontrol::UNIQUE);
     bindHwiModule();
     refreshLiveDevices();
     updateSignerPolling();
+    markAccountXpubsUsed();
 }
 
 KeysModule::~KeysModule() {
@@ -234,7 +238,19 @@ void KeysModule::setNetwork(Network network) {
         return;
     }
     s_network = network;
+    markAccountXpubsUsed();
     emit keysChanged();
+}
+
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void KeysModule::markAccountXpubsUsed() {
+    if (rust() == nullptr) {
+        return;
+    }
+    auto result = rust()->mark_account_xpubs_used();
+    if (!result.is_ok) {
+        qWarning() << "keys:" << toQt(result.error);
+    }
 }
 
 void KeysModule::setTabShown(bool shown) {

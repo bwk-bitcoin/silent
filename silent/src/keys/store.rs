@@ -359,6 +359,7 @@ mod tests {
         record.xpubs.push(XpubEntry {
             path: DerivationPath::from_str("m/86'/1'/0'").expect("valid path"),
             xpub: test_xpub(),
+            used: false,
         });
         record.descriptors.push(DescriptorEntry {
             alias: "descriptor alias".to_string(),

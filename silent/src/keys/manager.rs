@@ -172,7 +172,12 @@ pub trait KeyManagerImpl {
         path: DerivationPath,
         xpub: Xpub,
     ) -> Result<(), Error>;
-    /// Drops the xpub cached at `path`, unless a registered descriptor carries it.
+    /// Marks used every xpub `descriptor` carries under the origin of a registered key,
+    /// caching it when the cache lacks it. One conflicting with the xpub cached at its
+    /// path is left alone.
+    fn mark_xpubs_used(&mut self, descriptor: &str) -> Result<(), Error>;
+    /// Drops the xpub cached at `path`, unless it is used or a registered descriptor
+    /// carries it.
     fn remove_xpub(&mut self, fingerprint: Fingerprint, path: &DerivationPath)
         -> Result<(), Error>;
     fn xpub(&self, fingerprint: Fingerprint, path: &DerivationPath) -> Option<Xpub>;
@@ -599,14 +604,66 @@ impl KeyManagerImpl for KeyManager {
                     found: Box::new(xpub),
                 });
             }
-            let index = record
-                .xpubs
-                .iter()
-                .position(|entry| entry.path > path)
-                .unwrap_or(record.xpubs.len());
-            record.xpubs.insert(index, XpubEntry { path, xpub });
+            insert_xpub(
+                record,
+                XpubEntry {
+                    path,
+                    xpub,
+                    used: false,
+                },
+            );
             Ok(())
         })
+    }
+
+    fn mark_xpubs_used(&mut self, descriptor: &str) -> Result<(), Error> {
+        // An sp() descriptor carries no xpub of a key's cache.
+        let Some(miniscript) = Descriptor::from_str(descriptor)
+            .ok()
+            .and_then(|parsed| parsed.as_miniscript().cloned())
+        else {
+            return Ok(());
+        };
+        for key in miniscript.plain_keys() {
+            let (origin, xpub) = match key {
+                DescriptorPublicKey::XPub(k) => (k.origin, k.xkey),
+                DescriptorPublicKey::MultiXPub(k) => (k.origin, k.xkey),
+                DescriptorPublicKey::Single(_) => continue,
+            };
+            let Some((fingerprint, path)) = origin else {
+                continue;
+            };
+            let Some(record) = self.records.get(&fingerprint) else {
+                continue;
+            };
+            if let Some(cached) = record.xpubs.iter().find(|entry| entry.path == path) {
+                if cached.xpub != xpub {
+                    log::warn!(
+                        "mark_xpubs_used: {fingerprint} at {path} caches another xpub than the \
+                         descriptor's, left as it is"
+                    );
+                    continue;
+                }
+                if cached.used {
+                    continue;
+                }
+            }
+            self.mutate(fingerprint, |record| {
+                match record.xpubs.iter_mut().find(|entry| entry.path == path) {
+                    Some(entry) => entry.used = true,
+                    None => insert_xpub(
+                        record,
+                        XpubEntry {
+                            path,
+                            xpub,
+                            used: true,
+                        },
+                    ),
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
     }
 
     fn remove_xpub(
@@ -622,10 +679,11 @@ impl KeyManagerImpl for KeyManager {
                 });
             };
             let xpub = record.xpubs[index].xpub.to_string();
-            if record
-                .descriptors
-                .iter()
-                .any(|entry| entry.descriptor.contains(&xpub))
+            if record.xpubs[index].used
+                || record
+                    .descriptors
+                    .iter()
+                    .any(|entry| entry.descriptor.contains(&xpub))
             {
                 return Err(Error::XpubInUse {
                     fingerprint,
@@ -653,6 +711,7 @@ impl KeyManagerImpl for KeyManager {
         descriptor: String,
     ) -> Result<(), Error> {
         self.refuse_sp_spend_descriptor(&descriptor)?;
+        self.mark_xpubs_used(&descriptor)?;
         self.mutate(fingerprint, |record| {
             upsert_descriptor_entry(record, alias, descriptor);
             Ok(())
@@ -667,6 +726,7 @@ impl KeyManagerImpl for KeyManager {
         hmac: [u8; 32],
     ) -> Result<(), Error> {
         self.refuse_sp_spend_descriptor(&descriptor)?;
+        self.mark_xpubs_used(&descriptor)?;
         self.mutate(fingerprint, |record| {
             upsert_descriptor_entry(record, alias, descriptor).hmac = Some(hex::encode(hmac));
             Ok(())
@@ -754,6 +814,16 @@ impl KeyManagerImpl for KeyManager {
         let artifacts = inspect_bytes(psbt_bytes, &descriptors, &self.secp)?;
         Ok(self.plan_from_artifacts(&artifacts))
     }
+}
+
+/// Inserts `entry` into `record`'s cache, kept sorted by path.
+fn insert_xpub(record: &mut KeyRecord, entry: XpubEntry) {
+    let index = record
+        .xpubs
+        .iter()
+        .position(|cached| cached.path > entry.path)
+        .unwrap_or(record.xpubs.len());
+    record.xpubs.insert(index, entry);
 }
 
 /// The entry of `descriptor` in `record`, inserted in sorted order when missing. An
@@ -1641,7 +1711,11 @@ mod tests {
         let on_disk = store.load(fp).expect("load record");
         assert_eq!(
             on_disk.xpubs,
-            vec![XpubEntry { path, xpub: first }],
+            vec![XpubEntry {
+                path,
+                xpub: first,
+                used: false
+            }],
             "expected only A's xpub on disk, got {:?}",
             on_disk.xpubs
         );
@@ -1722,6 +1796,165 @@ mod tests {
         assert!(
             matches!(result, Err(Error::XpubNotCached { .. })),
             "expected XpubNotCached, got {result:?}"
+        );
+    }
+
+    fn cached_entry(manager: &KeyManager, path: &DerivationPath) -> Option<XpubEntry> {
+        manager.key(fingerprint(1)).and_then(|record| {
+            record
+                .xpubs
+                .iter()
+                .find(|entry| &entry.path == path)
+                .cloned()
+        })
+    }
+
+    #[test]
+    fn mark_xpubs_used_keeps_the_xpub_used_on_disk() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+        let path = DerivationPath::from_str("m/86'/1'/0'").expect("valid path");
+        let xpub = test_xpub();
+        manager
+            .cache_xpub(fingerprint(1), path.clone(), xpub)
+            .expect("cache xpub");
+
+        manager
+            .mark_xpubs_used(&format!("tr([00000001/86'/1'/0']{xpub}/<0;1>/*)"))
+            .expect("mark xpubs used");
+
+        let reloaded = manager_over(tmp.path(), Network::Regtest);
+        let entry = cached_entry(&reloaded, &path);
+        assert_eq!(
+            entry,
+            Some(XpubEntry {
+                path: path.clone(),
+                xpub,
+                used: true
+            }),
+            "expected the xpub marked used after a reload, got {entry:?}"
+        );
+        let result = manager.remove_xpub(fingerprint(1), &path);
+        assert!(
+            matches!(result, Err(Error::XpubInUse { .. })),
+            "expected XpubInUse on a used xpub, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn mark_xpubs_used_caches_an_uncached_xpub_as_used() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+        let path = DerivationPath::from_str("m/84'/1'/0'").expect("valid path");
+        let xpub = test_xpub();
+
+        manager
+            .mark_xpubs_used(&format!("wpkh([00000001/84'/1'/0']{xpub}/<0;1>/*)"))
+            .expect("mark xpubs used");
+
+        let entry = cached_entry(&manager, &path);
+        assert_eq!(
+            entry,
+            Some(XpubEntry {
+                path,
+                xpub,
+                used: true
+            }),
+            "expected the xpub cached and used, got {entry:?}"
+        );
+    }
+
+    #[test]
+    fn mark_xpubs_used_leaves_a_conflicting_cached_xpub() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+        let path = DerivationPath::from_str("m/86'/1'/0'").expect("valid path");
+        let cached = other_test_xpub();
+        manager
+            .cache_xpub(fingerprint(1), path.clone(), cached)
+            .expect("cache xpub");
+
+        manager
+            .mark_xpubs_used(&format!("tr([00000001/86'/1'/0']{}/<0;1>/*)", test_xpub()))
+            .expect("mark xpubs used");
+
+        let entry = cached_entry(&manager, &path);
+        assert_eq!(
+            entry,
+            Some(XpubEntry {
+                path,
+                xpub: cached,
+                used: false
+            }),
+            "expected the cached xpub left as it was, got {entry:?}"
+        );
+    }
+
+    #[test]
+    fn mark_xpubs_used_ignores_keys_not_registered_and_sp_descriptors() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+        let xpub = test_xpub();
+
+        for descriptor in [
+            format!("tr([00000002/86'/1'/0']{xpub}/<0;1>/*)"),
+            "sp(not a descriptor)".to_string(),
+        ] {
+            let result = manager.mark_xpubs_used(&descriptor);
+            assert!(
+                result.is_ok(),
+                "expected {descriptor} ignored, got {result:?}"
+            );
+        }
+        let xpubs = manager
+            .key(fingerprint(1))
+            .map(|record| record.xpubs.clone());
+        assert_eq!(
+            xpubs,
+            Some(Vec::new()),
+            "expected nothing cached, got {xpubs:?}"
+        );
+    }
+
+    #[test]
+    fn a_registered_descriptor_keeps_its_xpub_used_once_unregistered() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+        let path = DerivationPath::from_str("m/86'/1'/0'").expect("valid path");
+        let xpub = test_xpub();
+        let descriptor = format!("tr([00000001/86'/1'/0']{xpub}/<0;1>/*)");
+        manager
+            .set_descriptor_registered(fingerprint(1), "wallet".to_string(), descriptor.clone())
+            .expect("register descriptor");
+
+        manager
+            .clear_descriptor_registration(fingerprint(1), &descriptor)
+            .expect("clear registration");
+
+        let entry = cached_entry(&manager, &path);
+        assert_eq!(
+            entry,
+            Some(XpubEntry {
+                path: path.clone(),
+                xpub,
+                used: true
+            }),
+            "expected the xpub still used once the descriptor is gone, got {entry:?}"
+        );
+        let result = manager.remove_xpub(fingerprint(1), &path);
+        assert!(
+            matches!(result, Err(Error::XpubInUse { .. })),
+            "expected XpubInUse, got {result:?}"
         );
     }
 
