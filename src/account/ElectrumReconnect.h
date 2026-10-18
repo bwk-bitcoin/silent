@@ -21,7 +21,9 @@ public:
     void connected();
     // Stopped on purpose: a later loss does not reconnect.
     void stopped();
-    // The connection dropped, or failed while it ran.
+    // The connection dropped, or failed while it ran, or a reconnect attempt failed.
+    // One loss gives several notifications (the merkle client, the transport error,
+    // the listener's stop): only the first of them counts.
     void lost();
 
 signals:
@@ -38,6 +40,10 @@ protected:
 
 private:
     bool m_armed = false;
+    // Connected since the last loss.
+    bool m_up = false;
+    // A reconnect was asked and has not connected yet: its failure is a loss.
+    bool m_retrying = false;
     // When each recent loss happened, ms since the epoch.
     QList<qint64> m_losses;
     QTimer *m_retry = nullptr;
