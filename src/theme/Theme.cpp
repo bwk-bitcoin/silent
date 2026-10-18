@@ -14,6 +14,7 @@
 #include "catalog/display/CopyField.h"
 #include "catalog/display/Display.h"
 #include "catalog/display/Label.h"
+#include "catalog/display/WizardSteps.h"
 #include "catalog/display/WordGrid.h"
 #include "catalog/feedback/Notice.h"
 #include "catalog/feedback/ScanProgress.h"
@@ -22,6 +23,7 @@
 #include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/Checkbox.h"
 #include "catalog/inputs/ComboBox.h"
+#include "catalog/inputs/DateTimeInput.h"
 #include "catalog/inputs/Input.h"
 #include "catalog/inputs/TextEdit.h"
 #include "catalog/inputs/Toggle.h"
@@ -233,6 +235,8 @@ void Theme::apply() {
     qss += catalog::WordGrid::qss(p);
     qss += catalog::BalanceHeader::qss(p);
     qss += catalog::FoldSection::qss(p);
+    qss += catalog::WizardSteps::qss(p);
+    qss += catalog::DateTimeInput::qss(p);
 
     qApp->setStyleSheet(qss);
 }

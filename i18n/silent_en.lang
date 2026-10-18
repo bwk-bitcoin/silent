@@ -381,6 +381,20 @@ pill-used => "Used"
 
 pill-not-used => "Not Used"
 
+pill-fetched => "Fetched"
+
+pill-missing => "Missing"
+
+pill-registering => "Registering…"
+
+pill-not-needed => "Not Needed"
+
+pill-verified => "Verified"
+
+pill-not-checked => "Not Checked"
+
+pill-no-screen => "No Screen"
+
 pill-unloading => "Unloading…"
 
 btn-copied => "Copied"
@@ -1159,6 +1173,10 @@ musig-words-from-height => "from block %1"
 musig-words-timelocked => "%1, %2"
 
 btn-remove-path => "Remove Path"
+
+btn-save-spend-path => "Save Path"
+
+btn-backup-descriptor => "Backup Descriptor"
 
 musig-create-fetch-lead
 => "These keys still have to give their account xpub, one window per key.";;

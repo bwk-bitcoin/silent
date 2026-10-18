@@ -116,6 +116,9 @@ const int SELECT_ROW_ICON_SIZE = 18;
 const int SELECT_ROW_PADDING_H = 14;
 const int SELECT_ROW_PADDING_V = 12;
 const int MODAL_STATUS_ICON_SIZE = 40;
+// Every step of a wizard modal keeps this height: its body fills it, its actions at
+// the bottom.
+const int MODAL_WIZARD_HEIGHT = 640;
 const int SPINNER_SIZE = 114;
 const int TABLE_ROW_HEIGHT = 34;
 const int TABLE_CELL_PAD = 7;
@@ -311,7 +314,8 @@ constexpr auto resolve(PillWidth w) -> int {
 
 // ===== Modal widths =====
 
-enum class ModalWidth { XXS, XS, S, M, L, XL, XXL, Wide };
+// Wizard: the Multikey creator, every one of its steps.
+enum class ModalWidth { XXS, XS, S, M, L, XL, XXL, Wizard, Wide };
 
 constexpr auto resolve(ModalWidth w) -> int {
     switch (w) {
@@ -329,6 +333,8 @@ constexpr auto resolve(ModalWidth w) -> int {
         return 620;
     case ModalWidth::XXL:
         return 640;
+    case ModalWidth::Wizard:
+        return 760;
     case ModalWidth::Wide:
         return 1040;
     }

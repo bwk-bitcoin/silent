@@ -89,6 +89,11 @@ void Modal::setWidth(ModalWidth width) {
     refit();
 }
 
+void Modal::setWizardHeight(bool wizard) {
+    m_wizard_height = wizard;
+    refit();
+}
+
 void Modal::activateLayouts() {
     // Reversed, every widget comes before its parent: each one hands its new size up
     // before the parent lays out.
@@ -111,6 +116,9 @@ void Modal::refit() {
     // the modal's fixed one, so it leaves the height of lines that no longer wrap.
     if (layout()->hasHeightForWidth()) {
         height = layout()->totalHeightForWidth(width());
+    }
+    if (m_wizard_height) {
+        height = std::max(height, metric::MODAL_WIZARD_HEIGHT);
     }
     // No taller than the screen: the window manager would shrink it back, the resize
     // would refit it, and the two would fight. Capped, a fitting body scrolls instead.

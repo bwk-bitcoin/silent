@@ -5,6 +5,7 @@
 #include "theme/Palette.h"
 
 #include <QGridLayout>
+#include <Qontrol>
 
 namespace catalog {
 
@@ -28,6 +29,21 @@ auto FieldGroup::addField(const QString &label, QWidget *control, bool top) -> F
     Qt::Alignment vertical = top ? Qt::AlignTop : Qt::AlignVCenter;
     m_grid->addWidget(labelWidget, row, 0, (payment ? Qt::AlignRight : Qt::AlignLeft) | vertical);
     m_grid->addWidget(control, row, 1, vertical);
+    m_labels.insert(control, labelWidget);
+    return this;
+}
+
+auto FieldGroup::addTippedField(const QString &label, QWidget *tip, QWidget *control)
+    -> FieldGroup * {
+    auto *labelWidget = new Label(label, LabelRole::Body, this);
+    auto *labelRow = (new qontrol::Row)
+                         ->spacing(resolve(Spacing::XS))
+                         ->push(labelWidget)
+                         ->push(tip)
+                         ->pushSpacer();
+    int row = m_grid->rowCount();
+    m_grid->addWidget(labelRow, row, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    m_grid->addWidget(control, row, 1, Qt::AlignVCenter);
     m_labels.insert(control, labelWidget);
     return this;
 }

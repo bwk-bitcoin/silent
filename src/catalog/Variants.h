@@ -87,6 +87,13 @@ auto btnMoveDown() -> Button *;
 auto btnMoveUp() -> Button *;
 auto btnRemovePayment() -> Button *;
 auto btnRemovePath() -> Button *;
+// The Edit Spend Path view of the Multikey creator.
+auto btnRemoveSpendPath() -> Button *;
+auto btnSaveSpendPath() -> Button *;
+// The creator's Review step: the main action until the descriptor is saved, then a
+// default one to save it again.
+auto btnBackupDescriptorPrimary() -> Button *;
+auto btnBackupDescriptor() -> Button *;
 auto btnScanAddress() -> Button *;
 auto btnRemoveRoute() -> Button *;
 auto btnRemoveXpub() -> Button *;
@@ -123,6 +130,18 @@ auto pillSdStepDone() -> Badge *;
 auto pillTxSigned() -> Badge *;
 auto pillXpubUsed() -> Badge *;
 auto pillXpubUnused() -> Badge *;
+// The Multikey creator's Xpubs step: one per key of the spend paths.
+auto pillXpubFetched() -> Badge *;
+auto pillXpubMissing() -> Badge *;
+// Its Register step: one per signer.
+auto pillRegRegistered() -> Badge *;
+auto pillRegPending() -> Badge *;
+auto pillRegRegistering() -> Badge *;
+auto pillRegNotNeeded() -> Badge *;
+// Its Verify step: one per signer.
+auto pillAddrVerified() -> Badge *;
+auto pillAddrUnchecked() -> Badge *;
+auto pillAddrNoScreen() -> Badge *;
 auto pillPluginUnloading() -> Badge *;
 
 auto pillNetwork(const QString &network) -> Badge *;

@@ -515,6 +515,32 @@ auto btnRemovePath() -> Button * {
                  .width = BtnWidth::Icon});
 }
 
+auto btnRemoveSpendPath() -> Button * {
+    return make(
+        {.role = ButtonRole::Destructive, .label = TR("btn-remove-path"), .width = BtnWidth::M});
+}
+
+auto btnSaveSpendPath() -> Button * {
+    return make(
+        {.role = ButtonRole::Primary, .label = TR("btn-save-spend-path"), .width = BtnWidth::M});
+}
+
+auto btnBackupDescriptorPrimary() -> Button * {
+    return make({.role = ButtonRole::Primary,
+                 .label = TR("btn-backup-descriptor"),
+                 .icon = icon::download,
+                 .iconSize = 16,
+                 .width = BtnWidth::XL});
+}
+
+auto btnBackupDescriptor() -> Button * {
+    return make({.role = ButtonRole::Default,
+                 .label = TR("btn-backup-descriptor"),
+                 .icon = icon::download,
+                 .iconSize = 16,
+                 .width = BtnWidth::XL});
+}
+
 auto btnRemoveRoute() -> Button * {
     return make({.role = ButtonRole::InlineIcon,
                  .icon = icon::trash,
@@ -648,6 +674,48 @@ auto pillXpubUsed() -> Badge * {
 
 auto pillXpubUnused() -> Badge * {
     return makePill(Badge::Role::Off, TR("pill-not-used"), PillWidth::M);
+}
+
+auto pillXpubFetched() -> Badge * {
+    auto *pill = makePill(Badge::Role::Success, TR("pill-fetched"), PillWidth::M);
+    pill->setIcon(icon::check(IconColor::Success));
+    return pill;
+}
+
+auto pillXpubMissing() -> Badge * {
+    return makePill(Badge::Role::Warning, TR("pill-missing"), PillWidth::M);
+}
+
+auto pillRegRegistered() -> Badge * {
+    auto *pill = makePill(Badge::Role::Success, TR("pill-registered"), PillWidth::L);
+    pill->setIcon(icon::check(IconColor::Success));
+    return pill;
+}
+
+auto pillRegPending() -> Badge * {
+    return makePill(Badge::Role::Warning, TR("pill-not-registered"), PillWidth::L);
+}
+
+auto pillRegRegistering() -> Badge * {
+    return makePill(Badge::Role::Off, TR("pill-registering"), PillWidth::L);
+}
+
+auto pillRegNotNeeded() -> Badge * {
+    return makePill(Badge::Role::Off, TR("pill-not-needed"), PillWidth::L);
+}
+
+auto pillAddrVerified() -> Badge * {
+    auto *pill = makePill(Badge::Role::Success, TR("pill-verified"), PillWidth::M);
+    pill->setIcon(icon::check(IconColor::Success));
+    return pill;
+}
+
+auto pillAddrUnchecked() -> Badge * {
+    return makePill(Badge::Role::Off, TR("pill-not-checked"), PillWidth::M);
+}
+
+auto pillAddrNoScreen() -> Badge * {
+    return makePill(Badge::Role::Off, TR("pill-no-screen"), PillWidth::M);
 }
 
 auto pillPluginUnloading() -> Badge * {

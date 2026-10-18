@@ -29,6 +29,9 @@ public:
     // Empties the header and the footer and puts `page` in the body, filling the width.
     void setPage(QWidget *page);
     void setWidth(ModalWidth width);
+    // A wizard keeps one height on every step (metric::MODAL_WIZARD_HEIGHT), its body
+    // filling it; taller content grows it.
+    void setWizardHeight(bool wizard);
     // Opens over the active window, centred on it at the size its content lays out to.
     void setVisible(bool visible) override;
 
@@ -45,6 +48,7 @@ protected:
 
 private:
     ViewSlots *m_slots = nullptr;
+    bool m_wizard_height = false;
 };
 
 // Keeps only Close in the window manager titlebar of `dialog`: a modal is neither

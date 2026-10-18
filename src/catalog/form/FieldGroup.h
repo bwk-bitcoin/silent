@@ -23,6 +23,8 @@ public:
     explicit FieldGroup(Labels labels = Labels::Plain, QWidget *parent = nullptr);
     // `top` sits the label at the top of a multi-line control.
     auto addField(const QString &label, QWidget *control, bool top = false) -> FieldGroup *;
+    // A field whose label is followed by `tip` (an InfoTip).
+    auto addTippedField(const QString &label, QWidget *tip, QWidget *control) -> FieldGroup *;
     // A note in the control column, under the field added before it.
     auto addNote(FieldNote *note) -> FieldGroup *;
     // Shows or hides a field: its control and its label.

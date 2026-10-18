@@ -79,6 +79,8 @@ set(SILENT_APP_SOURCES
     src/catalog/display/Label.cpp
     src/catalog/inputs/Input.h
     src/catalog/inputs/Input.cpp
+    src/catalog/inputs/DateTimeInput.h
+    src/catalog/inputs/DateTimeInput.cpp
     src/catalog/display/Display.h
     src/catalog/display/Display.cpp
     src/AppController.h
@@ -269,6 +271,10 @@ set(SILENT_APP_SOURCES
     src/catalog/containers/Card.cpp
     src/catalog/display/Badge.h
     src/catalog/display/Badge.cpp
+    src/catalog/display/InfoTip.h
+    src/catalog/display/InfoTip.cpp
+    src/catalog/display/WizardSteps.h
+    src/catalog/display/WizardSteps.cpp
     src/catalog/display/CopyField.h
     src/catalog/display/CopyField.cpp
     src/catalog/display/RouteIcons.h

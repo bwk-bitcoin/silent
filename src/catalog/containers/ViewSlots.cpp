@@ -13,7 +13,8 @@ ViewSlots::ViewSlots(QWidget *parent) : QWidget(parent) {
     (new qontrol::Column)
         ->spacing(resolve(Spacing::M))
         ->push(m_header)
-        ->push(m_body)
+        // A window taller than its content (a wizard step) gives the room to the body.
+        ->push(m_body, 1)
         ->push(m_footer)
         ->into(this);
 }
