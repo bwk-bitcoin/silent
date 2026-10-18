@@ -1097,8 +1097,6 @@ musig-sign-lead-single => "Click the cosigner to add its signature."
 musig-sign-reason-one => "1 cosigner still to go."
 musig-sign-reason-on-device => "On the device…"
 
-musig-sign-row-why => "%1 · %2"
-
 musig-sign-why-disconnected => "Its device is not connected: plug it in and unlock it."
 
 musig-sign-why-no-route => "No route to this key: no device, QR code or hot key."

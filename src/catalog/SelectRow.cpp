@@ -49,6 +49,9 @@ SelectRow::SelectRow(QWidget *parent) : QFrame(parent) {
     m_meta->setSize(LabelSize::Sm);
     m_meta->setTone(LabelTone::Muted);
     m_meta->setVisible(false);
+    m_note = new Label(LabelRole::Caption, this);
+    m_note->setTone(LabelTone::Muted);
+    m_note->setVisible(false);
 
     m_status_slot = new qontrol::Row;
     m_status_slot->setVisible(false);
@@ -69,6 +72,7 @@ SelectRow::SelectRow(QWidget *parent) : QFrame(parent) {
         ->push(m_icon)
         ->push(m_body, 1)
         ->push(m_meta)
+        ->push(m_note)
         ->push(m_status_slot)
         ->push(m_trailing_slot)
         ->push(m_check)
@@ -98,6 +102,11 @@ void SelectRow::setSub(const QString &sub) {
 void SelectRow::setMeta(const QString &meta) {
     m_meta->setText(meta);
     m_meta->setVisible(m_meta_fixed || !meta.isEmpty());
+}
+
+void SelectRow::setNote(const QString &note) {
+    m_note->setText(note);
+    m_note->setVisible(!note.isEmpty());
 }
 
 void SelectRow::setMetaWidth(int width) {

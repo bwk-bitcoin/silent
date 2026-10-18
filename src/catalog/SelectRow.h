@@ -36,6 +36,8 @@ public:
     void setSub(const QString &sub);
     void setMeta(const QString &meta);
     void setMetaWidth(int width);
+    // A short sentence just left of the status, muted: why a row is greyed out.
+    void setNote(const QString &note);
     void setStatus(QWidget *status);
     void setStatusWidth(int width);
     // An action at the row end; clicks on it do not activate the row.
@@ -80,6 +82,7 @@ private:
     Label *m_title = nullptr;
     Label *m_sub = nullptr;
     Label *m_meta = nullptr;
+    Label *m_note = nullptr;
     qontrol::Row *m_status_slot = nullptr;
     qontrol::Row *m_trailing_slot = nullptr;
     QLabel *m_chevron = nullptr;

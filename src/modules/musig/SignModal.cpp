@@ -59,10 +59,10 @@ auto keyRow(const KeyEntry &entry, const QString &fingerprint, catalog::Badge *p
     return row;
 }
 
-// A row that cannot sign, greyed out, the reason after its fingerprint.
-void greyRow(catalog::SelectRow *row, const QString &fingerprint, const QString &why) {
+// A row that cannot sign, greyed out, the reason on its row just left of its pill.
+void greyRow(catalog::SelectRow *row, const QString &why) {
     row->setEnabled(false);
-    row->setSub(TR("musig-sign-row-why").arg(fingerprint, why));
+    row->setNote(why);
 }
 
 } // namespace
@@ -245,7 +245,7 @@ void SignModal::render(const MusigRoundStatus &status) {
         // One cosigner at a time: none is clicked while a device signs.
         row->setClickable(!in && usable && m_on_device.isEmpty());
         if (!usable) {
-            greyRow(row, fingerprint, why);
+            greyRow(row, why);
         }
         connect(row, &catalog::SelectRow::clicked, this, &SignModal::onCosignerClicked,
                 qontrol::UNIQUE);
@@ -262,7 +262,7 @@ void SignModal::render(const MusigRoundStatus &status) {
         }
         auto *row = keyRow(entries.value(fingerprint.toLower()), fingerprint,
                            catalog::pillSignerNotInPath());
-        greyRow(row, fingerprint, TR("musig-sign-why-not-in-path"));
+        greyRow(row, TR("musig-sign-why-not-in-path"));
         others.append(row);
     }
     // Connected devices whose key is not one of this wallet's: listed last, greyed.
@@ -285,7 +285,7 @@ void SignModal::render(const MusigRoundStatus &status) {
             entry.alias = keys::deviceName(*device.signer);
         }
         auto *row = keyRow(entry, fingerprint, catalog::pillSignerNotInWallet());
-        greyRow(row, fingerprint, TR("musig-sign-why-not-in-wallet"));
+        greyRow(row, TR("musig-sign-why-not-in-wallet"));
         strangers.append(row);
     }
     for (const auto &group : {ready, unusable, others, strangers}) {
