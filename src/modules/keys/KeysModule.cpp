@@ -1282,7 +1282,25 @@ void KeysModule::onDeviceRegisterError(std::optional<ReqId> req_id, const QStrin
     if (found == m_device_registrations.end() || found->signer != sender()) {
         return;
     }
-    finishDeviceRegistration(m_device_registrations.take(req_id.value()), message);
+    auto registration = m_device_registrations.take(req_id.value());
+    // The device service's own text (its JSON answer at times) goes to the log; the
+    // caller gets what happened, in words.
+    qWarning() << "keys: device:" << message;
+    QString device =
+        registration.signer.isNull() ? registration.fingerprint : deviceName(*registration.signer);
+    QString text;
+    switch (flow::usbErrorFor(message)) {
+    case flow::UsbError::Rejected:
+        text = TR("keys-register-account-rejected").arg(device);
+        break;
+    case flow::UsbError::Disconnected:
+        text = TR("keys-register-account-disconnected").arg(device);
+        break;
+    case flow::UsbError::Failed:
+        text = TR("keys-register-account-no-answer").arg(device);
+        break;
+    }
+    finishDeviceRegistration(registration, text);
 }
 
 } // namespace keys

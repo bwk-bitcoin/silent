@@ -455,13 +455,22 @@ keys-qr-wrong-kind => "That response does not carry an xpub." => "NONE"
 keys-register-account-connect
 => "Connect the device to check or register this account."
 => "NONE";;
+keys-register-account-disconnected
+=> "%1 was disconnected. Reconnect and unlock it, then try again."
+=> "%1 was disconnected. Reconnect and unlock it, then try again.";;
 keys-register-account-failed
 => "Could not register this account on the device: %1"
 => "NONE";;
+keys-register-account-no-answer
+=> "%1 could not register the account. Unplug it, plug it back in, then try again."
+=> "%1 could not register the account. Unplug it, plug it back in, then try again.";;
 keys-register-account-on => "Register on %1" => "NONE"
 keys-register-account-refused
 => "The device did not register this account."
 => "NONE";;
+keys-register-account-rejected
+=> "%1 declined the account. Nothing was registered."
+=> "%1 declined the account. Nothing was registered.";;
 keys-register-alias => "Alias" => "NONE"
 keys-register-alias-placeholder => "Optional. Leave empty to name it “%1”." => "NONE"
 keys-register-disconnected => "The device was disconnected." => "NONE"
@@ -762,6 +771,7 @@ network-signet => "Signet" => "Signet"
 network-testnet => "Testnet" => "Testnet"
 pill-connected => "Connected" => "NONE"
 pill-done => "Done" => "NONE"
+pill-failed => "Failed" => "Failed"
 pill-fetched => "Fetched" => "Fetched"
 pill-hot-key => "Hot Key" => "NONE"
 pill-locked => "Locked" => "NONE"

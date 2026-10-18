@@ -709,6 +709,10 @@ auto pillRegRegistering() -> Badge * {
     return makePill(Badge::Role::Off, TR("pill-registering"), PillWidth::L);
 }
 
+auto pillRegFailed() -> Badge * {
+    return makePill(Badge::Role::Error, TR("pill-failed"), PillWidth::L);
+}
+
 auto pillRegNotNeeded() -> Badge * {
     return makePill(Badge::Role::Off, TR("pill-not-needed"), PillWidth::L);
 }

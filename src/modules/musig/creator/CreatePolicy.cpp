@@ -568,6 +568,7 @@ void CreatePolicy::refreshRegisterRows() {
         if (needs && !done) {
             ++left;
         }
+        auto failure = m_register_failed.value(fingerprint);
         catalog::Badge *status = nullptr;
         if (!needs) {
             status = catalog::pillRegNotNeeded();
@@ -575,11 +576,18 @@ void CreatePolicy::refreshRegisterRows() {
             status = catalog::pillRegRegistered();
         } else if (m_registering == fingerprint) {
             status = catalog::pillRegRegistering();
+        } else if (!failure.isEmpty()) {
+            status = catalog::pillRegFailed();
         } else {
             status = catalog::pillRegPending();
         }
         auto *row = keyRow(entry, status, needs && !done && m_registering.isEmpty());
         row->setEnabled(needs);
+        // A failed device says why on its own row; a click tries it again.
+        if (needs && !done && m_registering != fingerprint && !failure.isEmpty()) {
+            row->setSub(failure);
+            row->setTone(catalog::SelectRow::Tone::Error);
+        }
         connect(row, &catalog::SelectRow::clicked, this, &CreatePolicy::onRegisterRowClicked,
                 qontrol::UNIQUE);
         m_register_rows->push(row);
@@ -1146,6 +1154,7 @@ void CreatePolicy::onRegisterRowClicked() {
         return;
     }
     m_registering = sender()->property(K_FINGERPRINT).toString();
+    m_register_failed.remove(m_registering);
     m_req_id = keys->newRequest();
     showStatus({}, catalog::LabelTone::Muted);
     refreshRegisterRows();
@@ -1292,6 +1301,13 @@ void CreatePolicy::onKeysError(std::optional<ReqId> req_id, const QString &messa
         return;
     }
     m_req_id = 0;
+    // A registration's failure shows on its device's row, not above the step.
+    if (m_view == View::Register && !m_registering.isEmpty()) {
+        m_register_failed.insert(m_registering, message);
+        m_registering.clear();
+        refreshRegisterRows();
+        return;
+    }
     m_registering.clear();
     showStatus(message, catalog::LabelTone::Error);
     switch (m_view) {

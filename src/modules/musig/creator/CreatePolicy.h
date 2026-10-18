@@ -277,6 +277,8 @@ private:
     QSet<QString> m_registered;
     // The key registering now, empty when none is.
     QString m_registering;
+    // Why the device of a key failed to register, by fingerprint, until it is clicked again.
+    QHash<QString, QString> m_register_failed;
     QSet<QString> m_verified;
     MusigReceiveAddress m_address{};
 };

@@ -389,6 +389,7 @@ pill-fetched => "Fetched"
 pill-missing => "Missing"
 
 pill-registering => "Registering…"
+pill-failed => "Failed"
 
 pill-not-needed => "Not Needed"
 
@@ -963,6 +964,9 @@ keys-register-account-connect
 keys-register-account-on => "Register on %1"
 
 keys-register-account-refused => "The device did not register this account."
+keys-register-account-rejected => "%1 declined the account. Nothing was registered."
+keys-register-account-disconnected => "%1 was disconnected. Reconnect and unlock it, then try again."
+keys-register-account-no-answer => "%1 could not register the account. Unplug it, plug it back in, then try again."
 
 keys-register-account-failed => "Could not register this account on the device: %1"
 

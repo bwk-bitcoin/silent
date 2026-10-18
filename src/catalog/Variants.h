@@ -140,6 +140,7 @@ auto pillXpubMissing() -> Badge *;
 auto pillRegRegistered() -> Badge *;
 auto pillRegPending() -> Badge *;
 auto pillRegRegistering() -> Badge *;
+auto pillRegFailed() -> Badge *;
 auto pillRegNotNeeded() -> Badge *;
 // Its Verify step: one per signer.
 auto pillAddrVerified() -> Badge *;
