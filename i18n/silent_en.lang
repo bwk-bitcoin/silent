@@ -1001,7 +1001,7 @@ settings-plugin-no-library => "No plugin library found in its folder."
 
 settings-plugin-not-silent => "This library is not a Silent plugin."
 
-musig-account-type => "Shared Wallet"
+musig-account-type => "Multikey Wallet"
 
 musig-instance-not-found => "MuSig2 instance not found: %1"
 
@@ -1071,7 +1071,7 @@ btn-create-account => "+ Create Account"
 
 musig-creator-unknown-instance => "Unknown MuSig2 creator entry: %1"
 
-musig-create-title => "Create Shared Account"
+musig-create-title => "Create Multikey Account"
 
 musig-create-add-path => "+ Add a Spend Path"
 

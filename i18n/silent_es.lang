@@ -537,7 +537,7 @@ main-menu-tab => "+" => "+"
 main-window-title
 => "Silent - Silent Payments Wallet"
 => "Silent - Cartera Silent Payments";;
-musig-account-type => "Shared Wallet" => "Shared Wallet"
+musig-account-type => "Multikey Wallet" => "NONE"
 musig-create-add-path => "+ Add a Spend Path" => "NONE"
 musig-create-blocks-placeholder => "blocks" => "NONE"
 musig-create-fetch-key => "%1 (%2)" => "NONE"
@@ -569,7 +569,7 @@ musig-create-skip-verify
 musig-create-skip-verify-title => "The address is not checked" => "NONE"
 musig-create-threshold => "%1 of %2" => "NONE"
 musig-create-timelock => "Timelock:" => "NONE"
-musig-create-title => "Create Shared Account" => "NONE"
+musig-create-title => "Create Multikey Account" => "NONE"
 musig-create-too-many-leaves
 => "This policy needs %1 tap leaves, at most %2 are allowed: lower a threshold or split the keys over more paths"
 => "NONE";;
