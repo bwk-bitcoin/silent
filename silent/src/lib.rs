@@ -782,15 +782,15 @@ mod ffi {
         Absolute,
     }
 
-    /// One key of a path, as the creator gathered it. The binding derives the
-    /// role key `[fp/87'/coin'/account'/R]xpub` from the account xpub.
+    /// One key of a path, as the creator gathered it. The role key
+    /// `[fp/87'/coin'/account'/R]xpub` is its role xpub, fetched at R 0 (Internal).
     #[derive(Debug, Clone)]
     pub struct PolicyKey {
         pub fingerprint: String,
         /// The BIP-87 account path `m/87'/coin'/account'`.
         pub account_path: String,
-        /// The xpub at `account_path`; ignored by preview_policy.
-        pub account_xpub: String,
+        /// The xpub at `account_path`/0, the Internal role's; ignored by preview_policy.
+        pub role_xpub: String,
         pub key_type: PolicyKeyType,
         /// MultiMandatory only: the key signs every leaf.
         pub mandatory: bool,
@@ -873,10 +873,10 @@ mod ffi {
         fn bip87_account_path(network: Network, account: u32) -> String;
         /// `target` rounded up to the grid a renewable absolute timelock sits on.
         fn renewable_height(target: u32) -> u32;
-        /// Compiles with placeholder keys (account_xpub ignored): leaf count, cap and
+        /// Compiles with placeholder keys (role_xpub ignored): leaf count, cap and
         /// shape errors before any device is asked. descriptor stays empty.
         fn preview_policy(spec: PolicySpec) -> PolicyCompileResult;
-        /// Derives each key's R from its account xpub, builds the bwk-bup Policy and
+        /// Takes each key's role xpub as its role key, builds the bwk-bup Policy and
         /// compiles it, every multisig to MuSig2.
         fn compile_policy(spec: PolicySpec) -> PolicyCompileResult;
         /// `Policy::from_descriptor` of BIP-390 text, key types read from R.

@@ -193,7 +193,7 @@ protected:
     // The tip of the network's last or default Electrum server, off the GUI thread.
     void fetchTip();
     [[nodiscard]] auto spec() const -> PolicySpec;
-    // m/87'/coin'/0' of the picked network.
+    // m/87'/coin'/0'/0 of the picked network: the Internal role's xpub, fetched per key.
     [[nodiscard]] auto accountPath() const -> QString;
     [[nodiscard]] auto missingXpubs() const -> QStringList;
     // Compiles the paths with the account xpubs, then Review; a refused policy goes
@@ -307,7 +307,7 @@ private:
     QString m_flow_fingerprint;
     // Distinct keys of the paths, in path order.
     QStringList m_fingerprints;
-    // Fingerprint to account xpub.
+    // Fingerprint to role xpub (m/87'/coin'/0'/0).
     QHash<QString, QString> m_account_xpubs;
     // Why a key's device failed to give its xpub, by fingerprint, until it is clicked again.
     QHash<QString, QString> m_xpub_failed;

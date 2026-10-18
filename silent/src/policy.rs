@@ -152,7 +152,9 @@ fn to_path(
     Ok(Path::new(semantic, locktime, TapPosition::TapTree(vec![])))
 }
 
-/// `[fp/87'/coin'/account'/R]xpub` of `key`.
+/// `[fp/87'/coin'/account'/R]xpub` of `key`. Its xpub is either the account xpub
+/// (`87'/coin'/account'`), R then derived from it, or the role xpub itself
+/// (`87'/coin'/account'/R`), as keys are now fetched at R 0 (Internal).
 fn role_key(
     key: &PolicyKey,
     network: bitcoin::Network,
@@ -167,12 +169,29 @@ fn role_key(
     let xpub = if placeholder_keys {
         placeholder_xpub(fingerprint, &path, network)?
     } else {
-        Xpub::from_str(&key.account_xpub)
+        Xpub::from_str(&key.role_xpub)
             .map_err(|e| format!("invalid xpub for key {fingerprint}: {e}"))?
     };
-    Bip87Account::new(fingerprint, path, xpub)
-        .and_then(|account| account.role_key(key_type, 0))
-        .map_err(|e| format!("key {fingerprint}: {e}"))
+    // Checks the account path and that its coin matches the xpub's network.
+    let account = Bip87Account::new(fingerprint, path.clone(), xpub)
+        .map_err(|e| format!("key {fingerprint}: {e}"))?;
+    if placeholder_keys || usize::from(xpub.depth) == path.len() {
+        return account
+            .role_key(key_type, 0)
+            .map_err(|e| format!("key {fingerprint}: {e}"));
+    }
+    let r = key_type
+        .child_index(0)
+        .map_err(|e| format!("key {fingerprint}: {e}"))?;
+    let child = ChildNumber::from_normal_idx(r).map_err(|e| format!("key {fingerprint}: {e}"))?;
+    // A role xpub: it must be the one at R, it cannot give another role.
+    if usize::from(xpub.depth) != path.len() + 1 || xpub.child_number != child {
+        return Err(format!(
+            "key {fingerprint}: the xpub is not the one at {}",
+            path.child(child)
+        ));
+    }
+    Ok(OXpub::new(Some((fingerprint, path.child(child))), xpub))
 }
 
 /// A stand-in account xpub, the same for the same fingerprint and account path, so a

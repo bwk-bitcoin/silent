@@ -53,7 +53,7 @@ fn key(mnemonic: &str, key_type: PolicyKeyType) -> PolicyKey {
     PolicyKey {
         fingerprint: master.fingerprint(&secp).to_string(),
         account_path: ACCOUNT_PATH.into(),
-        account_xpub: Xpub::from_priv(&secp, &account).to_string(),
+        role_xpub: Xpub::from_priv(&secp, &account).to_string(),
         key_type,
         mandatory: false,
     }

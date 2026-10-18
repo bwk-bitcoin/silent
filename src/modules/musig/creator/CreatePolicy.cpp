@@ -928,7 +928,9 @@ auto CreatePolicy::spec() const -> PolicySpec {
 }
 
 auto CreatePolicy::accountPath() const -> QString {
-    return QString::fromStdString(std::string(::bip87_account_path(network(), 0)));
+    // The Internal role's xpub, R 0: the one every key of a path signs with.
+    return QString::fromStdString(std::string(::bip87_account_path(network(), 0))) +
+           QStringLiteral("/0");
 }
 
 auto CreatePolicy::missingXpubs() const -> QStringList {
@@ -946,7 +948,7 @@ void CreatePolicy::compilePolicy() {
     for (auto &path : policy.paths) {
         for (auto &key : path.keys) {
             auto fingerprint = QString::fromStdString(std::string(key.fingerprint));
-            key.account_xpub = rust::String(m_account_xpubs.value(fingerprint).toStdString());
+            key.role_xpub = rust::String(m_account_xpubs.value(fingerprint).toStdString());
         }
     }
     auto result = ::compile_policy(policy);

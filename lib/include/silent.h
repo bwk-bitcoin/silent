@@ -2036,14 +2036,14 @@ enum class PolicyLocktime : ::std::uint8_t {
 
 #ifndef CXXBRIDGE1_STRUCT_PolicyKey
 #define CXXBRIDGE1_STRUCT_PolicyKey
-// One key of a path, as the creator gathered it. The binding derives the
-// role key `[fp/87'/coin'/account'/R]xpub` from the account xpub.
+// One key of a path, as the creator gathered it. The role key
+// `[fp/87'/coin'/account'/R]xpub` is its role xpub, fetched at R 0 (Internal).
 struct PolicyKey final {
   ::rust::String fingerprint;
   // The BIP-87 account path `m/87'/coin'/account'`.
   ::rust::String account_path;
-  // The xpub at `account_path`; ignored by preview_policy.
-  ::rust::String account_xpub;
+  // The xpub at `account_path`/0, the Internal role's; ignored by preview_policy.
+  ::rust::String role_xpub;
   ::PolicyKeyType key_type;
   // MultiMandatory only: the key signs every leaf.
   bool mandatory CXX_DEFAULT_VALUE(false);
@@ -2869,11 +2869,11 @@ private:
 // `target` rounded up to the grid a renewable absolute timelock sits on.
 ::std::uint32_t renewable_height(::std::uint32_t target) noexcept;
 
-// Compiles with placeholder keys (account_xpub ignored): leaf count, cap and
+// Compiles with placeholder keys (role_xpub ignored): leaf count, cap and
 // shape errors before any device is asked. descriptor stays empty.
 ::PolicyCompileResult preview_policy(::PolicySpec spec) noexcept;
 
-// Derives each key's R from its account xpub, builds the bwk-bup Policy and
+// Takes each key's role xpub as its role key, builds the bwk-bup Policy and
 // compiles it, every multisig to MuSig2.
 ::PolicyCompileResult compile_policy(::PolicySpec spec) noexcept;
 

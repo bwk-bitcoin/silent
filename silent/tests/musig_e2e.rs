@@ -53,7 +53,7 @@ fn policy_key(signer: &HotSigner, key_type: PolicyKeyType) -> PolicyKey {
     PolicyKey {
         fingerprint: signer.fingerprint().to_string(),
         account_path: ACCOUNT_PATH.to_string(),
-        account_xpub: signer.xpub(&path).xkey.to_string(),
+        role_xpub: signer.xpub(&path).xkey.to_string(),
         key_type,
         mandatory: false,
     }

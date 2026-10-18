@@ -24,7 +24,7 @@ fn key(seed: u8, key_type: PolicyKeyType, mandatory: bool) -> PolicyKey {
     PolicyKey {
         fingerprint: master.fingerprint(&secp).to_string(),
         account_path: ACCOUNT_PATH.into(),
-        account_xpub: Xpub::from_priv(&secp, &account).to_string(),
+        role_xpub: Xpub::from_priv(&secp, &account).to_string(),
         key_type,
         mandatory,
     }
@@ -291,7 +291,7 @@ fn single_key_policy() {
     let mut blanked = spec.clone();
     for path in &mut blanked.paths {
         for key in &mut path.keys {
-            key.account_xpub.clear();
+            key.role_xpub.clear();
         }
     }
     let preview = preview_policy(blanked);
@@ -715,4 +715,74 @@ fn twenty_nine_of_sixty_three_is_too_many_leaves() {
             result.error_path
         );
     }
+}
+
+// ===== Role xpub =====
+
+/// `key` with its xpub at `m/87'/1'/0'/0` (the Internal role's), as keys are fetched.
+fn with_role_xpub(mut key: PolicyKey, seed: u8) -> PolicyKey {
+    let secp = Secp256k1::new();
+    let master = Xpriv::new_master(bitcoin::Network::Regtest, &[seed; 32]).unwrap();
+    let role = master
+        .derive_priv(
+            &secp,
+            &DerivationPath::from_str(&format!("{ACCOUNT_PATH}/0")).unwrap(),
+        )
+        .unwrap();
+    key.role_xpub = Xpub::from_priv(&secp, &role).to_string();
+    key
+}
+
+#[test]
+fn role_xpub_compiles_as_the_account_xpub() {
+    let from_account = compiled(&two_internal_spec());
+    let mut spec = two_internal_spec();
+    for path in &mut spec.paths {
+        for (seed, key) in (1u8..).zip(path.keys.iter_mut()) {
+            *key = with_role_xpub(key.clone(), seed);
+        }
+    }
+    let from_role = compiled(&spec);
+    assert_eq!(
+        from_role.descriptor, from_account.descriptor,
+        "the role xpub gives the same Internal role key as the account xpub"
+    );
+    assert!(
+        from_role.descriptor.contains("/87'/1'/0'/0]")
+            || from_role.descriptor.contains("/87h/1h/0h/0]"),
+        "the origin ends at R 0: {}",
+        from_role.descriptor
+    );
+}
+
+#[test]
+fn role_xpub_refuses_another_role() {
+    let mut spec = spec(vec![path(
+        PolicySemantic::Single,
+        1,
+        PolicyLocktime::None,
+        0,
+        vec![with_role_xpub(key(1, PolicyKeyType::SafetyNet, false), 1)],
+    )]);
+    let result = compile_policy(spec.clone());
+    assert!(
+        !result.is_ok,
+        "an Internal role xpub cannot give the Safety Net role"
+    );
+    spec.paths[0].keys[0] = with_role_xpub(key(1, PolicyKeyType::Internal, false), 1);
+    assert!(compile_policy(spec).is_ok, "it gives the Internal role");
+}
+
+/// One 2-of-2 path, keys from seeds 1 and 2, both Internal.
+fn two_internal_spec() -> PolicySpec {
+    spec(vec![path(
+        PolicySemantic::Multi,
+        2,
+        PolicyLocktime::None,
+        0,
+        vec![
+            key(1, PolicyKeyType::Internal, false),
+            key(2, PolicyKeyType::Internal, false),
+        ],
+    )])
 }

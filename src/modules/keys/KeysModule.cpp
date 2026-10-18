@@ -1190,13 +1190,14 @@ auto KeysModule::defaultXpubPath() -> QString {
 auto KeysModule::accountXpubPaths() -> QStringList {
     int coin = coinType();
     return {defaultXpubPath(), QStringLiteral("m/86'/%1'/0'").arg(coin),
-            QStringLiteral("m/48'/%1'/0'/2'").arg(coin), QStringLiteral("m/87'/%1'/0'").arg(coin)};
+            QStringLiteral("m/48'/%1'/0'/2'").arg(coin),
+            QStringLiteral("m/87'/%1'/0'/0").arg(coin)};
 }
 
 auto KeysModule::deviceXpubPaths(quint32 capabilities) -> QStringList {
     int coin = coinType();
     QStringList paths = {defaultXpubPath(), QStringLiteral("m/86'/%1'/0'").arg(coin),
-                         QStringLiteral("m/87'/%1'/0'").arg(coin)};
+                         QStringLiteral("m/87'/%1'/0'/0").arg(coin)};
     if (::supports_silent_payments(capabilities)) {
         paths.append(QStringLiteral("m/352'/%1'/0'").arg(coin));
     }
