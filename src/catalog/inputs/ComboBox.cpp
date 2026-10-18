@@ -151,6 +151,9 @@ auto ComboBox::qss(const Palette &p) -> QString {
                    "  border: 1px solid %1;"
                    "  border-radius: %8px;"
                    "  outline: none;"
+                   // Rows inset and rounded: a highlighted first or last row stays
+                   // inside the popup's rounded corners.
+                   "  padding: %18px;"
                    "  selection-background-color: %6;"
                    "  selection-color: %3;"
                    "}"
@@ -159,6 +162,7 @@ auto ComboBox::qss(const Palette &p) -> QString {
                    "QComboBox[class=\"combobox\"] QAbstractItemView::item {"
                    "  padding: %9px %11px;"
                    "  border: none;"
+                   "  border-radius: %19px;"
                    "}"
                    "QComboBox[class=\"combobox\"] QAbstractItemView::item:selected {"
                    "  background: %6;"
@@ -185,7 +189,9 @@ auto ComboBox::qss(const Palette &p) -> QString {
         .arg(p.textSecondary.name())                             // %14
         .arg(p.borderLight.name())                               // %15
         .arg(disabledChevron)                                    // %16
-        .arg(p.textMuted.name());                                // %17
+        .arg(p.textMuted.name())                                 // %17
+        .arg(resolve(Padding::XXS))                              // %18
+        .arg(radius::INPUT);                                     // %19
 }
 
 } // namespace catalog
