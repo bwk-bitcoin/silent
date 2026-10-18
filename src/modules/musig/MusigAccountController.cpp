@@ -1,11 +1,11 @@
 #include "modules/musig/MusigAccountController.h"
 
+#include "account/views/Coins.h"
+#include "account/views/History.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "modules/musig/MusigAccountWidget.h"
-#include "modules/musig/views/Coins.h"
-#include "modules/musig/views/History.h"
 #include "modules/musig/views/Receive.h"
 #include "modules/musig/views/Send.h"
 #include "modules/musig/views/Settings.h"
@@ -30,7 +30,7 @@ auto toQString(const rust::String &value) -> QString {
 
 // The widget owns the controller: deleting it on stopped() frees both.
 MusigAccountController::MusigAccountController(const QString &account, MusigAccountWidget *widget)
-    : QObject(widget),
+    : AccountBackend(widget),
       m_widget(widget) {
     init(account);
 }
@@ -71,8 +71,8 @@ void MusigAccountController::init(const QString &account) {
 }
 
 void MusigAccountController::loadPanels() {
-    m_panels.insert("history", new qontrol::Panel(new musig::view::History(this), "history"));
-    m_panels.insert("coins", new qontrol::Panel(new musig::view::Coins(this), "coins"));
+    m_panels.insert("history", new qontrol::Panel(new account::view::History(this), "history"));
+    m_panels.insert("coins", new qontrol::Panel(new account::view::Coins(this), "coins"));
     m_panels.insert("receive", new qontrol::Panel(new musig::view::Receive(this), "receive"));
     m_panels.insert("send", new qontrol::Panel(new musig::view::Send(this), "send"));
     m_panels.insert("settings", new qontrol::Panel(new musig::view::Settings(this), "settings"));

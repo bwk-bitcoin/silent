@@ -192,10 +192,6 @@ set(SILENT_APP_SOURCES
     src/modules/musig/MusigAccountWidget.cpp
     src/modules/musig/MusigStatusBar.h
     src/modules/musig/MusigStatusBar.cpp
-    src/modules/musig/views/Coins.h
-    src/modules/musig/views/Coins.cpp
-    src/modules/musig/views/History.h
-    src/modules/musig/views/History.cpp
     src/modules/musig/views/Receive.h
     src/modules/musig/views/Receive.cpp
     src/modules/musig/views/Send.h
@@ -228,10 +224,11 @@ set(SILENT_APP_SOURCES
     src/views/utils.cpp
     src/views/DashboardLayout.h
     src/views/DashboardLayout.cpp
-    src/modules/sp/views/History.h
-    src/modules/sp/views/History.cpp
-    src/modules/sp/views/Coins.h
-    src/modules/sp/views/Coins.cpp
+    src/account/AccountBackend.h
+    src/account/views/Coins.h
+    src/account/views/Coins.cpp
+    src/account/views/History.h
+    src/account/views/History.cpp
     src/modules/sp/views/Receive.h
     src/modules/sp/views/Receive.cpp
     src/modules/sp/views/Send.h

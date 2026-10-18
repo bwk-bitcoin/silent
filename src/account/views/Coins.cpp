@@ -1,46 +1,32 @@
-#include "Coins.h"
-#include "AccountController.h"
+#include "account/views/Coins.h"
+
+#include "account/AccountBackend.h"
 #include "catalog/BalanceHeader.h"
 #include "catalog/Table.h"
 #include "i18n/Tr.h"
 #include "views/utils.h"
+
 #include <Qontrol>
 #include <common.h>
-#include <cstdint>
-#include <optional>
-#include <utility>
 
-namespace view {
+namespace account::view {
 
 using catalog::DisplayRole;
 
-Coins::Coins(AccountController *ctrl) {
-    m_controller = ctrl;
-    this->init();
-    this->doConnect();
-    this->view();
+Coins::Coins(AccountBackend *backend) : m_backend(backend) {
+    init();
+    doConnect();
+    view();
 }
 
 void Coins::init() {
 }
 
-void Coins::onRecvPayload(const CoinState &state) {
-    m_state = state;
-    this->view();
-    emit coinsUpdated();
-}
-
 void Coins::doConnect() {
-    auto *ctrl = m_controller;
-    connect(ctrl, &AccountController::updateCoins, this, &Coins::onRecvPayload, qontrol::UNIQUE);
+    connect(m_backend, &AccountBackend::updateCoins, this, &Coins::onCoinsUpdated, qontrol::UNIQUE);
 }
 
 void Coins::view() {
-    if (m_controller == nullptr) {
-        return;
-    }
-    m_coins = m_controller->getCoins();
-
     m_balance = new catalog::BalanceHeader;
     m_balance->setConfirmed(toBitcoin(m_state.confirmed_balance, false));
     m_balance->setUnconfirmed(m_state.unconfirmed_balance);
@@ -63,7 +49,7 @@ void Coins::view() {
                         .role = DisplayRole::Amount});
     connect(m_table, &catalog::Table::cellEdited, this, &Coins::onCellEdited, qontrol::UNIQUE);
 
-    for (const auto &coin : m_coins) {
+    for (const auto &coin : m_backend->getCoins()) {
         QString typeStr = QString::fromUtf8(coin.account_type.data(), coin.account_type.size());
 
         QString heightStr;
@@ -82,21 +68,14 @@ void Coins::view() {
     }
 
     auto *mainLayout = (new qontrol::Column(this))->push(m_balance)->push(m_table);
-
-    auto *boxed = dashboard(TR("coins-title"), mainLayout);
-    setScreenContent(this, m_main_widget, boxed);
+    setScreenContent(this, m_main_widget, dashboard(TR("coins-title"), mainLayout));
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-auto Coins::getCoins() -> std::optional<QList<RustCoin>> {
-    auto coins = QList<RustCoin>();
-    for (const auto &coin : m_coins) {
-        coins.append(coin);
-    }
-    if (coins.isEmpty()) {
-        return std::nullopt;
-    }
-    return std::make_optional(coins);
+// ===== Slots =====
+
+void Coins::onCoinsUpdated(const CoinState &state) {
+    m_state = state;
+    view();
 }
 
 void Coins::onCellEdited(const QString &outpoint, [[maybe_unused]] int column,
@@ -104,12 +83,7 @@ void Coins::onCellEdited(const QString &outpoint, [[maybe_unused]] int column,
     if (outpoint.isEmpty()) {
         return;
     }
-
-    // Update the coin label through the controller
-    if (m_controller == nullptr) {
-        return;
-    }
-    m_controller->updateCoinLabel(outpoint, text);
+    m_backend->updateCoinLabel(outpoint, text);
 }
 
-} // namespace view
+} // namespace account::view

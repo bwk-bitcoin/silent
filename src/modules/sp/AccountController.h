@@ -1,8 +1,9 @@
 #pragma once
 
+#include "account/AccountBackend.h"
+
 #include <QHash>
 #include <QList>
-#include <QObject>
 #include <QPointer>
 #include <QString>
 #include <QThread>
@@ -12,7 +13,7 @@
 
 class AccountWidget;
 
-class AccountController : public QObject {
+class AccountController : public AccountBackend {
     Q_OBJECT
 
 public:
@@ -20,8 +21,8 @@ public:
     auto init(const QString &account) -> void;
     auto screen(const QString &screen) -> std::optional<qontrol::Screen *>;
     virtual auto loadPanels() -> void;
-    virtual auto getCoins() -> rust::Vec<RustCoin>;
-    virtual auto getPaymentHistory() -> rust::Vec<RustTx>;
+    auto getCoins() -> rust::Vec<RustCoin> override;
+    auto getPaymentHistory() -> rust::Vec<RustTx> override;
     virtual auto getSpAddress() -> rust::String;
     virtual auto newSegwitAddr() -> rust::String;
     virtual auto newTaprootAddr() -> rust::String;
@@ -38,8 +39,6 @@ public:
     void startWorker(QThread *worker);
 
 signals:
-    void updateCoins(CoinState coins);
-    void updateBalance(uint64_t balance);
     void newAddress(rust::String addr);
     void scanProgress(uint32_t height, uint32_t tip);
     void waitingForBlocks(uint32_t tip_height);
@@ -58,7 +57,7 @@ public slots:
     auto pollCoins() -> void;
     auto handleNotification(Notification notif) -> void;
     virtual auto simulateTx(TransactionTemplate tx) -> TransactionSimulation;
-    auto updateCoinLabel(const QString &outpoint, const QString &label) -> void;
+    void updateCoinLabel(const QString &outpoint, const QString &label) override;
     auto startScanner() -> void;
     auto stop() -> void;
     void onWorkerFinished();

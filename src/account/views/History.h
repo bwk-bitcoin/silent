@@ -5,23 +5,23 @@
 #include <Qontrol>
 #include <silent.h>
 
-class MusigAccountController;
+class AccountBackend;
 
 namespace catalog {
 class BalanceHeader;
 class HistoryTable;
 } // namespace catalog
 
-namespace musig::view {
+namespace account::view {
 
 class History : public qontrol::Screen {
     Q_OBJECT
 
 public:
-    explicit History(MusigAccountController *ctrl);
+    explicit History(AccountBackend *backend);
 
 public slots:
-    void onCoinsUpdated(CoinState state);
+    void onCoinsUpdated(const CoinState &state);
 
 protected:
     void init() override;
@@ -30,11 +30,11 @@ protected:
     void changeEvent(QEvent *event) override;
 
 private:
-    MusigAccountController *m_controller = nullptr;
+    AccountBackend *m_backend = nullptr;
     CoinState m_state{};
     QWidget *m_main_widget = nullptr;
     catalog::BalanceHeader *m_balance = nullptr;
     catalog::HistoryTable *m_table = nullptr;
 };
 
-} // namespace musig::view
+} // namespace account::view

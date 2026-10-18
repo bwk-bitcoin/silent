@@ -7,20 +7,20 @@
 #include <Qontrol>
 #include <silent.h>
 
-class MusigAccountController;
+class AccountBackend;
 
 namespace catalog {
 class BalanceHeader;
 class Table;
 } // namespace catalog
 
-namespace musig::view {
+namespace account::view {
 
 class Coins : public qontrol::Screen {
     Q_OBJECT
 
 public:
-    explicit Coins(MusigAccountController *ctrl);
+    explicit Coins(AccountBackend *backend);
 
     static const int TYPE_W = resolve(Size::XS);
     static const int HEIGHT_W = resolve(Size::XS);
@@ -29,9 +29,8 @@ public:
     static const int VALUE_W = resolve(Size::S);
 
 public slots:
-    void onCoinsUpdated(CoinState state);
+    void onCoinsUpdated(const CoinState &state);
     void onCellEdited(const QString &outpoint, int column, const QString &text);
-    void onLabelEdited(const QString &outpoint, const QString &label);
 
 protected:
     void init() override;
@@ -39,11 +38,11 @@ protected:
     void view() override;
 
 private:
-    MusigAccountController *m_controller = nullptr;
+    AccountBackend *m_backend = nullptr;
     CoinState m_state{};
     QWidget *m_main_widget = nullptr;
     catalog::BalanceHeader *m_balance = nullptr;
     catalog::Table *m_table = nullptr;
 };
 
-} // namespace musig::view
+} // namespace account::view

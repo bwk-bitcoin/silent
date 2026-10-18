@@ -1,8 +1,8 @@
 #include "AccountController.h"
 #include "AccountWidget.h"
 #include "AppController.h"
-#include "views/Coins.h"
-#include "views/History.h"
+#include "account/views/Coins.h"
+#include "account/views/History.h"
 #include "views/Receive.h"
 #include "views/Send.h"
 #include "views/Settings.h"
@@ -14,12 +14,12 @@
 
 // The widget owns the controller: deleting it on stopped() frees both.
 AccountController::AccountController(const QString &account, AccountWidget *widget)
-    : QObject(widget) {
+    : AccountBackend(widget) {
     m_widget = widget;
     init(account);
 }
 
-AccountController::AccountController(AccountWidget *widget) : QObject(widget) {
+AccountController::AccountController(AccountWidget *widget) : AccountBackend(widget) {
     m_widget = widget;
 }
 
@@ -182,12 +182,12 @@ auto AccountController::handleNotification(Notification notif) -> void {
 
 auto AccountController::loadPanels() -> void {
     // Create History screen panel
-    auto *historyScreen = new view::History(this);
+    auto *historyScreen = new account::view::History(this);
     auto *historyPanel = new qontrol::Panel(historyScreen, "history");
     this->insertPanel(historyPanel);
 
     // Create Coins screen panel
-    auto *coinsScreen = new view::Coins(this);
+    auto *coinsScreen = new account::view::Coins(this);
     auto *coinsPanel = new qontrol::Panel(coinsScreen, "coins");
     this->insertPanel(coinsPanel);
 
@@ -394,7 +394,7 @@ auto AccountController::coins() -> qontrol::Screen * {
     return nullptr;
 }
 
-auto AccountController::updateCoinLabel(const QString &outpoint, const QString &label) -> void {
+void AccountController::updateCoinLabel(const QString &outpoint, const QString &label) {
     if (m_account.has_value()) {
         if (!m_account.value()->update_coin_label(rust::String(outpoint.toStdString()),
                                                   rust::String(label.toStdString()))) {

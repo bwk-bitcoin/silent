@@ -1,17 +1,17 @@
-#include "modules/musig/views/History.h"
+#include "account/views/History.h"
 
+#include "account/AccountBackend.h"
 #include "catalog/BalanceHeader.h"
 #include "catalog/panels/home/HistoryTable.h"
 #include "i18n/Tr.h"
-#include "modules/musig/MusigAccountController.h"
 #include "views/utils.h"
 
 #include <Qontrol>
 #include <common.h>
 
-namespace musig::view {
+namespace account::view {
 
-History::History(MusigAccountController *ctrl) : m_controller(ctrl) {
+History::History(AccountBackend *backend) : m_backend(backend) {
     init();
     doConnect();
     view();
@@ -21,22 +21,18 @@ void History::init() {
 }
 
 void History::doConnect() {
-    connect(m_controller, &MusigAccountController::updateCoins, this, &History::onCoinsUpdated,
+    connect(m_backend, &AccountBackend::updateCoins, this, &History::onCoinsUpdated,
             qontrol::UNIQUE);
 }
 
 void History::view() {
-    if (m_controller == nullptr) {
-        return;
-    }
-
     m_balance = new catalog::BalanceHeader;
     m_balance->setConfirmed(toBitcoin(m_state.confirmed_balance, false));
     m_balance->setUnconfirmed(m_state.unconfirmed_balance);
     m_balance->setCoinCount(m_state.confirmed_count + m_state.unconfirmed_count);
 
     m_table = new catalog::HistoryTable;
-    for (const auto &tx : m_controller->getPaymentHistory()) {
+    for (const auto &tx : m_backend->getPaymentHistory()) {
         QString direction = QString::fromUtf8(tx.direction.data(), tx.direction.size());
         QString txid = QString::fromUtf8(tx.txid.data(), tx.txid.size());
         m_table->addEntry(direction, txid, tx.height, tx.amount);
@@ -55,9 +51,9 @@ void History::changeEvent(QEvent *event) {
 
 // ===== Slots =====
 
-void History::onCoinsUpdated(CoinState state) {
+void History::onCoinsUpdated(const CoinState &state) {
     m_state = state;
     view();
 }
 
-} // namespace musig::view
+} // namespace account::view

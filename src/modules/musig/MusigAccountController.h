@@ -1,9 +1,9 @@
 #pragma once
 
+#include "account/AccountBackend.h"
 #include "interfaces/types.h"
 
 #include <QHash>
-#include <QObject>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
@@ -19,7 +19,7 @@ class QThread;
 // keys()->sign() per round: Nonces, then PartialSigs, then finalize at Ready. On
 // SignError::MusigSession it drops every nonce and partial sig and goes back to
 // round 1 over the prepared PSBT.
-class MusigAccountController : public QObject {
+class MusigAccountController : public AccountBackend {
     Q_OBJECT
 
 public:
@@ -29,8 +29,8 @@ public:
     void loadPanels();
     auto screen(const QString &screen) -> std::optional<qontrol::Screen *>;
     auto getAccount() -> std::optional<rust::Box<MusigAccount>> &;
-    auto getCoins() -> rust::Vec<RustCoin>;
-    auto getPaymentHistory() -> rust::Vec<RustTx>;
+    auto getCoins() -> rust::Vec<RustCoin> override;
+    auto getPaymentHistory() -> rust::Vec<RustTx> override;
     auto newAddress() -> rust::String;
     auto network() -> Network;
     auto getDescriptor() -> rust::String;
@@ -45,8 +45,6 @@ public:
     auto spendLeaves(const QStringList &outpoints) -> MusigSpendLeaves;
 
 signals:
-    void updateCoins(CoinState coins);
-    void updateBalance(uint64_t balance);
     void electrumConnected(QString address);
     void electrumDisconnected();
     // The Electrum URL was saved.
@@ -70,7 +68,7 @@ public slots:
     void loadPanel(const QString &name);
     void pollCoins();
     void handleNotification(Notification notif);
-    void updateCoinLabel(const QString &outpoint, const QString &label);
+    void updateCoinLabel(const QString &outpoint, const QString &label) override;
     auto setElectrumUrl(const QString &url) -> MusigElectrumUrlResult;
     void startElectrum();
     void stopElectrum();
