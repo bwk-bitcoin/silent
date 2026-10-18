@@ -11,8 +11,9 @@ class QLabel;
 class QMouseEvent;
 
 namespace qontrol {
+class Column;
 class Row;
-}
+} // namespace qontrol
 
 namespace catalog {
 
@@ -25,7 +26,8 @@ class SelectRow : public QFrame {
     Q_OBJECT
 
 public:
-    enum class Tone { Default, Error };
+    // Add: the closing "add one" row of a list, its icon and title centred, no chevron.
+    enum class Tone { Default, Error, Add };
 
     explicit SelectRow(QWidget *parent = nullptr);
     // The row tints the icon: accent, muted when disabled, error in the error tone.
@@ -48,6 +50,9 @@ public:
     void setSelected(bool selected);
     // The active step of a step list: tinted like a selected row, not a choice.
     void setCurrent(bool current);
+    // A title-only row as tall as a title and sub row, its title centred: a pick-list
+    // next to device and key rows keeps one row height.
+    void setTwoLine(bool two_line);
     void setTone(Tone tone);
     static auto qss(const Palette &p) -> QString;
 
@@ -68,6 +73,10 @@ private:
     IconFn m_icon_fn = nullptr;
     int m_icon_size = metric::SELECT_ROW_ICON_SIZE;
     QLabel *m_icon = nullptr;
+    // Shown in the add tone only, on each side, so the content centres.
+    QWidget *m_lead = nullptr;
+    QWidget *m_tail = nullptr;
+    qontrol::Column *m_body = nullptr;
     Label *m_title = nullptr;
     Label *m_sub = nullptr;
     Label *m_meta = nullptr;
@@ -86,6 +95,7 @@ private:
     bool m_current = false;
     bool m_chevron_set = false;
     bool m_chevron_shown = false;
+    bool m_two_line = false;
     Tone m_tone = Tone::Default;
 };
 

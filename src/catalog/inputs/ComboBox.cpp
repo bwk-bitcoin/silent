@@ -156,8 +156,8 @@ auto ComboBox::qss(const Palette &p) -> QString {
                    "  color: %3;"
                    "  border: 1px solid %1;"
                    "  border-radius: %8px;"
-                   "  selection-background-color: %6;"
-                   "  selection-color: %3;"
+                   "  selection-background-color: %17;"
+                   "  selection-color: %18;"
                    "}")
         .arg(p.inputBorder.name())   // %1
         .arg(p.inputBg.name())       // %2
@@ -174,7 +174,9 @@ auto ComboBox::qss(const Palette &p) -> QString {
         .arg(metric::COMBO_ARROW_SIZE) // %13
         .arg(p.textSecondary.name())   // %14
         .arg(p.borderLight.name())     // %15
-        .arg(disabledChevron);         // %16
+        .arg(disabledChevron)          // %16
+        .arg(p.accent.name())          // %17
+        .arg(p.onAccent.name());       // %18
 }
 
 } // namespace catalog

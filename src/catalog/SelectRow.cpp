@@ -2,6 +2,7 @@
 
 #include "catalog/display/Label.h"
 
+#include <QBoxLayout>
 #include <QEvent>
 #include <QKeyEvent>
 #include <QLabel>
@@ -35,7 +36,14 @@ SelectRow::SelectRow(QWidget *parent) : QFrame(parent) {
     m_sub->setWordWrap(true);
     m_sub->setPrefersOneLine(true);
     m_sub->setVisible(false);
-    auto *body = (new qontrol::Column)->spacing(resolve(Spacing::XXS))->push(m_title)->push(m_sub);
+    m_body = (new qontrol::Column)->spacing(resolve(Spacing::XXS))->push(m_title)->push(m_sub);
+
+    m_lead = new QWidget(this);
+    m_lead->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    m_lead->setVisible(false);
+    m_tail = new QWidget(this);
+    m_tail->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    m_tail->setVisible(false);
 
     m_meta = new Label(LabelRole::Mono, this);
     m_meta->setSize(LabelSize::Sm);
@@ -57,12 +65,14 @@ SelectRow::SelectRow(QWidget *parent) : QFrame(parent) {
         ->margins(metric::SELECT_ROW_PADDING_H, metric::SELECT_ROW_PADDING_V,
                   metric::SELECT_ROW_PADDING_H, metric::SELECT_ROW_PADDING_V)
         ->spacing(resolve(Spacing::M))
+        ->push(m_lead)
         ->push(m_icon)
-        ->push(body, 1)
+        ->push(m_body, 1)
         ->push(m_meta)
         ->push(m_status_slot)
         ->push(m_trailing_slot)
         ->push(m_check)
+        ->push(m_tail)
         ->into(this);
 
     refresh();
@@ -82,6 +92,7 @@ void SelectRow::setTitle(const QString &title) {
 void SelectRow::setSub(const QString &sub) {
     m_sub->setText(sub);
     m_sub->setVisible(!sub.isEmpty());
+    refresh();
 }
 
 void SelectRow::setMeta(const QString &meta) {
@@ -151,6 +162,11 @@ void SelectRow::setCurrent(bool current) {
     refresh();
 }
 
+void SelectRow::setTwoLine(bool two_line) {
+    m_two_line = two_line;
+    refresh();
+}
+
 void SelectRow::setTone(Tone tone) {
     m_tone = tone;
     m_sub->setTone(m_tone == Tone::Error ? LabelTone::Error : LabelTone::Muted);
@@ -162,6 +178,9 @@ auto SelectRow::isActivatable() const -> bool {
 }
 
 auto SelectRow::showsChevron() const -> bool {
+    if (m_tone == Tone::Add) {
+        return false;
+    }
     if (m_chevron_set) {
         return m_chevron_shown;
     }
@@ -176,6 +195,19 @@ void SelectRow::refresh() {
     setProperty("tone", m_tone == Tone::Error ? "error" : "default");
     setFocusPolicy(activatable ? Qt::StrongFocus : Qt::NoFocus);
     setCursor(activatable ? Qt::PointingHandCursor : Qt::ArrowCursor);
+
+    bool add = m_tone == Tone::Add;
+    m_lead->setVisible(add);
+    m_tail->setVisible(add);
+    if (auto *row = qobject_cast<QBoxLayout *>(layout()); row != nullptr) {
+        row->setStretchFactor(m_body, add ? 0 : 1);
+        row->setSpacing(resolve(add ? Spacing::XS : Spacing::M));
+    }
+    // The title fills the height of a title and sub; a label centres its text.
+    m_body->setMinimumHeight(m_two_line && m_sub->text().isEmpty()
+                                 ? m_title->sizeHint().height() + resolve(Spacing::XXS) +
+                                       m_sub->fontMetrics().height()
+                                 : 0);
 
     m_chevron->setVisible(showsChevron());
     m_trailing_slot->setVisible(m_trailing_fixed || m_trailing != nullptr || showsChevron());
