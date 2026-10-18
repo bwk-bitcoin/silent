@@ -1,7 +1,7 @@
 #include "catalog/inputs/ComboBox.h"
+#include "resources/icon/chevron_down.h"
 #include "theme/Palette.h"
 #include "theme/Theme.h"
-#include "resources/icon/chevron_down.h"
 #include <QAbstractItemView>
 #include <QDir>
 #include <QFile>
@@ -9,32 +9,16 @@
 #include <QFrame>
 #include <QPainter>
 #include <QPixmap>
-#include <QProxyStyle>
 #include <QStandardPaths>
 #include <QStyle>
 #include <QSvgRenderer>
 
 namespace catalog {
 
-namespace {
-// Forces a plain list popup instead of the menu-style one, so Qt never creates the
-// top/bottom scroll-indicator widgets that otherwise overlay the dropdown as bands.
-class PlainPopupStyle final : public QProxyStyle {
-public:
-    int styleHint(StyleHint hint, const QStyleOption *option, const QWidget *widget,
-                  QStyleHintReturn *return_data) const override {
-        if (hint == QStyle::SH_ComboBox_Popup) {
-            return 0;
-        }
-        return QProxyStyle::styleHint(hint, option, widget, return_data);
-    }
-};
-} // namespace
-
+// The plain list popup comes from the app style (SH_ComboBox_Popup): a style of its own
+// here would sit on the desktop's native style instead, which draws its focus frame
+// around the combobox.
 ComboBox::ComboBox(ComboBoxRole role, QWidget *parent) : QComboBox(parent), m_role(role) {
-    auto *popupStyle = new PlainPopupStyle;
-    popupStyle->setParent(this);
-    setStyle(popupStyle);
     applyRole();
 }
 
@@ -156,27 +140,36 @@ auto ComboBox::qss(const Palette &p) -> QString {
                    "  color: %3;"
                    "  border: 1px solid %1;"
                    "  border-radius: %8px;"
-                   "  selection-background-color: %17;"
-                   "  selection-color: %18;"
+                   "  outline: none;"
+                   "  selection-background-color: %6;"
+                   "  selection-color: %3;"
+                   "}"
+                   // Rows as the kit draws them: the highlighted one keeps the text
+                   // colour on the hover background.
+                   "QComboBox[class=\"combobox\"] QAbstractItemView::item {"
+                   "  padding: %9px %11px;"
+                   "  border: none;"
+                   "}"
+                   "QComboBox[class=\"combobox\"] QAbstractItemView::item:selected {"
+                   "  background: %6;"
+                   "  color: %3;"
                    "}")
-        .arg(p.inputBorder.name())   // %1
-        .arg(p.inputBg.name())       // %2
-        .arg(p.text.name())          // %3
-        .arg(p.inputFocus.name())    // %4
-        .arg(p.bgSecondary.name())   // %5
-        .arg(p.surfaceHover.name())  // %6
-        .arg(chevron)                // %7
-        .arg(radius::COMBO)          // %8
-        .arg(resolve(Padding::XS))   // %9
+        .arg(p.inputBorder.name())                               // %1
+        .arg(p.inputBg.name())                                   // %2
+        .arg(p.text.name())                                      // %3
+        .arg(p.inputFocus.name())                                // %4
+        .arg(p.bgSecondary.name())                               // %5
+        .arg(p.surfaceHover.name())                              // %6
+        .arg(chevron)                                            // %7
+        .arg(radius::COMBO)                                      // %8
+        .arg(resolve(Padding::XS))                               // %9
         .arg(metric::COMBO_DROPDOWN_WIDTH + resolve(Padding::S)) // %10
-        .arg(resolve(Padding::S))    // %11
-        .arg(metric::COMBO_DROPDOWN_WIDTH) // %12
-        .arg(metric::COMBO_ARROW_SIZE) // %13
-        .arg(p.textSecondary.name())   // %14
-        .arg(p.borderLight.name())     // %15
-        .arg(disabledChevron)          // %16
-        .arg(p.accent.name())          // %17
-        .arg(p.onAccent.name());       // %18
+        .arg(resolve(Padding::S))                                // %11
+        .arg(metric::COMBO_DROPDOWN_WIDTH)                       // %12
+        .arg(metric::COMBO_ARROW_SIZE)                           // %13
+        .arg(p.textSecondary.name())                             // %14
+        .arg(p.borderLight.name())                               // %15
+        .arg(disabledChevron);                                   // %16
 }
 
 } // namespace catalog

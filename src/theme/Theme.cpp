@@ -71,6 +71,17 @@ public:
         return QProxyStyle::subElementRect(element, option, widget);
     }
 
+    // A plain list popup instead of the menu-style one, so Qt never creates the
+    // top/bottom scroll-indicator widgets that otherwise overlay the dropdown as bands.
+    auto styleHint(StyleHint hint, const QStyleOption *option = nullptr,
+                   const QWidget *widget = nullptr, QStyleHintReturn *return_data = nullptr) const
+        -> int override {
+        if (hint == SH_ComboBox_Popup) {
+            return 0;
+        }
+        return QProxyStyle::styleHint(hint, option, widget, return_data);
+    }
+
     auto standardIcon(StandardPixmap sp, const QStyleOption *opt = nullptr,
                       const QWidget *widget = nullptr) const -> QIcon override {
         if (sp == SP_TabCloseButton) {
