@@ -536,6 +536,14 @@ auto btnBackupDescriptor() -> Button * {
                  .width = BtnWidth::XL});
 }
 
+auto btnRegisterDescriptor() -> Button * {
+    return make({.role = ButtonRole::Default,
+                 .label = TR("btn-register-descriptor"),
+                 .icon = icon::usb,
+                 .iconSize = 16,
+                 .width = BtnWidth::XL});
+}
+
 auto btnRemoveRoute() -> Button * {
     return make({.role = ButtonRole::InlineIcon,
                  .icon = icon::trash,
@@ -719,6 +727,10 @@ auto pillRegPending() -> Badge * {
 
 auto pillRegRegistering() -> Badge * {
     return makePill(Badge::Role::Off, TR("pill-registering"), PillWidth::L);
+}
+
+auto pillRegChecking() -> Badge * {
+    return makePill(Badge::Role::Off, TR("pill-checking"), PillWidth::L);
 }
 
 auto pillRegFailed() -> Badge * {

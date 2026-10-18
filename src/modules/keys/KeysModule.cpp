@@ -139,6 +139,12 @@ void KeysBus::registerDescriptor(ReqId req_id, Network network, const QString &f
     m_module->registerDescriptor(req_id, fingerprint, descriptor);
 }
 
+void KeysBus::checkDescriptorRegistered(ReqId req_id, Network network, const QString &fingerprint,
+                                        const QString &descriptor) {
+    NetworkScope scope(m_module, network);
+    m_module->checkDescriptorRegistered(req_id, fingerprint, descriptor);
+}
+
 void KeysBus::deliverSigned(ReqId req_id, const QString &psbt_v2_hex) {
     emit signed_(req_id, psbt_v2_hex);
 }
@@ -168,6 +174,10 @@ void KeysBus::deliverXpub(ReqId req_id, const QString &xpub, const QString &fing
 
 void KeysBus::deliverDescriptorRegistered(ReqId req_id, const QString &fingerprint) {
     emit descriptorRegistered(req_id, fingerprint);
+}
+
+void KeysBus::deliverRegistrationChecked(ReqId req_id, bool registered) {
+    emit registrationChecked(req_id, registered);
 }
 
 KeysModule::KeysModule(QObject *parent) : IModule(parent) {
@@ -665,6 +675,27 @@ void KeysModule::registerDescriptor(ReqId req_id, const QString &fingerprint,
                             .signer = device->signer});
 }
 
+void KeysModule::checkDescriptorRegistered(ReqId req_id, const QString &fingerprint,
+                                           const QString &descriptor) {
+    auto device = registrationDevice(fingerprint);
+    if (!device.has_value()) {
+        m_bus->deliverError(req_id, TR("flow-usb-disconnected-body").arg(fingerprint));
+        return;
+    }
+    connect(device->signer, &ISigner::descriptorIsRegistered, this,
+            &KeysModule::onDeviceIsRegistered, qontrol::UNIQUE);
+    connect(device->signer, &ISigner::descriptorRegistered, this, &KeysModule::onDeviceRegistered,
+            qontrol::UNIQUE);
+    connect(device->signer, &ISigner::error, this, &KeysModule::onDeviceRegisterError,
+            qontrol::UNIQUE);
+    sendDeviceRegistration({.bus_req = req_id,
+                            .fingerprint = fingerprint,
+                            .descriptor = descriptor,
+                            .instance_id = device->instanceId,
+                            .signer = device->signer,
+                            .check_only = true});
+}
+
 auto KeysModule::registrationDevice(const QString &fingerprint) const
     -> std::optional<plugin::SignerEntry> {
     auto infos = keys();
@@ -692,7 +723,10 @@ void KeysModule::finishDeviceRegistration(const DeviceRegistration &registration
     } else {
         m_bus->deliverDescriptorRegistered(registration.bus_req, registration.fingerprint);
     }
-    ISigner *signer = registration.signer.data();
+    releaseRegistrationSigner(registration.signer.data());
+}
+
+void KeysModule::releaseRegistrationSigner(ISigner *signer) {
     if (signer == nullptr) {
         return;
     }
@@ -1345,6 +1379,11 @@ void KeysModule::onDeviceIsRegistered(ReqId req_id, bool registered) {
         return;
     }
     auto registration = m_device_registrations.take(req_id);
+    if (registration.check_only) {
+        m_bus->deliverRegistrationChecked(registration.bus_req, registered);
+        releaseRegistrationSigner(registration.signer.data());
+        return;
+    }
     if (registered) {
         finishDeviceRegistration(registration, std::nullopt);
         return;

@@ -22,6 +22,7 @@ public:
 
 public slots:
     void onDeleteClicked();
+    void onRegisterClicked();
 
 protected:
     void init();
@@ -33,6 +34,8 @@ private:
     catalog::CopyField *m_descriptor = nullptr;
     catalog::Label *m_cosigners = nullptr;
     catalog::Button *m_delete_btn = nullptr;
+    // Opens Register Descriptor: the wallet's devices to register the account on.
+    catalog::Button *m_register_btn = nullptr;
 };
 
 } // namespace musig

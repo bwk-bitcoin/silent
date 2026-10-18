@@ -50,6 +50,8 @@
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigPlugin.h"
 #include "modules/musig/creator/CreatePolicy.h"
+#include "modules/musig/RegisterDescriptor.h"
+#include "modules/musig/SettingsExtras.h"
 #include "modules/musig/SignModal.h"
 #include "modules/musig/SigningSection.h"
 #include "modules/sp/SpPlugin.h"
@@ -1592,11 +1594,41 @@ void addSteps() {
     });
     broadcastSteps("34-coldcard-leaf-ready", "35-broadcast-success-3", QStringLiteral("NotMusig"));
 
+    // ===== Settings: Register Descriptor =====
+    // Every device already holds the account: asked on open, each row reads Registered,
+    // the hot key Not Needed; nothing is registered again.
+    step("settings", [] { return visible<catalog::Modal>() == nullptr; },
+         [] { widget()->controller()->settingsClicked(); });
+    step("register descriptor button", [] {
+        auto *extras = widget()->findChild<musig::SettingsExtras *>();
+        return extras != nullptr && extras->m_register_btn->isVisible();
+    }, [] {
+        shot("36a-settings-register-descriptor");
+        auto *extras = widget()->findChild<musig::SettingsExtras *>();
+        later([extras] { extras->m_register_btn->click(); });
+    });
+    step("register descriptor checked", [] {
+        auto *m = visible<musig::modal::RegisterDescriptor>();
+        return m != nullptr && m->m_requests.isEmpty() &&
+               m->m_states.value(g_fp_b) != musig::modal::RegisterDescriptor::State::Checking;
+    }, [] {
+        auto *m = visible<musig::modal::RegisterDescriptor>();
+        using State = musig::modal::RegisterDescriptor::State;
+        check(m->m_states.value(g_fp_b) == State::Registered,
+              "Register Descriptor: the Ledger holds the account");
+        check(m->m_states.value(g_fp_c) == State::Registered,
+              "Register Descriptor: the Coldcard holds the account");
+        check(m->m_states.value(g_fp_a) == State::NotNeeded,
+              "Register Descriptor: the hot key needs no registration");
+        shot("36b-register-descriptor");
+        later([m] { m->accept(); });
+    });
+
     // ===== End =====
     step("history", [] { return visible<catalog::Modal>() == nullptr; },
          [] { widget()->controller()->historyClicked(); });
     step("end", always(), [] {
-        shot("36-history-three-spends");
+        shot("37-history-three-spends");
         check(g_txids.size() == 3, "three spends broadcast");
         for (const auto &txid : g_txids) {
             std::printf("txid %s\n", txid.toStdString().c_str());

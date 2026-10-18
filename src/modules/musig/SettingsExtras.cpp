@@ -10,6 +10,7 @@
 #include "catalog/form/FieldGroup.h"
 #include "i18n/Tr.h"
 #include "modules/musig/MusigAccountController.h"
+#include "modules/musig/RegisterDescriptor.h"
 #include "theme/Palette.h"
 
 #include <Qontrol>
@@ -35,17 +36,21 @@ void SettingsExtras::init() {
         m_controller->cosignerFingerprints().join(QStringLiteral(", ")), catalog::LabelRole::Mono);
 
     m_delete_btn = catalog::btnDelete();
+    m_register_btn = catalog::btnRegisterDescriptor();
 }
 
 void SettingsExtras::doConnect() {
     connect(m_delete_btn, &QPushButton::clicked, this, &SettingsExtras::onDeleteClicked,
+            qontrol::UNIQUE);
+    connect(m_register_btn, &QPushButton::clicked, this, &SettingsExtras::onRegisterClicked,
             qontrol::UNIQUE);
 }
 
 void SettingsExtras::view() {
     auto *accountContent = (new catalog::FieldGroup)
                                ->addField(TR("musig-settings-descriptor"), m_descriptor, true)
-                               ->addField(TR("musig-settings-cosigners"), m_cosigners);
+                               ->addField(TR("musig-settings-cosigners"), m_cosigners)
+                               ->addField(TR("musig-settings-devices"), m_register_btn);
     auto *accountSection = new catalog::FoldSection(TR("musig-settings-account"));
     accountSection->setContent(accountContent);
 
@@ -61,6 +66,10 @@ void SettingsExtras::view() {
 }
 
 // ===== Slots =====
+
+void SettingsExtras::onRegisterClicked() {
+    AppController::execModal(new modal::RegisterDescriptor(m_controller));
+}
 
 void SettingsExtras::onDeleteClicked() {
     auto &account = m_controller->getAccount();

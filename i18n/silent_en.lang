@@ -395,6 +395,8 @@ pill-fetched => "Fetched"
 pill-missing => "Missing"
 
 pill-registering => "Registering…"
+
+pill-checking => "Checking…"
 pill-failed => "Failed"
 
 pill-not-needed => "Not Needed"
@@ -1221,6 +1223,8 @@ btn-save-spend-path => "Save Path"
 
 btn-backup-descriptor => "Backup Descriptor"
 
+btn-register-descriptor => "Register Descriptor"
+
 musig-create-fetch-lead
 => "These keys still have to give their account xpub, one window per key.";;
 
@@ -1366,6 +1370,10 @@ musig-review-privacy-tip
 => "Leaves the common derivation paths out of the backup's clear part: whoever finds the file learns less, a restore then looks for the paths itself.";;
 
 musig-register-lead => "Click a device to register the account on it."
+
+musig-register-descriptor-title => "Register Descriptor"
+
+musig-settings-devices => "Signing Devices"
 
 musig-register-skip => "Skip: continue without registering every device (register them later from the Keys tab)"
 

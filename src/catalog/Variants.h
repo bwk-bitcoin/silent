@@ -93,6 +93,7 @@ auto btnSaveSpendPath() -> Button *;
 // default one to save it again.
 auto btnBackupDescriptorPrimary() -> Button *;
 auto btnBackupDescriptor() -> Button *;
+auto btnRegisterDescriptor() -> Button *;
 auto btnScanAddress() -> Button *;
 auto btnRemoveRoute() -> Button *;
 auto btnRemoveXpub() -> Button *;
@@ -143,6 +144,7 @@ auto pillXpubMissing() -> Badge *;
 auto pillRegRegistered() -> Badge *;
 auto pillRegPending() -> Badge *;
 auto pillRegRegistering() -> Badge *;
+auto pillRegChecking() -> Badge *;
 auto pillRegFailed() -> Badge *;
 auto pillRegNotNeeded() -> Badge *;
 // Its Verify step: one per signer.

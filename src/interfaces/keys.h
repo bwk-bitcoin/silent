@@ -108,6 +108,11 @@ public:
     // devices that need it.
     virtual void registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
                                     const QString &descriptor) = 0;
+    // Asks the key's connected USB device whether it holds `descriptor`, registering
+    // nothing. Answers registrationChecked() or error() (no device connected...).
+    virtual void checkDescriptorRegistered(ReqId req_id, Network network,
+                                           const QString &fingerprint,
+                                           const QString &descriptor) = 0;
 
 signals:
     // NOLINTNEXTLINE(readability-identifier-naming)
@@ -118,6 +123,8 @@ signals:
     void spDescriptorReady(ReqId req_id, QString descriptor, QString fingerprint);
     void xpubReady(ReqId req_id, QString xpub, QString fingerprint, QString path);
     void descriptorRegistered(ReqId req_id, QString fingerprint);
+    // The device's answer to checkDescriptorRegistered().
+    void registrationChecked(ReqId req_id, bool registered);
     // A failure the caller reports, once. `kind` is MusigSession when a key lost its
     // MuSig2 session: drop every nonce and partial signature and start again from
     // round 1. Other for everything else.

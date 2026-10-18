@@ -52,6 +52,8 @@ struct DeviceRegistration {
     QString instance_id;
     QPointer<ISigner> signer;
     bool checking = true;
+    // checkDescriptorRegistered(): the check's answer is the result, nothing registers.
+    bool check_only = false;
 };
 
 // One signOnDevice() waiting on the key's connected device: its bus request and the
@@ -112,6 +114,8 @@ public:
                                const QString &descriptor, const QString &hmac) -> bool override;
     void registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
                             const QString &descriptor) override;
+    void checkDescriptorRegistered(ReqId req_id, Network network, const QString &fingerprint,
+                                   const QString &descriptor) override;
 
 public slots:
     // Called by the module and its signing flows, which own every outstanding request.
@@ -125,6 +129,7 @@ public slots:
     void deliverXpub(ReqId req_id, const QString &xpub, const QString &fingerprint,
                      const QString &path);
     void deliverDescriptorRegistered(ReqId req_id, const QString &fingerprint);
+    void deliverRegistrationChecked(ReqId req_id, bool registered);
 
 private:
     KeysModule *m_module = nullptr;
@@ -257,6 +262,9 @@ public:
     // answers `req_id` through the bus's descriptorRegistered or error signal once the
     // device has. With no connected device it answers at once.
     void registerDescriptor(ReqId req_id, const QString &fingerprint, const QString &descriptor);
+    // Asks `fingerprint`'s connected USB device whether it holds `descriptor`.
+    void checkDescriptorRegistered(ReqId req_id, const QString &fingerprint,
+                                   const QString &descriptor);
 
     // Worker jobs owned by this module, so a thread never outlives the modal that asked
     // for it. Each starts a QThread::create lambda that captures only copied data plus
@@ -379,6 +387,8 @@ protected:
     // Sends the next device request of `registration`: the check first, then the
     // registration. Tracked under the device's request id.
     void sendDeviceRegistration(const DeviceRegistration &registration);
+    // Lets go of `signer` once no registration of it is in flight.
+    void releaseRegistrationSigner(ISigner *signer);
     // Answers the bus request of `registration` and lets go of its signer.
     void finishDeviceRegistration(const DeviceRegistration &registration,
                                   const std::optional<QString> &error);
