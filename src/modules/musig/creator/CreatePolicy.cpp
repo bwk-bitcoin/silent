@@ -456,6 +456,8 @@ void CreatePolicy::initReview() {
     m_backup_primary_btn = catalog::btnBackupDescriptorPrimary();
     m_backup_btn = catalog::btnBackupDescriptor();
     m_privacy_check = new catalog::Checkbox(TR("musig-review-privacy-mode"));
+    // On by default: the backup's clear part names no derivation path unless asked to.
+    m_privacy_check->setChecked(true);
     m_backup_note = new catalog::Label(catalog::LabelRole::Caption);
     m_backup_note->setTone(catalog::LabelTone::Warning);
     m_backup_note->setWordWrap(true);
@@ -477,23 +479,24 @@ void CreatePolicy::connectReview() {
 
 auto CreatePolicy::viewReview() -> QWidget * {
     auto *name = (new catalog::FieldGroup)->addField(TR("create-account-name"), m_name_input);
+    // The privacy mode on the button's own row: it sets what the button saves.
     auto *backup = (new qontrol::Row)
                        ->spacing(resolve(Spacing::S))
+                       ->push((new qontrol::Row)
+                                  ->spacing(resolve(Spacing::XS))
+                                  ->push(m_privacy_check)
+                                  ->push(new catalog::InfoTip(TR("musig-review-privacy-tip"))))
                        ->pushSpacer()
                        ->push(m_backed_up_label)
                        ->push(m_backup_primary_btn)
                        ->push(m_backup_btn);
-    auto *privacy = (new qontrol::Row)->pushSpacer()->push(m_privacy_check);
     m_review_footer = m_review_actions;
     return (new qontrol::Column)
         ->spacing(resolve(Spacing::M))
         ->push(name)
         ->push(m_review_cards)
-        ->push((new qontrol::Column)
-                   ->spacing(resolve(Spacing::S))
-                   ->push(backup)
-                   ->push(privacy)
-                   ->push(m_backup_note))
+        ->push(
+            (new qontrol::Column)->spacing(resolve(Spacing::S))->push(backup)->push(m_backup_note))
         ->pushSpacer();
 }
 

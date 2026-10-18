@@ -695,9 +695,10 @@ musig-review-key-path => "Key path: spends as one key" => "NONE"
 musig-review-leaves => "%1 tap leaves" => "NONE"
 musig-review-mandatory => "signs every spend" => "NONE"
 musig-review-path => "%1: %2" => "%1: %2"
-musig-review-privacy-mode
-=> "Privacy mode: leave the common derivation paths out of the backup"
-=> "Privacy mode: leave the common derivation paths out of the backup";;
+musig-review-privacy-mode => "Privacy mode" => "NONE"
+musig-review-privacy-tip
+=> "Leaves the common derivation paths out of the backup's clear part: whoever finds the file learns less, a restore then looks for the paths itself."
+=> "Leaves the common derivation paths out of the backup's clear part: whoever finds the file learns less, a restore then looks for the paths itself.";;
 musig-review-reason-backup
 => "Back up the descriptor first."
 => "Back up the descriptor first.";;

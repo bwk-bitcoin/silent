@@ -1341,7 +1341,10 @@ musig-review-backup-failed => "Could not back the descriptor up to %1: %2"
 
 musig-review-backup-excluded => "Left out of the backup, so their holders cannot decrypt it with them: %1"
 
-musig-review-privacy-mode => "Privacy mode: leave the common derivation paths out of the backup"
+musig-review-privacy-mode => "Privacy mode"
+
+musig-review-privacy-tip
+=> "Leaves the common derivation paths out of the backup's clear part: whoever finds the file learns less, a restore then looks for the paths itself.";;
 
 musig-register-lead => "Click a device to register the account on it."
 
