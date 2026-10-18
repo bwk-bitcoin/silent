@@ -7,6 +7,7 @@
 #include <QHash>
 #include <QList>
 #include <QPointer>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <Qontrol>
@@ -62,6 +63,8 @@ public:
     [[nodiscard]] auto roundStatus() const -> MusigRoundStatus;
     [[nodiscard]] auto psbtInFlight() const -> QString;
     // The finalized transaction hex, empty until the PSBT in flight is finalized.
+    // The keys asked to sign now, lowercased fingerprints.
+    [[nodiscard]] auto signingKeys() const -> QSet<QString>;
     [[nodiscard]] auto finalizedTx() const -> QString;
     // The fingerprints of the spend path the prepared transaction spends with, empty
     // with no transaction prepared.
@@ -80,6 +83,8 @@ signals:
     void prepareFailed(QString message);
     void roundChanged(MusigRoundStatus status);
     void signingFailed(QString message, plugin::SignError kind);
+    // The key `fingerprint` answered its request; roundChanged() follows.
+    void signerAnswered(QString fingerprint);
     void signingCancelled();
     // Finalized at Ready.
     void transactionReady(QString tx_hex);
@@ -125,7 +130,9 @@ public slots:
 protected:
     // Listens to the keys module and allocates the request of a round's signature, null
     // when no round can be signed now.
-    [[nodiscard]] auto beginSignRequest() -> IKeys *;
+    // A request of `fingerprint`'s key allocated, null when none can be sent now (no
+    // PSBT, or that key already asked). Every key may be asked at once.
+    [[nodiscard]] auto beginSignRequest(const QString &fingerprint) -> std::pair<IKeys *, ReqId>;
     void finalizeIfReady();
     void restartRounds();
 
@@ -144,7 +151,9 @@ private:
     QString m_tx_hex;
     // The signers of the spend path of the prepared transaction.
     QStringList m_spend_signers;
-    ReqId m_sign_req_id = 0;
+    // Sign requests in flight, each one key's, by request id. Answers are merged into
+    // the PSBT as it is by then, so keys sign at once.
+    QHash<ReqId, QString> m_sign_reqs;
     bool m_init = false;
     bool m_stopping = false;
 };

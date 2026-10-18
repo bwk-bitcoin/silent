@@ -469,40 +469,50 @@ void MusigAccountController::prepareTransaction(TransactionTemplate tx, MusigSpe
     emit roundChanged(roundStatus());
 }
 
-auto MusigAccountController::beginSignRequest() -> IKeys * {
-    if (m_psbt_v2_hex.isEmpty() || m_sign_req_id != 0 || !m_account.has_value()) {
-        return nullptr;
+auto MusigAccountController::beginSignRequest(const QString &fingerprint)
+    -> std::pair<IKeys *, ReqId> {
+    if (m_psbt_v2_hex.isEmpty() || !m_account.has_value() ||
+        signingKeys().contains(fingerprint.toLower())) {
+        return {nullptr, 0};
     }
     auto *keys = Host::get()->keys();
     if (keys == nullptr) {
         emit signingFailed(TR("musig-send-no-keys"), plugin::SignError::Other);
-        return nullptr;
+        return {nullptr, 0};
     }
     connect(keys, &IKeys::signed_, this, &MusigAccountController::onKeysSigned, qontrol::UNIQUE);
     connect(keys, &IKeys::error, this, &MusigAccountController::onKeysError, qontrol::UNIQUE);
     connect(keys, &IKeys::cancelled, this, &MusigAccountController::onKeysCancelled,
             qontrol::UNIQUE);
     // The answer may arrive during the request: the id is stored first.
-    m_sign_req_id = keys->newRequest();
+    auto req = keys->newRequest();
+    m_sign_reqs.insert(req, fingerprint);
+    return {keys, req};
+}
+
+auto MusigAccountController::signingKeys() const -> QSet<QString> {
+    QSet<QString> keys;
+    for (const auto &fingerprint : m_sign_reqs) {
+        keys.insert(fingerprint.toLower());
+    }
     return keys;
 }
 
 void MusigAccountController::signRound(const QString &fingerprint) {
-    auto *keys = beginSignRequest();
+    auto [keys, req] = beginSignRequest(fingerprint);
     if (keys == nullptr) {
         return;
     }
-    keys->sign(m_sign_req_id, network(), m_psbt_v2_hex, QStringList{toQString(getDescriptor())},
+    keys->sign(req, network(), m_psbt_v2_hex, QStringList{toQString(getDescriptor())},
                toQString(m_account.value()->name()), fingerprint);
 }
 
 void MusigAccountController::signRoundOnDevice(const QString &fingerprint) {
-    auto *keys = beginSignRequest();
+    auto [keys, req] = beginSignRequest(fingerprint);
     if (keys == nullptr) {
         return;
     }
-    keys->signOnDevice(m_sign_req_id, network(), m_psbt_v2_hex, toQString(getDescriptor()),
-                       fingerprint);
+    keys->signOnDevice(req, network(), m_psbt_v2_hex, toQString(getDescriptor()), fingerprint);
 }
 
 void MusigAccountController::cancelSigning() {
@@ -510,7 +520,7 @@ void MusigAccountController::cancelSigning() {
     m_prepared_psbt_v2_hex.clear();
     m_psbt_v2_hex.clear();
     m_tx_hex.clear();
-    m_sign_req_id = 0;
+    m_sign_reqs.clear();
 }
 
 void MusigAccountController::broadcast() {
@@ -530,11 +540,20 @@ void MusigAccountController::broadcast() {
 }
 
 void MusigAccountController::onKeysSigned(ReqId req_id, const QString &psbt_v2_hex) {
-    if (req_id != m_sign_req_id) {
+    if (!m_sign_reqs.contains(req_id)) {
         return;
     }
-    m_sign_req_id = 0;
-    m_psbt_v2_hex = psbt_v2_hex;
+    auto fingerprint = m_sign_reqs.take(req_id);
+    // Signed on the PSBT as it was when asked: merged into the one gathered since.
+    auto current = m_psbt_v2_hex.toStdString();
+    auto answer = psbt_v2_hex.toStdString();
+    auto merged = ::merge_signed_psbt(rust::Str(current), rust::Str(answer));
+    if (!merged.is_ok) {
+        emit signingFailed(toQString(merged.error), plugin::SignError::Other);
+        return;
+    }
+    m_psbt_v2_hex = toQString(merged.psbt_v2_hex);
+    emit signerAnswered(fingerprint);
     auto status = roundStatus();
     if (!status.is_ok) {
         emit signingFailed(toQString(status.error), plugin::SignError::Other);
@@ -549,11 +568,13 @@ void MusigAccountController::onKeysSigned(ReqId req_id, const QString &psbt_v2_h
 
 void MusigAccountController::onKeysError(std::optional<ReqId> req_id, const QString &message,
                                          plugin::SignError kind) {
-    if (!req_id.has_value() || req_id.value() != m_sign_req_id) {
+    if (!req_id.has_value() || !m_sign_reqs.contains(req_id.value())) {
         return;
     }
-    m_sign_req_id = 0;
+    m_sign_reqs.remove(req_id.value());
     if (kind == plugin::SignError::MusigSession) {
+        // Every nonce is dropped: the answers still to come are for the old ones.
+        m_sign_reqs.clear();
         restartRounds();
     }
     emit signingFailed(message, kind);
@@ -561,10 +582,10 @@ void MusigAccountController::onKeysError(std::optional<ReqId> req_id, const QStr
 
 // The PSBT keeps the round it was at.
 void MusigAccountController::onKeysCancelled(ReqId req_id) {
-    if (req_id != m_sign_req_id) {
+    if (!m_sign_reqs.contains(req_id)) {
         return;
     }
-    m_sign_req_id = 0;
+    m_sign_reqs.remove(req_id);
     emit signingCancelled();
 }
 

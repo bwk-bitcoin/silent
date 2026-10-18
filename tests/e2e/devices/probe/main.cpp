@@ -492,7 +492,7 @@ auto signModal() -> musig::SignModal * {
 auto onDeviceShown(const QString &fp) -> bool {
     auto *m = signModal();
     if (m == nullptr || visible<SigningFlow>() != nullptr ||
-        QString::compare(m->m_on_device, fp, Qt::CaseInsensitive) != 0) {
+        !widget()->controller()->signingKeys().contains(fp.toLower())) {
         return false;
     }
     for (auto *label : m->findChildren<QLabel *>()) {
@@ -891,7 +891,7 @@ void signRoundSteps(const QString &tag, const std::vector<RoundSigner> &signers,
              [] {
                  auto *m = signModal();
                  return visible<SigningFlow>() == nullptr && unsealShown() == nullptr &&
-                        m != nullptr && m->m_on_device.isEmpty();
+                        m != nullptr && widget()->controller()->signingKeys().isEmpty();
              },
              [] {});
     }
@@ -1307,10 +1307,39 @@ void addSteps() {
         shot("16-sign-modal-round1");
     });
     using Kind = RoundSigner::Kind;
-    signRoundSteps("round 1",
-                   {{&g_fp_b, Kind::Ledger, "17-round1-ledger-usb"},
-                    {&g_fp_c, Kind::Coldcard, "18-round1-coldcard-usb"}},
-                   false);
+    // Round 1 on both devices at once: both rows clicked in the same pass, the
+    // Coldcard asked while the Ledger works on its nonce.
+    step("round 1: both devices clicked", [] {
+        auto *b = cosignerRow(g_fp_b);
+        auto *c = cosignerRow(g_fp_c);
+        return b != nullptr && c != nullptr && b->isEnabled() && c->isEnabled();
+    }, [] {
+        auto *b = cosignerRow(g_fp_b);
+        auto *c = cosignerRow(g_fp_c);
+        later([b, c] {
+            emit b->clicked();
+            emit c->clicked();
+        });
+    });
+    step("round 1: both on their device",
+         [] { return onDeviceShown(g_fp_b) && onDeviceShown(g_fp_c); }, [] {
+             check(true, "round 1: the Ledger and the Coldcard both On Device at once");
+             shot("17-round1-both-devices");
+             approveColdcard();
+         });
+    step("round 1: Coldcard approved", [] { return g_cc_driver.finished(); },
+         [] { checkColdcardApproved("round 1: Coldcard approved"); });
+    step("round 1: both answered", [] {
+        return signModal() != nullptr && widget()->controller()->signingKeys().isEmpty();
+    }, [] {
+        auto *m = signModal();
+        bool notice = m->m_notice->isVisibleTo(m);
+        auto text = m->m_notice->m_text != nullptr ? m->m_notice->m_text->text() : QString();
+        check(!notice, "round 1: both nonces merged, no notice" + (notice ? ": " + text : QString()));
+        check(currentRound() == "PartialSigs", "round 1: every nonce in: " + currentRound());
+        shot("18-round1-both-nonces");
+        later([m] { m->m_continue_btn->click(); });
+    });
     step("after round 1", [] { return signModal() != nullptr && signModal()->m_partial; }, [] {
         check(currentRound() == "PartialSigs", "round 1 done: round 2 next");
         shot("19-after-round1");
@@ -1496,7 +1525,7 @@ void addSteps() {
          [] { checkColdcardApproved("spend 3: Coldcard approved"); });
     step("spend 3: signed", [] {
         auto *m = signModal();
-        return m != nullptr && m->m_on_device.isEmpty();
+        return m != nullptr && widget()->controller()->signingKeys().isEmpty();
     }, [] {
         auto *m = signModal();
         bool notice = m->m_notice->isVisibleTo(m);

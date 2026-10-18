@@ -47,6 +47,7 @@ public slots:
     void onContinueClicked();
     void onBroadcastClicked();
     void onRoundChanged(const MusigRoundStatus &status);
+    void onSignerAnswered(const QString &fingerprint);
     void onTransactionReady(const QString &tx_hex);
     void onSigningFailed(const QString &message, plugin::SignError kind);
     void onFinalizeFailed(const QString &message);
@@ -86,12 +87,7 @@ private:
     bool m_partial = false;
     Failure m_failure = Failure::None;
     QString m_flow_fingerprint;
-    // The cosigner signing on its device right now, empty when none.
-    QString m_on_device;
-    // The key asked to sign now, on its device or in its flow, empty when none: a
-    // single-key path tells who signed by it.
-    QString m_signing;
-    // The keys of a single-key path that signed.
+    // The keys of a single-key path that signed, lowercased.
     QSet<QString> m_signed;
 };
 

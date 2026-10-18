@@ -3070,6 +3070,12 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 // fields are copied. Cheap; safe to call from the GUI thread.
 ::SignResult usb_merge_signed(::rust::Str original_v2_hex, ::rust::Str signed_v0_base64) noexcept;
 
+// Merges a signer's v2 answer, made on an earlier copy of the PSBT, into
+// `current_v2_hex`: its signatures and MuSig2 nonces / partial signatures join
+// the ones gathered since, so several signers can work at once. An answer
+// adding nothing new leaves `current_v2_hex` as it is. Cheap; GUI thread.
+::SignResult merge_signed_psbt(::rust::Str current_v2_hex, ::rust::Str signed_v2_hex) noexcept;
+
 ::CameraListResult camera_list() noexcept;
 
 // Spawns the capture thread for camera `index`; the device opens inside it,

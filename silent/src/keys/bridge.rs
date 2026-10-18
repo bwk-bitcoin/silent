@@ -906,6 +906,31 @@ pub fn usb_merge_signed(original_v2_hex: &str, signed_v0_base64: &str) -> ffi::S
     }
 }
 
+/// See the bridge declaration.
+pub fn merge_signed_psbt(current_v2_hex: &str, signed_v2_hex: &str) -> ffi::SignResult {
+    let current = match hex::decode(current_v2_hex) {
+        Ok(bytes) => bytes,
+        Err(e) => return failed_sign(&format!("invalid psbt hex: {e}")),
+    };
+    let signed = match hex::decode(signed_v2_hex) {
+        Ok(bytes) => bytes,
+        Err(e) => return failed_sign(&format!("invalid psbt hex: {e}")),
+    };
+    let merged = match psbt::merge_signatures_bytes(&current, &signed) {
+        Ok(merged) => hex::encode(merged),
+        // Already in: another answer brought the same.
+        Err(Error::NothingSigned) => current_v2_hex.to_string(),
+        Err(e) => return failed_sign(&e.to_string()),
+    };
+    ffi::SignResult {
+        is_ok: true,
+        error: String::new(),
+        wrong_password: false,
+        musig_session: false,
+        psbt_v2_hex: merged,
+    }
+}
+
 /// Wraps a decoded and validated QR response, or the error that rejected it. An
 /// accessor for a kind the response is not returns an empty value.
 pub struct QrResponse {

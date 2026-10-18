@@ -1542,6 +1542,12 @@ mod ffi {
         /// keeping its silent-payment input tweaks and ECDH shares. Only signature
         /// fields are copied. Cheap; safe to call from the GUI thread.
         fn usb_merge_signed(original_v2_hex: &str, signed_v0_base64: &str) -> SignResult;
+
+        /// Merges a signer's v2 answer, made on an earlier copy of the PSBT, into
+        /// `current_v2_hex`: its signatures and MuSig2 nonces / partial signatures join
+        /// the ones gathered since, so several signers can work at once. An answer
+        /// adding nothing new leaves `current_v2_hex` as it is. Cheap; GUI thread.
+        fn merge_signed_psbt(current_v2_hex: &str, signed_v2_hex: &str) -> SignResult;
     }
 
     // ===== Keys QR Methods =====
@@ -2245,8 +2251,9 @@ pub use hwi_config::{
 };
 pub use keys::{
     bridge::{
-        hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, hot_xpub, new_keys_module,
-        usb_merge_signed, usb_sign_payload, HotMaterial, KeysModule, QrResponse, SealedHotKey,
+        hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, hot_xpub, merge_signed_psbt,
+        new_keys_module, usb_merge_signed, usb_sign_payload, HotMaterial, KeysModule, QrResponse,
+        SealedHotKey,
     },
     supports_silent_payments,
 };

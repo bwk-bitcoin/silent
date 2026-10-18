@@ -112,6 +112,8 @@ void SignModal::doConnect() {
             qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::transactionReady, this,
             &SignModal::onTransactionReady, qontrol::UNIQUE);
+    connect(m_controller, &MusigAccountController::signerAnswered, this,
+            &SignModal::onSignerAnswered, qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::signingFailed, this, &SignModal::onSigningFailed,
             qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::finalizeFailed, this,
@@ -152,7 +154,6 @@ void SignModal::retranslateUi() {
 void SignModal::runFlow() {
     // Returns once the flow's window has closed, its answer delivered.
     m_controller->signRound(m_flow_fingerprint);
-    m_signing.clear();
     refresh();
 }
 
@@ -194,6 +195,8 @@ void SignModal::render(const MusigRoundStatus &status) {
         }
     }
     bool finalized = !m_controller->finalizedTx().isEmpty();
+    // The keys asked to sign now, each on its device (or in its window).
+    auto busy = m_controller->signingKeys();
     // The spend path's signers, and whether each gave its part of the step shown.
     QList<std::pair<QString, bool>> signers;
     if (single) {
@@ -214,7 +217,7 @@ void SignModal::render(const MusigRoundStatus &status) {
         if (!in) {
             ++left;
         }
-        bool onDevice = !in && fingerprint.compare(m_on_device, Qt::CaseInsensitive) == 0;
+        bool onDevice = !in && busy.contains(fingerprint.toLower());
         // A signer still to sign that cannot: no connected device or route, or a MuSig2
         // round on a device that does not sign MuSig2. Greyed, its reason on its row.
         QString why;
@@ -243,7 +246,8 @@ void SignModal::render(const MusigRoundStatus &status) {
         }
         auto *row = keyRow(entry, fingerprint, pill);
         // One cosigner at a time: none is clicked while a device signs.
-        row->setClickable(!in && usable && m_on_device.isEmpty());
+        // Each key answers one request at a time; the others stay clickable meanwhile.
+        row->setClickable(!in && usable && !onDevice);
         if (!usable) {
             greyRow(row, why);
         }
@@ -296,7 +300,7 @@ void SignModal::render(const MusigRoundStatus &status) {
     }
 
     QString reason;
-    if (!m_on_device.isEmpty()) {
+    if (!busy.isEmpty()) {
         reason = TR("musig-sign-reason-on-device");
     } else if (left == 1) {
         reason = TR("musig-sign-reason-one");
@@ -304,7 +308,7 @@ void SignModal::render(const MusigRoundStatus &status) {
         reason = TR("musig-sign-reason").arg(left);
     }
     m_actions->setReason(reason);
-    bool idle = m_on_device.isEmpty();
+    bool idle = busy.isEmpty();
     m_continue_btn->setVisible(!partial);
     m_continue_btn->setEnabled(idle && left == 0);
     m_broadcast_btn->setVisible(partial);
@@ -349,11 +353,11 @@ auto SignModal::failureTitle() const -> QString {
 void SignModal::onCosignerClicked() {
     auto fingerprint = sender()->property(K_FINGERPRINT).toString();
     m_notice->setVisible(false);
-    m_signing = fingerprint;
+    // A key on its connected USB device signs in place, its row On Device while every
+    // other key can be asked too; another route runs in its own window.
     if (onDevice(fingerprint)) {
-        m_on_device = fingerprint;
-        refresh();
         m_controller->signRoundOnDevice(fingerprint);
+        refresh();
         return;
     }
     m_flow_fingerprint = fingerprint;
@@ -370,13 +374,15 @@ void SignModal::onBroadcastClicked() {
     m_controller->broadcast();
 }
 
+void SignModal::onSignerAnswered(const QString &fingerprint) {
+    // A single-key path has no rounds to say who signed: the key that answered did.
+    if (m_controller->roundStatus().round == MusigRound::NotMusig) {
+        m_signed.insert(fingerprint.toLower());
+    }
+}
+
 void SignModal::onRoundChanged(const MusigRoundStatus &status) {
     // A single-key path has no rounds to say who signed: the key asked did.
-    if (status.round == MusigRound::NotMusig && !m_signing.isEmpty()) {
-        m_signed.insert(m_signing.toLower());
-    }
-    m_signing.clear();
-    m_on_device.clear();
     render(status);
 }
 
@@ -386,8 +392,6 @@ void SignModal::onTransactionReady([[maybe_unused]] const QString &tx_hex) {
 }
 
 void SignModal::onSigningFailed(const QString &message, plugin::SignError kind) {
-    m_signing.clear();
-    m_on_device.clear();
     if (kind == plugin::SignError::MusigSession) {
         // The controller dropped every nonce: the session starts over at round 1.
         m_partial = false;
