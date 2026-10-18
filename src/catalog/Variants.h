@@ -129,6 +129,7 @@ auto pillSignerDisconnected() -> Badge *;
 auto pillSignerNoHot() -> Badge *;
 auto pillSignerNoRoute() -> Badge *;
 auto pillSignerUnregistered() -> Badge *;
+auto pillSignerNotInPath() -> Badge *;
 auto pillSdStepDone() -> Badge *;
 auto pillTxSigned() -> Badge *;
 auto pillXpubUsed() -> Badge *;

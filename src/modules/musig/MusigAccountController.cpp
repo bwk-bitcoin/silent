@@ -241,6 +241,10 @@ auto MusigAccountController::finalizedTx() const -> QString {
     return m_tx_hex;
 }
 
+auto MusigAccountController::spendSigners() const -> QStringList {
+    return m_spend_signers;
+}
+
 auto MusigAccountController::spendLeaves(const QStringList &outpoints) -> MusigSpendLeaves {
     if (!m_account.has_value()) {
         MusigSpendLeaves leaves;
@@ -431,6 +435,10 @@ void MusigAccountController::prepareTransaction(TransactionTemplate tx, MusigSpe
         emit prepareFailed(TR("send-no-account-loaded"));
         return;
     }
+    QStringList signers;
+    for (const auto &fingerprint : spend.fingerprints) {
+        signers.append(toQString(fingerprint));
+    }
     auto psbt = m_account.value()->prepare_transaction(std::move(tx), std::move(spend));
     if (!psbt->is_ok()) {
         emit prepareFailed(mapBackendErrorSummary(toQString(psbt->get_psbt_error())));
@@ -438,6 +446,7 @@ void MusigAccountController::prepareTransaction(TransactionTemplate tx, MusigSpe
     }
     m_prepared_psbt_v2_hex = toQString(psbt->bytes_v2_hex());
     m_psbt_v2_hex = m_prepared_psbt_v2_hex;
+    m_spend_signers = signers;
     m_tx_hex.clear();
     emit prepared(m_psbt_v2_hex, toQString(psbt->get_txid_preview()));
     emit roundChanged(roundStatus());
@@ -480,6 +489,7 @@ void MusigAccountController::signRoundOnDevice(const QString &fingerprint) {
 }
 
 void MusigAccountController::cancelSigning() {
+    m_spend_signers.clear();
     m_prepared_psbt_v2_hex.clear();
     m_psbt_v2_hex.clear();
     m_tx_hex.clear();

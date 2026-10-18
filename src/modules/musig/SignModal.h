@@ -3,6 +3,7 @@
 #include "catalog/containers/Modal.h"
 #include "interfaces/types.h"
 
+#include <QSet>
 #include <QString>
 #include <cstdint>
 #include <silent.h>
@@ -25,8 +26,11 @@ class Column;
 namespace musig {
 
 // Sign on a Multikey Send: the MuSig2 rounds of the prepared transaction. Nonces, then
-// Partial Signatures, which ends on Broadcast. Each round lists the cosigners of the
-// spend path; a click on one signs with its key alone. A key on its connected USB
+// Partial Signatures, which ends on Broadcast. Each round lists every key of the
+// wallet: the spend path's signers first, those that can sign ahead of those that
+// cannot (no connected device, no route), then the keys the path does not use, greyed
+// out. A click on a signer signs with its key alone. A single-key path (a timelocked
+// one) signs once, with no rounds. A key on its connected USB
 // device signs in place, its row "On Device…" until the device answers; any other
 // route runs its own window, this modal hidden meanwhile. A round cannot go back (a
 // nonce is spent), so there is no Back; closing keeps the session, Sign on the Send
@@ -84,6 +88,11 @@ private:
     QString m_flow_fingerprint;
     // The cosigner signing on its device right now, empty when none.
     QString m_on_device;
+    // The key asked to sign now, on its device or in its flow, empty when none: a
+    // single-key path tells who signed by it.
+    QString m_signing;
+    // The keys of a single-key path that signed.
+    QSet<QString> m_signed;
 };
 
 } // namespace musig

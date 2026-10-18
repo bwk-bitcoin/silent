@@ -667,6 +667,10 @@ auto pillSignerUnregistered() -> Badge * {
     return makePill(Badge::Role::Error, TR("pill-not-registered"), PillWidth::L);
 }
 
+auto pillSignerNotInPath() -> Badge * {
+    return makePill(Badge::Role::Off, TR("pill-not-in-path"), PillWidth::L);
+}
+
 auto pillSdStepDone() -> Badge * {
     return makePill(Badge::Role::Success, TR("pill-done"), PillWidth::M);
 }

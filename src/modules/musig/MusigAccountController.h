@@ -62,6 +62,9 @@ public:
     [[nodiscard]] auto psbtInFlight() const -> QString;
     // The finalized transaction hex, empty until the PSBT in flight is finalized.
     [[nodiscard]] auto finalizedTx() const -> QString;
+    // The fingerprints of the spend path the prepared transaction spends with, empty
+    // with no transaction prepared.
+    [[nodiscard]] auto spendSigners() const -> QStringList;
     // MusigAccount::spend_leaves for the selected coins.
     auto spendLeaves(const QStringList &outpoints) -> MusigSpendLeaves;
 
@@ -135,6 +138,8 @@ private:
     QString m_prepared_psbt_v2_hex;
     QString m_psbt_v2_hex;
     QString m_tx_hex;
+    // The signers of the spend path of the prepared transaction.
+    QStringList m_spend_signers;
     ReqId m_sign_req_id = 0;
     bool m_init = false;
     bool m_stopping = false;

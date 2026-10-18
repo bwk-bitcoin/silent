@@ -42,6 +42,21 @@ auto partIn(bool partial, const MusigCosignerStatus &cosigner) -> bool {
                    : cosigner.nonces >= cosigner.expected;
 }
 
+// A key's row: its route icon, its alias (its fingerprint when it has none), the
+// fingerprint under it, and `pill`.
+auto keyRow(const KeyEntry &entry, const QString &fingerprint, catalog::Badge *pill)
+    -> catalog::SelectRow * {
+    auto *row = new catalog::SelectRow;
+    row->setIcon(catalog::routeIcon(entry.route));
+    row->setTitle(entry.alias.isEmpty() ? fingerprint : entry.alias);
+    row->setSub(fingerprint);
+    row->setStatus(pill);
+    row->setChevron(false);
+    row->setClickable(false);
+    row->setProperty(K_FINGERPRINT, fingerprint);
+    return row;
+}
+
 } // namespace
 
 SignModal::SignModal(MusigAccountController *controller) : m_controller(controller) {
@@ -129,6 +144,7 @@ void SignModal::retranslateUi() {
 void SignModal::runFlow() {
     // Returns once the flow's window has closed, its answer delivered.
     m_controller->signRound(m_flow_fingerprint);
+    m_signing.clear();
     refresh();
 }
 
@@ -164,18 +180,35 @@ void SignModal::render(const MusigRoundStatus &status) {
         }
     }
     bool finalized = !m_controller->finalizedTx().isEmpty();
+    // The spend path's signers, and whether each gave its part of the step shown.
+    QList<std::pair<QString, bool>> signers;
+    if (single) {
+        for (const auto &fingerprint : m_controller->spendSigners()) {
+            signers.append({fingerprint, finalized || m_signed.contains(fingerprint.toLower())});
+        }
+    } else {
+        for (const auto &cosigner : status.cosigners) {
+            signers.append(
+                {toQString(cosigner.fingerprint), finalized || partIn(partial, cosigner)});
+        }
+    }
+    QList<catalog::SelectRow *> ready;
+    QList<catalog::SelectRow *> unusable;
     int left = 0;
-    for (const auto &cosigner : status.cosigners) {
-        auto fingerprint = toQString(cosigner.fingerprint);
+    for (const auto &[fingerprint, in] : signers) {
         auto entry = entries.value(fingerprint.toLower());
-        bool in = finalized || partIn(partial, cosigner);
         if (!in) {
             ++left;
         }
         bool onDevice = !in && fingerprint.compare(m_on_device, Qt::CaseInsensitive) == 0;
+        // A signer with no connected device or route still to sign cannot be clicked.
+        bool usable = in || entry.can_sign;
         catalog::Badge *pill = nullptr;
         if (onDevice) {
             pill = catalog::pillMusigOnDevice();
+        } else if (!usable) {
+            pill = entry.route == KeyRouteKind::Usb ? catalog::pillSignerDisconnected()
+                                                    : catalog::pillSignerNoRoute();
         } else if (!in) {
             pill = catalog::pillMusigNeeded();
         } else if (partial) {
@@ -183,19 +216,33 @@ void SignModal::render(const MusigRoundStatus &status) {
         } else {
             pill = catalog::pillMusigNonceAdded();
         }
-        auto *row = new catalog::SelectRow;
-        row->setIcon(catalog::routeIcon(entry.route));
-        row->setTitle(entry.alias.isEmpty() ? fingerprint : entry.alias);
-        row->setSub(fingerprint);
-        row->setStatus(pill);
-        row->setChevron(false);
+        auto *row = keyRow(entry, fingerprint, pill);
         // One cosigner at a time: none is clicked while a device signs.
-        row->setClickable(!in && m_on_device.isEmpty());
-        row->setProperty(K_FINGERPRINT, fingerprint);
+        row->setClickable(!in && usable && m_on_device.isEmpty());
+        row->setEnabled(usable);
         connect(row, &catalog::SelectRow::clicked, this, &SignModal::onCosignerClicked,
                 qontrol::UNIQUE);
-        m_rows->push(row);
-        row->show();
+        (usable ? ready : unusable).append(row);
+    }
+    // The wallet's other keys: listed, greyed out, as this path does not use them.
+    QList<catalog::SelectRow *> others;
+    for (const auto &fingerprint : m_controller->cosignerFingerprints()) {
+        bool inPath = std::ranges::any_of(signers, [&fingerprint](const auto &signer) {
+            return signer.first.compare(fingerprint, Qt::CaseInsensitive) == 0;
+        });
+        if (inPath) {
+            continue;
+        }
+        auto *row = keyRow(entries.value(fingerprint.toLower()), fingerprint,
+                           catalog::pillSignerNotInPath());
+        row->setEnabled(false);
+        others.append(row);
+    }
+    for (const auto &group : {ready, unusable, others}) {
+        for (auto *row : group) {
+            m_rows->push(row);
+            row->show();
+        }
     }
 
     QString reason;
@@ -252,6 +299,7 @@ auto SignModal::failureTitle() const -> QString {
 void SignModal::onCosignerClicked() {
     auto fingerprint = sender()->property(K_FINGERPRINT).toString();
     m_notice->setVisible(false);
+    m_signing = fingerprint;
     if (onDevice(fingerprint)) {
         m_on_device = fingerprint;
         refresh();
@@ -273,6 +321,11 @@ void SignModal::onBroadcastClicked() {
 }
 
 void SignModal::onRoundChanged(const MusigRoundStatus &status) {
+    // A single-key path has no rounds to say who signed: the key asked did.
+    if (status.round == MusigRound::NotMusig && !m_signing.isEmpty()) {
+        m_signed.insert(m_signing.toLower());
+    }
+    m_signing.clear();
     m_on_device.clear();
     render(status);
 }
@@ -283,6 +336,7 @@ void SignModal::onTransactionReady([[maybe_unused]] const QString &tx_hex) {
 }
 
 void SignModal::onSigningFailed(const QString &message, plugin::SignError kind) {
+    m_signing.clear();
     m_on_device.clear();
     if (kind == plugin::SignError::MusigSession) {
         // The controller dropped every nonce: the session starts over at round 1.

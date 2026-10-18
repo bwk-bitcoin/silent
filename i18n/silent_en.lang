@@ -380,6 +380,8 @@ pill-no-usable-route => "No Usable Route"
 
 pill-not-registered => "Not Registered"
 
+pill-not-in-path => "Not in Path"
+
 pill-done => "Done"
 
 pill-used => "Used"
