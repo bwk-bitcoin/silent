@@ -1373,6 +1373,8 @@ musig-register-lead => "Click a device to register the account on it."
 
 musig-register-descriptor-title => "Register Descriptor"
 
+musig-register-why-disconnected => "Plug it in and unlock it."
+
 musig-settings-devices => "Signing Devices"
 
 musig-register-skip => "Skip: continue without registering every device (register them later from the Keys tab)"

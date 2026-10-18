@@ -182,7 +182,7 @@ void RegisterDescriptor::refresh() {
         row->setClickable(clickable);
         row->setEnabled(state != State::NotNeeded);
         if (state == State::Disconnected) {
-            row->setNote(TR("musig-sign-why-disconnected"));
+            row->setNote(TR("musig-register-why-disconnected"));
         }
         // A failed device says why on its own row; a click tries it again.
         if (state == State::Failed) {

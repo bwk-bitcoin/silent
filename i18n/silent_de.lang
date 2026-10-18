@@ -692,6 +692,9 @@ musig-register-reason-one
 musig-register-skip
 => "Skip: continue without registering every device (register them later from the Keys tab)"
 => "Skip: continue without registering every device (register them later from the Keys tab)";;
+musig-register-why-disconnected
+=> "Plug it in and unlock it."
+=> "Plug it in and unlock it.";;
 musig-review-backed-up => "Descriptor backed up." => "Descriptor backed up."
 musig-review-backup-excluded
 => "Left out of the backup, so their holders cannot decrypt it with them: %1"
