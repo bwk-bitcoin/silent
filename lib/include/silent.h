@@ -1422,8 +1422,6 @@ struct RegtestDefaults final {
   ::rust::String error;
   // BlindBit server URL (with http:// prefix).
   ::rust::String blindbit_url;
-  // Electrum server address (host:port).
-  ::rust::String electrum_url;
 
   using IsRelocatable = ::std::true_type;
 };
