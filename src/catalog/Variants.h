@@ -145,6 +145,7 @@ auto pillRegNotNeeded() -> Badge *;
 // Its Verify step: one per signer.
 auto pillAddrVerified() -> Badge *;
 auto pillAddrUnchecked() -> Badge *;
+auto pillAddrMismatch() -> Badge *;
 auto pillAddrNoScreen() -> Badge *;
 auto pillPluginUnloading() -> Badge *;
 

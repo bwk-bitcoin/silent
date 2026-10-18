@@ -389,6 +389,17 @@ auto CreatePolicy::viewXpubs() -> QWidget * {
 void CreatePolicy::showXpubs() {
     m_view = View::Xpubs;
     showStep(1);
+    setWideBody(m_xpubs_page);
+    setFooter(m_xpubs_footer);
+    refreshXpubRows();
+}
+
+void CreatePolicy::hideXpubs() {
+    keep(m_xpubs_page);
+    keep(m_xpubs_footer);
+}
+
+void CreatePolicy::refreshXpubRows() {
     auto missing = missingXpubs();
     m_xpubs_count->setText(TR("musig-create-fetch-status")
                                .arg(m_fingerprints.size() - missing.size())
@@ -399,15 +410,28 @@ void CreatePolicy::showXpubs() {
     for (const auto &fingerprint : m_fingerprints) {
         auto entry = keyEntry(fingerprint).value_or(KeyEntry{.fingerprint = fingerprint});
         bool fetched = !missing.contains(fingerprint);
-        auto *row = keyRow(entry, fetched ? catalog::pillXpubFetched() : catalog::pillXpubMissing(),
-                           !fetched && m_req_id == 0);
+        bool fetching = asking(Ask::Xpub, fingerprint);
+        auto failure = m_xpub_failed.value(fingerprint);
+        catalog::Badge *status = nullptr;
+        if (fetched) {
+            status = catalog::pillXpubFetched();
+        } else if (fetching) {
+            status = catalog::pillMusigOnDevice();
+        } else if (!failure.isEmpty()) {
+            status = catalog::pillRegFailed();
+        } else {
+            status = catalog::pillXpubMissing();
+        }
+        auto *row = keyRow(entry, status, !fetched && !busy(fingerprint));
+        // A failed device says why on its own row; a click tries it again.
+        if (!fetched && !fetching && !failure.isEmpty()) {
+            markFailed(row, failure);
+        }
         connect(row, &catalog::SelectRow::clicked, this, &CreatePolicy::onXpubRowClicked,
                 qontrol::UNIQUE);
         m_xpub_rows->push(row);
         row->show();
     }
-    setWideBody(m_xpubs_page);
-    setFooter(m_xpubs_footer);
     QString reason;
     if (missing.size() == 1) {
         reason = TR("musig-xpubs-reason-one");
@@ -416,11 +440,6 @@ void CreatePolicy::showXpubs() {
     }
     m_xpubs_actions->setReason(reason);
     m_xpubs_next_btn->setEnabled(missing.isEmpty());
-}
-
-void CreatePolicy::hideXpubs() {
-    keep(m_xpubs_page);
-    keep(m_xpubs_footer);
 }
 
 // ===== Review view =====
@@ -584,19 +603,18 @@ void CreatePolicy::refreshRegisterRows() {
             status = catalog::pillRegNotNeeded();
         } else if (done) {
             status = catalog::pillRegRegistered();
-        } else if (m_registering == fingerprint) {
+        } else if (asking(Ask::Register, fingerprint)) {
             status = catalog::pillRegRegistering();
         } else if (!failure.isEmpty()) {
             status = catalog::pillRegFailed();
         } else {
             status = catalog::pillRegPending();
         }
-        auto *row = keyRow(entry, status, needs && !done && m_registering.isEmpty());
+        auto *row = keyRow(entry, status, needs && !done && !busy(fingerprint));
         row->setEnabled(needs);
         // A failed device says why on its own row; a click tries it again.
-        if (needs && !done && m_registering != fingerprint && !failure.isEmpty()) {
-            row->setSub(failure);
-            row->setTone(catalog::SelectRow::Tone::Error);
+        if (needs && !done && !asking(Ask::Register, fingerprint) && !failure.isEmpty()) {
+            markFailed(row, failure);
         }
         connect(row, &catalog::SelectRow::clicked, this, &CreatePolicy::onRegisterRowClicked,
                 qontrol::UNIQUE);
@@ -604,31 +622,32 @@ void CreatePolicy::refreshRegisterRows() {
         row->show();
     }
     m_skip_check->setVisible(left > 0);
+    bool registering = askingAny(Ask::Register);
     QString reason;
-    if (!m_registering.isEmpty()) {
+    if (registering) {
         reason = TR("musig-register-reason-busy");
     } else if (left > 0 && !m_skip_check->isChecked()) {
         reason =
             left == 1 ? TR("musig-register-reason-one") : TR("musig-register-reason").arg(left);
     }
     m_register_actions->setReason(reason);
-    m_register_actions->setBack(m_registering.isEmpty() ? catalog::ModalActions::Back::Back
-                                                        : catalog::ModalActions::Back::None);
+    m_register_actions->setBack(registering ? catalog::ModalActions::Back::None
+                                            : catalog::ModalActions::Back::Back);
     m_register_next_btn->setEnabled(reason.isEmpty());
 }
 
 void CreatePolicy::registerNextQuiet() {
     auto *keys = Host::get()->keys();
-    if (keys == nullptr || m_req_id != 0) {
+    if (keys == nullptr) {
         return;
     }
+    // m_registered is read again each time round: an answer may come during the call.
     for (const auto &fingerprint : m_fingerprints) {
-        if (!needsRegister(fingerprint) && !m_registered.contains(fingerprint)) {
-            m_registering = fingerprint;
-            m_req_id = keys->newRequest();
+        if (!needsRegister(fingerprint) && !m_registered.contains(fingerprint) &&
+            !busy(fingerprint)) {
+            auto req = beginAsk(Ask::Register, fingerprint);
             // No window: a key with no device records the descriptor at once.
-            keys->registerDescriptor(m_req_id, network(), fingerprint, m_descriptor);
-            return;
+            keys->registerDescriptor(req, network(), fingerprint, m_descriptor);
         }
     }
 }
@@ -686,16 +705,28 @@ void CreatePolicy::refreshVerifyRows() {
         auto entry = keyEntry(fingerprint).value_or(KeyEntry{.fingerprint = fingerprint});
         bool screen = entry.can_show_address;
         checkable = checkable || screen;
+        bool checking = asking(Ask::Verify, fingerprint);
+        auto failure = m_verify_failed.value(fingerprint);
         catalog::Badge *status = nullptr;
         if (!screen) {
             status = catalog::pillAddrNoScreen();
         } else if (m_verified.contains(fingerprint)) {
             status = catalog::pillAddrVerified();
+        } else if (checking) {
+            status = catalog::pillMusigOnDevice();
+        } else if (m_mismatched.contains(fingerprint)) {
+            status = catalog::pillAddrMismatch();
+        } else if (!failure.isEmpty()) {
+            status = catalog::pillRegFailed();
         } else {
             status = catalog::pillAddrUnchecked();
         }
-        auto *row = keyRow(entry, status, screen && m_req_id == 0);
+        auto *row = keyRow(entry, status, screen && !busy(fingerprint));
         row->setEnabled(screen);
+        // A device that did not confirm says why on its own row; a click asks it again.
+        if (screen && !checking && !m_verified.contains(fingerprint) && !failure.isEmpty()) {
+            markFailed(row, failure);
+        }
         connect(row, &catalog::SelectRow::clicked, this, &CreatePolicy::onVerifyRowClicked,
                 qontrol::UNIQUE);
         m_verify_rows->push(row);
@@ -933,7 +964,12 @@ void CreatePolicy::compilePolicy() {
         m_descriptor = descriptor;
         m_backed_up = false;
         m_registered.clear();
+        m_register_failed.clear();
         m_verified.clear();
+        m_verify_failed.clear();
+        m_mismatched.clear();
+        dropAsks(Ask::Register);
+        dropAsks(Ask::Verify);
         m_skip_check->setChecked(false);
         m_address =
             ::musig_first_receive_address(rust::String(m_descriptor.toStdString()), network());
@@ -974,22 +1010,58 @@ void CreatePolicy::runFlow() {
     switch (flow) {
     case Flow::None:
         break;
-    case Flow::Xpub:
-        m_req_id = keys->newRequest();
+    case Flow::Xpub: {
+        auto req = beginAsk(Ask::Xpub, m_flow_fingerprint);
         // Returns once the flow's window has closed, its answer delivered.
-        keys->xpub(m_req_id, network(), m_flow_fingerprint, accountPath());
+        keys->xpub(req, network(), m_flow_fingerprint, accountPath());
         showXpubs();
         break;
-    case Flow::Verify:
-        m_req_id = keys->newRequest();
+    }
+    case Flow::Verify: {
+        auto req = beginAsk(Ask::Verify, m_flow_fingerprint);
         // Returns once the flow's window has closed, its answer delivered.
-        keys->verifyAddress(m_req_id, network(),
-                            QString::fromStdString(std::string(m_address.descriptor)),
-                            QString::fromStdString(std::string(m_address.path)),
-                            QString::fromStdString(std::string(m_address.address)));
+        keys->verifyAddress(
+            req, network(), QString::fromStdString(std::string(m_address.descriptor)),
+            QString::fromStdString(std::string(m_address.path)),
+            QString::fromStdString(std::string(m_address.address)), m_flow_fingerprint);
         refreshVerifyRows();
         break;
     }
+    }
+}
+
+auto CreatePolicy::beginAsk(Ask ask, const QString &fingerprint) -> ReqId {
+    auto req = Host::get()->keys()->newRequest();
+    m_asks.insert(req, {.ask = ask, .fingerprint = fingerprint});
+    return req;
+}
+
+auto CreatePolicy::busy(const QString &fingerprint) const -> bool {
+    return std::ranges::any_of(
+        m_asks, [&fingerprint](const KeyAsk &a) { return a.fingerprint == fingerprint; });
+}
+
+auto CreatePolicy::asking(Ask ask, const QString &fingerprint) const -> bool {
+    return std::ranges::any_of(m_asks, [ask, &fingerprint](const KeyAsk &a) {
+        return !a.stale && a.ask == ask && a.fingerprint == fingerprint;
+    });
+}
+
+auto CreatePolicy::askingAny(Ask ask) const -> bool {
+    return std::ranges::any_of(m_asks, [ask](const KeyAsk &a) { return !a.stale && a.ask == ask; });
+}
+
+void CreatePolicy::dropAsks(Ask ask) {
+    for (auto &a : m_asks) {
+        if (a.ask == ask) {
+            a.stale = true;
+        }
+    }
+}
+
+void CreatePolicy::markFailed(catalog::SelectRow *row, const QString &why) {
+    row->setSub(why);
+    row->setTone(catalog::SelectRow::Tone::Error);
 }
 
 // ===== Slots =====
@@ -1012,7 +1084,7 @@ void CreatePolicy::onBackClicked() {
         }
         break;
     case View::Register:
-        if (m_registering.isEmpty()) {
+        if (!askingAny(Ask::Register)) {
             showReview();
         }
         break;
@@ -1094,6 +1166,11 @@ void CreatePolicy::onNetworkChanged([[maybe_unused]] int index) {
     m_paths.clear();
     m_paths.append(defaultPath());
     m_descriptor.clear();
+    // The keys of another network: what is asked of them now is of no use.
+    dropAsks(Ask::Xpub);
+    dropAsks(Ask::Register);
+    dropAsks(Ask::Verify);
+    m_xpub_failed.clear();
     // The editor lists the network's keys.
     auto *editor = new PathEditor(networkKeys());
     connect(editor, &PathEditor::edited, this, &CreatePolicy::onPathEdited, qontrol::UNIQUE);
@@ -1128,7 +1205,20 @@ void CreatePolicy::onPathEdited() {
 }
 
 void CreatePolicy::onXpubRowClicked() {
-    m_flow_fingerprint = sender()->property(K_FINGERPRINT).toString();
+    auto fingerprint = sender()->property(K_FINGERPRINT).toString();
+    auto *keys = Host::get()->keys();
+    if (keys == nullptr || busy(fingerprint)) {
+        return;
+    }
+    m_xpub_failed.remove(fingerprint);
+    // A connected USB device gives it with no window, while the others are asked too.
+    if (auto entry = keyEntry(fingerprint); entry.has_value() && entry->on_device) {
+        auto req = beginAsk(Ask::Xpub, fingerprint);
+        keys->xpubOnDevice(req, network(), fingerprint, accountPath());
+        refreshXpubRows();
+        return;
+    }
+    m_flow_fingerprint = fingerprint;
     m_pending_flow = Flow::Xpub;
     done(FLOW_RESULT);
 }
@@ -1172,18 +1262,18 @@ void CreatePolicy::onBackupClicked() {
 }
 
 void CreatePolicy::onRegisterRowClicked() {
+    auto fingerprint = sender()->property(K_FINGERPRINT).toString();
     auto *keys = Host::get()->keys();
-    if (keys == nullptr || m_req_id != 0) {
+    if (keys == nullptr || busy(fingerprint)) {
         return;
     }
-    m_registering = sender()->property(K_FINGERPRINT).toString();
-    m_register_failed.remove(m_registering);
-    m_req_id = keys->newRequest();
+    m_register_failed.remove(fingerprint);
+    auto req = beginAsk(Ask::Register, fingerprint);
     showStatus({}, catalog::LabelTone::Muted);
     refreshRegisterRows();
     // No window: the answer comes once the key's device has registered it, and may
     // come during the call.
-    keys->registerDescriptor(m_req_id, network(), m_registering, m_descriptor);
+    keys->registerDescriptor(req, network(), fingerprint, m_descriptor);
 }
 
 void CreatePolicy::onSkipToggled([[maybe_unused]] bool checked) {
@@ -1191,7 +1281,26 @@ void CreatePolicy::onSkipToggled([[maybe_unused]] bool checked) {
 }
 
 void CreatePolicy::onVerifyRowClicked() {
-    m_flow_fingerprint = sender()->property(K_FINGERPRINT).toString();
+    auto fingerprint = sender()->property(K_FINGERPRINT).toString();
+    auto *keys = Host::get()->keys();
+    if (keys == nullptr || busy(fingerprint)) {
+        return;
+    }
+    m_verify_failed.remove(fingerprint);
+    m_mismatched.remove(fingerprint);
+    showStatus({}, catalog::LabelTone::Muted);
+    // A connected USB device shows it with no window, while the others are asked too.
+    if (auto entry = keyEntry(fingerprint); entry.has_value() && entry->on_device) {
+        auto req = beginAsk(Ask::Verify, fingerprint);
+        keys->verifyOnDevice(req, network(),
+                             QString::fromStdString(std::string(m_address.descriptor)),
+                             QString::fromStdString(std::string(m_address.path)),
+                             QString::fromStdString(std::string(m_address.address)), fingerprint);
+        refreshVerifyRows();
+        return;
+    }
+    // The key's own flow, no signer picker: the click picked it.
+    m_flow_fingerprint = fingerprint;
     m_pending_flow = Flow::Verify;
     done(FLOW_RESULT);
 }
@@ -1279,89 +1388,89 @@ void CreatePolicy::onTipReady(Network network, const ElectrumTipResult &result) 
 
 void CreatePolicy::onXpubReady(ReqId req_id, const QString &xpub, const QString &fingerprint,
                                const QString &path) {
-    if (req_id != m_req_id) {
+    auto found = m_asks.constFind(req_id);
+    if (found == m_asks.cend() || found->ask != Ask::Xpub) {
         return;
     }
-    m_req_id = 0;
-    // The request was for the key clicked, at the account path.
-    if (fingerprint != m_flow_fingerprint || path != accountPath()) {
-        showStatus(TR("keys-xpub-other-key"), catalog::LabelTone::Error);
-        return;
+    auto ask = m_asks.take(req_id);
+    if (!ask.stale) {
+        // The request was for the key clicked, at the account path.
+        if (fingerprint != ask.fingerprint || path != accountPath()) {
+            m_xpub_failed.insert(ask.fingerprint, TR("keys-xpub-other-key"));
+        } else {
+            m_account_xpubs.insert(fingerprint, xpub);
+        }
     }
-    m_account_xpubs.insert(fingerprint, xpub);
-    showXpubs();
+    refreshKeyRows();
 }
 
 void CreatePolicy::onDescriptorRegistered(ReqId req_id, const QString &fingerprint) {
-    if (req_id != m_req_id) {
+    auto found = m_asks.constFind(req_id);
+    if (found == m_asks.cend() || found->ask != Ask::Register) {
         return;
     }
-    m_req_id = 0;
-    m_registered.insert(fingerprint.isEmpty() ? m_registering : fingerprint);
-    m_registering.clear();
+    auto ask = m_asks.take(req_id);
+    if (!ask.stale) {
+        m_registered.insert(fingerprint.isEmpty() ? ask.fingerprint : fingerprint);
+    }
+    refreshKeyRows();
     if (m_view == View::Register) {
-        refreshRegisterRows();
         registerNextQuiet();
     }
 }
 
 void CreatePolicy::onAddressVerified(ReqId req_id, bool verified) {
-    if (req_id != m_req_id) {
+    auto found = m_asks.constFind(req_id);
+    if (found == m_asks.cend() || found->ask != Ask::Verify) {
         return;
     }
-    m_req_id = 0;
-    if (verified) {
-        m_verified.insert(m_flow_fingerprint);
-    } else {
-        showStatus(TR("musig-receive-verify-mismatch"), catalog::LabelTone::Error);
+    auto ask = m_asks.take(req_id);
+    if (!ask.stale) {
+        if (verified) {
+            m_verified.insert(ask.fingerprint);
+        } else {
+            m_mismatched.insert(ask.fingerprint);
+            m_verify_failed.insert(ask.fingerprint, TR("musig-receive-verify-mismatch"));
+        }
     }
-    refreshVerifyRows();
+    refreshKeyRows();
 }
 
 void CreatePolicy::onKeysError(std::optional<ReqId> req_id, const QString &message,
                                [[maybe_unused]] plugin::SignError kind) {
-    if (!req_id.has_value() || req_id.value() != m_req_id) {
+    if (!req_id.has_value() || !m_asks.contains(req_id.value())) {
         return;
     }
-    m_req_id = 0;
-    // A registration's failure shows on its device's row, not above the step.
-    if (m_view == View::Register && !m_registering.isEmpty()) {
-        m_register_failed.insert(m_registering, message);
-        m_registering.clear();
-        refreshRegisterRows();
-        return;
+    auto ask = m_asks.take(req_id.value());
+    // A failure shows on its key's row, not above the step.
+    if (!ask.stale) {
+        switch (ask.ask) {
+        case Ask::Xpub:
+            m_xpub_failed.insert(ask.fingerprint, message);
+            break;
+        case Ask::Register:
+            m_register_failed.insert(ask.fingerprint, message);
+            break;
+        case Ask::Verify:
+            m_verify_failed.insert(ask.fingerprint, message);
+            break;
+        }
     }
-    m_registering.clear();
-    showStatus(message, catalog::LabelTone::Error);
-    switch (m_view) {
-    case View::Xpubs:
-        showXpubs();
-        break;
-    case View::Register:
-        refreshRegisterRows();
-        break;
-    case View::Verify:
-        refreshVerifyRows();
-        break;
-    case View::Paths:
-    case View::EditPath:
-    case View::Review:
-    case View::Electrum:
-        break;
-    }
-    // showXpubs() clears the status with the step: show it again.
-    showStatus(message, catalog::LabelTone::Error);
+    refreshKeyRows();
 }
 
 void CreatePolicy::onKeysCancelled(ReqId req_id) {
-    if (req_id != m_req_id) {
+    if (!m_asks.contains(req_id)) {
         return;
     }
-    m_req_id = 0;
-    m_registering.clear();
+    m_asks.remove(req_id);
+    refreshKeyRows();
+}
+
+void CreatePolicy::refreshKeyRows() {
     switch (m_view) {
     case View::Xpubs:
-        showXpubs();
+        refreshXpubRows();
         break;
     case View::Register:
         refreshRegisterRows();

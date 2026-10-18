@@ -727,6 +727,10 @@ auto pillAddrUnchecked() -> Badge * {
     return makePill(Badge::Role::Off, TR("pill-not-checked"), PillWidth::M);
 }
 
+auto pillAddrMismatch() -> Badge * {
+    return makePill(Badge::Role::Error, TR("pill-mismatch"), PillWidth::M);
+}
+
 auto pillAddrNoScreen() -> Badge * {
     return makePill(Badge::Role::Off, TR("pill-no-screen"), PillWidth::M);
 }

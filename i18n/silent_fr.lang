@@ -278,6 +278,9 @@ flow-verify-hot-busy => "Checking the address…" => "NONE"
 flow-verify-hot-prompt
 => "Enter the password of “%1” to check this address."
 => "NONE";;
+flow-verify-key-not-needed
+=> "This key is not a key of this wallet."
+=> "This key is not a key of this wallet.";;
 flow-verify-matched-body
 => "%1 derived the same address. It belongs to this wallet."
 => "NONE";;
@@ -536,6 +539,9 @@ keys-xpub-not-cached => "No cached xpub for this derivation path." => "NONE"
 keys-xpub-other-key
 => "The device answered with the xpub of another key."
 => "The device answered with the xpub of another key.";;
+keys-xpub-rejected
+=> "%1 declined to share the xpub."
+=> "%1 declined to share the xpub.";;
 keys-xpub-unavailable
 => "This key has no connected device, QR code or hot key route to get an xpub from."
 => "This key has no connected device, QR code or hot key route to get an xpub from.";;
@@ -781,6 +787,7 @@ pill-failed => "Failed" => "Failed"
 pill-fetched => "Fetched" => "Fetched"
 pill-hot-key => "Hot Key" => "NONE"
 pill-locked => "Locked" => "NONE"
+pill-mismatch => "Mismatch" => "Mismatch"
 pill-missing => "Missing" => "Missing"
 pill-needed => "Needed" => "Needed"
 pill-no-hot-secret => "No Hot Secret" => "NONE"

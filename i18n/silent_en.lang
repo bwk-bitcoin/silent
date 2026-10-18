@@ -221,6 +221,8 @@ keys-xpub-unavailable
 
 keys-xpub-other-key => "The device answered with the xpub of another key."
 
+keys-xpub-rejected => "%1 declined to share the xpub."
+
 main-keys-tab => "Keys"
 
 receive-show-qr => "Show QR code"
@@ -397,6 +399,8 @@ pill-verified => "Verified"
 
 pill-not-checked => "Not Checked"
 
+pill-mismatch => "Mismatch"
+
 pill-no-screen => "No Screen"
 
 pill-unloading => "Unloading…"
@@ -528,6 +532,8 @@ flow-signer-no-route-sub
 => "None of this key’s routes can sign. Add one in the Keys tab.";;
 
 flow-signer-not-needed => "This key does not sign this transaction."
+
+flow-verify-key-not-needed => "This key is not a key of this wallet."
 
 flow-signer-unregistered-sub
 => "This fingerprint is not a key on this computer. Add it in the Keys tab.";;

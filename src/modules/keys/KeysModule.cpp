@@ -6,6 +6,7 @@
 #include "modules/hwi/HwiModule.h"
 #include "modules/hwi/HwiSigner.h"
 #include "modules/keys/flow/SigningFlow.h"
+#include "modules/keys/flow/signingflow/DeviceQuery.h"
 #include "modules/keys/flow/signingflow/DeviceSign.h"
 #include "modules/keys/flow/signingflow/LiveDevice.h"
 #include "modules/keys/signers/OfflineSigner.h"
@@ -85,9 +86,17 @@ void KeysBus::signOnDevice(ReqId req_id, Network network, const QString &psbt_v2
 }
 
 void KeysBus::verifyAddress(ReqId req_id, Network network, const QString &descriptor,
-                            const QString &path, const QString &address) {
+                            const QString &path, const QString &address,
+                            const QString &fingerprint) {
     NetworkScope scope(m_module, network);
-    m_module->verifyAddress(req_id, descriptor, path, address);
+    m_module->verifyAddress(req_id, descriptor, path, address, fingerprint);
+}
+
+void KeysBus::verifyOnDevice(ReqId req_id, Network network, const QString &descriptor,
+                             const QString &path, const QString &address,
+                             const QString &fingerprint) {
+    NetworkScope scope(m_module, network);
+    m_module->verifyOnDevice(req_id, descriptor, path, address, fingerprint);
 }
 
 void KeysBus::spDescriptor(ReqId req_id, Network network, const QString &fingerprint) {
@@ -98,6 +107,12 @@ void KeysBus::spDescriptor(ReqId req_id, Network network, const QString &fingerp
 void KeysBus::xpub(ReqId req_id, Network network, const QString &fingerprint, const QString &path) {
     NetworkScope scope(m_module, network);
     m_module->fetchXpub(req_id, fingerprint, path);
+}
+
+void KeysBus::xpubOnDevice(ReqId req_id, Network network, const QString &fingerprint,
+                           const QString &path) {
+    NetworkScope scope(m_module, network);
+    m_module->fetchXpubOnDevice(req_id, fingerprint, path);
 }
 
 auto KeysBus::cachedXpub(Network network, const QString &fingerprint, const QString &path) const
@@ -484,7 +499,7 @@ void KeysModule::signOnDevice(ReqId req_id, const QString &psbt_v2_hex, const QS
 }
 
 void KeysModule::verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
-                               const QString &address) {
+                               const QString &address, const QString &fingerprint) {
     if (rust() == nullptr) {
         m_bus->deliverError(req_id, TR("keys-module-not-ready"));
         return;
@@ -493,7 +508,25 @@ void KeysModule::verifyAddress(ReqId req_id, const QString &descriptor, const QS
                                          .req_id = req_id,
                                          .descriptor = descriptor,
                                          .path = path,
-                                         .address = address}));
+                                         .address = address,
+                                         .fingerprint = fingerprint}));
+}
+
+void KeysModule::verifyOnDevice(ReqId req_id, const QString &descriptor, const QString &path,
+                                const QString &address, const QString &fingerprint) {
+    auto device = flow::liveDevice(fingerprint);
+    if (!device.has_value()) {
+        m_bus->deliverError(req_id, TR("flow-usb-disconnected-body").arg(fingerprint));
+        return;
+    }
+    // Deleted once it answers, or with this module.
+    auto *query = new flow::DeviceQuery(device->signer, device->instanceId, this);
+    m_device_queries.insert(query, {.bus_req = req_id, .device = deviceName(*device->signer)});
+    connect(query, &flow::DeviceQuery::addressShown, this, &KeysModule::onDeviceQueryAddress,
+            qontrol::UNIQUE);
+    connect(query, &flow::DeviceQuery::failed, this, &KeysModule::onDeviceQueryFailed,
+            qontrol::UNIQUE);
+    query->showAddress(descriptor, path, address);
 }
 
 void KeysModule::spDescriptor(ReqId req_id, const QString &fingerprint) {
@@ -530,6 +563,33 @@ void KeysModule::fetchXpub(ReqId req_id, const QString &fingerprint, const QStri
                                          .req_id = req_id,
                                          .path = path,
                                          .fingerprint = fingerprint}));
+}
+
+void KeysModule::fetchXpubOnDevice(ReqId req_id, const QString &fingerprint, const QString &path) {
+    if (rust() == nullptr) {
+        m_bus->deliverError(req_id, TR("keys-module-not-ready"));
+        return;
+    }
+    if (auto cached = cachedXpub(fingerprint, path); !cached.isEmpty()) {
+        m_bus->deliverXpub(req_id, cached, fingerprint, path);
+        return;
+    }
+    auto device = flow::liveDevice(fingerprint);
+    if (!device.has_value()) {
+        m_bus->deliverError(req_id, TR("flow-usb-disconnected-body").arg(fingerprint));
+        return;
+    }
+    // Deleted once it answers, or with this module.
+    auto *query = new flow::DeviceQuery(device->signer, device->instanceId, this);
+    m_device_queries.insert(query, {.bus_req = req_id,
+                                    .device = deviceName(*device->signer),
+                                    .fingerprint = fingerprint,
+                                    .path = path});
+    connect(query, &flow::DeviceQuery::xpubFetched, this, &KeysModule::onDeviceQueryXpub,
+            qontrol::UNIQUE);
+    connect(query, &flow::DeviceQuery::failed, this, &KeysModule::onDeviceQueryFailed,
+            qontrol::UNIQUE);
+    query->fetchXpub(path);
 }
 
 auto KeysModule::cachedXpub(const QString &fingerprint, const QString &path) const -> QString {
@@ -848,6 +908,38 @@ void KeysModule::onDeviceSignFailed(flow::UsbError error, const QString &message
         break;
     }
     m_bus->deliverError(request.bus_req, text, kind);
+}
+
+void KeysModule::onDeviceQueryXpub(const QString &xpub) {
+    auto request = m_device_queries.take(qobject_cast<flow::DeviceQuery *>(sender()));
+    // As a flow's: cached even when the caller is gone.
+    onFlowXpubFetched(request.bus_req, xpub, request.fingerprint, request.path);
+}
+
+void KeysModule::onDeviceQueryAddress(bool matched) {
+    auto request = m_device_queries.take(qobject_cast<flow::DeviceQuery *>(sender()));
+    m_bus->deliverVerified(request.bus_req, matched);
+}
+
+void KeysModule::onDeviceQueryFailed(flow::UsbError error, const QString &message) {
+    auto request = m_device_queries.take(qobject_cast<flow::DeviceQuery *>(sender()));
+    if (!message.isEmpty()) {
+        qWarning() << "keys: device:" << message;
+    }
+    QString text;
+    switch (error) {
+    case flow::UsbError::Rejected:
+        // Only an xpub is declined: a declined address is a mismatch.
+        text = TR("keys-xpub-rejected").arg(request.device);
+        break;
+    case flow::UsbError::Disconnected:
+        text = TR("flow-usb-disconnected-body").arg(request.device);
+        break;
+    case flow::UsbError::Failed:
+        text = TR("flow-usb-failed-body").arg(request.device);
+        break;
+    }
+    m_bus->deliverError(request.bus_req, text);
 }
 
 void KeysModule::onFlowXpubFetched(ReqId req_id, const QString &xpub, const QString &fingerprint,

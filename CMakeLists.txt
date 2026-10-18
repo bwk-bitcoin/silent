@@ -129,6 +129,7 @@ set(SILENT_APP_SOURCES
     src/modules/keys/flow/signingflow/VerifyResultView.h
     src/modules/keys/flow/signingflow/VerifyResultView.cpp
     src/modules/keys/flow/signingflow/UsbRouteFlow.h
+    src/modules/keys/flow/signingflow/DeviceQuery.cpp
     src/modules/keys/flow/signingflow/DeviceSign.cpp
     src/modules/keys/flow/signingflow/UsbRouteFlow.cpp
     src/modules/keys/flow/signingflow/HotRouteFlow.h

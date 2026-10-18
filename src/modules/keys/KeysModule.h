@@ -23,6 +23,7 @@ class QThread;
 class QWidget;
 
 namespace keys::flow {
+class DeviceQuery;
 class DeviceSign;
 class SigningFlow;
 enum class UsbError : std::uint8_t;
@@ -60,6 +61,16 @@ struct DeviceSignRequest {
     QString device;
 };
 
+// One verifyOnDevice() or xpubOnDevice() waiting on the key's connected device: its bus
+// request, the device's name for the error it may answer with, and for an xpub the key
+// and path it is cached under.
+struct DeviceQueryRequest {
+    ReqId bus_req = 0;
+    QString device;
+    QString fingerprint;
+    QString path;
+};
+
 // An xpub and the path it was derived at, as a key caches it.
 struct PathXpub {
     QString path;
@@ -83,10 +94,16 @@ public:
     void signOnDevice(ReqId req_id, Network network, const QString &psbt_v2_hex,
                       const QString &descriptor, const QString &fingerprint) override;
     void verifyAddress(ReqId req_id, Network network, const QString &descriptor,
-                       const QString &path, const QString &address) override;
+                       const QString &path, const QString &address,
+                       const QString &fingerprint) override;
+    void verifyOnDevice(ReqId req_id, Network network, const QString &descriptor,
+                        const QString &path, const QString &address,
+                        const QString &fingerprint) override;
     void spDescriptor(ReqId req_id, Network network, const QString &fingerprint) override;
     void xpub(ReqId req_id, Network network, const QString &fingerprint,
               const QString &path) override;
+    void xpubOnDevice(ReqId req_id, Network network, const QString &fingerprint,
+                      const QString &path) override;
     [[nodiscard]] auto cachedXpub(Network network, const QString &fingerprint,
                                   const QString &path) const -> QString override;
     [[nodiscard]] auto registrationHmac(Network network, const QString &fingerprint,
@@ -211,14 +228,22 @@ public:
     // window; answers `req_id` through the bus.
     void signOnDevice(ReqId req_id, const QString &psbt_v2_hex, const QString &descriptor,
                       const QString &fingerprint);
-    // Shows `address` on a device of a key `descriptor` is registered against.
+    // Shows `address` on a device of a key `descriptor` is registered against, or of
+    // the key `fingerprint` alone when it is set.
     void verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,
-                       const QString &address);
+                       const QString &address, const QString &fingerprint);
+    // Shows `address` on the connected USB device of `fingerprint`'s key, no window;
+    // answers `req_id` through the bus.
+    void verifyOnDevice(ReqId req_id, const QString &descriptor, const QString &path,
+                        const QString &address, const QString &fingerprint);
     // Fetches the sp() descriptor of `fingerprint`'s key over its QR or hot route.
     void spDescriptor(ReqId req_id, const QString &fingerprint);
     // The xpub at `path` of `fingerprint`'s key: from its cache when it holds one,
     // else over its route (see xpubRoute()), then cached.
     void fetchXpub(ReqId req_id, const QString &fingerprint, const QString &path);
+    // The xpub at `path` of `fingerprint`'s key: from its cache, else from its
+    // connected USB device with no window, then cached. Answers through the bus.
+    void fetchXpubOnDevice(ReqId req_id, const QString &fingerprint, const QString &path);
     // The key's cached xpub at `path`, empty when not cached.
     [[nodiscard]] auto cachedXpub(const QString &fingerprint, const QString &path) const -> QString;
     // The stored registration proof of `descriptor` on the key, empty when none.
@@ -321,6 +346,10 @@ private slots:
     // A signOnDevice() request answered by its device.
     void onDeviceSignedPsbt(const QString &psbt_v2_hex);
     void onDeviceSignFailed(flow::UsbError error, const QString &message, plugin::SignError kind);
+    // A verifyOnDevice() or xpubOnDevice() request answered by its device.
+    void onDeviceQueryXpub(const QString &xpub);
+    void onDeviceQueryAddress(bool matched);
+    void onDeviceQueryFailed(flow::UsbError error, const QString &message);
 
 protected:
     void createModule();
@@ -389,6 +418,8 @@ private:
     QHash<ReqId, DeviceRegistration> m_device_registrations;
     // signOnDevice() requests in flight, by the exchange signing them.
     QHash<const flow::DeviceSign *, DeviceSignRequest> m_device_signs;
+    // verifyOnDevice() and xpubOnDevice() requests in flight, by the exchange asking.
+    QHash<const flow::DeviceQuery *, DeviceQueryRequest> m_device_queries;
 };
 
 // Makes `network` the keys module's network while it lives: rust(), keys() and the

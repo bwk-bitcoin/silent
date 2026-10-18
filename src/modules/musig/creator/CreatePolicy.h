@@ -47,11 +47,14 @@ class PathEditor;
 //    heights are counted from the tip of the network's last or default Electrum server.
 //  2 Xpubs: one row per key of the paths, a missing one fetched on click; skipped when
 //    every account xpub is cached. Then compile_policy().
+//  At Xpubs, Register and Verify each key's device is asked on its own, all of them at
+//  once: a connected USB device with no window, its row On Device until it answers;
+//  another route in its keys-module flow, which closes this window while it runs.
 //  3 Review: the account name, the policy, and Backup Descriptor before Continue.
 //  4 Register: one row per signer, a device registering the descriptor on click; Skip
 //    leaves devices for the Keys tab. Keys with no device register on their own.
 //  5 Verify: the first receive address, one row per signer, a device with a screen
-//    showing it on click. Optional.
+//    showing it on click, with no signer picker. Optional.
 //  6 Electrum: the server, SSL and the certificate check, then Create installs the
 //    account (not opened).
 class CreatePolicy : public catalog::Modal {
@@ -99,6 +102,17 @@ public slots:
 protected:
     // The keys-module flow this window closed to run.
     enum class Flow : std::uint8_t { None, Xpub, Verify };
+    // The step a request to a key is for.
+    enum class Ask : std::uint8_t { Xpub, Register, Verify };
+
+    // One request to a key in flight.
+    struct KeyAsk {
+        Ask ask = Ask::Xpub;
+        QString fingerprint;
+        // Asked for a descriptor or network since replaced: its answer is dropped, its
+        // device still busy until it comes.
+        bool stale = false;
+    };
 
     void init();
     void doConnect();
@@ -126,6 +140,7 @@ protected:
     [[nodiscard]] auto viewXpubs() -> QWidget *;
     void showXpubs();
     void hideXpubs();
+    void refreshXpubRows();
 
     // Review view
     void initReview();
@@ -191,6 +206,21 @@ protected:
     void showStatus(const QString &text, catalog::LabelTone tone);
     // Runs the flow the window closed for, once it has closed.
     void runFlow();
+    // Sends a request to the key `fingerprint` for `ask`: the id the answer comes with.
+    // Recorded before the call, as the answer may come during it.
+    auto beginAsk(Ask ask, const QString &fingerprint) -> ReqId;
+    // Whether a request to the key is in flight, for any step: a device answers one at
+    // a time.
+    [[nodiscard]] auto busy(const QString &fingerprint) const -> bool;
+    [[nodiscard]] auto asking(Ask ask, const QString &fingerprint) const -> bool;
+    [[nodiscard]] auto askingAny(Ask ask) const -> bool;
+    // Marks the requests for `ask` stale: their answers, if any come, are dropped.
+    void dropAsks(Ask ask);
+    // The key rows of the step on display, after an answer for any step: the key it
+    // came from is no longer busy.
+    void refreshKeyRows();
+    // The row a failed request leaves: why, in its sub line, under the error tone.
+    static void markFailed(catalog::SelectRow *row, const QString &why);
 
 private:
     View m_view = View::Paths;
@@ -270,20 +300,25 @@ private:
     bool m_skipped_xpubs = false;
     QString m_descriptor;
     bool m_backed_up = false;
-    ReqId m_req_id = 0;
+    // Requests to keys in flight, by request id.
+    QHash<ReqId, KeyAsk> m_asks;
     Flow m_pending_flow = Flow::None;
-    // The key a pending xpub fetch or address check is for.
+    // The key the flow this window closed for is for.
     QString m_flow_fingerprint;
     // Distinct keys of the paths, in path order.
     QStringList m_fingerprints;
     // Fingerprint to account xpub.
     QHash<QString, QString> m_account_xpubs;
+    // Why a key's device failed to give its xpub, by fingerprint, until it is clicked again.
+    QHash<QString, QString> m_xpub_failed;
     QSet<QString> m_registered;
-    // The key registering now, empty when none is.
-    QString m_registering;
     // Why the device of a key failed to register, by fingerprint, until it is clicked again.
     QHash<QString, QString> m_register_failed;
     QSet<QString> m_verified;
+    // Why a key's device did not confirm the address, by fingerprint, until it is
+    // clicked again; `m_mismatched` the keys whose device showed another one.
+    QHash<QString, QString> m_verify_failed;
+    QSet<QString> m_mismatched;
     MusigReceiveAddress m_address{};
 };
 

@@ -1025,7 +1025,7 @@ void addSteps() {
     });
     step("fetch page", [] {
         auto *m = wizardAt(CreatePolicy::View::Xpubs);
-        return m != nullptr && m->m_req_id == 0 && !m->missingXpubs().isEmpty();
+        return m != nullptr && m->m_asks.isEmpty() && !m->missingXpubs().isEmpty();
     }, [] {
         auto *m = wizardAt(CreatePolicy::View::Xpubs);
         auto missing = m->missingXpubs();
@@ -1038,7 +1038,7 @@ void addSteps() {
          [] { enterPassword(unsealShown()); });
     step("xpubs fetched", [] {
         auto *m = wizardAt(CreatePolicy::View::Xpubs);
-        return m != nullptr && m->m_req_id == 0 && m->missingXpubs().isEmpty();
+        return m != nullptr && m->m_asks.isEmpty() && m->missingXpubs().isEmpty();
     }, [] {
         auto *m = wizardAt(CreatePolicy::View::Xpubs);
         later([m] { m->onNextClicked(); });
@@ -1062,61 +1062,58 @@ void addSteps() {
         check(m->m_review_next_btn->isEnabled(), "Continue enabled once named and backed up");
         later([m] { m->onNextClicked(); });
     });
-    // A device registers on its row's click. The Coldcard's step runs once its enroll
-    // request was sent: its story waits on the device until approved.
-    for (int i = 0; i < 2; ++i) {
-        step(QStringLiteral("click device %1").arg(i + 1), [] {
-            auto *m = wizardAt(CreatePolicy::View::Register);
-            return m != nullptr && g_register_devices.size() == 2 && m->m_req_id == 0 &&
-                   m->m_registering.isEmpty();
-        }, [i] {
-            auto *m = wizardAt(CreatePolicy::View::Register);
-            auto *row = wizardRow(m->m_register_rows, g_register_devices.at(i));
-            check(row != nullptr && row->isEnabled(), "device row to register " +
-                                                          g_register_devices.at(i));
-            later([row] { emit row->clicked(); });
-        });
-        step(QStringLiteral("register on device %1").arg(i + 1), [i] {
-            if (auto *u = unsealShown(); u != nullptr) {
-                enterPassword(u);
-            }
-            auto *m = wizardAt(CreatePolicy::View::Register);
-            if (m == nullptr) {
-                return false;
-            }
-            const auto &fp = g_register_devices.at(i);
-            if (fp == g_fp_b) {
-                return QString::compare(m->m_registering, fp, Qt::CaseInsensitive) == 0 ||
-                       m->m_registered.contains(fp);
-            }
-            for (const auto &registration : g_keys->m_device_registrations) {
-                if (QString::compare(registration.fingerprint, fp, Qt::CaseInsensitive) == 0 &&
-                    !registration.checking) {
-                    return true;
-                }
-            }
-            return m->m_registered.contains(fp);
-        }, [i] {
-            if (g_register_devices.at(i) == g_fp_b) {
-                shot("08-creator-register-ledger");
-                return;
-            }
-            shot("09-creator-register-coldcard");
-            approveColdcard();
-        });
-        if (i == 0) {
-            step("Ledger registered", [] {
-                auto *m = wizardAt(CreatePolicy::View::Register);
-                return m != nullptr && m->m_registered.contains(g_register_devices.at(0)) &&
-                       m->m_req_id == 0;
-            }, [] {});
+    // Every device registers at once: both rows are clicked in the same pass, before
+    // either answers. The Coldcard's step runs once its enroll request was sent: its
+    // story waits on the device until approved.
+    step("click both devices", [] {
+        auto *m = wizardAt(CreatePolicy::View::Register);
+        return m != nullptr && g_register_devices.size() == 2 &&
+               !m->askingAny(CreatePolicy::Ask::Register);
+    }, [] {
+        auto *m = wizardAt(CreatePolicy::View::Register);
+        QList<catalog::SelectRow *> rows;
+        for (const auto &fp : g_register_devices) {
+            auto *row = wizardRow(m->m_register_rows, fp);
+            check(row != nullptr && row->isEnabled(), "device row to register " + fp);
+            rows.append(row);
         }
-    }
+        later([rows] {
+            for (auto *row : rows) {
+                emit row->clicked();
+            }
+        });
+    });
+    step("both devices registering at once", [] {
+        if (auto *u = unsealShown(); u != nullptr) {
+            enterPassword(u);
+        }
+        auto *m = wizardAt(CreatePolicy::View::Register);
+        if (m == nullptr) {
+            return false;
+        }
+        for (const auto &registration : g_keys->m_device_registrations) {
+            if (QString::compare(registration.fingerprint, g_fp_c, Qt::CaseInsensitive) == 0 &&
+                !registration.checking) {
+                return true;
+            }
+        }
+        return false;
+    }, [] {
+        auto *m = wizardAt(CreatePolicy::View::Register);
+        check(m->asking(CreatePolicy::Ask::Register, g_fp_c),
+              "the Coldcard registers, clicked while the Ledger was registering");
+        check(m->asking(CreatePolicy::Ask::Register, g_fp_b) || m->m_registered.contains(g_fp_b),
+              "the Ledger was asked too, not dropped for the Coldcard");
+        std::printf("Ledger %s while the Coldcard enrolls\n",
+                    m->m_registered.contains(g_fp_b) ? "registered" : "still registering");
+        shot("08-creator-register-both");
+        approveColdcard();
+    });
     step("Coldcard enrolled", [] { return g_cc_driver.finished(); },
          [] { checkColdcardApproved("the Coldcard enrolled the wallet"); });
     step("every device registered", [] {
         auto *m = wizardAt(CreatePolicy::View::Register);
-        return m != nullptr && m->m_req_id == 0 && m->m_registered.contains(g_fp_b) &&
+        return m != nullptr && m->m_asks.isEmpty() && m->m_registered.contains(g_fp_b) &&
                m->m_registered.contains(g_fp_c) && m->m_registered.contains(g_fp_a);
     }, [] {
         auto *m = wizardAt(CreatePolicy::View::Register);
@@ -1136,24 +1133,21 @@ void addSteps() {
         markLedgerScreens();
         later([row] { emit row->clicked(); });
     });
-    step("verify picker", [] { return visible<SigningFlow>() != nullptr; },
-         [] { pickRow(g_fp_b, "the Ledger, to show the address"); });
-    step("verify on the Ledger", [] { return usbWaiting(g_fp_b); },
-         [] { shot("10-creator-verify-ledger"); });
-    step("verify result", [] {
-        auto *f = visible<SigningFlow>();
-        return f != nullptr && f->m_verify_result.has_value();
+    // A click sends the address straight to the device: no signer picker, no window.
+    step("verify on the Ledger", [] {
+        auto *m = wizardAt(CreatePolicy::View::Verify);
+        return m != nullptr && m->asking(CreatePolicy::Ask::Verify, g_fp_b);
     }, [] {
-        auto *f = visible<SigningFlow>();
-        check(f->m_verify_result.value() == SigningFlow::VerifyResult::Matched,
-              "the Ledger matched the first address");
-        // The creator is closed while the flow runs in its place.
-        QString address;
-        for (auto *w : QApplication::topLevelWidgets()) {
-            if (auto *c = qobject_cast<CreatePolicy *>(w); c != nullptr) {
-                address = QString::fromStdString(std::string(c->m_address.address));
-            }
-        }
+        check(visible<SigningFlow>() == nullptr, "no signer picker opened over the Verify step");
+        shot("10-creator-verify-ledger");
+    });
+    step("verified", [] {
+        auto *m = wizardAt(CreatePolicy::View::Verify);
+        return m != nullptr && m->m_asks.isEmpty();
+    }, [] {
+        auto *m = wizardAt(CreatePolicy::View::Verify);
+        check(m->m_verified.contains(g_fp_b), "the Ledger row reads Verified");
+        auto address = QString::fromStdString(std::string(m->m_address.address));
         // The Bitcoin Test app writes a regtest address with the testnet prefix: the
         // part between the prefix and the checksum is the same.
         auto program = address.section('1', 1).chopped(BECH32_CHECKSUM_LENGTH);
@@ -1161,14 +1155,6 @@ void addSteps() {
                   ledgerScreensText().contains("tb1" + program),
               "the Ledger screens showed " + address + " (tb1" + program + "...)");
         shot("11-creator-verify-matched");
-        later([f] { f->accept(); });
-    });
-    step("verified", [] {
-        auto *m = wizardAt(CreatePolicy::View::Verify);
-        return visible<SigningFlow>() == nullptr && m != nullptr && m->m_req_id == 0;
-    }, [] {
-        auto *m = wizardAt(CreatePolicy::View::Verify);
-        check(m->m_verified.contains(g_fp_b), "the Ledger row reads Verified");
         later([m] { m->onNextClicked(); });
     });
     step("electrum", [] { return wizardAt(CreatePolicy::View::Electrum) != nullptr; }, [] {

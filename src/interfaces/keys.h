@@ -20,8 +20,8 @@ class ISigner;
 // when the key has neither. `can_show_address` is true when the key has a USB or QR
 // route, a device with a screen verifyAddress() can show an address on. `route` is the
 // key's first route, connected or not, Unknown when it has none. `on_device` is true
-// when the key's best route is its connected USB device: signOnDevice() can sign
-// with it without a window.
+// when the key's best route is its connected USB device: signOnDevice(),
+// verifyOnDevice() and xpubOnDevice() reach it without a window.
 struct KeyEntry {
     QString fingerprint;
     QString alias;
@@ -68,9 +68,17 @@ public:
     // itself. Answers as sign() does, signed_() or error(), never cancelled().
     virtual void signOnDevice(ReqId req_id, Network network, const QString &psbt_v2_hex,
                               const QString &descriptor, const QString &fingerprint) = 0;
-    // Shows `address` on the device holding the key `descriptor` belongs to.
+    // Shows `address` on the device holding the key `descriptor` belongs to, or on the
+    // key `fingerprint` alone when it is set (no signer picker).
     virtual void verifyAddress(ReqId req_id, Network network, const QString &descriptor,
-                               const QString &path, const QString &address) = 0;
+                               const QString &path, const QString &address,
+                               const QString &fingerprint) = 0;
+    // Shows `address` on the connected USB device of the key `fingerprint` (a key whose
+    // entry is `on_device`), opening no window: for a caller that shows the wait
+    // itself. Answers verified() or error(), never cancelled().
+    virtual void verifyOnDevice(ReqId req_id, Network network, const QString &descriptor,
+                                const QString &path, const QString &address,
+                                const QString &fingerprint) = 0;
     // Fetches the sp() descriptor from the key, over its best route. The only
     // descriptor a key ever hands out: see the SP exception in the design.
     virtual void spDescriptor(ReqId req_id, Network network, const QString &fingerprint) = 0;
@@ -79,6 +87,11 @@ public:
     // xpubReady(), error() or cancelled().
     virtual void xpub(ReqId req_id, Network network, const QString &fingerprint,
                       const QString &path) = 0;
+    // Fetches the key's xpub at `path` from its cache, else from its connected USB
+    // device (a key whose entry is `on_device`), opening no window. Answers xpubReady()
+    // or error(), never cancelled().
+    virtual void xpubOnDevice(ReqId req_id, Network network, const QString &fingerprint,
+                              const QString &path) = 0;
     // The key's xpub at `path` when its cache holds one, else empty: no modal, no
     // request, so a caller can skip xpub() and the window it opens.
     [[nodiscard]] virtual auto cachedXpub(Network network, const QString &fingerprint,

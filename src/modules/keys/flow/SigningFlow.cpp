@@ -139,6 +139,10 @@ void SigningFlow::begin() {
     }
     case Context::Verify:
         m_rows = verifyRows();
+        if (!m_request.fingerprint.isEmpty()) {
+            startRequestedRow();
+            return;
+        }
         showPicker();
         return;
     case Context::Fetch:
@@ -431,7 +435,8 @@ void SigningFlow::startRequestedRow() {
         return sameFingerprint(row.fingerprint, m_request.fingerprint);
     });
     if (found == m_rows.end()) {
-        onFailed(TR("flow-signer-not-needed"));
+        onFailed(m_request.context == Context::Verify ? TR("flow-verify-key-not-needed")
+                                                      : TR("flow-signer-not-needed"));
         return;
     }
     if (!found->usable()) {
