@@ -2848,6 +2848,9 @@ private:
 // `m/87'/coin'/account'` for `network`.
 ::rust::String bip87_account_path(::Network network, ::std::uint32_t account) noexcept;
 
+// `target` rounded up to the grid a renewable absolute timelock sits on.
+::std::uint32_t renewable_height(::std::uint32_t target) noexcept;
+
 // Compiles with placeholder keys (account_xpub ignored): leaf count, cap and
 // shape errors before any device is asked. descriptor stays empty.
 ::PolicyCompileResult preview_policy(::PolicySpec spec) noexcept;

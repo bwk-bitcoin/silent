@@ -857,6 +857,8 @@ mod ffi {
     extern "Rust" {
         /// `m/87'/coin'/account'` for `network`.
         fn bip87_account_path(network: Network, account: u32) -> String;
+        /// `target` rounded up to the grid a renewable absolute timelock sits on.
+        fn renewable_height(target: u32) -> u32;
         /// Compiles with placeholder keys (account_xpub ignored): leaf count, cap and
         /// shape errors before any device is asked. descriptor stays empty.
         fn preview_policy(spec: PolicySpec) -> PolicyCompileResult;
@@ -2198,7 +2200,9 @@ pub use musig::{
     musig_descriptor_fingerprints, musig_first_receive_address, new_musig_account,
     validate_musig_descriptor, MusigAccount, MUSIG_PLUGIN_ID,
 };
-pub use policy::{bip87_account_path, compile_policy, preview_policy, review_policy};
+pub use policy::{
+    bip87_account_path, compile_policy, preview_policy, renewable_height, review_policy,
+};
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};
 
 #[cfg(test)]

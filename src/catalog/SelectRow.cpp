@@ -199,7 +199,7 @@ void SelectRow::refresh() {
     bool add = m_tone == Tone::Add;
     m_lead->setVisible(add);
     m_tail->setVisible(add);
-    if (auto *row = qobject_cast<QBoxLayout *>(layout()); row != nullptr) {
+    if (auto *row = qobject_cast<QBoxLayout *>(m_body->parentWidget()->layout()); row != nullptr) {
         row->setStretchFactor(m_body, add ? 0 : 1);
         row->setSpacing(resolve(add ? Spacing::XS : Spacing::M));
     }

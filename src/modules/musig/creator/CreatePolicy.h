@@ -2,9 +2,13 @@
 
 #include "catalog/containers/Modal.h"
 #include "catalog/form/EndpointRow.h"
+#include "interfaces/keys.h"
 #include "interfaces/types.h"
+#include "modules/musig/creator/SpendPath.h"
 
 #include <QHash>
+#include <QList>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <cstdint>
@@ -16,13 +20,17 @@ class QWidget;
 namespace catalog {
 class Button;
 class Card;
+class Checkbox;
 class ChunkedAddress;
 class ComboBox;
-class FieldNote;
+class FieldGroup;
 class Input;
 class Label;
 class ModalActions;
 class Notice;
+class SelectRow;
+class Toggle;
+class WizardSteps;
 enum class LabelTone;
 } // namespace catalog
 
@@ -32,35 +40,25 @@ class Column;
 
 namespace musig::modal {
 
-class PolicyEditor;
-class ReviewPolicy;
+class PathEditor;
 
-// The 7-step Create flow (decision 10). Steps:
-//  1 Define: name, network, Electrum, PolicyEditor (paths, thresholds, timelocks, key
-//    types, keys picked from IKeys::keys()); every key at BIP-87 account' = 0'.
-//  2 Compile: preview_policy() on every edit; leaf count, cap and errors shown,
-//    Next disabled while it fails.
-//  3 FetchXpubs: per key cachedXpub() else xpub() at bip87_account_path(network, 0);
-//    then compile_policy() (R derived in Rust).
-//  4 Review: review_policy() of the descriptor in plain words, leaf count, descriptor.
-//  5 Register: registerDescriptor() on each own key.
-//  6 VerifyAddress: verifyAddress() of the first receive address on one own device;
-//    skipped with a warning when no key has a USB or QR route (no device can show it).
-//  7 Install: new_config(..., MUSIG_PLUGIN_ID)->to_file(), then Host::refreshLauncher(), and
-//    the modal closes. The account is not opened.
+// Create Multikey Account, a wizard under a step trail, every step one height:
+//  1 Spend Paths: the network and one row per path, each opening Edit Spend Path;
+//    heights are counted from the tip of the network's last or default Electrum server.
+//  2 Xpubs: one row per key of the paths, a missing one fetched on click; skipped when
+//    every account xpub is cached. Then compile_policy().
+//  3 Review: the account name, the policy, and Backup Descriptor before Continue.
+//  4 Register: one row per signer, a device registering the descriptor on click; Skip
+//    leaves devices for the Keys tab. Keys with no device register on their own.
+//  5 Verify: the first receive address, one row per signer, a device with a screen
+//    showing it on click. Optional.
+//  6 Electrum: the server, SSL and the certificate check, then Create installs the
+//    account (not opened).
 class CreatePolicy : public catalog::Modal {
     Q_OBJECT
 
 public:
-    enum class Step : std::uint8_t {
-        Define,
-        Compile,
-        FetchXpubs,
-        Review,
-        Register,
-        VerifyAddress,
-        Install,
-    };
+    enum class View : std::uint8_t { Paths, EditPath, Xpubs, Review, Register, Verify, Electrum };
 
     CreatePolicy();
     // A keys-module flow closes this window and runs in its place, then shows this
@@ -69,18 +67,28 @@ public:
 
 signals:
     void electrumTestReady(ConnectionResult result);
+    void tipReady(Network network, ElectrumTipResult result);
 
 public slots:
-    void onNetworkChanged(int index);
-    void onNameEdited(const QString &text);
-    void onPolicyEdited();
-    void onNextClicked();
     void onBackClicked();
-    // Closes the window to check the address on a device.
-    void onCheckAddressClicked();
+    void onNextClicked();
+    void onNetworkChanged(int index);
+    void onPathRowClicked();
+    void onAddPathClicked();
+    void onRemovePathClicked();
+    void onPathEdited();
+    void onXpubRowClicked();
+    void onNameEdited(const QString &text);
+    void onBackupClicked();
+    void onRegisterRowClicked();
+    void onSkipToggled(bool checked);
+    void onVerifyRowClicked();
     void onElectrumEdited();
+    void onSslToggled(bool checked);
+    void onVerifyCertificateToggled(bool checked);
     void onTestElectrum();
     void onElectrumTestReady(const ConnectionResult &result);
+    void onTipReady(Network network, const ElectrumTipResult &result);
     void onXpubReady(ReqId req_id, const QString &xpub, const QString &fingerprint,
                      const QString &path);
     void onDescriptorRegistered(ReqId req_id, const QString &fingerprint);
@@ -90,81 +98,184 @@ public slots:
 
 protected:
     // The keys-module flow this window closed to run.
-    enum class Flow : std::uint8_t { None, Xpubs, Verify };
+    enum class Flow : std::uint8_t { None, Xpub, Verify };
 
     void init();
     void doConnect();
     void view();
-    void showStep(Step step);
-    [[nodiscard]] auto network() const -> Network;
-    [[nodiscard]] auto disabledReason() const -> QString;
-    void updateActions();
-    // Which of next, fetch, register, verify and install the step shows, and the reason.
-    void updateStepActions();
-    // An error or a result under the step, empty `text` hides it.
-    void showStatus(const QString &text, catalog::LabelTone tone);
+
+    // Paths view
+    void initPaths();
+    void connectPaths();
+    [[nodiscard]] auto viewPaths() -> QWidget *;
+    void showPaths();
+    // One row per path, then the add row.
+    void refreshPathRows();
+    [[nodiscard]] auto pathsReason() -> QString;
+
+    // EditPath view
+    void initEditPath();
+    void connectEditPath();
+    [[nodiscard]] auto viewEditPath() -> QWidget *;
+    void showEditPath(int index);
+    void hideEditPath();
+    void refreshEditActions();
+
+    // Xpubs view
+    void initXpubs();
+    [[nodiscard]] auto viewXpubs() -> QWidget *;
+    void showXpubs();
+    void hideXpubs();
+
+    // Review view
+    void initReview();
+    void connectReview();
+    [[nodiscard]] auto viewReview() -> QWidget *;
+    void showReview();
+    void hideReview();
+    void refreshReviewActions();
+
+    // Register view
+    void initRegister();
+    void connectRegister();
+    [[nodiscard]] auto viewRegister() -> QWidget *;
+    void showRegister();
+    void hideRegister();
+    void refreshRegisterRows();
+    // Registers the next key with no device, which needs no click.
+    void registerNextQuiet();
+
+    // Verify view
+    void initVerify();
+    [[nodiscard]] auto viewVerify() -> QWidget *;
+    void showVerify();
+    void hideVerify();
+    void refreshVerifyRows();
+
+    // Electrum view
+    void initElectrum();
+    void connectElectrum();
+    [[nodiscard]] auto viewElectrum() -> QWidget *;
+    void showElectrum();
+    void hideElectrum();
+    void refreshElectrumActions();
     void applyNetworkDefaults();
-    void previewPolicy();
+    // The address to test: the input without its scheme, under the scheme SSL picks.
+    [[nodiscard]] auto electrumAddress() const -> QString;
+    void install();
+
+    // Shared
+    // The step trail and the window title of a wizard step.
+    void showStep(int index);
+    [[nodiscard]] auto network() const -> Network;
+    [[nodiscard]] auto networkKeys() const -> QList<KeyEntry>;
+    // Fingerprint to the name a key is shown by: its alias, else its fingerprint.
+    [[nodiscard]] auto keyNames() const -> QHash<QString, QString>;
+    [[nodiscard]] auto keyEntry(const QString &fingerprint) const -> std::optional<KeyEntry>;
+    // The tip of the network's last or default Electrum server, off the GUI thread.
+    void fetchTip();
+    [[nodiscard]] auto spec() const -> PolicySpec;
     // m/87'/coin'/0' of the picked network.
     [[nodiscard]] auto accountPath() const -> QString;
     [[nodiscard]] auto missingXpubs() const -> QStringList;
-    // xpub() of the first key still missing its account xpub.
-    void fetchNextXpub();
+    // Compiles the paths with the account xpubs, then Review; a refused policy goes
+    // back to Spend Paths with the error.
     void compilePolicy();
-    void showReview();
-    void registerNext();
-    // Some key of the policy is on a device with a screen (KeyEntry::can_show_address).
-    [[nodiscard]] auto canCheckAddress() const -> bool;
-    void verifyAddress();
-    void install();
+    // Whether a key registers the descriptor on a device: one with a USB, QR or SD card
+    // route.
+    [[nodiscard]] auto needsRegister(const QString &fingerprint) const -> bool;
+    // An error under the actions of the view on display, empty `text` hides it.
+    void showStatus(const QString &text, catalog::LabelTone tone);
     // Runs the flow the window closed for, once it has closed.
     void runFlow();
 
 private:
-    Step m_step = Step::Define;
-    catalog::Input *m_name_input = nullptr;
-    catalog::ComboBox *m_network_combo = nullptr;
-    catalog::EndpointRow m_electrum;
-    PolicyEditor *m_editor = nullptr;
-    ReviewPolicy *m_review = nullptr;
-    QWidget *m_define_page = nullptr;
-    catalog::Card *m_preview_card = nullptr;
-    catalog::Label *m_preview_leaves = nullptr;
-    qontrol::Column *m_preview_paths = nullptr;
-    catalog::FieldNote *m_preview_error = nullptr;
+    View m_view = View::Paths;
+    catalog::WizardSteps *m_steps = nullptr;
     catalog::Label *m_status_label = nullptr;
-    catalog::ModalActions *m_actions = nullptr;
-    catalog::Button *m_next_btn = nullptr;
-    catalog::Button *m_fetch_btn = nullptr;
-    catalog::Button *m_register_btn = nullptr;
-    catalog::Button *m_verify_btn = nullptr;
-    catalog::Button *m_install_btn = nullptr;
-    // m_status_label over m_actions, on every step.
-    QWidget *m_footer = nullptr;
-    QWidget *m_fetch_page = nullptr;
-    // The fetched count and one line per key still missing its xpub.
-    qontrol::Column *m_missing_column = nullptr;
-    // The review, scrolling, for steps Review and Register.
+
+    // Paths view
+    catalog::ComboBox *m_network_combo = nullptr;
+    qontrol::Column *m_path_rows = nullptr;
+    catalog::ModalActions *m_paths_actions = nullptr;
+    catalog::Button *m_paths_next_btn = nullptr;
+    QWidget *m_paths_page = nullptr;
+    QWidget *m_paths_footer = nullptr;
+
+    // EditPath view
+    PathEditor *m_editor = nullptr;
+    catalog::ModalActions *m_edit_actions = nullptr;
+    catalog::Button *m_remove_path_btn = nullptr;
+    catalog::Button *m_save_path_btn = nullptr;
+    QWidget *m_edit_page = nullptr;
+    QWidget *m_edit_footer = nullptr;
+    // The path open in the editor, m_paths.size() for a new one.
+    int m_editing = 0;
+
+    // Xpubs view
+    catalog::Label *m_xpubs_count = nullptr;
+    qontrol::Column *m_xpub_rows = nullptr;
+    catalog::ModalActions *m_xpubs_actions = nullptr;
+    catalog::Button *m_xpubs_next_btn = nullptr;
+    QWidget *m_xpubs_page = nullptr;
+    QWidget *m_xpubs_footer = nullptr;
+
+    // Review view
+    catalog::Input *m_name_input = nullptr;
+    qontrol::Column *m_review_cards = nullptr;
+    catalog::Label *m_backed_up_label = nullptr;
+    catalog::Button *m_backup_primary_btn = nullptr;
+    catalog::Button *m_backup_btn = nullptr;
+    catalog::ModalActions *m_review_actions = nullptr;
+    catalog::Button *m_review_next_btn = nullptr;
     QWidget *m_review_page = nullptr;
-    QWidget *m_verify_page = nullptr;
+    QWidget *m_review_footer = nullptr;
+
+    // Register view
+    qontrol::Column *m_register_rows = nullptr;
+    catalog::Checkbox *m_skip_check = nullptr;
+    catalog::ModalActions *m_register_actions = nullptr;
+    catalog::Button *m_register_next_btn = nullptr;
+    QWidget *m_register_page = nullptr;
+    QWidget *m_register_footer = nullptr;
+
+    // Verify view
     catalog::Label *m_verify_lead = nullptr;
     catalog::ChunkedAddress *m_address_label = nullptr;
-    // Whether the device showed the same address.
-    catalog::Label *m_verify_status = nullptr;
-    // No key can show the address: it is not checked.
+    qontrol::Column *m_verify_rows = nullptr;
     catalog::Notice *m_skip_notice = nullptr;
-    bool m_preview_ok = false;
-    PolicySpec m_spec;
+    catalog::ModalActions *m_verify_actions = nullptr;
+    catalog::Button *m_verify_next_btn = nullptr;
+    QWidget *m_verify_page = nullptr;
+    QWidget *m_verify_footer = nullptr;
+
+    // Electrum view
+    catalog::EndpointRow m_electrum;
+    catalog::Toggle *m_ssl_toggle = nullptr;
+    catalog::Toggle *m_verify_toggle = nullptr;
+    catalog::ModalActions *m_electrum_actions = nullptr;
+    catalog::Button *m_install_btn = nullptr;
+    QWidget *m_electrum_page = nullptr;
+    QWidget *m_electrum_footer = nullptr;
+
+    QList<SpendPath> m_paths;
+    std::optional<std::uint32_t> m_tip;
+    bool m_skipped_xpubs = false;
     QString m_descriptor;
+    bool m_backed_up = false;
     ReqId m_req_id = 0;
     Flow m_pending_flow = Flow::None;
-    // Distinct keys of m_spec, in path order.
+    // The key a pending xpub fetch or address check is for.
+    QString m_flow_fingerprint;
+    // Distinct keys of the paths, in path order.
     QStringList m_fingerprints;
     // Fingerprint to account xpub.
     QHash<QString, QString> m_account_xpubs;
-    QStringList m_to_register;
+    QSet<QString> m_registered;
+    // The key registering now, empty when none is.
+    QString m_registering;
+    QSet<QString> m_verified;
     MusigReceiveAddress m_address{};
-    bool m_address_verified = false;
 };
 
 } // namespace musig::modal

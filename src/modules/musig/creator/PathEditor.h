@@ -1,78 +1,81 @@
 #pragma once
 
 #include "interfaces/keys.h"
+#include "modules/musig/creator/SpendPath.h"
 
 #include <QList>
 #include <QString>
 #include <QWidget>
-#include <silent.h>
+#include <cstdint>
+#include <optional>
 
 class QIntValidator;
 
 namespace catalog {
-class Button;
 class Checkbox;
 class ComboBox;
+class DateTimeInput;
+class FieldGroup;
 class Input;
 class Label;
 } // namespace catalog
 
-namespace qontrol {
-class Column;
-} // namespace qontrol
-
 namespace musig::modal {
 
-// One path.
+// One spend path being edited: its optional name, the keys it picks among the
+// network's and those that sign every spend (at least one stays optional), the
+// signatures it needs, and when it opens.
 class PathEditor : public QWidget {
     Q_OBJECT
 
 public:
-    PathEditor(const QList<KeyEntry> &keys, QWidget *parent = nullptr);
-    // Every key at BIP-87 account 0 of `network`, account_xpub empty.
-    [[nodiscard]] auto path(Network network) const -> PolicyPath;
-    void setTitle(const QString &title);
-    void setRemovable(bool removable);
+    explicit PathEditor(const QList<KeyEntry> &keys, QWidget *parent = nullptr);
+    void setPath(const SpendPath &path);
+    [[nodiscard]] auto path() const -> SpendPath;
+    // The chain tip a renewable count is shown from, none while it is not known.
+    void setTip(std::optional<std::uint32_t> tip);
 
 signals:
     void edited();
-    void removeRequested(PathEditor *path);
 
 public slots:
-    void onSemanticChanged(int index);
-    void onThresholdChanged(int index);
-    void onLocktimeKindChanged(int index);
-    void onLocktimeValueChanged(const QString &text);
+    void onNameEdited(const QString &text);
     void onKeyToggled(bool checked);
-    void onKeyTypeChanged(int index);
     void onMandatoryToggled(bool checked);
-    void onRemoveClicked();
+    void onThresholdChanged(int index);
+    void onLockKindChanged(int index);
+    void onCountEdited(const QString &text);
+    void onUnitChanged(int index);
+    void onDateChanged(const QDateTime &date);
 
 protected:
     void init();
     void doConnect();
     void view();
-    // Threshold items 1 to the checked key count, keeping the current one in range.
+    // The path from the widgets, the threshold kept within its range.
+    void readPath();
+    // Shows the mandatory boxes, the threshold items and the timelock inputs `m_path`
+    // has, without emitting edited().
+    void refresh();
     void refreshThresholds();
-    // Shows the threshold and the mandatory flags the semantic has.
-    void applySemantic();
-    [[nodiscard]] auto semantic() const -> PolicySemantic;
-    [[nodiscard]] auto locktime() const -> PolicyLocktime;
 
 private:
     QList<KeyEntry> m_keys;
-    catalog::Label *m_title_label = nullptr;
-    catalog::ComboBox *m_semantic_combo = nullptr;
-    catalog::ComboBox *m_threshold_combo = nullptr;
-    catalog::ComboBox *m_locktime_combo = nullptr;
-    catalog::Input *m_locktime_input = nullptr;
-    QIntValidator *m_locktime_validator = nullptr;
-    qontrol::Column *m_keys_column = nullptr;
+    SpendPath m_path;
+    std::optional<std::uint32_t> m_tip;
+    catalog::Input *m_name_input = nullptr;
     // One entry per m_keys key, same order.
     QList<catalog::Checkbox *> m_key_checks;
-    QList<catalog::ComboBox *> m_key_type_combos;
     QList<catalog::Checkbox *> m_mandatory_checks;
-    catalog::Button *m_remove_btn = nullptr;
+    QWidget *m_keys_table = nullptr;
+    catalog::FieldGroup *m_fields = nullptr;
+    catalog::ComboBox *m_threshold_combo = nullptr;
+    catalog::ComboBox *m_lock_combo = nullptr;
+    catalog::Input *m_count_input = nullptr;
+    QIntValidator *m_count_validator = nullptr;
+    catalog::ComboBox *m_unit_combo = nullptr;
+    catalog::DateTimeInput *m_date_input = nullptr;
+    catalog::Label *m_hint_label = nullptr;
 };
 
 } // namespace musig::modal

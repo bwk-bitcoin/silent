@@ -542,7 +542,15 @@ main-window-title
 => "Silent - Silent Payments Wallet"
 => "Silent - Silent Payments Wallet";;
 musig-account-type => "Multikey Wallet" => "NONE"
-musig-create-add-path => "+ Add a Spend Path" => "NONE"
+musig-count-block => "1 block" => "1 block"
+musig-count-blocks => "%1 blocks" => "%1 blocks"
+musig-count-day => "1 day" => "1 day"
+musig-count-days => "%1 days" => "%1 days"
+musig-count-month => "1 month" => "1 month"
+musig-count-months => "%1 months" => "%1 months"
+musig-count-week => "1 week" => "1 week"
+musig-count-weeks => "%1 weeks" => "%1 weeks"
+musig-create-add-path => "Add a Spend Path" => "NONE"
 musig-create-blocks-placeholder => "blocks" => "NONE"
 musig-create-fetch-key => "%1 (%2)" => "NONE"
 musig-create-fetch-lead
@@ -578,35 +586,98 @@ musig-create-too-many-leaves
 => "This policy needs %1 tap leaves, at most %2 are allowed: lower a threshold or split the keys over more paths"
 => "NONE";;
 musig-create-verify-lead
-=> "Check this address on one of your devices before using the wallet."
+=> "Optionally, check this address on your signing devices: click a signer."
 => "NONE";;
 musig-create-verify-lead-unchecked
 => "This is the first receive address of the wallet."
 => "NONE";;
 musig-create-verify-match => "The device shows the same address." => "NONE"
 musig-creator-unknown-instance => "Unknown MuSig2 creator entry: %1" => "NONE"
+musig-electrum-lead
+=> "An Electrum server is needed to fetch the on-chain history."
+=> "An Electrum server is needed to fetch the on-chain history.";;
+musig-electrum-own
+=> "A server run by someone else sees every address and transaction of this account."
+=> "A server run by someone else sees every address and transaction of this account.";;
+musig-electrum-own-title
+=> "Use your own Electrum server"
+=> "Use your own Electrum server";;
+musig-electrum-ssl => "SSL:" => "SSL:"
+musig-electrum-verify-certificate => "Verify Certificate:" => "Verify Certificate:"
+musig-electrum-verify-tip
+=> "Turn off for a server with a self-signed certificate."
+=> "Turn off for a server with a self-signed certificate.";;
 musig-instance-not-found => "MuSig2 instance not found: %1" => "NONE"
 musig-key-type-cosigner => "Cosigner" => "NONE"
 musig-key-type-external => "External" => "NONE"
 musig-key-type-internal => "Internal" => "NONE"
 musig-key-type-safety-net => "Safety Net" => "NONE"
 musig-key-type-unknown => "Unknown" => "NONE"
+musig-lock-hint-height => "block %1" => "block %1"
+musig-lock-line-date => "From %1" => "From %1"
+musig-lock-line-relative
+=> "%1 after a coin is received"
+=> "%1 after a coin is received";;
+musig-lock-line-renewable => "From block %1, renewable" => "From block %1, renewable"
+musig-lock-line-unset => "Once the timelock is set" => "Once the timelock is set"
+musig-lock-reason-count => "Enter the timelock." => "Enter the timelock."
+musig-lock-reason-date => "Pick the date." => "Pick the date."
+musig-lock-reason-future
+=> "Pick a date in the future."
+=> "Pick a date in the future.";;
+musig-lock-reason-relative-max
+=> "A relative timelock is at most 65535 blocks (about 15 months)."
+=> "A relative timelock is at most 65535 blocks (about 15 months).";;
+musig-lock-reason-tip
+=> "The chain tip is not known yet: this timelock is counted from it."
+=> "The chain tip is not known yet: this timelock is counted from it.";;
 musig-locktime-absolute => "From a block height" => "NONE"
+musig-locktime-date => "Date in the future" => "Date in the future"
 musig-locktime-none => "No timelock" => "NONE"
-musig-locktime-relative => "After a number of blocks" => "NONE"
-musig-locktime-renewable => "From a block height, renewable" => "NONE"
+musig-locktime-relative => "Relative" => "NONE"
+musig-locktime-renewable => "Absolute renewable" => "NONE"
 musig-menu-coins => "Coins" => "NONE"
 musig-menu-history => "History" => "NONE"
 musig-menu-receive => "Receive" => "NONE"
 musig-menu-send => "Send" => "NONE"
 musig-menu-settings => "Settings" => "NONE"
+musig-path-all => "All %1" => "All %1"
+musig-path-fingerprint => "Fingerprint" => "Fingerprint"
+musig-path-key => "Key" => "Key"
+musig-path-mandatory => "Mandatory" => "Mandatory"
+musig-path-name => "Name:" => "Name:"
+musig-path-name-placeholder => "Optional" => "Optional"
+musig-path-no-key => "No key picked yet" => "No key picked yet"
+musig-path-reason-keys => "Pick at least one key." => "Pick at least one key."
+musig-path-signatures => "Signatures:" => "Signatures:"
 musig-receive-verify-mismatch
 => "The device showed another address: do not use this one"
 => "NONE";;
+musig-register-lead
+=> "Click a device to register the account on it."
+=> "Click a device to register the account on it.";;
+musig-register-reason
+=> "%1 devices still to register."
+=> "%1 devices still to register.";;
+musig-register-reason-busy => "Registering…" => "Registering…"
+musig-register-reason-one
+=> "1 device still to register."
+=> "1 device still to register.";;
+musig-register-skip
+=> "Skip: continue without registering every device (register them later from the Keys tab)"
+=> "Skip: continue without registering every device (register them later from the Keys tab)";;
+musig-review-backed-up => "Descriptor backed up." => "Descriptor backed up."
+musig-review-backup-failed => "Could not write %1." => "Could not write %1."
+musig-review-backup-file => "%1-descriptor.txt" => "%1-descriptor.txt"
+musig-review-backup-filter => "Text files (*.txt)" => "Text files (*.txt)"
 musig-review-checksum => "Checksum" => "NONE"
 musig-review-key-path => "Key path: spends as one key" => "NONE"
 musig-review-leaves => "%1 tap leaves" => "NONE"
 musig-review-mandatory => "signs every spend" => "NONE"
+musig-review-path => "%1: %2" => "%1: %2"
+musig-review-reason-backup
+=> "Back up the descriptor first."
+=> "Back up the descriptor first.";;
 musig-review-total-leaves => "%1 tap leaves in total" => "NONE"
 musig-send-after-blocks => "after %1 blocks" => "NONE"
 musig-send-finalize-failed
@@ -641,18 +712,40 @@ musig-settings-save-failed => "Could not save the Electrum server" => "NONE"
 musig-shape-mandatory => "Mandatory keys and others" => "NONE"
 musig-shape-multi => "Several keys" => "NONE"
 musig-shape-single => "One key" => "NONE"
+musig-span-days => "about %1 days" => "about %1 days"
+musig-span-hours => "about %1 hours" => "about %1 hours"
+musig-span-months => "about %1 months" => "about %1 months"
+musig-step-electrum => "Electrum" => "Electrum"
+musig-step-paths => "Spend Paths" => "Spend Paths"
+musig-step-register => "Register" => "Register"
+musig-step-review => "Review" => "Review"
+musig-step-verify => "Verify" => "Verify"
+musig-step-xpubs => "Xpubs" => "Xpubs"
+musig-unit-blocks => "Blocks" => "Blocks"
+musig-unit-days => "Days" => "Days"
+musig-unit-months => "Months" => "Months"
+musig-unit-weeks => "Weeks" => "Weeks"
 musig-words-after-blocks => "once the coins are %1 blocks old" => "NONE"
 musig-words-after-blocks-one => "once the coins are 1 block old" => "NONE"
 musig-words-all => "%1 sign together" => "NONE"
 musig-words-from-height => "from block %1" => "NONE"
 musig-words-from-height-renewable => "from block %1, renewable" => "NONE"
-musig-words-mandatory => "%1 always sign, with any %2 of %3" => "NONE"
-musig-words-mandatory-one => "%1 always signs, with any %2 of %3" => "NONE"
+musig-words-mandatory => "%1 sign, plus any %2 of %3" => "NONE"
+musig-words-mandatory-one => "%1 signs, plus any %2 of %3" => "NONE"
 musig-words-multi => "Any %1 of %2 sign" => "NONE"
 musig-words-multi-one => "Any 1 of %1 signs" => "NONE"
 musig-words-other => "A custom set of signers" => "NONE"
 musig-words-single => "%1 signs alone" => "NONE"
 musig-words-timelocked => "%1, %2" => "NONE"
+musig-xpubs-lead
+=> "Click a missing key to fetch its xpub."
+=> "Click a missing key to fetch its xpub.";;
+musig-xpubs-reason
+=> "%1 account xpubs still missing."
+=> "%1 account xpubs still missing.";;
+musig-xpubs-reason-one
+=> "1 account xpub still missing."
+=> "1 account xpub still missing.";;
 network-bitcoin => "Bitcoin" => "Bitcoin"
 network-regtest => "Regtest" => "Regtest"
 network-signet => "Signet" => "Signet"

@@ -12,9 +12,9 @@ use bitcoin::{
 };
 use bwk_sp::receiver::bip39::Mnemonic;
 use silent::{
-    compile_policy, musig_first_receive_address, new_config, new_musig_account, review_policy,
-    set_datadir, Network, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicySemantic,
-    PolicySpec, MUSIG_PLUGIN_ID,
+    compile_policy, musig_first_receive_address, new_config, new_musig_account, renewable_height,
+    review_policy, set_datadir, Network, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath,
+    PolicySemantic, PolicySpec, MUSIG_PLUGIN_ID,
 };
 use temp_dir::TempDir;
 
@@ -74,6 +74,90 @@ fn two_of_three_spec() -> PolicySpec {
                 key(THIRD_MNEMONIC, PolicyKeyType::Cosigner),
             ],
         }],
+    }
+}
+
+// ===== Timelock Tests =====
+
+#[test]
+fn renewable_height_rounds_up_to_the_grid() {
+    for target in [1, 905_210, 905_216, 906_240] {
+        let height = renewable_height(target);
+        assert!(
+            height >= target && height % 1024 == 0 && height - target <= 1024,
+            "renewable_height({target}) = {height}: expected the next multiple of 1024"
+        );
+    }
+}
+
+/// A creator policy: every key Internal, a key in both paths, the second path behind
+/// `locktime` at `locktime_value`.
+fn timelocked_spec(locktime: PolicyLocktime, locktime_value: u32) -> PolicySpec {
+    let path = |locktime, locktime_value, keys| PolicyPath {
+        semantic: PolicySemantic::Multi,
+        threshold: 2,
+        locktime,
+        locktime_value,
+        keys,
+    };
+    PolicySpec {
+        network: Network::Regtest,
+        paths: vec![
+            path(
+                PolicyLocktime::None,
+                0,
+                vec![
+                    key(TEST_MNEMONIC, PolicyKeyType::Internal),
+                    key(SECOND_MNEMONIC, PolicyKeyType::Internal),
+                ],
+            ),
+            path(
+                locktime,
+                locktime_value,
+                vec![
+                    key(TEST_MNEMONIC, PolicyKeyType::Internal),
+                    key(THIRD_MNEMONIC, PolicyKeyType::Internal),
+                ],
+            ),
+        ],
+    }
+}
+
+/// The creator's timelocks once turned into heights: a renewable one counted from the
+/// tip and rounded to the grid, and the plain height of a date.
+#[test]
+fn the_creator_timelocks_compile() {
+    let tip = 905_210;
+    for (locktime, value) in [
+        (
+            PolicyLocktime::AbsoluteRenewable,
+            renewable_height(tip + 4320 * 6),
+        ),
+        (PolicyLocktime::Absolute, tip + 144 * 30 + 7),
+        (PolicyLocktime::Relative, 144 * 30),
+    ] {
+        let result = compile_policy(timelocked_spec(locktime, value));
+
+        assert!(
+            result.is_ok,
+            "expected {locktime:?} {value} to compile: {}",
+            result.error
+        );
+        let review = review_policy(result.descriptor);
+        assert!(
+            review.is_ok,
+            "expected the descriptor to review: {}",
+            review.error
+        );
+        let back: Vec<_> = review
+            .paths
+            .iter()
+            .map(|p| (p.locktime, p.locktime_value))
+            .collect();
+        assert!(
+            back.contains(&(locktime, value)),
+            "expected {locktime:?} {value} back, got {back:?}"
+        );
     }
 }
 

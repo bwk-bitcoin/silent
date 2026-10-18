@@ -202,12 +202,10 @@ set(SILENT_APP_SOURCES
     src/modules/musig/creator/MusigCreatorModule.cpp
     src/modules/musig/creator/CreatePolicy.h
     src/modules/musig/creator/CreatePolicy.cpp
-    src/modules/musig/creator/PolicyEditor.h
-    src/modules/musig/creator/PolicyEditor.cpp
     src/modules/musig/creator/PathEditor.h
     src/modules/musig/creator/PathEditor.cpp
-    src/modules/musig/creator/ReviewPolicy.h
-    src/modules/musig/creator/ReviewPolicy.cpp
+    src/modules/musig/creator/SpendPath.h
+    src/modules/musig/creator/SpendPath.cpp
     src/views/MenuTab.h
     src/views/MenuTab.cpp
     src/views/modals/AppSettings.h

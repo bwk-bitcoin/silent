@@ -49,8 +49,6 @@
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigPlugin.h"
 #include "modules/musig/creator/CreatePolicy.h"
-#include "modules/musig/creator/PathEditor.h"
-#include "modules/musig/creator/PolicyEditor.h"
 #include "modules/musig/SigningSection.h"
 #include "modules/sp/SpPlugin.h"
 #include "qr/QrTypes.h"
@@ -690,33 +688,20 @@ void checkColdcardApproved(const QString &what) {
 
 // ===== Step groups =====
 
-void definePolicy(CreatePolicy *m) {
-    m->m_name_input->setText(ACCOUNT);
-    for (int i = 0; i < m->m_network_combo->count(); ++i) {
-        if (m->m_network_combo->itemText(i).contains("Regtest", Qt::CaseInsensitive)) {
-            m->m_network_combo->setCurrentIndex(i);
-            m->onNetworkChanged(i);
+// The wizard's row of `fingerprint` among `rows`.
+auto wizardRow(qontrol::Column *rows, const QString &fingerprint) -> catalog::SelectRow * {
+    for (auto *row : rows->findChildren<catalog::SelectRow *>()) {
+        if (QString::compare(row->property("fingerprint").toString(), fingerprint,
+                             Qt::CaseInsensitive) == 0) {
+            return row;
         }
     }
-    m->m_electrum.input()->setText(g_electrum);
-    m->onElectrumEdited();
-    // Internal, External, Cosigner: the order of the key type combo. A is Internal,
-    // B Cosigner, C External, as bwk-hwi's device tests.
-    const QHash<QString, int> types = {{g_fp_a, 0}, {g_fp_b, 2}, {g_fp_c, 1}};
-    auto *path = m->m_editor->m_paths.at(0);
-    path->m_semantic_combo->setCurrentIndex(1);
-    path->onSemanticChanged(1);
-    for (int i = 0; i < path->m_keys.size(); ++i) {
-        auto fp = path->m_keys.at(i).fingerprint;
-        path->m_key_checks.at(i)->setChecked(types.contains(fp));
-        if (types.contains(fp)) {
-            path->m_key_type_combos.at(i)->setCurrentIndex(types.value(fp));
-            path->onKeyTypeChanged(types.value(fp));
-        }
-    }
-    path->m_threshold_combo->setCurrentIndex(1);
-    path->onThresholdChanged(1);
-    m->updateActions();
+    return nullptr;
+}
+
+auto wizardAt(CreatePolicy::View view) -> CreatePolicy * {
+    auto *m = visible<CreatePolicy>();
+    return m != nullptr && m->m_view == view ? m : nullptr;
 }
 
 // Registers the live device `id` as a key named `alias` from its Keys tab row.
@@ -939,37 +924,38 @@ void addSteps() {
         }
         check(false, "the account type modal lists the shared wallet");
     });
-    step("define", [] { return visible<CreatePolicy>() != nullptr; }, [] {
-        definePolicy(visible<CreatePolicy>());
-        later([] { visible<CreatePolicy>()->onTestElectrum(); });
-    });
-    step("electrum tested", [] {
-        auto *m = visible<CreatePolicy>();
-        return m->m_electrum.state() == catalog::EndpointRow::State::Ok ||
-               m->m_electrum.state() == catalog::EndpointRow::State::Failed;
-    }, [] {
-        auto *m = visible<CreatePolicy>();
-        check(m->m_electrum.state() == catalog::EndpointRow::State::Ok,
-              "electrum test passes against electrs");
-        m->updateActions();
-        shot("05-creator-define-preview");
-        check(m->m_next_btn->isEnabled(), "Next enabled");
-        later([m] { m->m_next_btn->click(); });
+    // The first path is the default one: every key of the network, any 2 signing.
+    step("spend paths", [] { return wizardAt(CreatePolicy::View::Paths) != nullptr; }, [] {
+        auto *m = wizardAt(CreatePolicy::View::Paths);
+        check(m->m_paths.size() == 1 && m->m_paths.first().keys.size() == 3 &&
+                  m->m_paths.first().threshold == 2,
+              "the default path is any 2 of the 3 keys");
+        check(m->pathsReason().isEmpty(), "Continue enabled: " + m->pathsReason());
+        shot("05-creator-paths");
+        later([m] { m->onNextClicked(); });
     });
     step("fetch page", [] {
-        auto *m = visible<CreatePolicy>();
-        return m != nullptr && m->m_step == CreatePolicy::Step::FetchXpubs;
+        auto *m = wizardAt(CreatePolicy::View::Xpubs);
+        return m != nullptr && m->m_req_id == 0 && !m->missingXpubs().isEmpty();
     }, [] {
-        auto *m = visible<CreatePolicy>();
-        later([m] { m->m_fetch_btn->click(); });
+        auto *m = wizardAt(CreatePolicy::View::Xpubs);
+        auto missing = m->missingXpubs();
+        check(missing == QStringList{g_fp_a}, "only the hot key's xpub is missing: " +
+                                                  missing.join(' '));
+        auto *row = wizardRow(m->m_xpub_rows, missing.first());
+        later([row] { emit row->clicked(); });
     });
     step("fetch A password", [] { return unsealShown() != nullptr; },
          [] { enterPassword(unsealShown()); });
-    step("review", [] {
-        auto *m = visible<CreatePolicy>();
-        return m != nullptr && m->m_step == CreatePolicy::Step::Review;
+    step("xpubs fetched", [] {
+        auto *m = wizardAt(CreatePolicy::View::Xpubs);
+        return m != nullptr && m->m_req_id == 0 && m->missingXpubs().isEmpty();
     }, [] {
-        auto *m = visible<CreatePolicy>();
+        auto *m = wizardAt(CreatePolicy::View::Xpubs);
+        later([m] { m->onNextClicked(); });
+    });
+    step("review", [] { return wizardAt(CreatePolicy::View::Review) != nullptr; }, [] {
+        auto *m = wizardAt(CreatePolicy::View::Review);
         g_descriptor = m->m_descriptor;
         std::printf("descriptor %s\n", g_descriptor.toStdString().c_str());
         check(g_descriptor.contains("musig("), "musig descriptor compiled");
@@ -979,27 +965,40 @@ void addSteps() {
             }
         }
         std::printf("registration order %s\n", m->m_fingerprints.join(' ').toStdString().c_str());
+        m->m_name_input->setText(ACCOUNT);
+        // The save dialog cannot be driven offscreen: the backup counts as done.
+        m->m_backed_up = true;
+        m->refreshReviewActions();
         shot("07-creator-review");
-        later([m] { m->m_register_btn->click(); });
+        check(m->m_review_next_btn->isEnabled(), "Continue enabled once named and backed up");
+        later([m] { m->onNextClicked(); });
     });
-    // The creator registers in path order. The Coldcard's step runs once its enroll
+    // A device registers on its row's click. The Coldcard's step runs once its enroll
     // request was sent: its story waits on the device until approved.
     for (int i = 0; i < 2; ++i) {
+        step(QStringLiteral("click device %1").arg(i + 1), [] {
+            auto *m = wizardAt(CreatePolicy::View::Register);
+            return m != nullptr && g_register_devices.size() == 2 && m->m_req_id == 0 &&
+                   m->m_registering.isEmpty();
+        }, [i] {
+            auto *m = wizardAt(CreatePolicy::View::Register);
+            auto *row = wizardRow(m->m_register_rows, g_register_devices.at(i));
+            check(row != nullptr && row->isEnabled(), "device row to register " +
+                                                          g_register_devices.at(i));
+            later([row] { emit row->clicked(); });
+        });
         step(QStringLiteral("register on device %1").arg(i + 1), [i] {
             if (auto *u = unsealShown(); u != nullptr) {
                 enterPassword(u);
             }
-            auto *m = visible<CreatePolicy>();
-            if (m == nullptr || g_register_devices.size() != 2 ||
-                (m->m_step != CreatePolicy::Step::Register &&
-                 m->m_step != CreatePolicy::Step::VerifyAddress)) {
+            auto *m = wizardAt(CreatePolicy::View::Register);
+            if (m == nullptr) {
                 return false;
             }
             const auto &fp = g_register_devices.at(i);
-            bool current = m->m_req_id != 0 && !m->m_to_register.isEmpty() &&
-                           QString::compare(m->m_to_register.first(), fp, Qt::CaseInsensitive) == 0;
             if (fp == g_fp_b) {
-                return current;
+                return QString::compare(m->m_registering, fp, Qt::CaseInsensitive) == 0 ||
+                       m->m_registered.contains(fp);
             }
             for (const auto &registration : g_keys->m_device_registrations) {
                 if (QString::compare(registration.fingerprint, fp, Qt::CaseInsensitive) == 0 &&
@@ -1007,7 +1006,7 @@ void addSteps() {
                     return true;
                 }
             }
-            return !current && !m->m_to_register.contains(fp, Qt::CaseInsensitive);
+            return m->m_registered.contains(fp);
         }, [i] {
             if (g_register_devices.at(i) == g_fp_b) {
                 shot("08-creator-register-ledger");
@@ -1016,22 +1015,37 @@ void addSteps() {
             shot("09-creator-register-coldcard");
             approveColdcard();
         });
+        if (i == 0) {
+            step("Ledger registered", [] {
+                auto *m = wizardAt(CreatePolicy::View::Register);
+                return m != nullptr && m->m_registered.contains(g_register_devices.at(0)) &&
+                       m->m_req_id == 0;
+            }, [] {});
+        }
     }
     step("Coldcard enrolled", [] { return g_cc_driver.finished(); },
          [] { checkColdcardApproved("the Coldcard enrolled the wallet"); });
-    step("verify address step", [] {
-        auto *m = visible<CreatePolicy>();
-        return m != nullptr && m->m_step == CreatePolicy::Step::VerifyAddress;
+    step("every device registered", [] {
+        auto *m = wizardAt(CreatePolicy::View::Register);
+        return m != nullptr && m->m_req_id == 0 && m->m_registered.contains(g_fp_b) &&
+               m->m_registered.contains(g_fp_c) && m->m_registered.contains(g_fp_a);
     }, [] {
-        auto *m = visible<CreatePolicy>();
+        auto *m = wizardAt(CreatePolicy::View::Register);
         auto hmac = Host::get()->keys()->registrationHmac(Network::Regtest, g_fp_b, g_descriptor);
         static const QRegularExpression HEX64(QStringLiteral("^[0-9a-f]{64}$"));
         check(HEX64.match(hmac).hasMatch(), "the Ledger HMAC is stored (" +
                                                 QString::number(hmac.size()) + " chars)");
+        check(m->m_register_next_btn->isEnabled(), "Continue enabled once every device registered");
+        shot("09b-creator-registered");
+        later([m] { m->onNextClicked(); });
+    });
+    step("verify address step", [] { return wizardAt(CreatePolicy::View::Verify) != nullptr; }, [] {
+        auto *m = wizardAt(CreatePolicy::View::Verify);
         std::printf("first address %s\n", std::string(m->m_address.address).c_str());
-        check(m->m_verify_btn->isVisibleTo(m), "check on device offered");
+        auto *row = wizardRow(m->m_verify_rows, g_fp_b);
+        check(row != nullptr && row->isEnabled(), "check on the Ledger offered");
         markLedgerScreens();
-        later([m] { m->m_verify_btn->click(); });
+        later([row] { emit row->clicked(); });
     });
     step("verify picker", [] { return visible<SigningFlow>() != nullptr; },
          [] { pickRow(g_fp_b, "the Ledger, to show the address"); });
@@ -1060,11 +1074,29 @@ void addSteps() {
         shot("11-creator-verify-matched");
         later([f] { f->accept(); });
     });
-    step("install", [] {
-        auto *m = visible<CreatePolicy>();
-        return visible<SigningFlow>() == nullptr && m != nullptr && m->m_install_btn->isEnabled();
+    step("verified", [] {
+        auto *m = wizardAt(CreatePolicy::View::Verify);
+        return visible<SigningFlow>() == nullptr && m != nullptr && m->m_req_id == 0;
     }, [] {
-        auto *m = visible<CreatePolicy>();
+        auto *m = wizardAt(CreatePolicy::View::Verify);
+        check(m->m_verified.contains(g_fp_b), "the Ledger row reads Verified");
+        later([m] { m->onNextClicked(); });
+    });
+    step("electrum", [] { return wizardAt(CreatePolicy::View::Electrum) != nullptr; }, [] {
+        auto *m = wizardAt(CreatePolicy::View::Electrum);
+        m->m_electrum.input()->setText(g_electrum);
+        m->onElectrumEdited();
+        later([m] { m->onTestElectrum(); });
+    });
+    step("electrum tested", [] {
+        auto *m = wizardAt(CreatePolicy::View::Electrum);
+        return m != nullptr && (m->m_electrum.state() == catalog::EndpointRow::State::Ok ||
+                                m->m_electrum.state() == catalog::EndpointRow::State::Failed);
+    }, [] {
+        auto *m = wizardAt(CreatePolicy::View::Electrum);
+        check(m->m_electrum.state() == catalog::EndpointRow::State::Ok,
+              "electrum test passes against electrs");
+        shot("11b-creator-electrum");
         g_instances_before = Host::get()->instances().size();
         later([m] { m->m_install_btn->click(); });
     });

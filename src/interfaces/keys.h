@@ -18,7 +18,8 @@ class ISigner;
 // cached xpubs when no route is usable. `can_sign` is false for that stand-in.
 // `descriptor_route` is the route spDescriptor() fetches over (QR or hot), Unknown
 // when the key has neither. `can_show_address` is true when the key has a USB or QR
-// route, a device with a screen verifyAddress() can show an address on.
+// route, a device with a screen verifyAddress() can show an address on. `route` is the
+// key's first route, connected or not, Unknown when it has none.
 struct KeyEntry {
     QString fingerprint;
     QString alias;
@@ -26,6 +27,7 @@ struct KeyEntry {
     ISigner *signer{};
     KeyRouteKind descriptor_route = KeyRouteKind::Unknown;
     bool can_show_address{};
+    KeyRouteKind route = KeyRouteKind::Unknown;
 };
 
 // The keys module, as accounts and plugins see it. An account never picks a signer:

@@ -311,6 +311,9 @@ auto KeysModule::buildKeyEntry(const KeyInfo &info) -> KeyEntry {
     entry.fingerprint = fingerprint;
     entry.alias = toQt(info.alias);
     entry.descriptor_route = descriptorRoute(info);
+    if (!info.routes.empty()) {
+        entry.route = info.routes.front();
+    }
     entry.can_show_address = std::ranges::any_of(info.routes, [](KeyRouteKind route) {
         return route == KeyRouteKind::Usb || route == KeyRouteKind::Qr;
     });

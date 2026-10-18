@@ -12,8 +12,8 @@ use bitcoin::{
 };
 use bwk::bwk_descriptor::{descriptor::Descriptor, musig::musig_descriptor_to_string};
 use bwk_bup::{
-    infer_policy_type, policy::MAX_LEAVES, Bip87Account, KeyType, Locktime, OXpub, Path, Policy,
-    PolicyError, PolicyType, Semantic, TapPosition,
+    cltv_align, infer_policy_type, policy::MAX_LEAVES, Bip87Account, KeyType, Locktime, OXpub,
+    Path, Policy, PolicyError, PolicyType, Semantic, TapPosition,
 };
 
 use crate::ffi::{
@@ -31,6 +31,12 @@ pub fn bip87_account_path(network: Network, account: u32) -> String {
         "m/{}",
         bwk_bup::key_role::bip87_account_path(network, account)
     )
+}
+
+/// `target` rounded up to bwk-bup's renewable timelock grid, the height a renewable
+/// absolute timelock asked for `target` compiles to.
+pub fn renewable_height(target: u32) -> u32 {
+    cltv_align(target)
 }
 
 pub fn preview_policy(spec: PolicySpec) -> PolicyCompileResult {
