@@ -300,6 +300,10 @@ private:
 };
 
 ColdcardDriver g_cc_driver;
+// Since the wizard sent the Coldcard its enroll request.
+QElapsedTimer g_enroll_sent;
+// How long the Coldcard is left unapproved before the check.
+constexpr qint64 ENROLL_WAIT_MS = 3000;
 
 void approveColdcard() {
     g_cc_driver.start({"approve", "--timeout", QString::number(APPROVE_TIMEOUT_S)});
@@ -837,6 +841,18 @@ void signRoundSteps(const QString &tag, const std::vector<RoundSigner> &signers,
              },
              [fp] {
                  check(true, "signer " + *fp + " can be picked");
+                 // Only the rows the list holds are drawn: none left over from an
+                 // earlier render under them.
+                 auto *m = signModal();
+                 int drawn = 0;
+                 for (auto *row : m->m_rows->findChildren<catalog::SelectRow *>(
+                          Qt::FindDirectChildrenOnly)) {
+                     drawn += row->isVisible() ? 1 : 0;
+                 }
+                 check(drawn == m->m_rows->layout()->count(),
+                       QStringLiteral("the Sign modal draws its %1 rows only (%2 drawn)")
+                           .arg(m->m_rows->layout()->count())
+                           .arg(drawn));
                  later([fp] { emit cosignerRow(*fp)->clicked(); });
              });
         QString name = signer.shot;
@@ -1107,8 +1123,19 @@ void addSteps() {
         std::printf("Ledger %s while the Coldcard enrolls\n",
                     m->m_registered.contains(g_fp_b) ? "registered" : "still registering");
         shot("08-creator-register-both");
-        approveColdcard();
+        g_enroll_sent.start();
     });
+    // The Coldcard answers its enroll request at once, then asks its user: until the
+    // user approves, the wizard keeps it registering.
+    step("Coldcard waits for its user", [] { return g_enroll_sent.elapsed() > ENROLL_WAIT_MS; },
+         [] {
+             auto *m = wizardAt(CreatePolicy::View::Register);
+             check(!m->m_registered.contains(g_fp_c) &&
+                       m->asking(CreatePolicy::Ask::Register, g_fp_c),
+                   "the Coldcard still registering while its user has not approved");
+             shot("08b-creator-register-coldcard-unconfirmed");
+             approveColdcard();
+         });
     step("Coldcard enrolled", [] { return g_cc_driver.finished(); },
          [] { checkColdcardApproved("the Coldcard enrolled the wallet"); });
     step("every device registered", [] {
