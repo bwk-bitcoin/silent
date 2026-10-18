@@ -278,6 +278,9 @@ flow-verify-hot-busy => "Checking the address…" => "NONE"
 flow-verify-hot-prompt
 => "Enter the password of “%1” to check this address."
 => "NONE";;
+flow-verify-hot-sub
+=> "A hot key has no screen to show the address on."
+=> "A hot key has no screen to show the address on.";;
 flow-verify-key-not-needed
 => "This key is not a key of this wallet."
 => "This key is not a key of this wallet.";;
@@ -289,11 +292,15 @@ flow-verify-mismatch-body
 => "%1 did not confirm this address. Do not use it to receive coins."
 => "NONE";;
 flow-verify-mismatch-title => "Address Does Not Match" => "NONE"
+flow-verify-no-route-sub
+=> "No device of this key can show the address. Add a USB or QR route in the Keys tab."
+=> "No device of this key can show the address. Add a USB or QR route in the Keys tab.";;
 flow-verify-picker-lead => "Pick the device to check this address on." => "NONE"
 flow-verify-qr-hint
 => "Scan this code with the device. It derives the address and shows it."
 => "NONE";;
 flow-verify-qr-title => "Show Address Request" => "NONE"
+flow-verify-ready-sub => "Shows the address on %1." => "Shows the address on %1."
 flow-verify-scan-hint
 => "Hold the answer code from the device in front of the camera."
 => "NONE";;

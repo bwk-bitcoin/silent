@@ -52,7 +52,11 @@ auto unusableStatus(KeyUnusableReason reason) -> SignerStatus {
     }
 }
 
-auto statusPill(SignerStatus status) -> catalog::Badge * {
+// A Verify picker's key with nothing to show the address on reads No Screen.
+auto statusPill(SignerStatus status, Context context) -> catalog::Badge * {
+    if (context == Context::Verify && status == SignerStatus::NoRoute) {
+        return catalog::pillAddrNoScreen();
+    }
     switch (status) {
     case SignerStatus::First:
         return catalog::pillSignerFirst();
@@ -74,7 +78,25 @@ auto statusPill(SignerStatus status) -> catalog::Badge * {
     return catalog::pillSignerNoRoute();
 }
 
-auto statusSub(const FlowRow &row) -> QString {
+// The row's line under its title. A Verify picker speaks of showing the address,
+// never of signing.
+auto statusSub(const FlowRow &row, Context context) -> QString {
+    if (context == Context::Verify) {
+        switch (row.status) {
+        case SignerStatus::Ready:
+            return TR("flow-verify-ready-sub").arg(catalog::routeLabel(row.route));
+        case SignerStatus::NoRoute:
+            return row.route == KeyRouteKind::Hot ? TR("flow-verify-hot-sub")
+                                                  : TR("flow-verify-no-route-sub");
+        case SignerStatus::NoHot:
+        case SignerStatus::First:
+        case SignerStatus::Signed:
+        case SignerStatus::Waiting:
+        case SignerStatus::Disconnected:
+        case SignerStatus::Unregistered:
+            break;
+        }
+    }
     switch (row.status) {
     case SignerStatus::First:
         return TR("flow-signer-first-sub");
@@ -323,8 +345,11 @@ auto SigningFlow::verifyRows() const -> QList<FlowRow> {
         if (!row.usable()) {
             bool hasUsb = !silentPayment &&
                           std::ranges::find(info.routes, KeyRouteKind::Usb) != info.routes.end();
+            bool hasHot = std::ranges::find(info.routes, KeyRouteKind::Hot) != info.routes.end();
             row.status = hasUsb ? SignerStatus::Disconnected : SignerStatus::NoRoute;
-            row.route = hasUsb ? KeyRouteKind::Usb : KeyRouteKind::Unknown;
+            // A hot key keeps its route: its row says it has no screen.
+            row.route =
+                hasUsb ? KeyRouteKind::Usb : (hasHot ? KeyRouteKind::Hot : KeyRouteKind::Unknown);
             row.device = hasUsb ? rememberedDevice(row.fingerprint) : QString();
         }
         rows.append(row);
@@ -378,9 +403,9 @@ auto SigningFlow::buildRow(const FlowRow &row, int index) const -> catalog::Sele
     selectRow->setIcon(row.route != KeyRouteKind::Unknown ? catalog::routeIcon(row.route)
                                                           : icon::key);
     selectRow->setTitle(row.alias.isEmpty() ? TR("flow-unknown-key") : row.alias);
-    selectRow->setSub(statusSub(row));
+    selectRow->setSub(statusSub(row, m_request.context));
     selectRow->setMeta(row.fingerprint);
-    selectRow->setStatus(statusPill(row.status));
+    selectRow->setStatus(statusPill(row.status, m_request.context));
     selectRow->setStatusWidth(resolve(PillWidth::L));
     if (row.usable()) {
         selectRow->setProperty(ROW_INDEX, index);
@@ -443,7 +468,7 @@ void SigningFlow::startRequestedRow() {
         return;
     }
     if (!found->usable()) {
-        onFailed(statusSub(*found));
+        onFailed(statusSub(*found, m_request.context));
         return;
     }
     m_current = *found;

@@ -532,6 +532,13 @@ flow-signer-disconnected-sub => "Connect and unlock %1."
 
 flow-signer-no-hot-sub => "The mnemonic of this key is not stored on this computer."
 
+flow-verify-ready-sub => "Shows the address on %1."
+
+flow-verify-hot-sub => "A hot key has no screen to show the address on."
+
+flow-verify-no-route-sub
+=> "No device of this key can show the address. Add a USB or QR route in the Keys tab.";;
+
 flow-signer-no-route-sub
 => "None of this key’s routes can sign. Add one in the Keys tab.";;
 
