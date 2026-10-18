@@ -635,7 +635,7 @@ fn test_usb_sign_round_trip_keeps_sp_fields_and_merges_the_signature() {
     let psbt = usb_signable_psbt(network);
     let psbt_v2_hex = hex::encode(psbt.serialize().expect("serialize psbt"));
 
-    let payload = silent::usb_sign_payload(&psbt_v2_hex);
+    let payload = silent::usb_sign_payload(&psbt_v2_hex, "", false);
     assert!(payload.is_ok, "expected ok, got error: {}", payload.error);
 
     let mut v0 = Psbt::from_str(&payload.psbt_base64).expect("valid v0 psbt");
@@ -723,7 +723,7 @@ fn test_usb_sign_payload_refuses_a_pending_sp_output() {
     let psbt = sp_pending_output_psbt();
     let bytes = psbt.serialize().expect("serialize psbt");
 
-    let payload = silent::usb_sign_payload(&hex::encode(bytes));
+    let payload = silent::usb_sign_payload(&hex::encode(bytes), "", false);
     assert!(!payload.is_ok, "expected a pending sp output to be refused");
     assert!(
         payload.error.contains("sp()"),

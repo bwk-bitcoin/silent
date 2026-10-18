@@ -13,7 +13,8 @@ use bwk_sp::{
         musig::{
             musig_input_partial_sigs, musig_input_participants_all, musig_input_pub_nonces,
             remove_musig_input_partial_sigs, remove_musig_input_pub_nonces,
-            Error as MusigFieldError, PSBT_IN_MUSIG2_PARTIAL_SIG, PSBT_IN_MUSIG2_PUB_NONCE,
+            set_musig_input_participants, Error as MusigFieldError, PSBT_IN_MUSIG2_PARTIAL_SIG,
+            PSBT_IN_MUSIG2_PUB_NONCE,
         },
         sp::{
             sp_input_tweak, sp_v0_output, PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE,
@@ -668,9 +669,45 @@ fn copy_unknown(into: &mut UnknownMap, from: &UnknownMap, types: &[u8]) {
     }
 }
 
+/// Adds, to each taproot input of `participants`' wallet that lists no MuSig2
+/// participants, `aggregate`'s: the internal key's of a wallet whose internal key is a
+/// musig(). A Coldcard opens its MuSig2 session only for a PSBT carrying MuSig2 fields,
+/// then asserts on that session for every input of a wallet with a musig() internal
+/// key, even one it signs on a single-key leaf (firmware `psbt.py`,
+/// `musig_process_input`: "Signing failed late"). Returns how many inputs gained it.
+pub fn add_internal_participants(
+    psbt: &mut PsbtV2,
+    aggregate: PublicKey,
+    participants: &[PublicKey],
+) -> Result<usize, Error> {
+    let mut added = 0;
+    for input in &mut psbt.inputs {
+        let input = &mut input.psbt;
+        let ours = participants.iter().any(|key| {
+            input
+                .tap_key_origins
+                .contains_key(&key.x_only_public_key().0)
+        });
+        if input.tap_internal_key.is_none() || !ours {
+            continue;
+        }
+        if !musig_input_participants_all(input)
+            .map_err(|e| Error::PsbtParse(e.to_string()))?
+            .is_empty()
+        {
+            continue;
+        }
+        set_musig_input_participants(input, aggregate, participants);
+        added += 1;
+    }
+    Ok(added)
+}
+
 /// Adds `signed`'s signatures to `input`, keeping the ones it has. Whether any
-/// signature was added. Also copies 0x1b / 0x1c; a nonce-only answer counts as
-/// progress.
+/// signature was added. Also copies 0x1b / 0x1c when `input` lists MuSig2
+/// participants: a device may answer a nonce for a key path it was only told of to
+/// sign a single-key leaf (see `add_internal_participants`). A nonce-only answer
+/// counts as progress.
 fn copy_signatures(input: &mut bitcoin::psbt::Input, signed: &bitcoin::psbt::Input) -> bool {
     let count = |input: &bitcoin::psbt::Input| {
         input.partial_sigs.len()
@@ -684,7 +721,12 @@ fn copy_signatures(input: &mut bitcoin::psbt::Input, signed: &bitcoin::psbt::Inp
         input.tap_key_sig = signed.tap_key_sig;
     }
     input.tap_script_sigs.extend(signed.tap_script_sigs.clone());
-    copy_unknown(&mut input.unknown, &signed.unknown, &MUSIG_INPUT_TYPES);
+    // An input listing no MuSig2 participants signs no MuSig2 round: a nonce in the
+    // answer is one the device made for a key path it was only told of.
+    let musig = musig_input_participants_all(input).is_ok_and(|all| !all.is_empty());
+    if musig {
+        copy_unknown(&mut input.unknown, &signed.unknown, &MUSIG_INPUT_TYPES);
+    }
     count(input) > before
 }
 

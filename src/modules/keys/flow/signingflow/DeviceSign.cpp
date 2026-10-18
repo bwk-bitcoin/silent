@@ -43,7 +43,12 @@ void DeviceSign::start(const QString &descriptor) {
         fail(UsbError::Disconnected, QString());
         return;
     }
-    auto payload = ::usb_sign_payload(rust::String(m_psbt_v2_hex.toStdString()));
+    // A Coldcard needs a MuSig2 session open for a wallet with a musig() internal key,
+    // even on a single-key leaf: the payload then lists that key's participants.
+    bool coldcard = m_device->brand().startsWith(QStringLiteral("coldcard"), Qt::CaseInsensitive);
+    auto psbt = m_psbt_v2_hex.toStdString();
+    auto wallet = descriptor.toStdString();
+    auto payload = ::usb_sign_payload(rust::Str(psbt), rust::Str(wallet), coldcard);
     if (!payload.is_ok) {
         fail(UsbError::Failed, KeysModule::toQt(payload.error));
         return;

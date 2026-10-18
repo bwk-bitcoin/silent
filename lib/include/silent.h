@@ -3058,8 +3058,12 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 // MuSig2 round 1 every nonce and partial signature is dropped, as the QR route
 // does, because a device takes any nonce in the PSBT as round 2;
 // `usb_merge_signed` merges into the unstripped original, so the nonces
-// already gathered stay.
-::PsbtPayloadResult usb_sign_payload(::rust::Str psbt_v2_hex) noexcept;
+// already gathered stay. With `open_musig_session` (a Coldcard) and a wallet
+// `descriptor` whose internal key is a musig(), an input listing no MuSig2
+// participants gets the internal key's: the Coldcard needs a MuSig2 session
+// for such a wallet even on a single-key leaf. The nonce it may add for that
+// key path is dropped by `usb_merge_signed`.
+::PsbtPayloadResult usb_sign_payload(::rust::Str psbt_v2_hex, ::rust::Str descriptor, bool open_musig_session) noexcept;
 
 // Merges a USB device's v0 signed answer back into the original v2 PSBT,
 // keeping its silent-payment input tweaks and ECDH shares. Only signature

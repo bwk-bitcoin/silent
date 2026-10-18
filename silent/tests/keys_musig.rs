@@ -17,16 +17,17 @@ use bitcoin::{
 use bwk_qr_protocol::{request, response, Message, MessageType, Response};
 use bwk_sp::bwk_tx::bwk_psbt::{
     musig::{
-        musig_input_partial_sigs, musig_input_pub_nonces, set_musig_input_partial_sig,
-        set_musig_input_participants, set_musig_input_pub_nonce, MusigPartialSig, MusigPubNonce,
+        musig_input_partial_sigs, musig_input_participants_all, musig_input_pub_nonces,
+        set_musig_input_partial_sig, set_musig_input_participants, set_musig_input_pub_nonce,
+        MusigPartialSig, MusigPubNonce,
     },
     Input as PsbtInput, Output as PsbtOutput, PsbtV2,
 };
 use silent::{
     keys::{
         psbt::{
-            merge_signatures_bytes, musig_done_fingerprints, musig_nonces_complete,
-            required_fingerprints, strip_musig_round1,
+            add_internal_participants, merge_signatures_bytes, musig_done_fingerprints,
+            musig_nonces_complete, required_fingerprints, strip_musig_round1,
         },
         qr::{QrResponse, QrSession},
         Error,
@@ -337,6 +338,74 @@ fn merge_keeps_a_nonce_only_answer() {
     );
 }
 
+/// A single-key leaf spend of a wallet whose internal key is `aggregate -> [A, B]`:
+/// A's and B's origins, the internal key, and no MuSig2 field at all.
+fn leaf_psbt() -> PsbtV2 {
+    let mut input = blank_input();
+    add_origin(&mut input, key_a(), fingerprint_a());
+    add_origin(&mut input, key_b(), fingerprint_b());
+    input.psbt.tap_internal_key = Some(aggregate().x_only_public_key().0);
+    one_input_psbt(input)
+}
+
+#[test]
+fn merge_drops_a_nonce_for_an_aggregate_not_listed() {
+    let original = leaf_psbt();
+    let original_bytes = v2_bytes(&original);
+    // A Coldcard told of the internal key's participants answers its leaf signature
+    // and a nonce for that key path.
+    let mut answer = original.clone();
+    answer.inputs[0].psbt.tap_script_sigs.insert(
+        (
+            key_a().x_only_public_key().0,
+            bitcoin::taproot::TapLeafHash::all_zeros(),
+        ),
+        bitcoin::taproot::Signature::from_slice(&[7; 64]).expect("a 64 byte signature"),
+    );
+    add_nonce(&mut answer, key_a(), 1);
+    let merged = merge_signatures_bytes(&original_bytes, &v0_bytes(&answer))
+        .expect("the leaf signature merges");
+    let merged = PsbtV2::deserialize(&merged).expect("merged psbt parses as v2");
+    assert_eq!(
+        merged.inputs[0].psbt.tap_script_sigs.len(),
+        1,
+        "the leaf signature is kept"
+    );
+    assert!(
+        nonces_of(&merged.inputs[0].psbt).is_empty(),
+        "no nonce for an aggregate the original does not list"
+    );
+}
+
+#[test]
+fn internal_participants_only_where_none_are_listed() {
+    let mut leaf = leaf_psbt();
+    let added = add_internal_participants(&mut leaf, aggregate(), &[key_a(), key_b()])
+        .expect("participants added");
+    assert_eq!(
+        added, 1,
+        "the leaf input gains the internal key's participants"
+    );
+    let listed = musig_input_participants_all(&leaf.inputs[0].psbt).expect("valid 0x1a");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].aggregate, aggregate());
+    assert_eq!(listed[0].participants, vec![key_a(), key_b()]);
+
+    let mut musig = musig_psbt();
+    musig.inputs[0].psbt.tap_internal_key = Some(aggregate().x_only_public_key().0);
+    let added = add_internal_participants(&mut musig, public_key(0x0d), &[key_a(), key_b()])
+        .expect("nothing to add");
+    assert_eq!(
+        added, 0,
+        "an input already listing participants is left as it is"
+    );
+
+    let mut stranger = leaf_psbt();
+    let added = add_internal_participants(&mut stranger, aggregate(), &[public_key(0x0e)])
+        .expect("nothing to add");
+    assert_eq!(added, 0, "an input of another wallet is left as it is");
+}
+
 // ===== QR =====
 
 /// The PSBT a decoded sign request carries.
@@ -430,7 +499,7 @@ fn qr_0x0d_is_a_musig_session_error() {
 
 /// The v0 PSBT of a `usb_sign_payload` answer.
 fn usb_payload_psbt(original: &PsbtV2) -> Psbt {
-    let payload = silent::usb_sign_payload(&hex::encode(v2_bytes(original)));
+    let payload = silent::usb_sign_payload(&hex::encode(v2_bytes(original)), "", false);
     assert!(payload.is_ok, "usb payload refused: {}", payload.error);
     let bytes = BASE64_STANDARD
         .decode(&payload.psbt_base64)

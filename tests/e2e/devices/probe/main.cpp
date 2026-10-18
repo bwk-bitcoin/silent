@@ -300,6 +300,8 @@ private:
 };
 
 ColdcardDriver g_cc_driver;
+// The relative timelock, in blocks, of the Coldcard's recovery path.
+constexpr int RECOVERY_BLOCKS = 3;
 // Since the wizard sent the Coldcard its enroll request.
 QElapsedTimer g_enroll_sent;
 // How long the Coldcard is left unapproved before the check.
@@ -917,15 +919,18 @@ void signRoundSteps(const QString &tag, const std::vector<RoundSigner> &signers,
     });
 }
 
-void broadcastSteps(const QString &ready_shot, const QString &success_shot) {
+// `round`: the round status once every signature is in, Ready after MuSig2 rounds,
+// NotMusig for a single-key leaf.
+void broadcastSteps(const QString &ready_shot, const QString &success_shot,
+                    const QString &round = QStringLiteral("Ready")) {
     step("ready to broadcast",
          [] {
              auto *m = signModal();
              return m != nullptr && m->m_broadcast_btn->isVisible() &&
                     m->m_broadcast_btn->isEnabled();
          },
-         [ready_shot] {
-             check(currentRound() == "Ready", "round 2 done: ready");
+         [ready_shot, round] {
+             check(currentRound() == round, "every signature in: " + round);
              if (!ready_shot.isEmpty()) {
                  shot(ready_shot);
              }
@@ -1035,6 +1040,32 @@ void addSteps() {
         check(m->m_paths.size() == 1 && m->m_paths.first().keys.size() == 3 &&
                   m->m_paths.first().threshold == 2,
               "the default path is any 2 of the 3 keys");
+        // The paths: the Ledger and the Coldcard together (the key path, a musig()
+        // internal key), the hot key and the Ledger together (a MuSig2 leaf), and a
+        // recovery path for the Coldcard alone, open 3 blocks after a coin confirms:
+        // spend 3 signs that single-key leaf next to the musig() internal key.
+        auto pair = [](const QString &first, const QString &second) {
+            musig::modal::SpendPath both;
+            both.keys = QStringList{first, second};
+            both.threshold = 2;
+            return both;
+        };
+        // One path only goes without a timelock: the hot key and the Ledger wait a
+        // block, open by spend 2.
+        auto hotLedger = pair(g_fp_a, g_fp_b);
+        hotLedger.lock = musig::modal::LockKind::Relative;
+        hotLedger.count = 1;
+        hotLedger.unit = musig::modal::LockUnit::Blocks;
+        m->m_paths = {pair(g_fp_b, g_fp_c), hotLedger};
+        musig::modal::SpendPath recovery;
+        recovery.name = QStringLiteral("Recovery");
+        recovery.keys = QStringList{g_fp_c};
+        recovery.threshold = 1;
+        recovery.lock = musig::modal::LockKind::Relative;
+        recovery.count = RECOVERY_BLOCKS;
+        recovery.unit = musig::modal::LockUnit::Blocks;
+        m->m_paths.append(recovery);
+        m->showPaths();
         check(m->pathsReason().isEmpty(), "Continue enabled: " + m->pathsReason());
         shot("05-creator-paths");
         later([m] { m->onNextClicked(); });
@@ -1413,12 +1444,74 @@ void addSteps() {
                    false);
     broadcastSteps(QString(), "30-broadcast-success-2");
 
+    // ===== Spend 3: the Coldcard alone, on its timelocked leaf =====
+    step("mine past the recovery timelock", [] { return visible<catalog::Modal>() == nullptr; },
+         [] {
+             chain(QStringLiteral("mine %1").arg(RECOVERY_BLOCKS + 1));
+             widget()->controller()->sendClicked();
+         });
+    step("send 3", [] { return section() != nullptr && !section()->m_session; }, [] {
+        auto *payment = sendScreen()->m_outputs.begin().value();
+        payment->m_address_input->setText(chain("newaddr"));
+        payment->m_amount_input->setText("0.002");
+    });
+    step("Coldcard leaf open", [] {
+        auto *s = section();
+        int c = leafOf(s, {g_fp_c});
+        return c >= 0 && s->m_leaves.leaves[c].spendable;
+    }, [] {
+        auto *s = section();
+        int c = leafOf(s, {g_fp_c});
+        check(true, "the Coldcard's recovery leaf is spendable");
+        s->m_leaf_combo->setCurrentIndex(c);
+        sendScreen()->onProcess();
+    });
+    step("sign 3", [] { return section()->m_sign_btn->isEnabled(); }, [] {
+        shot("31-send-coldcard-leaf");
+        later([] { section()->m_sign_btn->click(); });
+    });
+    step("prepared 3", [] { return signModal() != nullptr; }, [] {
+        auto *m = signModal();
+        check(currentRound() == "NotMusig", "prepared 3: a single-key leaf, no MuSig2 round");
+        // The path's signer first, the wallet's other keys after it, greyed.
+        QStringList order;
+        for (int i = 0; i < m->m_rows->layout()->count(); ++i) {
+            auto *row = qobject_cast<catalog::SelectRow *>(m->m_rows->layout()->itemAt(i)->widget());
+            if (row != nullptr) {
+                order.append(row->property("fingerprint").toString() +
+                             (row->isEnabled() ? "" : " (greyed)"));
+            }
+        }
+        check(order.size() == 3 && order.first() == g_fp_c && order.at(1).endsWith("(greyed)") &&
+                  order.at(2).endsWith("(greyed)"),
+              "every key listed, the Coldcard first, the others greyed: " + order.join(", "));
+        shot("32-sign-coldcard-leaf");
+        later([] { emit cosignerRow(g_fp_c)->clicked(); });
+    });
+    step("spend 3: on the Coldcard", [] { return onDeviceShown(g_fp_c); }, [] {
+        shot("33-coldcard-leaf-on-device");
+        approveColdcard();
+    });
+    step("spend 3: Coldcard approved", [] { return g_cc_driver.finished(); },
+         [] { checkColdcardApproved("spend 3: Coldcard approved"); });
+    step("spend 3: signed", [] {
+        auto *m = signModal();
+        return m != nullptr && m->m_on_device.isEmpty();
+    }, [] {
+        auto *m = signModal();
+        bool notice = m->m_notice->isVisibleTo(m);
+        auto text = m->m_notice->m_text != nullptr ? m->m_notice->m_text->text() : QString();
+        check(!notice, "spend 3: the Coldcard signed its single-key leaf" +
+                           (notice ? ": " + text : QString()));
+    });
+    broadcastSteps("34-coldcard-leaf-ready", "35-broadcast-success-3", QStringLiteral("NotMusig"));
+
     // ===== End =====
     step("history", [] { return visible<catalog::Modal>() == nullptr; },
          [] { widget()->controller()->historyClicked(); });
     step("end", always(), [] {
-        shot("31-history-two-spends");
-        check(g_txids.size() == 2, "two spends broadcast");
+        shot("36-history-three-spends");
+        check(g_txids.size() == 3, "three spends broadcast");
         for (const auto &txid : g_txids) {
             std::printf("txid %s\n", txid.toStdString().c_str());
         }

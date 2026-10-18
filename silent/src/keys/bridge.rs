@@ -11,6 +11,9 @@ use std::str::FromStr;
 use base64::{prelude::BASE64_STANDARD, Engine};
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
 use bitcoin::Network as BtcNetwork;
+use bwk::bwk_descriptor::musig::parse_musig_descriptor;
+use bwk::bwk_keys::musig::MusigKey;
+use bwk::bwk_sign::miniscript;
 use bwk_sp::bwk_sign::bwk_descriptor::descriptor::Descriptor;
 use bwk_sp::bwk_tx::bwk_psbt::Error as PsbtV2Error;
 use zeroize::Zeroizing;
@@ -824,7 +827,11 @@ fn registration_key(fingerprint: &str, descriptor: &str) -> Result<Fingerprint, 
 /// every nonce and partial signature is dropped, as the QR route does, because a
 /// device takes any nonce in the PSBT as round 2 (Ledger's rule); `usb_merge_signed`
 /// merges into the unstripped original, so the nonces already gathered stay.
-pub fn usb_sign_payload(psbt_v2_hex: &str) -> ffi::PsbtPayloadResult {
+pub fn usb_sign_payload(
+    psbt_v2_hex: &str,
+    descriptor: &str,
+    open_musig_session: bool,
+) -> ffi::PsbtPayloadResult {
     let bytes = match hex::decode(psbt_v2_hex) {
         Ok(bytes) => bytes,
         Err(e) => return failed_psbt_payload(&format!("invalid psbt hex: {e}")),
@@ -835,6 +842,13 @@ pub fn usb_sign_payload(psbt_v2_hex: &str) -> ffi::PsbtPayloadResult {
     };
     if let Err(e) = psbt::strip_musig_round1(&mut parsed) {
         return failed_psbt_payload(&e.to_string());
+    }
+    if open_musig_session {
+        if let Some((aggregate, participants)) = musig_internal_key(descriptor) {
+            if let Err(e) = psbt::add_internal_participants(&mut parsed, aggregate, &participants) {
+                return failed_psbt_payload(&e.to_string());
+            }
+        }
     }
     let v0 = match parsed.into_bitcoin_psbt() {
         Ok(v0) => v0,
@@ -848,6 +862,24 @@ pub fn usb_sign_payload(psbt_v2_hex: &str) -> ffi::PsbtPayloadResult {
         error: String::new(),
         psbt_base64: BASE64_STANDARD.encode(v0.serialize()),
     }
+}
+
+/// The aggregate and KeySort participants of `descriptor`'s internal key when it is a
+/// musig() of plain (unranged) cosigners, None otherwise.
+fn musig_internal_key(
+    descriptor: &str,
+) -> Option<(
+    bitcoin::secp256k1::PublicKey,
+    Vec<bitcoin::secp256k1::PublicKey>,
+)> {
+    let parsed = parse_musig_descriptor(descriptor).ok()?;
+    let miniscript::Descriptor::Tr(tr) = parsed else {
+        return None;
+    };
+    let MusigKey::Musig(aggregate) = tr.internal_key() else {
+        return None;
+    };
+    Some((aggregate.aggregate()?, aggregate.participants().to_vec()))
 }
 
 /// Merges a USB device's v0 signed answer back into `original_v2_hex`, keeping its
