@@ -735,15 +735,25 @@ void addDeviceKeySteps(const QString &id, const QString &alias, QString *fp,
              if (!modal_shot.isEmpty()) {
                  shot(modal_shot);
              }
+             markLedgerScreens();
              later([m] { m->onRegisterClicked(); });
          });
     step(alias + " added with a USB route",
          [fp] { return visible<keys::modal::RegisterDevice>() == nullptr && hasUsbRoute(*fp); },
-         [alias, fp] {
+         [id, alias, fp] {
              check(true, alias + " is a key with a USB route");
              for (const auto &path : keys::KeysModule::deviceXpubPaths()) {
                  check(!g_keys->cachedXpub(*fp, path).isEmpty(),
                        alias + " has its xpub at " + path);
+             }
+             if (id == LEDGER_ID) {
+                 // The Ledger asks to approve the paths it does not export silently.
+                 auto screens = ledgerScreensSinceMark().join('\n');
+                 std::printf("Ledger screens while registering:\n  %s\n",
+                             screens.toStdString().c_str());
+                 check(screens.contains("87'/1'/0'") && screens.contains("352'/1'/0'") &&
+                           screens.contains("Approve public key"),
+                       "the Ledger's 87' and 352' xpub exports were approved on its screen");
              }
          });
 }
@@ -930,24 +940,15 @@ void addSteps() {
         auto *m = visible<CreatePolicy>();
         return m != nullptr && m->m_step == CreatePolicy::Step::FetchXpubs;
     }, [] {
-        markLedgerScreens();
         auto *m = visible<CreatePolicy>();
         later([m] { m->m_fetch_btn->click(); });
     });
     step("fetch A password", [] { return unsealShown() != nullptr; },
          [] { enterPassword(unsealShown()); });
-    step("fetch B on the Ledger", [] { return usbWaiting(g_fp_b); },
-         [] { shot("06-creator-fetch-ledger-approval"); });
     step("review", [] {
         auto *m = visible<CreatePolicy>();
         return m != nullptr && m->m_step == CreatePolicy::Step::Review;
     }, [] {
-        auto screens = ledgerScreensSinceMark();
-        std::printf("Ledger screens while fetching:\n  %s\n",
-                    screens.join("\n  ").toStdString().c_str());
-        check(screens.join('\n').contains("87'/1'/0'"), "the Ledger showed the m/87'/1'/0' path");
-        check(screens.join('\n').contains("Approve public key"),
-              "the Ledger's xpub export was approved on its screen");
         auto *m = visible<CreatePolicy>();
         g_descriptor = m->m_descriptor;
         std::printf("descriptor %s\n", g_descriptor.toStdString().c_str());
