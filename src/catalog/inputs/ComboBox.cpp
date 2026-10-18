@@ -9,6 +9,7 @@
 #include <QFrame>
 #include <QPainter>
 #include <QPixmap>
+#include <QStandardItemModel>
 #include <QStandardPaths>
 #include <QStyle>
 #include <QSvgRenderer>
@@ -49,6 +50,15 @@ void ComboBox::applyRole() {
 
 void ComboBox::setWidth(Size s) {
     setFixedWidth(resolve(s));
+}
+
+void ComboBox::setItemEnabled(int index, bool enabled) {
+    // QComboBox's own model: one QStandardItem per entry.
+    auto *items = qobject_cast<QStandardItemModel *>(model());
+    if (items == nullptr || items->item(index) == nullptr) {
+        return;
+    }
+    items->item(index)->setEnabled(enabled);
 }
 
 void ComboBox::showPopup() {
@@ -153,6 +163,11 @@ auto ComboBox::qss(const Palette &p) -> QString {
                    "QComboBox[class=\"combobox\"] QAbstractItemView::item:selected {"
                    "  background: %6;"
                    "  color: %3;"
+                   "}"
+                   // A disabled entry goes muted, as a disabled row does.
+                   "QComboBox[class=\"combobox\"] QAbstractItemView::item:disabled {"
+                   "  background: transparent;"
+                   "  color: %17;"
                    "}")
         .arg(p.inputBorder.name())                               // %1
         .arg(p.inputBg.name())                                   // %2
@@ -169,7 +184,8 @@ auto ComboBox::qss(const Palette &p) -> QString {
         .arg(metric::COMBO_ARROW_SIZE)                           // %13
         .arg(p.textSecondary.name())                             // %14
         .arg(p.borderLight.name())                               // %15
-        .arg(disabledChevron);                                   // %16
+        .arg(disabledChevron)                                    // %16
+        .arg(p.textMuted.name());                                // %17
 }
 
 } // namespace catalog

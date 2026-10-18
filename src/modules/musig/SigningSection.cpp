@@ -251,7 +251,7 @@ void SigningSection::onCoinsSelected(const QStringList &outpoints) {
             inputs.append(toQString(coin.outpoint));
         }
     }
-    // Keep the path the user picked when the new list still has it.
+    // Keep the path the user picked when the new list still has it, spendable.
     const auto *chosen = chosenLeaf();
     bool hadChoice = chosen != nullptr;
     QString previous;
@@ -269,8 +269,10 @@ void SigningSection::onCoinsSelected(const QStringList &outpoints) {
         for (std::size_t i = 0; i < m_leaves.leaves.size(); ++i) {
             const auto &leaf = m_leaves.leaves[i];
             m_leaf_combo->addItem(leafText(leaf, keys));
+            // A path its timelock still holds is shown, greyed out, and cannot be picked.
+            m_leaf_combo->setItemEnabled(static_cast<int>(i), leaf.spendable);
             auto hash = leaf.key_path ? QString() : toQString(leaf.leaf_hash);
-            if (hadChoice && hash == previous) {
+            if (hadChoice && hash == previous && leaf.spendable) {
                 index = static_cast<int>(i);
             }
         }
