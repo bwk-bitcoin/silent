@@ -965,7 +965,10 @@ void addSteps() {
                         QStringLiteral("02-register-ledger"));
     step("the Ledger creating its key",
          [] { return keysTab() != nullptr && keysTab()->m_creations.size() == 1; },
-         [] { check(true, "the Ledger is being turned into a key"); });
+         [] {
+             check(true, "the Ledger is being turned into a key");
+             shot("02a-keys-ledger-creating");
+         });
     startDeviceKeySteps(COLDCARD_ID, QStringLiteral("Coldcard"), &g_fp_c, QString());
     // The Coldcard gives its xpubs at once, the Ledger waits for its 87' approval: the
     // Coldcard is a key while the Ledger is still creating its own.
