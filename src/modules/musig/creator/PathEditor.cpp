@@ -72,13 +72,20 @@ PathEditor::PathEditor(const QList<KeyEntry> &keys, QWidget *parent)
 
 void PathEditor::setPath(const SpendPath &path) {
     m_path = path;
+    // A key that cannot sign MuSig2 is never picked.
+    for (const auto &entry : m_keys) {
+        if (!entry.can_musig) {
+            m_path.keys.removeAll(entry.fingerprint);
+            m_path.mandatory.removeAll(entry.fingerprint);
+        }
+    }
     QSignalBlocker nameBlocker(m_name_input);
     m_name_input->setText(m_path.name);
     for (int i = 0; i < m_keys.size(); ++i) {
         const auto &fingerprint = m_keys.at(i).fingerprint;
         QSignalBlocker checkBlocker(m_key_checks.at(i));
         QSignalBlocker mandatoryBlocker(m_mandatory_checks.at(i));
-        m_key_checks.at(i)->setChecked(m_path.keys.contains(fingerprint));
+        m_key_checks.at(i)->setChecked(m_keys.at(i).can_musig && m_path.keys.contains(fingerprint));
         m_mandatory_checks.at(i)->setChecked(m_path.mandatory.contains(fingerprint));
     }
     QSignalBlocker lockBlocker(m_lock_combo);
@@ -123,11 +130,21 @@ void PathEditor::init() {
             auto *mandatory = new catalog::Checkbox;
             auto *name = new catalog::Label(entry.alias.isEmpty() ? entry.fingerprint : entry.alias,
                                             catalog::LabelRole::Body);
+            QWidget *keyCell = name;
+            if (!entry.can_musig) {
+                // Shown, not hidden: the user sees why the key cannot be picked.
+                check->setEnabled(false);
+                name->setTone(catalog::LabelTone::Muted);
+                auto *reason =
+                    new catalog::Label(TR("musig-path-key-no-musig"), catalog::LabelRole::Caption);
+                reason->setTone(catalog::LabelTone::Muted);
+                keyCell = (new qontrol::Column)->spacing(0)->push(name)->push(reason);
+            }
             auto *fingerprint = new catalog::Label(entry.fingerprint, catalog::LabelRole::Mono);
             fingerprint->setTone(catalog::LabelTone::Muted);
             m_key_checks.append(check);
             m_mandatory_checks.append(mandatory);
-            table->addWidgetRow(entry.fingerprint, {check, name, fingerprint, mandatory});
+            table->addWidgetRow(entry.fingerprint, {check, keyCell, fingerprint, mandatory});
         }
         m_keys_table = table;
     }

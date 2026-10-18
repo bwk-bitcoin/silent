@@ -28,6 +28,8 @@ struct KeyEntry {
     KeyRouteKind descriptor_route = KeyRouteKind::Unknown;
     bool can_show_address{};
     KeyRouteKind route = KeyRouteKind::Unknown;
+    // Signs MuSig2: a hot key, or a device reporting the MuSig2 capability.
+    bool can_musig{};
 };
 
 // The keys module, as accounts and plugins see it. An account never picks a signer:

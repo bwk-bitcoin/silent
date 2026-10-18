@@ -642,6 +642,9 @@ musig-menu-settings => "Settings" => "NONE"
 musig-path-all => "All %1" => "All %1"
 musig-path-fingerprint => "Fingerprint" => "Fingerprint"
 musig-path-key => "Key" => "Key"
+musig-path-key-no-musig
+=> "This key's device does not support MuSig2"
+=> "This key's device does not support MuSig2";;
 musig-path-mandatory => "Mandatory" => "Mandatory"
 musig-path-name => "Name:" => "Name:"
 musig-path-name-placeholder => "Optional" => "Optional"

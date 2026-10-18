@@ -414,6 +414,9 @@ mod ffi {
         pub is_connected: bool,
         pub device_count: u32,
         pub descriptor_count: u32,
+        /// Signs MuSig2: a hot secret, or a recorded or live device reporting the
+        /// MuSig2 capability.
+        pub can_musig: bool,
     }
 
     /// A device remembered for a key. `model` and `serial` are empty until bwk-hwi

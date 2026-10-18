@@ -1289,6 +1289,8 @@ musig-path-fingerprint => "Fingerprint"
 
 musig-path-mandatory => "Mandatory"
 
+musig-path-key-no-musig => "This key's device does not support MuSig2"
+
 musig-path-signatures => "Signatures:"
 
 musig-path-all => "All %1"

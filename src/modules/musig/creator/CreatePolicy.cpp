@@ -227,14 +227,7 @@ void CreatePolicy::initPaths() {
     m_paths_next_btn = catalog::btnContinue();
     m_paths_actions = new catalog::ModalActions;
     m_paths_actions->addAction(m_paths_next_btn);
-    // A first path over every key, two of them signing when there are several.
-    SpendPath first;
-    for (const auto &entry : networkKeys()) {
-        first.keys.append(entry.fingerprint);
-    }
-    first.threshold = first.keys.size() > 1 ? 2 : 1;
-    first.lock = LockKind::None;
-    m_paths.append(first);
+    m_paths.append(defaultPath());
 }
 
 void CreatePolicy::connectPaths() {
@@ -816,6 +809,18 @@ auto CreatePolicy::networkKeys() const -> QList<KeyEntry> {
     return bus != nullptr ? bus->keys(network()) : QList<KeyEntry>{};
 }
 
+auto CreatePolicy::defaultPath() const -> SpendPath {
+    SpendPath first;
+    for (const auto &entry : networkKeys()) {
+        if (entry.can_musig) {
+            first.keys.append(entry.fingerprint);
+        }
+    }
+    first.threshold = first.keys.size() > 1 ? 2 : 1;
+    first.lock = LockKind::None;
+    return first;
+}
+
 auto CreatePolicy::keyNames() const -> QHash<QString, QString> {
     QHash<QString, QString> names;
     for (const auto &entry : networkKeys()) {
@@ -1059,12 +1064,7 @@ void CreatePolicy::onNextClicked() {
 void CreatePolicy::onNetworkChanged([[maybe_unused]] int index) {
     // The paths pick keys of the network: start over from one path over its keys.
     m_paths.clear();
-    SpendPath first;
-    for (const auto &entry : networkKeys()) {
-        first.keys.append(entry.fingerprint);
-    }
-    first.threshold = first.keys.size() > 1 ? 2 : 1;
-    m_paths.append(first);
+    m_paths.append(defaultPath());
     m_descriptor.clear();
     // The editor lists the network's keys.
     auto *editor = new PathEditor(networkKeys());

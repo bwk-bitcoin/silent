@@ -311,6 +311,7 @@ auto KeysModule::buildKeyEntry(const KeyInfo &info) -> KeyEntry {
     entry.fingerprint = fingerprint;
     entry.alias = toQt(info.alias);
     entry.descriptor_route = descriptorRoute(info);
+    entry.can_musig = info.can_musig;
     if (!info.routes.empty()) {
         entry.route = info.routes.front();
     }

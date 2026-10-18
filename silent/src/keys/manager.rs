@@ -26,7 +26,7 @@ use crate::keys::{
     psbt::{inspect_bytes, PsbtArtifacts},
     record::{DescriptorEntry, DeviceRecord, KeyRecord, RouteKind, SecretEnvelope, XpubEntry},
     store::KeyStore,
-    supports_silent_payments,
+    supports_musig, supports_silent_payments,
 };
 
 /// One signing device as currently seen by a hardware backend, for example HWI.
@@ -298,6 +298,22 @@ impl KeyManager {
     /// Derived from the record and the live device list, never stored.
     pub fn is_connected(&self, fingerprint: Fingerprint) -> bool {
         self.live_device_for(fingerprint).is_some()
+    }
+
+    /// Whether the key can sign MuSig2: silent signs with its hot secret, or one of its
+    /// recorded devices or its live device reports the MuSig2 capability.
+    pub fn can_musig(&self, fingerprint: Fingerprint) -> bool {
+        let Some(record) = self.records.get(&fingerprint) else {
+            return false;
+        };
+        record.secret.is_some()
+            || record
+                .devices
+                .iter()
+                .any(|device| supports_musig(device.capabilities))
+            || self
+                .live_device_for(fingerprint)
+                .is_some_and(|device| supports_musig(device.capabilities))
     }
 
     /// Derived from the record, never stored.
@@ -1419,6 +1435,78 @@ mod tests {
             matches!(result, Err(Error::NoSecret(found)) if found == fp),
             "expected NoSecret, got {result:?}"
         );
+    }
+
+    #[test]
+    fn can_musig_needs_a_hot_secret_or_a_device_with_the_capability() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let record = KeyRecord::new(fingerprint(1), Network::Regtest, "alias".to_string());
+        manager.add_key(record).expect("add key");
+        manager
+            .add_route(fingerprint(1), RouteKind::Usb)
+            .expect("add usb");
+        assert!(
+            !manager.can_musig(fingerprint(1)),
+            "a bare key cannot sign MuSig2"
+        );
+        assert!(
+            !manager.can_musig(fingerprint(9)),
+            "an unknown key cannot sign MuSig2"
+        );
+
+        let recorded = |capabilities| DeviceRecord {
+            kind: "hardware".to_string(),
+            model: "model".to_string(),
+            serial: "serial".to_string(),
+            module: "hwi".to_string(),
+            version: String::new(),
+            capabilities,
+        };
+        manager
+            .record_device(fingerprint(1), recorded(0))
+            .expect("record device");
+        assert!(
+            !manager.can_musig(fingerprint(1)),
+            "a recorded device with no capability cannot sign MuSig2"
+        );
+
+        let live = |capabilities| LiveDevice {
+            id: "dev-1".to_string(),
+            kind: "ledger".to_string(),
+            model: "other".to_string(),
+            serial: "other".to_string(),
+            module: "hwi".to_string(),
+            version: String::new(),
+            capabilities,
+            fingerprint: Some(fingerprint(1)),
+        };
+        manager.set_live_devices(vec![live(crate::keys::CAPABILITY_SILENT_PAYMENTS)]);
+        assert!(
+            !manager.can_musig(fingerprint(1)),
+            "a live device without the MuSig2 bit cannot sign MuSig2"
+        );
+        manager.set_live_devices(vec![live(crate::keys::CAPABILITY_MUSIG)]);
+        assert!(
+            manager.can_musig(fingerprint(1)),
+            "a live device with the MuSig2 bit signs MuSig2"
+        );
+        manager.set_live_devices(Vec::new());
+
+        let mut upgraded = recorded(crate::keys::CAPABILITY_MUSIG);
+        upgraded.serial = "second".to_string();
+        manager
+            .record_device(fingerprint(1), upgraded)
+            .expect("record second device");
+        assert!(
+            manager.can_musig(fingerprint(1)),
+            "a recorded device with the MuSig2 bit signs MuSig2"
+        );
+
+        let mut hot = KeyRecord::new(fingerprint(2), Network::Regtest, "hot".to_string());
+        hot.secret = Some(test_secret());
+        manager.add_key(hot).expect("add hot key");
+        assert!(manager.can_musig(fingerprint(2)), "a hot key signs MuSig2");
     }
 
     #[test]

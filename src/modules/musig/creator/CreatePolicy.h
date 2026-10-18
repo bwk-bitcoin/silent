@@ -169,6 +169,9 @@ protected:
     void showStep(int index);
     [[nodiscard]] auto network() const -> Network;
     [[nodiscard]] auto networkKeys() const -> QList<KeyEntry>;
+    // A first path over every key that signs MuSig2, two of them signing when there are
+    // several.
+    [[nodiscard]] auto defaultPath() const -> SpendPath;
     // Fingerprint to the name a key is shown by: its alias, else its fingerprint.
     [[nodiscard]] auto keyNames() const -> QHash<QString, QString>;
     [[nodiscard]] auto keyEntry(const QString &fingerprint) const -> std::optional<KeyEntry>;

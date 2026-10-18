@@ -1544,6 +1544,9 @@ struct KeyInfo final {
   bool is_connected CXX_DEFAULT_VALUE(false);
   ::std::uint32_t device_count CXX_DEFAULT_VALUE(0);
   ::std::uint32_t descriptor_count CXX_DEFAULT_VALUE(0);
+  // Signs MuSig2: a hot secret, or a recorded or live device reporting the
+  // MuSig2 capability.
+  bool can_musig CXX_DEFAULT_VALUE(false);
 
   using IsRelocatable = ::std::true_type;
 };

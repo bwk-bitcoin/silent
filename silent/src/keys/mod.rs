@@ -55,6 +55,11 @@ pub fn supports_silent_payments(capabilities: u32) -> bool {
     capabilities & CAPABILITY_SILENT_PAYMENTS != 0
 }
 
+/// Whether `capabilities` include MuSig2.
+pub fn supports_musig(capabilities: u32) -> bool {
+    capabilities & CAPABILITY_MUSIG != 0
+}
+
 /// The network name used both for directory layout and as crypto associated data, so
 /// the two always agree.
 pub fn network_name(network: bitcoin::Network) -> Result<&'static str, Error> {

@@ -1059,6 +1059,7 @@ fn to_key_info(record: &KeyRecord, manager: &KeyManager) -> ffi::KeyInfo {
         is_connected: manager.is_connected(record.fingerprint),
         device_count: record.devices.len() as u32,
         descriptor_count: record.descriptors.len() as u32,
+        can_musig: manager.can_musig(record.fingerprint),
     }
 }
 
@@ -1145,6 +1146,7 @@ fn empty_key_info() -> ffi::KeyInfo {
         is_connected: false,
         device_count: 0,
         descriptor_count: 0,
+        can_musig: false,
     }
 }
 
