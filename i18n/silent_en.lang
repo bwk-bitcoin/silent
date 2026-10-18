@@ -382,6 +382,8 @@ pill-not-registered => "Not Registered"
 
 pill-not-in-path => "Not in Path"
 
+pill-not-in-wallet => "Not in Wallet"
+
 pill-done => "Done"
 
 pill-used => "Used"
@@ -1094,6 +1096,18 @@ musig-sign-lead-single => "Click the cosigner to add its signature."
 
 musig-sign-reason-one => "1 cosigner still to go."
 musig-sign-reason-on-device => "On the device…"
+
+musig-sign-row-why => "%1 · %2"
+
+musig-sign-why-disconnected => "Its device is not connected: plug it in and unlock it."
+
+musig-sign-why-no-route => "No route to this key: no device, QR code or hot key."
+
+musig-sign-why-unsupported => "Its device cannot sign MuSig2."
+
+musig-sign-why-not-in-path => "Not a signer of this spend path."
+
+musig-sign-why-not-in-wallet => "Not a key of this wallet."
 
 musig-sign-reason => "%1 cosigners still to go."
 

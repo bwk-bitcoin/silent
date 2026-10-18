@@ -738,12 +738,28 @@ musig-sign-lead-single
 musig-sign-reason => "%1 cosigners still to go." => "%1 cosigners still to go."
 musig-sign-reason-on-device => "On the device…" => "On the device…"
 musig-sign-reason-one => "1 cosigner still to go." => "1 cosigner still to go."
+musig-sign-row-why => "%1 · %2" => "%1 · %2"
 musig-sign-session-lost-title
 => "MuSig2 session missing or mismatch"
 => "MuSig2 session missing or mismatch";;
 musig-sign-step-nonces => "Nonces" => "Nonces"
 musig-sign-step-partial => "Partial Signatures" => "Partial Signatures"
 musig-sign-title => "Sign" => "Sign"
+musig-sign-why-disconnected
+=> "Its device is not connected: plug it in and unlock it."
+=> "Its device is not connected: plug it in and unlock it.";;
+musig-sign-why-no-route
+=> "No route to this key: no device, QR code or hot key."
+=> "No route to this key: no device, QR code or hot key.";;
+musig-sign-why-not-in-path
+=> "Not a signer of this spend path."
+=> "Not a signer of this spend path.";;
+musig-sign-why-not-in-wallet
+=> "Not a key of this wallet."
+=> "Not a key of this wallet.";;
+musig-sign-why-unsupported
+=> "Its device cannot sign MuSig2."
+=> "Its device cannot sign MuSig2.";;
 musig-span-days => "about %1 days" => "about %1 days"
 musig-span-hours => "about %1 hours" => "about %1 hours"
 musig-span-months => "about %1 months" => "about %1 months"
@@ -798,6 +814,7 @@ pill-nonce => "Nonce" => "Nonce"
 pill-not-checked => "Not Checked" => "Not Checked"
 pill-not-connected => "Not Connected" => "NONE"
 pill-not-in-path => "Not in Path" => "Not in Path"
+pill-not-in-wallet => "Not in Wallet" => "Not in Wallet"
 pill-not-needed => "Not Needed" => "Not Needed"
 pill-not-registered => "Not Registered" => "NONE"
 pill-not-used => "Not Used" => "NONE"

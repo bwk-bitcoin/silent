@@ -12,6 +12,8 @@
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
+#include "interfaces/signer.h"
+#include "modules/keys/DeviceName.h"
 #include "modules/musig/MusigAccountController.h"
 #include "theme/Palette.h"
 
@@ -55,6 +57,12 @@ auto keyRow(const KeyEntry &entry, const QString &fingerprint, catalog::Badge *p
     row->setClickable(false);
     row->setProperty(K_FINGERPRINT, fingerprint);
     return row;
+}
+
+// A row that cannot sign, greyed out, the reason after its fingerprint.
+void greyRow(catalog::SelectRow *row, const QString &fingerprint, const QString &why) {
+    row->setEnabled(false);
+    row->setSub(TR("musig-sign-row-why").arg(fingerprint, why));
 }
 
 } // namespace
@@ -207,25 +215,38 @@ void SignModal::render(const MusigRoundStatus &status) {
             ++left;
         }
         bool onDevice = !in && fingerprint.compare(m_on_device, Qt::CaseInsensitive) == 0;
-        // A signer with no connected device or route still to sign cannot be clicked.
-        bool usable = in || entry.can_sign;
+        // A signer still to sign that cannot: no connected device or route, or a MuSig2
+        // round on a device that does not sign MuSig2. Greyed, its reason on its row.
+        QString why;
         catalog::Badge *pill = nullptr;
-        if (onDevice) {
-            pill = catalog::pillMusigOnDevice();
-        } else if (!usable) {
-            pill = entry.route == KeyRouteKind::Usb ? catalog::pillSignerDisconnected()
-                                                    : catalog::pillSignerNoRoute();
-        } else if (!in) {
-            pill = catalog::pillMusigNeeded();
-        } else if (partial) {
-            pill = catalog::pillSignerSigned();
-        } else {
-            pill = catalog::pillMusigNonceAdded();
+        if (!in && !entry.can_sign && entry.route == KeyRouteKind::Usb) {
+            why = TR("musig-sign-why-disconnected");
+            pill = catalog::pillSignerDisconnected();
+        } else if (!in && !entry.can_sign) {
+            why = TR("musig-sign-why-no-route");
+            pill = catalog::pillSignerNoRoute();
+        } else if (!in && !single && !entry.can_musig) {
+            why = TR("musig-sign-why-unsupported");
+            pill = catalog::pillSignerUnsupported();
+        }
+        bool usable = why.isEmpty();
+        if (usable) {
+            if (onDevice) {
+                pill = catalog::pillMusigOnDevice();
+            } else if (!in) {
+                pill = catalog::pillMusigNeeded();
+            } else if (partial) {
+                pill = catalog::pillSignerSigned();
+            } else {
+                pill = catalog::pillMusigNonceAdded();
+            }
         }
         auto *row = keyRow(entry, fingerprint, pill);
         // One cosigner at a time: none is clicked while a device signs.
         row->setClickable(!in && usable && m_on_device.isEmpty());
-        row->setEnabled(usable);
+        if (!usable) {
+            greyRow(row, fingerprint, why);
+        }
         connect(row, &catalog::SelectRow::clicked, this, &SignModal::onCosignerClicked,
                 qontrol::UNIQUE);
         (usable ? ready : unusable).append(row);
@@ -241,10 +262,33 @@ void SignModal::render(const MusigRoundStatus &status) {
         }
         auto *row = keyRow(entries.value(fingerprint.toLower()), fingerprint,
                            catalog::pillSignerNotInPath());
-        row->setEnabled(false);
+        greyRow(row, fingerprint, TR("musig-sign-why-not-in-path"));
         others.append(row);
     }
-    for (const auto &group : {ready, unusable, others}) {
+    // Connected devices whose key is not one of this wallet's: listed last, greyed.
+    QList<catalog::SelectRow *> strangers;
+    auto wallet = m_controller->cosignerFingerprints();
+    for (const auto &device : Host::get()->signers()) {
+        if (device.signer == nullptr) {
+            continue;
+        }
+        auto fingerprint = device.signer->fingerprint();
+        bool known = std::ranges::any_of(wallet, [&fingerprint](const QString &fp) {
+            return fp.compare(fingerprint, Qt::CaseInsensitive) == 0;
+        });
+        if (known || fingerprint.isEmpty()) {
+            continue;
+        }
+        auto entry = entries.value(fingerprint.toLower());
+        entry.route = KeyRouteKind::Usb;
+        if (entry.alias.isEmpty()) {
+            entry.alias = keys::deviceName(*device.signer);
+        }
+        auto *row = keyRow(entry, fingerprint, catalog::pillSignerNotInWallet());
+        greyRow(row, fingerprint, TR("musig-sign-why-not-in-wallet"));
+        strangers.append(row);
+    }
+    for (const auto &group : {ready, unusable, others, strangers}) {
         for (auto *row : group) {
             m_rows->push(row);
             row->show();

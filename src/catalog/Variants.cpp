@@ -671,6 +671,14 @@ auto pillSignerNotInPath() -> Badge * {
     return makePill(Badge::Role::Off, TR("pill-not-in-path"), PillWidth::L);
 }
 
+auto pillSignerUnsupported() -> Badge * {
+    return makePill(Badge::Role::Warning, TR("pill-unsupported"), PillWidth::L);
+}
+
+auto pillSignerNotInWallet() -> Badge * {
+    return makePill(Badge::Role::Off, TR("pill-not-in-wallet"), PillWidth::L);
+}
+
 auto pillSdStepDone() -> Badge * {
     return makePill(Badge::Role::Success, TR("pill-done"), PillWidth::M);
 }
