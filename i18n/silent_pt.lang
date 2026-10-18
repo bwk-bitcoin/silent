@@ -2,6 +2,7 @@
 # Format: id => "English" => "Translation"
 # Use \n for line breaks
 
+account-type-title => "Account Type" => "Account Type"
 btn-add-a-key => "+ Add a Key" => "NONE"
 btn-add-a-label => "Add a Label" => "NONE"
 btn-add-key => "Add Key" => "NONE"
@@ -19,7 +20,7 @@ btn-continue => "Continue" => "NONE"
 btn-copied => "Copied" => "NONE"
 btn-copy-address => "Copy Address" => "NONE"
 btn-create => "Create" => "NONE"
-btn-create-entry => "+ %1" => "NONE"
+btn-create-account => "+ Create Account" => "+ Create Account"
 btn-delete-wallet => "Delete wallet" => "NONE"
 btn-disable-plugin => "Disable Plugin" => "NONE"
 btn-disconnect-blindbit => "Disconnect Blindbit" => "NONE"
@@ -536,8 +537,7 @@ main-menu-tab => "+" => "+"
 main-window-title
 => "Silent - Silent Payments Wallet"
 => "Silent - Silent Payments Wallet";;
-menu-custom => "Custom" => "Personalizado"
-musig-create-account => "Create Shared Wallet" => "NONE"
+musig-account-type => "Shared Wallet" => "Shared Wallet"
 musig-create-add-path => "+ Add a Spend Path" => "NONE"
 musig-create-blocks-placeholder => "blocks" => "NONE"
 musig-create-fetch-key => "%1 (%2)" => "NONE"
@@ -821,7 +821,7 @@ settings-theme-dark => "Dark" => "Escuro"
 settings-theme-light => "Light" => "Claro"
 settings-theme-provided-by => "Provided by %1." => "NONE"
 settings-title => "Settings" => "Configuracoes"
-sp-create-account => "Create New Wallet" => "Criar nova conta"
+sp-account-type => "Silent Payment Wallet" => "Silent Payment Wallet"
 sp-instance-not-found
 => "SP instance not found: %1"
 => "Instancia SP nao encontrada: %1";;

@@ -564,9 +564,9 @@ auto btnOpenWallet(const QString &name) -> Button * {
     return make({.role = ButtonRole::TabOpen, .label = name, .width = BtnWidth::LaunchEntry});
 }
 
-auto btnCreateEntry(const QString &name) -> Button * {
+auto btnCreateAccount() -> Button * {
     return make({.role = ButtonRole::TabCreate,
-                 .label = TR("btn-create-entry").arg(name),
+                 .label = TR("btn-create-account"),
                  .width = BtnWidth::LaunchAdd});
 }
 

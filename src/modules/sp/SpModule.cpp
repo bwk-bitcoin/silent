@@ -53,7 +53,7 @@ ReqId SpModule::list() {
         instances.append({accountId, accountId});
     }
 
-    instances.append({K_CREATE_INSTANCE_ID, TR("sp-create-account")});
+    instances.append({K_CREATE_INSTANCE_ID, TR("sp-account-type")});
     emit IModule::instances(reqId, instances);
     return reqId;
 }

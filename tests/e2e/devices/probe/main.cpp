@@ -60,6 +60,7 @@
 #include "resources/font/noto_sans_mono.h"
 #include "resources/font/noto_sans_mono_bold.h"
 #include "theme/Theme.h"
+#include "views/modals/AccountType.h"
 #undef private
 #undef protected
 #include <QApplication>
@@ -894,9 +895,19 @@ void addSteps() {
     // ===== Creator =====
     step("launcher", always(), [] {
         shot("04-launcher");
-        auto *b = launcherButton(TR("musig-create-account"), false);
-        check(b != nullptr, "launcher has the create shared account button");
+        auto *b = launcherButton(TR("btn-create-account"), true);
+        check(b != nullptr, "launcher has the create account button");
         later([b] { b->click(); });
+    });
+    step("account type", [] { return visible<modal::AccountType>() != nullptr; }, [] {
+        auto *m = visible<modal::AccountType>();
+        for (int i = 0; i < m->m_creators.size(); ++i) {
+            if (m->m_creators.at(i).name == TR("musig-account-type")) {
+                later([row = m->m_rows.at(i)] { emit row->clicked(); });
+                return;
+            }
+        }
+        check(false, "the account type modal lists the shared wallet");
     });
     step("define", [] { return visible<CreatePolicy>() != nullptr; }, [] {
         definePolicy(visible<CreatePolicy>());

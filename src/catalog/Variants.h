@@ -102,7 +102,7 @@ auto btnCopyAddress() -> CopyButton *;
 auto btnAwaitingPayment(int count) -> Button *;
 auto btnOpenWallet(const QString &name) -> Button *;
 // A launcher create button, labelled by its creator entry.
-auto btnCreateEntry(const QString &name) -> Button *;
+auto btnCreateAccount() -> Button *;
 
 auto pillDeviceReady() -> Badge *;
 auto pillDeviceLocked() -> Badge *;

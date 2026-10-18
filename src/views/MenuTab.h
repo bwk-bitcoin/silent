@@ -1,5 +1,6 @@
 #pragma once
 
+#include "host/PluginRegistry.h"
 #include "interfaces/types.h"
 #include <QHash>
 #include <QList>
@@ -33,7 +34,6 @@ public slots:
     void onItemClicked();
     void onTrashClicked();
     void onExternalDeleteConfirmed(const QString &name);
-    void onCustomClicked();
     void onModuleInstances(ReqId req_id, QList<QPair<QString, QString>> instances);
     void onHostInstanceChanged(const QString &id);
     void onHostSettingsChanged();
@@ -59,8 +59,7 @@ private:
         bool external = false;
     };
 
-    qontrol::Column *m_create_column = nullptr;
-    catalog::Button *m_custom_btn = nullptr;
+    catalog::Button *m_create_btn = nullptr;
     qontrol::Column *m_accounts_column = nullptr;
     QList<QWidget *> m_rows;
     QSet<QString> m_sp_accounts;
@@ -69,6 +68,9 @@ private:
     QHash<IModule *, QPair<ReqId, QList<QPair<QString, QString>>>> m_sync_list_responses;
     QHash<IModule *, QList<QPair<QString, QString>>> m_items_by_module;
     QList<LauncherEntry> m_entries;
+    // The built-in creators, then the external plugins' ones, as the account type modal
+    // lists them.
+    QList<PluginRegistry::CreatorLauncher> m_creators;
     IModule *m_pending_delete_module = nullptr;
     QString m_pending_delete_id;
     Host *m_host = nullptr;

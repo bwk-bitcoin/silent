@@ -9,14 +9,12 @@
 #include "interfaces/module.h"
 #include "theme/Icon.h"
 #include "theme/Palette.h"
+#include "views/modals/AccountType.h"
 #include "views/modals/ConfirmDelete.h"
-#include "views/modals/CustomLaunchers.h"
 #include <QGraphicsOpacityEffect>
 #include <Qontrol>
 #include <common.h>
 
-using catalog::Button;
-using catalog::ButtonRole;
 using catalog::Label;
 using catalog::LabelRole;
 
@@ -27,11 +25,8 @@ MenuTab::MenuTab(QWidget *parent) : QWidget(parent) {
 }
 
 void MenuTab::init() {
-    m_create_column = new qontrol::Column;
-    m_custom_btn = new Button(TR("menu-custom"), ButtonRole::TabOpen);
-    // Match the create-account button width so the launcher buttons line up.
-    m_custom_btn->setWidth(BtnWidth::LaunchAdd);
-    m_custom_btn->setVisible(false);
+    m_create_btn = catalog::btnCreateAccount();
+    m_create_btn->setVisible(false);
 
     m_accounts_column = new qontrol::Column;
 
@@ -43,7 +38,7 @@ void MenuTab::init() {
 
 void MenuTab::doConnect() {
     auto *controller = AppController::get();
-    connect(m_custom_btn, &QPushButton::clicked, this, &MenuTab::onCustomClicked, qontrol::UNIQUE);
+    connect(m_create_btn, &QPushButton::clicked, this, &MenuTab::onCreateClicked, qontrol::UNIQUE);
     connect(controller, &AppController::accountList, this, &MenuTab::onAccountList,
             qontrol::UNIQUE);
     if (controller != nullptr && controller->pluginRegistry() != nullptr) {
@@ -62,7 +57,7 @@ void MenuTab::doConnect() {
 }
 
 void MenuTab::onCreateClicked() {
-    onItemClicked();
+    AppController::execModal(new modal::AccountType(m_creators));
 }
 
 void MenuTab::onItemClicked() {
@@ -124,11 +119,6 @@ void MenuTab::onExternalDeleteConfirmed(const QString &name) {
     m_pending_delete_id.clear();
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-void MenuTab::onCustomClicked() {
-    AppController::execModal(new modal::CustomLaunchers());
-}
-
 void MenuTab::view() {
     auto *mark = new Label(LabelRole::Title);
     mark->setPixmap(icon::silentMark().pixmap(48, 48));
@@ -139,8 +129,7 @@ void MenuTab::view() {
     title->setAlignment(Qt::AlignCenter);
 
     auto *titleRow = (new qontrol::Row)->pushSpacer()->push(title)->pushSpacer();
-    auto *createRow = (new qontrol::Row)->pushSpacer()->push(m_create_column)->pushSpacer();
-    auto *btnRow = (new qontrol::Row)->pushSpacer()->push(m_custom_btn)->pushSpacer();
+    auto *createRow = (new qontrol::Row)->pushSpacer()->push(m_create_btn)->pushSpacer();
 
     auto *col = (new qontrol::Column)
                     ->pushSpacer()
@@ -151,8 +140,6 @@ void MenuTab::view() {
                     ->push(m_accounts_column)
                     ->pushSpacer(resolve(Spacing::M))
                     ->push(createRow)
-                    ->pushSpacer(resolve(Spacing::S))
-                    ->push(btnRow)
                     ->pushSpacer();
 
     setLayout(col->layout());
@@ -264,14 +251,14 @@ void MenuTab::rebuildRows() {
     auto *registry = controller != nullptr ? controller->pluginRegistry() : nullptr;
 
     QList<LauncherEntry> openEntries;
-    QList<LauncherEntry> createEntries;
+    m_creators.clear();
 
     // Launcher module order, so the built-in creators keep the plugin order (sp first).
     for (auto *module : m_modules) {
         for (const auto &item : m_items_by_module.value(module)) {
             QString id = item.first.trimmed();
             bool isCreator = PluginRegistry::isCreatorInstanceId(id);
-            // External-plugin creators live in the Custom modal, not the launcher list.
+            // External-plugin creators are listed after the built-in ones, below.
             if (isCreator && registry != nullptr && !registry->isBuiltinModule(module)) {
                 continue;
             }
@@ -291,7 +278,7 @@ void MenuTab::rebuildRows() {
             entry.canDelete = isBuiltin ? m_sp_accounts.contains(entry.id) : !isCreator;
 
             if (isCreator) {
-                createEntries.append(entry);
+                m_creators.append({.module = module, .id = entry.id, .name = entry.name});
             } else {
                 openEntries.append(entry);
             }
@@ -335,22 +322,8 @@ void MenuTab::rebuildRows() {
         m_rows.append(row);
     }
 
-    m_create_column->clear();
-    bool firstCreate = true;
-    for (const auto &entry : createEntries) {
-        auto *btn = catalog::btnCreateEntry(entry.name);
-        btn->setProperty("instanceId", entry.id);
-        btn->setProperty("modulePtr",
-                         QVariant::fromValue(reinterpret_cast<qulonglong>(entry.module)));
-        connect(btn, &QPushButton::clicked, this, &MenuTab::onCreateClicked, qontrol::UNIQUE);
-        if (!firstCreate) {
-            m_create_column->pushSpacer(resolve(Spacing::S));
-        }
-        firstCreate = false;
-        m_create_column->push(btn);
+    if (registry != nullptr) {
+        m_creators.append(registry->externalCreatorLaunchers());
     }
-    if (m_custom_btn != nullptr) {
-        m_custom_btn->setVisible(registry != nullptr &&
-                                 !registry->externalCreatorLaunchers().isEmpty());
-    }
+    m_create_btn->setVisible(!m_creators.isEmpty());
 }

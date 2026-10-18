@@ -240,7 +240,7 @@ set(SILENT_APP_SOURCES
     src/modules/sp/views/Settings.cpp
     src/views/modals/ConfirmDelete.h
     src/views/modals/ConfirmDelete.cpp
-    src/views/modals/CustomLaunchers.cpp
+    src/views/modals/AccountType.cpp
     src/theme/Icon.h
     src/theme/Icon.cpp
     src/catalog/containers/Tab.h

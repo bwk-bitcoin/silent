@@ -24,7 +24,7 @@ auto MusigCreatorModule::meta() const -> QMap<QString, QString> {
 
 auto MusigCreatorModule::list() -> ReqId {
     ReqId reqId = nextReqId();
-    QList<QPair<QString, QString>> instances{{K_CREATE_INSTANCE_ID, TR("musig-create-account")}};
+    QList<QPair<QString, QString>> instances{{K_CREATE_INSTANCE_ID, TR("musig-account-type")}};
     emit IModule::instances(reqId, instances);
     return reqId;
 }

@@ -30,6 +30,7 @@ create-account-electrum => "Electrum:"
 create-account-name => "Account Name:"
 create-account-title => "Create Account"
 delete-wallet-confirmation => "Delete wallet “%1”? This cannot be undone."
+account-type-title => "Account Type"
 delete-wallet-title => "Delete Wallet"
 history-amount => "Amount"
 history-direction => "Direction"
@@ -41,7 +42,6 @@ history-title => "History"
 history-unconfirmed-no-colon => "Unconfirmed"
 main-menu-tab => "+"
 main-window-title => "Silent - Silent Payments Wallet"
-menu-custom => "Custom"
 network-bitcoin => "Bitcoin"
 network-regtest => "Regtest"
 network-signet => "Signet"
@@ -131,7 +131,7 @@ settings-theme => "Theme:"
 settings-theme-dark => "Dark"
 settings-theme-light => "Light"
 settings-title => "Settings"
-sp-create-account => "Create New Wallet"
+sp-account-type => "Silent Payment Wallet"
 sp-instance-not-found => "SP instance not found: %1"
 status-connected-blindbit => "Connected to blindbit-oracle at %1"
 status-connected-electrum => "Connected to electrum at %1"
@@ -1001,7 +1001,7 @@ settings-plugin-no-library => "No plugin library found in its folder."
 
 settings-plugin-not-silent => "This library is not a Silent plugin."
 
-musig-create-account => "Create Shared Wallet"
+musig-account-type => "Shared Wallet"
 
 musig-instance-not-found => "MuSig2 instance not found: %1"
 
@@ -1069,7 +1069,7 @@ musig-send-no-coins => "No coin to spend yet"
 
 musig-send-finalize-failed => "Could not finalize the transaction: cancel to restart the signing"
 
-btn-create-entry => "+ %1"
+btn-create-account => "+ Create Account"
 
 musig-creator-unknown-instance => "Unknown MuSig2 creator entry: %1"
 
