@@ -3,12 +3,13 @@
 #include "account/views/Coins.h"
 #include "account/views/History.h"
 #include "account/views/Receive.h"
+#include "account/views/Settings.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "modules/musig/MusigAccountWidget.h"
+#include "modules/musig/SettingsExtras.h"
 #include "modules/musig/views/Send.h"
-#include "modules/musig/views/Settings.h"
 #include "views/utils.h"
 
 #include <QDebug>
@@ -75,7 +76,7 @@ void MusigAccountController::loadPanels() {
     m_panels.insert("coins", new qontrol::Panel(new account::view::Coins(this), "coins"));
     m_panels.insert("receive", new qontrol::Panel(new account::view::Receive(this), "receive"));
     m_panels.insert("send", new qontrol::Panel(new musig::view::Send(this), "send"));
-    m_panels.insert("settings", new qontrol::Panel(new musig::view::Settings(this), "settings"));
+    m_panels.insert("settings", new qontrol::Panel(new account::view::Settings(this), "settings"));
 }
 
 auto MusigAccountController::screen(const QString &screen) -> std::optional<qontrol::Screen *> {
@@ -150,6 +151,54 @@ auto MusigAccountController::addressVerifyInfo(const QString &address) -> Addres
         return m_account.value()->address_verify_info(rust::Str(addr));
     }
     return AddressVerifyInfo{.descriptor = rust::String(""), .path = rust::String("")};
+}
+
+auto MusigAccountController::endpoints() -> QList<Endpoint> {
+    return {Endpoint::Electrum};
+}
+
+auto MusigAccountController::endpointUrl([[maybe_unused]] Endpoint endpoint) -> QString {
+    return electrumUrl();
+}
+
+auto MusigAccountController::isEndpointRunning([[maybe_unused]] Endpoint endpoint) const -> bool {
+    return m_electrum_running;
+}
+
+auto MusigAccountController::startEndpoint([[maybe_unused]] Endpoint endpoint) -> bool {
+    return m_account.has_value() && m_account.value()->start_electrum();
+}
+
+void MusigAccountController::stopEndpoint([[maybe_unused]] Endpoint endpoint) {
+    stopElectrum();
+}
+
+auto MusigAccountController::networkEditable() const -> bool {
+    return false;
+}
+
+auto MusigAccountController::saveSettings(const QHash<Endpoint, QString> &urls,
+                                          [[maybe_unused]] Network network) -> QString {
+    auto url = urls.value(Endpoint::Electrum);
+    auto result = setElectrumUrl(url);
+    if (!result.saved) {
+        return TR("musig-settings-save-failed");
+    }
+    if (!url.isEmpty() && !result.started) {
+        return TR("musig-settings-invalid-url");
+    }
+    return {};
+}
+
+auto MusigAccountController::settingsExtras() -> QWidget * {
+    return new musig::SettingsExtras(this);
+}
+
+void MusigAccountController::startWorker(QThread *worker) {
+    m_workers.append(worker);
+    connect(worker, &QThread::finished, this, &MusigAccountController::onWorkerFinished,
+            qontrol::UNIQUE);
+    worker->start();
 }
 
 auto MusigAccountController::electrumUrl() -> QString {
@@ -246,15 +295,21 @@ void MusigAccountController::handleNotification(Notification notif) {
         pollCoins();
         break;
     case NotificationFlag::ElectrumConnected:
+        m_electrum_running = true;
         emit electrumConnected(QString::fromStdString(std::string(notif.payload.c_str())));
+        emit endpointStateChanged(Endpoint::Electrum);
         break;
     case NotificationFlag::ElectrumError:
         qWarning() << "musig: electrum:"
                    << QString::fromStdString(std::string(notif.payload.c_str()));
+        m_electrum_running = false;
         emit electrumDisconnected();
+        emit endpointStateChanged(Endpoint::Electrum);
         break;
     case NotificationFlag::ElectrumStopped:
+        m_electrum_running = false;
         emit electrumDisconnected();
+        emit endpointStateChanged(Endpoint::Electrum);
         break;
     default:
         break;
@@ -284,7 +339,9 @@ auto MusigAccountController::setElectrumUrl(const QString &url) -> MusigElectrum
     emit electrumUrlChanged();
     if (!result.started) {
         // No listener runs on this url, so none reports its state.
+        m_electrum_running = false;
         emit electrumDisconnected();
+        emit endpointStateChanged(Endpoint::Electrum);
     }
     return result;
 }
@@ -307,37 +364,44 @@ void MusigAccountController::stop() {
     }
     m_stopping = true;
 
-    if (!m_account.has_value()) {
+    if (!m_account.has_value() && m_workers.isEmpty()) {
         emit stopped();
         return;
     }
 
-    // The account and the notification thread go to a background thread so the GUI
-    // never blocks: dropping the account closes the channel, which ends the listener's
-    // recv(); stopped() fires once the listener has exited. The listener is deleted
-    // only after the wait, so it cannot be gone before the teardown waits on it.
-    auto account = std::move(m_account.value());
+    // The account and the threads go to a background thread so the GUI never blocks:
+    // dropping the account closes the channel, which ends the listener's recv();
+    // stopped() fires once the listener has exited. Each thread is deleted only after
+    // the wait, so none can be gone before the teardown waits on it.
+    auto account = std::move(m_account);
     m_account.reset();
     QThread *notif = m_notif_thread;
     m_notif_thread = nullptr;
-    // A running broadcast uses the account: it ends before the account drops.
+    // A running broadcast or worker uses the account or a view: they end first.
     QThread *broadcast = m_broadcast_thread;
     m_broadcast_thread = nullptr;
+    auto workers = std::move(m_workers);
+    m_workers.clear();
 
-    auto *teardown = QThread::create([acc = std::move(account), notif, broadcast]() mutable {
-        if (broadcast != nullptr) {
-            broadcast->wait();
-            broadcast->deleteLater();
-        }
-        acc->stop_electrum();
-        {
-            auto dropped = std::move(acc);
-        }
-        if (notif != nullptr) {
-            notif->wait();
-            notif->deleteLater();
-        }
-    });
+    auto *teardown =
+        QThread::create([acc = std::move(account), notif, broadcast, workers]() mutable {
+            if (broadcast != nullptr) {
+                broadcast->wait();
+                broadcast->deleteLater();
+            }
+            for (auto *worker : workers) {
+                worker->wait();
+                worker->deleteLater();
+            }
+            if (acc.has_value()) {
+                acc.value()->stop_electrum();
+                acc.reset(); // drop the account, disconnecting the channel
+            }
+            if (notif != nullptr) {
+                notif->wait();
+                notif->deleteLater();
+            }
+        });
     connect(teardown, &QThread::finished, this, &MusigAccountController::stopped, qontrol::UNIQUE);
     connect(teardown, &QThread::finished, teardown, &QThread::deleteLater);
     teardown->start();
@@ -456,6 +520,18 @@ void MusigAccountController::onBroadcastResult(const TxResult &result) {
         cancelSigning();
     }
     pollCoins();
+}
+
+// Once stop() took the workers, its teardown deletes them.
+void MusigAccountController::onWorkerFinished() {
+    for (auto it = m_workers.begin(); it != m_workers.end();) {
+        if ((*it)->isFinished()) {
+            (*it)->deleteLater();
+            it = m_workers.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 // Once stop() took the thread, its teardown deletes it.

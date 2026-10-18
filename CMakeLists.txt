@@ -192,10 +192,10 @@ set(SILENT_APP_SOURCES
     src/modules/musig/MusigAccountWidget.cpp
     src/modules/musig/MusigStatusBar.h
     src/modules/musig/MusigStatusBar.cpp
+    src/modules/musig/SettingsExtras.h
+    src/modules/musig/SettingsExtras.cpp
     src/modules/musig/views/Send.h
     src/modules/musig/views/Send.cpp
-    src/modules/musig/views/Settings.h
-    src/modules/musig/views/Settings.cpp
     src/modules/musig/creator/MusigCreatorModule.h
     src/modules/musig/creator/MusigCreatorModule.cpp
     src/modules/musig/creator/CreatePolicy.h
@@ -229,10 +229,10 @@ set(SILENT_APP_SOURCES
     src/account/views/History.cpp
     src/account/views/Receive.h
     src/account/views/Receive.cpp
+    src/account/views/Settings.h
+    src/account/views/Settings.cpp
     src/modules/sp/views/Send.h
     src/modules/sp/views/Send.cpp
-    src/modules/sp/views/Settings.h
-    src/modules/sp/views/Settings.cpp
     src/views/modals/ConfirmDelete.h
     src/views/modals/ConfirmDelete.cpp
     src/views/modals/AccountType.cpp

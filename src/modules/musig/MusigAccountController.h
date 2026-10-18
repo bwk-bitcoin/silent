@@ -4,6 +4,7 @@
 #include "interfaces/types.h"
 
 #include <QHash>
+#include <QList>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
@@ -38,6 +39,19 @@ public:
     auto getDescriptor() -> rust::String;
     auto cosignerFingerprints() -> QStringList;
     auto addressVerifyInfo(const QString &address) -> AddressVerifyInfo override;
+    // Electrum only.
+    auto endpoints() -> QList<Endpoint> override;
+    auto endpointUrl(Endpoint endpoint) -> QString override;
+    [[nodiscard]] auto isEndpointRunning(Endpoint endpoint) const -> bool override;
+    auto startEndpoint(Endpoint endpoint) -> bool override;
+    void stopEndpoint(Endpoint endpoint) override;
+    [[nodiscard]] auto networkEditable() const -> bool override;
+    // Saves the Electrum url and restarts the listener on it; the network is fixed.
+    auto saveSettings(const QHash<Endpoint, QString> &urls, Network network) -> QString override;
+    // The descriptor, the cosigners and Delete.
+    auto settingsExtras() -> QWidget * override;
+    // stop() waits for the worker before it drops the account.
+    void startWorker(QThread *worker) override;
     auto electrumUrl() -> QString;
     [[nodiscard]] auto roundStatus() const -> MusigRoundStatus;
     [[nodiscard]] auto psbtInFlight() const -> QString;
@@ -87,6 +101,7 @@ public slots:
     void onKeysCancelled(ReqId req_id);
     void onBroadcastResult(const TxResult &result);
     void onBroadcastThreadFinished();
+    void onWorkerFinished();
     void historyClicked();
     void coinsClicked();
     void sendClicked();
@@ -104,6 +119,8 @@ private:
     std::optional<rust::Box<MusigAccount>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;
     QThread *m_broadcast_thread = nullptr;
+    QList<QThread *> m_workers;
+    bool m_electrum_running = false;
     QString m_prepared_psbt_v2_hex;
     QString m_psbt_v2_hex;
     QString m_tx_hex;

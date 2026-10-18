@@ -4,8 +4,9 @@
 #include "account/views/Coins.h"
 #include "account/views/History.h"
 #include "account/views/Receive.h"
+#include "account/views/Settings.h"
+#include "i18n/Tr.h"
 #include "views/Send.h"
-#include "views/Settings.h"
 #include <Qontrol>
 #include <common.h>
 #include <qlogging.h>
@@ -126,10 +127,12 @@ auto AccountController::handleNotification(Notification notif) -> void {
         m_scanner_running = true;
         m_estimator->reset();
         emit scannerStateChanged(true);
+        emit endpointStateChanged(Endpoint::Blindbit);
         break;
     case NotificationFlag::ScanStarted:
         m_scanner_running = true;
         emit scannerStateChanged(true);
+        emit endpointStateChanged(Endpoint::Blindbit);
         break;
     case NotificationFlag::StoppingScan:
         break;
@@ -139,6 +142,7 @@ auto AccountController::handleNotification(Notification notif) -> void {
         m_scanner_running = false;
         m_estimator->reset();
         emit scannerStateChanged(false);
+        emit endpointStateChanged(Endpoint::Blindbit);
         break;
     case NotificationFlag::WaitingForBlocks: {
         auto payload = QString::fromStdString(std::string(notif.payload.c_str()));
@@ -161,7 +165,9 @@ auto AccountController::handleNotification(Notification notif) -> void {
         m_electrum_connected_count++;
         if (m_electrum_connected_count >= m_electrum_expected_count) {
             auto payload = QString::fromStdString(std::string(notif.payload.c_str()));
+            m_electrum_running = true;
             emit electrumConnected(payload);
+            emit endpointStateChanged(Endpoint::Electrum);
         }
         break;
     }
@@ -172,7 +178,9 @@ auto AccountController::handleNotification(Notification notif) -> void {
         m_electrum_connected_count--;
         if (m_electrum_connected_count <= 0) {
             m_electrum_connected_count = 0;
+            m_electrum_running = false;
             emit electrumDisconnected();
+            emit endpointStateChanged(Endpoint::Electrum);
         }
         break;
     default:
@@ -202,7 +210,7 @@ auto AccountController::loadPanels() -> void {
     this->insertPanel(sendPanel);
 
     // Create Settings screen panel
-    auto *settingsScreen = new view::Settings(this);
+    auto *settingsScreen = new account::view::Settings(this);
     auto *settingsPanel = new qontrol::Panel(settingsScreen, "settings");
     this->insertPanel(settingsPanel);
 }
@@ -410,6 +418,76 @@ auto AccountController::addressVerifyInfo(const QString &address) -> AddressVeri
         return m_account.value()->address_verify_info(rust::String(address.toStdString()));
     }
     return AddressVerifyInfo{.descriptor = rust::String(""), .path = rust::String("")};
+}
+
+auto AccountController::endpoints() -> QList<Endpoint> {
+    return {Endpoint::Blindbit, Endpoint::Electrum};
+}
+
+auto AccountController::endpointUrl(Endpoint endpoint) -> QString {
+    if (!m_account.has_value()) {
+        return {};
+    }
+    auto config = config_from_file(m_account.value()->name());
+    if (!config->is_ok()) {
+        qWarning() << "AccountController: cannot load config:"
+                   << QString::fromStdString(std::string(config->get_error().c_str()));
+        return {};
+    }
+    auto url =
+        endpoint == Endpoint::Blindbit ? config->get_blindbit_url() : config->get_electrum_url();
+    return QString::fromStdString(std::string(url.c_str()));
+}
+
+auto AccountController::isEndpointRunning(Endpoint endpoint) const -> bool {
+    return endpoint == Endpoint::Blindbit ? m_scanner_running : m_electrum_running;
+}
+
+auto AccountController::startEndpoint(Endpoint endpoint) -> bool {
+    if (!m_account.has_value()) {
+        return false;
+    }
+    return endpoint == Endpoint::Blindbit ? m_account.value()->start_scanner()
+                                          : m_account.value()->start_electrum();
+}
+
+void AccountController::stopEndpoint(Endpoint endpoint) {
+    if (!m_account.has_value()) {
+        return;
+    }
+    if (endpoint == Endpoint::Blindbit) {
+        m_account.value()->stop_scanner();
+    } else {
+        m_account.value()->stop_electrum();
+    }
+}
+
+auto AccountController::networkEditable() const -> bool {
+    return true;
+}
+
+auto AccountController::saveSettings(const QHash<Endpoint, QString> &urls, Network network)
+    -> QString {
+    if (!m_account.has_value()) {
+        return TR("settings-no-account-loaded");
+    }
+    auto name = m_account.value()->name();
+    auto config = config_from_file(name);
+    if (!config->is_ok()) {
+        qCritical() << "AccountController: cannot save, config load failed for account"
+                    << QString::fromStdString(std::string(name.c_str())) << ":"
+                    << QString::fromStdString(std::string(config->get_error().c_str()));
+        return TR("settings-no-account-loaded");
+    }
+    config->set_blindbit_url(rust::String(urls.value(Endpoint::Blindbit).toStdString()));
+    config->set_electrum_url(rust::String(urls.value(Endpoint::Electrum).toStdString()));
+    config->set_network(network);
+    config->to_file();
+    return {};
+}
+
+auto AccountController::settingsExtras() -> QWidget * {
+    return nullptr;
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)

@@ -1,14 +1,21 @@
 #pragma once
 
+#include <QHash>
 #include <QList>
 #include <QObject>
 #include <QString>
 #include <cstdint>
 #include <silent.h>
 
+class QThread;
+class QWidget;
+
 // A kind of address an account receives on. The silent payment address is static;
 // the others are generated one at a time.
 enum class AddressKind : std::uint8_t { SilentPayment, Segwit, Taproot };
+
+// A server an account syncs from.
+enum class Endpoint : std::uint8_t { Blindbit, Electrum };
 
 // What the account panels ask of their account, whatever its kind: the sp account
 // and the musig account controllers both implement it, so one set of panels serves
@@ -32,9 +39,30 @@ public:
     // The descriptor and derivation path a device needs to show `address`.
     virtual auto addressVerifyInfo(const QString &address) -> AddressVerifyInfo = 0;
 
+    // The servers the account syncs from, in the order Settings lists them.
+    virtual auto endpoints() -> QList<Endpoint> = 0;
+    // The url saved for `endpoint`, empty when none is.
+    virtual auto endpointUrl(Endpoint endpoint) -> QString = 0;
+    [[nodiscard]] virtual auto isEndpointRunning(Endpoint endpoint) const -> bool = 0;
+    // false when it could not start.
+    virtual auto startEndpoint(Endpoint endpoint) -> bool = 0;
+    virtual void stopEndpoint(Endpoint endpoint) = 0;
+    // Whether Settings offers to move the account to another network.
+    [[nodiscard]] virtual auto networkEditable() const -> bool = 0;
+    // Saves the endpoint urls and the network; why it failed, empty once saved.
+    virtual auto saveSettings(const QHash<Endpoint, QString> &urls, Network network) -> QString = 0;
+    // What Settings shows below the endpoints, nullptr when nothing. Owned by the caller.
+    virtual auto settingsExtras() -> QWidget * = 0;
+
+    // Starts a worker thread that uses the account or a view: the account outlives it.
+    virtual void startWorker(QThread *worker) = 0;
+
 signals:
     void updateCoins(CoinState coins);
     void updateBalance(uint64_t balance);
+    void scanProgress(uint32_t height, uint32_t tip);
+    // `endpoint` started or stopped.
+    void endpointStateChanged(Endpoint endpoint);
 
 public slots:
     virtual void updateCoinLabel(const QString &outpoint, const QString &label) = 0;

@@ -34,15 +34,23 @@ public:
     auto newAddress(AddressKind kind) -> QString override;
     virtual auto getDescriptor() -> rust::String;
     auto addressVerifyInfo(const QString &address) -> AddressVerifyInfo override;
+    // BlindBit, then Electrum.
+    auto endpoints() -> QList<Endpoint> override;
+    auto endpointUrl(Endpoint endpoint) -> QString override;
+    [[nodiscard]] auto isEndpointRunning(Endpoint endpoint) const -> bool override;
+    auto startEndpoint(Endpoint endpoint) -> bool override;
+    void stopEndpoint(Endpoint endpoint) override;
+    [[nodiscard]] auto networkEditable() const -> bool override;
+    auto saveSettings(const QHash<Endpoint, QString> &urls, Network network) -> QString override;
+    auto settingsExtras() -> QWidget * override;
     auto coins() -> qontrol::Screen *;
     auto getAccount() -> std::optional<rust::Box<Account>> &;
-    // Starts a worker thread that uses the account or a view: stop() waits for it
-    // before it drops the account and before stopped() lets the owner delete them.
-    void startWorker(QThread *worker);
+    // stop() waits for the worker before it drops the account and before stopped()
+    // lets the owner delete them.
+    void startWorker(QThread *worker) override;
 
 signals:
     void newAddress(rust::String addr);
-    void scanProgress(uint32_t height, uint32_t tip);
     void waitingForBlocks(uint32_t tip_height);
     void scanError(rust::String error);
     void scannerStateChanged(bool running);
@@ -92,6 +100,7 @@ private:
     bool m_init = false;
     bool m_stopping = false;
     bool m_scanner_running = false;
+    bool m_electrum_running = false;
     int m_electrum_connected_count = 0;
     int m_electrum_expected_count = 0;
 };
