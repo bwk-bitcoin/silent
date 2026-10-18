@@ -158,6 +158,8 @@ if [[ ! -x "$FIRMWARE/unix/coldcard-mpy" ]]; then
         ln -sfn ../external/micropython/ports/unix l-port
         ln -sfn ../external/micropython l-mpy
         ln -sfn ../external/micropython/ports/unix/coldcard-mpy coldcard-mpy
+        # the frozen modules are compiled with it, and `make` does not build it
+        make -C ../external/micropython/mpy-cross CFLAGS_EXTRA="$COLDCARD_CFLAGS"
         make ngu-setup
         make CFLAGS_EXTRA="$COLDCARD_CFLAGS"
     ) 2>&1 | tee "$RUN_DIR/coldcard-build.log"
