@@ -321,6 +321,7 @@ set(SILENT_APP_SOURCES
     src/views/modals/AddressHistoryModal.cpp
     src/catalog/panels/receive/QrCode.h
     src/catalog/panels/receive/QrCode.cpp
+    src/catalog/ClearRows.h
     src/catalog/SelectRow.h
     src/catalog/SelectRow.cpp
     src/catalog/inputs/Stepper.h

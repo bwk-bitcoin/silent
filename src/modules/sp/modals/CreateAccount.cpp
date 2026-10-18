@@ -2,6 +2,7 @@
 
 #include "AppController.h"
 #include "catalog/Button.h"
+#include "catalog/ClearRows.h"
 #include "catalog/SelectRow.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/ModalActions.h"
@@ -230,7 +231,7 @@ void CreateAccount::updateActions() {
 }
 
 void CreateAccount::populateKeys() {
-    m_keys_column->clear();
+    catalog::clearRows(m_keys_column);
     m_keys_column->spacing(resolve(Spacing::S));
     m_key_rows.clear();
     m_keys.clear();

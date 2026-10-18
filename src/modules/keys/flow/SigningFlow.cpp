@@ -6,6 +6,7 @@
 #include "signingflow/SdRouteFlow.h"
 #include "signingflow/UsbRouteFlow.h"
 
+#include "catalog/ClearRows.h"
 #include "catalog/SelectRow.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/ViewSlots.h"
@@ -198,7 +199,7 @@ void SigningFlow::showPicker() {
     bool verify = m_request.context == Context::Verify;
 
     // clear() also resets the layout spacing
-    m_picker_column->clear();
+    catalog::clearRows(m_picker_column);
     m_picker_column->spacing(resolve(Spacing::M));
     // Each part added to the shown step is shown at once, or the step would be measured
     // without it until the next event loop pass.

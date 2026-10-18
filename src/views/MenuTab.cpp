@@ -1,6 +1,7 @@
 #include "MenuTab.h"
 #include "AppController.h"
 #include "catalog/Button.h"
+#include "catalog/ClearRows.h"
 #include "catalog/Variants.h"
 #include "catalog/display/Label.h"
 #include "host/Host.h"
@@ -146,7 +147,7 @@ void MenuTab::view() {
 }
 
 void MenuTab::clearRows() {
-    m_accounts_column->clear();
+    catalog::clearRows(m_accounts_column);
     m_rows.clear();
 }
 

@@ -5,6 +5,7 @@
 
 #include "AppController.h"
 #include "catalog/Button.h"
+#include "catalog/ClearRows.h"
 #include "catalog/SelectRow.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/ScrollArea.h"
@@ -279,7 +280,7 @@ void AppSettings::setScanning(bool scanning) {
 }
 
 void AppSettings::rebuildSettingSectionRows() {
-    m_section_column->clear();
+    catalog::clearRows(m_section_column);
     QList<Host::SettingSectionView> sections;
     if (m_host != nullptr) {
         sections = m_host->settingSections();
@@ -589,7 +590,7 @@ void AppSettings::onPluginToggled(bool enabled) {
 }
 
 void AppSettings::onPluginsChanged() {
-    m_plugins_column->clear();
+    catalog::clearRows(m_plugins_column);
     m_plugin_meta.clear();
 
     bool available = m_plugin_registry != nullptr && m_plugin_registry->isAvailable();

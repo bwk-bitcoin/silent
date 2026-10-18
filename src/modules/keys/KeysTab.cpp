@@ -11,6 +11,7 @@
 
 #include "AppController.h"
 #include "catalog/Button.h"
+#include "catalog/ClearRows.h"
 #include "catalog/SelectRow.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/ScrollArea.h"
@@ -236,7 +237,7 @@ void KeysTab::onSectionToggled() {
 }
 
 void KeysTab::rebuildDevices() {
-    m_device_column->clear();
+    catalog::clearRows(m_device_column);
     m_device_column->spacing(resolve(Spacing::S));
 
     int count = 0;
@@ -326,7 +327,7 @@ auto KeysTab::deviceRow(const plugin::SignerEntry &entry) const -> catalog::Sele
 }
 
 void KeysTab::rebuildKeys() {
-    m_key_column->clear();
+    catalog::clearRows(m_key_column);
     m_key_column->spacing(resolve(Spacing::S));
 
     QList<KeyInfo> keyList = m_module->tabKeys();

@@ -2,6 +2,7 @@
 
 #include "AppController.h"
 #include "catalog/Button.h"
+#include "catalog/ClearRows.h"
 #include "catalog/SelectRow.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/Card.h"
@@ -257,7 +258,7 @@ void CreatePolicy::showPaths() {
 
 void CreatePolicy::refreshPathRows() {
     // clear() also resets the layout spacing.
-    m_path_rows->clear();
+    catalog::clearRows(m_path_rows);
     m_path_rows->spacing(resolve(Spacing::XS));
     auto names = keyNames();
     for (int i = 0; i < m_paths.size(); ++i) {
@@ -405,7 +406,7 @@ void CreatePolicy::refreshXpubRows() {
                                .arg(m_fingerprints.size() - missing.size())
                                .arg(m_fingerprints.size()));
     // clear() also resets the layout spacing.
-    m_xpub_rows->clear();
+    catalog::clearRows(m_xpub_rows);
     m_xpub_rows->spacing(resolve(Spacing::XS));
     for (const auto &fingerprint : m_fingerprints) {
         auto entry = keyEntry(fingerprint).value_or(KeyEntry{.fingerprint = fingerprint});
@@ -504,7 +505,7 @@ void CreatePolicy::showReview() {
     m_view = View::Review;
     showStep(2);
     // clear() also resets the layout spacing.
-    m_review_cards->clear();
+    catalog::clearRows(m_review_cards);
     m_review_cards->spacing(resolve(Spacing::S));
     auto names = keyNames();
     for (int i = 0; i < m_paths.size(); ++i) {
@@ -590,7 +591,7 @@ void CreatePolicy::hideRegister() {
 
 void CreatePolicy::refreshRegisterRows() {
     // clear() also resets the layout spacing.
-    m_register_rows->clear();
+    catalog::clearRows(m_register_rows);
     m_register_rows->spacing(resolve(Spacing::XS));
     int left = 0;
     for (const auto &fingerprint : m_fingerprints) {
@@ -701,7 +702,7 @@ void CreatePolicy::hideVerify() {
 
 void CreatePolicy::refreshVerifyRows() {
     // clear() also resets the layout spacing.
-    m_verify_rows->clear();
+    catalog::clearRows(m_verify_rows);
     m_verify_rows->spacing(resolve(Spacing::XS));
     bool checkable = false;
     for (const auto &fingerprint : m_fingerprints) {

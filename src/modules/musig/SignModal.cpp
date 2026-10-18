@@ -1,6 +1,7 @@
 #include "SignModal.h"
 
 #include "catalog/Button.h"
+#include "catalog/ClearRows.h"
 #include "catalog/SelectRow.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/ModalActions.h"
@@ -162,14 +163,8 @@ void SignModal::refresh() {
 }
 
 void SignModal::render(const MusigRoundStatus &status) {
-    // clear() only deletes the old rows later, from the event loop that was running
-    // when it was called: the constructor renders before this modal's own loop runs,
-    // so those rows would stay drawn under the new ones until it closes. Hidden first.
-    for (auto *row : m_rows->findChildren<QWidget *>(Qt::FindDirectChildrenOnly)) {
-        row->hide();
-    }
     // clear() also resets the layout spacing.
-    m_rows->clear();
+    catalog::clearRows(m_rows);
     m_rows->spacing(resolve(Spacing::XS));
     if (!status.is_ok) {
         showFailure(Failure::Sign, toQString(status.error));
