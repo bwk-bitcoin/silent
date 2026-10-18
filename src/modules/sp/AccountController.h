@@ -1,6 +1,7 @@
 #pragma once
 
 #include "account/AccountBackend.h"
+#include "account/ElectrumReconnect.h"
 
 #include <QHash>
 #include <QList>
@@ -74,6 +75,8 @@ public slots:
     auto startScanner() -> void;
     auto stop() -> void;
     void onWorkerFinished();
+    // A lost Electrum connection starts again.
+    void onElectrumReconnect();
 
     // Screen button actions
     auto historyClicked() -> void;
@@ -104,6 +107,7 @@ private:
     bool m_stopping = false;
     bool m_scanner_running = false;
     bool m_electrum_running = false;
+    account::ElectrumReconnect *m_reconnect = new account::ElectrumReconnect(this);
     int m_electrum_connected_count = 0;
     int m_electrum_expected_count = 0;
 };

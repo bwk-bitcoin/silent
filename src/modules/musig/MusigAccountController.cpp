@@ -49,6 +49,8 @@ void MusigAccountController::init(const QString &account) {
         return;
     }
     m_account = std::make_optional(std::move(acc));
+    connect(m_reconnect, &account::ElectrumReconnect::reconnect, this,
+            &MusigAccountController::onElectrumReconnect, qontrol::UNIQUE);
 
     // Before any view connects, so the controller state is clear when views react.
     connect(this, &MusigAccountController::broadcastDone, this,
@@ -309,6 +311,7 @@ void MusigAccountController::handleNotification(Notification notif) {
         break;
     case NotificationFlag::ElectrumConnected:
         m_electrum_running = true;
+        m_reconnect->connected();
         emit electrumConnected(QString::fromStdString(std::string(notif.payload.c_str())));
         emit endpointStateChanged(Endpoint::Electrum);
         break;
@@ -316,11 +319,13 @@ void MusigAccountController::handleNotification(Notification notif) {
         qWarning() << "musig: electrum:"
                    << QString::fromStdString(std::string(notif.payload.c_str()));
         m_electrum_running = false;
+        m_reconnect->lost();
         emit electrumDisconnected();
         emit endpointStateChanged(Endpoint::Electrum);
         break;
     case NotificationFlag::ElectrumStopped:
         m_electrum_running = false;
+        m_reconnect->lost();
         emit electrumDisconnected();
         emit endpointStateChanged(Endpoint::Electrum);
         break;
@@ -344,6 +349,8 @@ auto MusigAccountController::setElectrumUrl(const QString &url) -> MusigElectrum
     if (!m_account.has_value()) {
         return MusigElectrumUrlResult{.saved = false, .started = false};
     }
+    // The old listener's stop is the url change, not a lost connection.
+    m_reconnect->stopped();
     auto result = m_account.value()->set_electrum_url(rust::String(url.toStdString()));
     if (!result.saved) {
         qWarning() << "MusigAccountController: failed to save electrum url" << url;
@@ -366,8 +373,17 @@ void MusigAccountController::startElectrum() {
 }
 
 void MusigAccountController::stopElectrum() {
+    // Stopped on purpose: not reconnected.
+    m_reconnect->stopped();
     if (m_account.has_value()) {
         m_account.value()->stop_electrum();
+    }
+}
+
+void MusigAccountController::onElectrumReconnect() {
+    if (m_account.has_value() && !m_stopping) {
+        qInfo() << "musig: electrum: reconnecting";
+        m_account.value()->start_electrum();
     }
 }
 
@@ -376,6 +392,7 @@ void MusigAccountController::stop() {
         return;
     }
     m_stopping = true;
+    m_reconnect->stopped();
 
     if (!m_account.has_value() && m_workers.isEmpty()) {
         emit stopped();

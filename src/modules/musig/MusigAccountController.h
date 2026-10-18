@@ -1,6 +1,7 @@
 #pragma once
 
 #include "account/AccountBackend.h"
+#include "account/ElectrumReconnect.h"
 #include "interfaces/types.h"
 
 #include <QHash>
@@ -96,6 +97,8 @@ public slots:
     auto setElectrumUrl(const QString &url) -> MusigElectrumUrlResult;
     void startElectrum();
     void stopElectrum();
+    // A lost Electrum connection starts again.
+    void onElectrumReconnect();
     void stop();
     // Prepares, then restricts the PSBT to `spend` before round 1.
     void prepareTransaction(TransactionTemplate tx, MusigSpendLeaf spend);
@@ -135,6 +138,7 @@ private:
     QThread *m_broadcast_thread = nullptr;
     QList<QThread *> m_workers;
     bool m_electrum_running = false;
+    account::ElectrumReconnect *m_reconnect = new account::ElectrumReconnect(this);
     QString m_prepared_psbt_v2_hex;
     QString m_psbt_v2_hex;
     QString m_tx_hex;

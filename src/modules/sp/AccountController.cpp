@@ -38,6 +38,8 @@ auto AccountController::init(const QString &account) -> void {
     }
     m_account = std::make_optional(std::move(acc));
     m_electrum_expected_count = static_cast<int>(m_account.value()->sub_account_count());
+    connect(m_reconnect, &account::ElectrumReconnect::reconnect, this,
+            &AccountController::onElectrumReconnect, qontrol::UNIQUE);
 
     // Take the notification receiver and spawn a blocking listener thread
     connect(this, &AccountController::notificationReceived, this,
@@ -167,12 +169,14 @@ auto AccountController::handleNotification(Notification notif) -> void {
         if (m_electrum_connected_count >= m_electrum_expected_count) {
             auto payload = QString::fromStdString(std::string(notif.payload.c_str()));
             m_electrum_running = true;
+            m_reconnect->connected();
             emit electrumConnected(payload);
             emit endpointStateChanged(Endpoint::Electrum);
         }
         break;
     }
     case NotificationFlag::ElectrumError:
+        m_reconnect->lost();
         emit scanError(notif.payload);
         break;
     case NotificationFlag::ElectrumStopped:
@@ -180,6 +184,7 @@ auto AccountController::handleNotification(Notification notif) -> void {
         if (m_electrum_connected_count <= 0) {
             m_electrum_connected_count = 0;
             m_electrum_running = false;
+            m_reconnect->lost();
             emit electrumDisconnected();
             emit endpointStateChanged(Endpoint::Electrum);
         }
@@ -261,6 +266,7 @@ auto AccountController::stop() -> void {
         return;
     }
     m_stopping = true;
+    m_reconnect->stopped();
 
     if (!m_account.has_value() && m_workers.isEmpty()) {
         // Nothing to tear down (mock controller or never initialized).
@@ -467,7 +473,16 @@ void AccountController::stopEndpoint(Endpoint endpoint) {
     if (endpoint == Endpoint::Blindbit) {
         m_account.value()->stop_scanner();
     } else {
+        // Stopped on purpose: not reconnected.
+        m_reconnect->stopped();
         m_account.value()->stop_electrum();
+    }
+}
+
+void AccountController::onElectrumReconnect() {
+    if (m_account.has_value() && !m_stopping) {
+        qInfo() << "electrum: reconnecting";
+        m_account.value()->start_electrum();
     }
 }
 

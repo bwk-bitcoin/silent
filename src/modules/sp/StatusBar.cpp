@@ -193,11 +193,12 @@ void StatusBar::onElectrumToggled(bool checked) {
         return;
     }
 
+    // Through the controller: a stop it is told of is not reconnected.
     if (checked) {
         m_electrum_item->setLabel(TR("status-connecting"));
-        accountOpt.value()->start_electrum();
+        m_controller->startEndpoint(Endpoint::Electrum);
     } else {
         m_electrum_item->setLabel(TR("status-disconnecting"));
-        accountOpt.value()->stop_electrum();
+        m_controller->stopEndpoint(Endpoint::Electrum);
     }
 }

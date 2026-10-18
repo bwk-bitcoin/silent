@@ -227,6 +227,8 @@ set(SILENT_APP_SOURCES
     src/views/DashboardLayout.h
     src/views/DashboardLayout.cpp
     src/account/AccountBackend.h
+    src/account/ElectrumReconnect.h
+    src/account/ElectrumReconnect.cpp
     src/account/views/Coins.h
     src/account/views/Coins.cpp
     src/account/views/History.h
