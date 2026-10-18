@@ -194,8 +194,8 @@ set(SILENT_APP_SOURCES
     src/modules/musig/MusigStatusBar.cpp
     src/modules/musig/SettingsExtras.h
     src/modules/musig/SettingsExtras.cpp
-    src/modules/musig/views/Send.h
-    src/modules/musig/views/Send.cpp
+    src/modules/musig/SigningSection.h
+    src/modules/musig/SigningSection.cpp
     src/modules/musig/creator/MusigCreatorModule.h
     src/modules/musig/creator/MusigCreatorModule.cpp
     src/modules/musig/creator/CreatePolicy.h
@@ -216,8 +216,8 @@ set(SILENT_APP_SOURCES
     src/views/modals/appsettings/SectionFlow.cpp
     src/modules/sp/modals/CreateAccount.h
     src/modules/sp/modals/CreateAccount.cpp
-    src/modules/sp/modals/ScanAddress.h
-    src/modules/sp/modals/ScanAddress.cpp
+    src/views/modals/ScanAddress.h
+    src/views/modals/ScanAddress.cpp
     src/views/utils.h
     src/views/utils.cpp
     src/views/DashboardLayout.h
@@ -231,8 +231,11 @@ set(SILENT_APP_SOURCES
     src/account/views/Receive.cpp
     src/account/views/Settings.h
     src/account/views/Settings.cpp
-    src/modules/sp/views/Send.h
-    src/modules/sp/views/Send.cpp
+    src/account/SendSigning.h
+    src/account/views/Send.h
+    src/account/views/Send.cpp
+    src/modules/sp/SpSigning.h
+    src/modules/sp/SpSigning.cpp
     src/views/modals/ConfirmDelete.h
     src/views/modals/ConfirmDelete.cpp
     src/views/modals/AccountType.cpp

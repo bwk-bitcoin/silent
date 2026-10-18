@@ -43,6 +43,9 @@ public:
     [[nodiscard]] auto networkEditable() const -> bool override;
     auto saveSettings(const QHash<Endpoint, QString> &urls, Network network) -> QString override;
     auto settingsExtras() -> QWidget * override;
+    auto simulateTx(TransactionTemplate tx) -> TransactionSimulation override;
+    // Sign, then Broadcast.
+    auto sendSigning() -> account::SendSigning * override;
     auto coins() -> qontrol::Screen *;
     auto getAccount() -> std::optional<rust::Box<Account>> &;
     // stop() waits for the worker before it drops the account and before stopped()
@@ -66,7 +69,6 @@ public slots:
     auto insertPanel(qontrol::Panel *panel) -> void;
     auto pollCoins() -> void;
     auto handleNotification(Notification notif) -> void;
-    virtual auto simulateTx(TransactionTemplate tx) -> TransactionSimulation;
     void updateCoinLabel(const QString &outpoint, const QString &label) override;
     auto startScanner() -> void;
     auto stop() -> void;

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "interfaces/types.h"
 #include "theme/Palette.h"
 #include <Qontrol>
 #include <cstdint>
@@ -62,9 +61,13 @@ class QCheckBox;
 #include <qwidget.h>
 #include <silent.h>
 
-class AccountController;
+class AccountBackend;
 
-namespace view {
+namespace account {
+class SendSigning;
+} // namespace account
+
+namespace account::view {
 class Send;
 
 class InputW {
@@ -114,15 +117,12 @@ private:
     QWidget *m_widget = nullptr;
 };
 
+// Payments, coins and fee, the transaction they form, then the account's signing
+// step (account::SendSigning) where the kinds of account differ.
 class Send : public qontrol::Screen {
     Q_OBJECT
 public:
-    Send(AccountController *ctrl);
-
-signals:
-    void validationReady(PsbtValidation result);
-    void signReady(TxResult result);
-    void broadcastReady(TxResult result);
+    explicit Send(AccountBackend *backend);
 
 public slots:
     void onOutputSetMax(int id);
@@ -132,10 +132,8 @@ public slots:
     void onScanAddressClicked();
     void onOutputMaxToggled();
     void onClearOutputs();
-    void onCancelSigned();
     void onClearInputs();
     void onFeeToggled();
-    void onSetBroadcastable(bool broadcastable);
     void onCoinToggled();
     void onCoinSelectionChanged(const QString &row_id, bool selected);
     void onAutoSelectionToggled();
@@ -143,18 +141,12 @@ public slots:
     void onUpdateOutputValidations();
     void onUpdateFeeValidation();
     void onUpdateSelectedCoinsFromSimulation();
-    void onSetSpendable(bool spendable);
     void onProcess();
-    void onSendTransaction();
-    void onValidationResult(PsbtValidation result);
-    void onSendConfirmed();
-    void onBroadcastConfirmed();
-    void onSignResult(TxResult result);
-    void onSignerSigned(ReqId req_id, const QString &psbt_v2_hex);
-    void onSignerError(std::optional<ReqId> req_id, const QString &message);
-    void onSignerCancelled(ReqId req_id);
-    void onBroadcastResult(TxResult result);
     void onCoinsUpdated(CoinState state);
+    // The signing step took or let go of a transaction.
+    void onSigningLocked(bool locked);
+    // The signing step broadcast the transaction.
+    void onSigningSent();
 
 protected:
     void init() override;
@@ -169,23 +161,20 @@ protected:
     // rebuilding/re-parenting anything (no input focus loss).
     void updateTransactionFlow();
     auto txTemplate() -> std::optional<TransactionTemplate>;
-    // Warn about address reuse and ask the user to confirm. Returns true to
-    // proceed, false if the user cancelled (transaction state is reset).
-    auto showReuseWarning(PsbtValidation result) -> bool;
-    // Guards the keys module is reachable, then hands the PSBT over to it.
-    void showSignerStep();
-    // Stops listening to the keys module once the signing request has its answer.
-    void disconnectSigner() const;
+    // The coins the transaction spends: the ones picked by hand, or the auto selection.
+    [[nodiscard]] auto spentOutpoints() const -> QStringList;
+    // Payments, fee and coins are frozen while the signing step holds a transaction.
+    void applyLocked();
     auto output() -> QWidget *;
     void updateCoinCheckboxes();
     void applyInputsMode();
     void updateInputsTitle();
-    // Sign and Broadcast share one enabled state; only one shows at a time.
-    void setSendEnabled(bool enabled);
 
 private:
     static constexpr int SPLIT_WIDTH = 1569;
-    AccountController *m_controller = nullptr;
+    AccountBackend *m_backend = nullptr;
+    account::SendSigning *m_signing = nullptr;
+    bool m_locked = false;
     bool m_stacked = true;
     int m_output_id = 0;
     QHash<int, OutputW *> m_outputs;
@@ -238,23 +227,14 @@ private:
     catalog::Label *m_auto_count = nullptr;
 
     catalog::Button *m_clear_outputs_btn = nullptr;
-    catalog::Button *m_cancel_signed_btn = nullptr;
     catalog::Button *m_clear_inputs_btn = nullptr;
-    catalog::Button *m_sign_btn = nullptr;
-    catalog::Button *m_broadcast_btn = nullptr;
 
     catalog::Label *m_fee_estimate_label = nullptr;
     uint64_t m_estimated_fee = 0;
 
-    bool m_broadcastable = false;
-    std::optional<rust::Box<PsbtResult>> m_psbt_result = std::nullopt;
-    std::optional<TransactionTemplate> m_tx_template = std::nullopt;
-    QString m_signed_tx_hex;
-    ReqId m_sign_req_id = 0;
-    /// SP change of m_signed_tx_hex, kept for broadcast once the psbt is dropped.
     QList<RustCoin> m_selected_coins{};
     QStringList m_auto_selected_outpoints;
     CoinState m_last_coin_state{};
 };
 
-} // namespace view
+} // namespace account::view

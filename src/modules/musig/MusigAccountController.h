@@ -50,6 +50,9 @@ public:
     auto saveSettings(const QHash<Endpoint, QString> &urls, Network network) -> QString override;
     // The descriptor, the cosigners and Delete.
     auto settingsExtras() -> QWidget * override;
+    auto simulateTx(TransactionTemplate tx) -> TransactionSimulation override;
+    // The spend path, Prepare and the MuSig2 rounds.
+    auto sendSigning() -> account::SendSigning * override;
     // stop() waits for the worker before it drops the account.
     void startWorker(QThread *worker) override;
     auto electrumUrl() -> QString;
@@ -89,7 +92,6 @@ public slots:
     void startElectrum();
     void stopElectrum();
     void stop();
-    auto simulateTx(TransactionTemplate tx) -> TransactionSimulation;
     // Prepares, then restricts the PSBT to `spend` before round 1.
     void prepareTransaction(TransactionTemplate tx, MusigSpendLeaf spend);
     // keys()->sign() for the current round of the PSBT in flight.

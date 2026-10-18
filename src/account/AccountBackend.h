@@ -10,6 +10,10 @@
 class QThread;
 class QWidget;
 
+namespace account {
+class SendSigning;
+} // namespace account
+
 // A kind of address an account receives on. The silent payment address is static;
 // the others are generated one at a time.
 enum class AddressKind : std::uint8_t { SilentPayment, Segwit, Taproot };
@@ -53,6 +57,11 @@ public:
     virtual auto saveSettings(const QHash<Endpoint, QString> &urls, Network network) -> QString = 0;
     // What Settings shows below the endpoints, nullptr when nothing. Owned by the caller.
     virtual auto settingsExtras() -> QWidget * = 0;
+
+    // Fee, inputs and validity of `tx`, without building it.
+    virtual auto simulateTx(TransactionTemplate tx) -> TransactionSimulation = 0;
+    // Send's signing step for this account. Owned by the caller.
+    virtual auto sendSigning() -> account::SendSigning * = 0;
 
     // Starts a worker thread that uses the account or a view: the account outlives it.
     virtual void startWorker(QThread *worker) = 0;

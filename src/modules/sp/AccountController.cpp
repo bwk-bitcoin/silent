@@ -1,12 +1,13 @@
 #include "AccountController.h"
 #include "AccountWidget.h"
 #include "AppController.h"
+#include "SpSigning.h"
 #include "account/views/Coins.h"
 #include "account/views/History.h"
 #include "account/views/Receive.h"
+#include "account/views/Send.h"
 #include "account/views/Settings.h"
 #include "i18n/Tr.h"
-#include "views/Send.h"
 #include <Qontrol>
 #include <common.h>
 #include <qlogging.h>
@@ -205,7 +206,7 @@ auto AccountController::loadPanels() -> void {
     this->insertPanel(receivePanel);
 
     // Create Send screen panel
-    auto *sendScreen = new view::Send(this);
+    auto *sendScreen = new account::view::Send(this);
     auto *sendPanel = new qontrol::Panel(sendScreen, "send");
     this->insertPanel(sendPanel);
 
@@ -488,6 +489,10 @@ auto AccountController::saveSettings(const QHash<Endpoint, QString> &urls, Netwo
 
 auto AccountController::settingsExtras() -> QWidget * {
     return nullptr;
+}
+
+auto AccountController::sendSigning() -> account::SendSigning * {
+    return new SpSigning(this);
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)

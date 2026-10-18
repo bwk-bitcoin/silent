@@ -1,19 +1,15 @@
 #include "Send.h"
-#include "AccountController.h"
-#include "AppController.h"
+#include "account/AccountBackend.h"
+#include "account/SendSigning.h"
 #include "catalog/Button.h"
 #include "catalog/Table.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/Card.h"
-#include "catalog/containers/Modal.h"
-#include "catalog/containers/ModalActions.h"
 #include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/SectionHeader.h"
 #include "catalog/containers/Separator.h"
-#include "catalog/display/Badge.h"
 #include "catalog/display/Display.h"
 #include "catalog/display/Label.h"
-#include "catalog/feedback/MessageModal.h"
 #include "catalog/form/FieldGroup.h"
 #include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/Checkbox.h"
@@ -21,11 +17,9 @@
 #include "catalog/inputs/Toggle.h"
 #include "catalog/panels/send/TxFlow.h"
 #include "i18n/Tr.h"
-#include "interfaces/host.h"
-#include "interfaces/keys.h"
-#include "modules/sp/modals/ScanAddress.h"
 #include "theme/Palette.h"
 #include "theme/Theme.h"
+#include "views/modals/ScanAddress.h"
 #include "views/utils.h"
 #include <QApplication>
 #include <QBoxLayout>
@@ -35,7 +29,6 @@
 #include <QPainter>
 #include <QResizeEvent>
 #include <QSignalBlocker>
-#include <QThread>
 #include <Qontrol>
 #include <QtGlobal>
 #include <algorithm>
@@ -47,7 +40,7 @@
 #include <qcontainerfwd.h>
 #include <string>
 
-namespace view {
+namespace account::view {
 
 namespace {
 
@@ -303,10 +296,9 @@ void Send::onFeeToggled() {
     onProcess();
 }
 
-Send::Send(AccountController *ctrl) {
+Send::Send(AccountBackend *backend) : m_backend(backend) {
     qDebug() << "Send::Send()";
-    m_controller = ctrl;
-    if (m_controller == nullptr) {
+    if (m_backend == nullptr) {
         return;
     }
     this->init();
@@ -314,7 +306,6 @@ Send::Send(AccountController *ctrl) {
     this->onAddOutput();
     this->view();
     this->onFeeToggled();
-    this->onSetBroadcastable(false);
 }
 
 void Send::init() {
@@ -323,10 +314,9 @@ void Send::init() {
     m_inputs_column = (new qontrol::Column);
 
     m_add_output_btn = catalog::btnAddPayment();
-    m_sign_btn = catalog::btnSign();
-    m_broadcast_btn = catalog::btnBroadcast();
     m_clear_outputs_btn = catalog::btnClear();
-    m_cancel_signed_btn = catalog::btnCancelSigned();
+    m_signing = m_backend->sendSigning();
+    m_signing->setParent(this);
 
     m_fee_estimate_label = new Label();
     m_fee_estimate_label->setVisible(false);
@@ -419,23 +409,17 @@ void Send::init() {
 void Send::doConnect() {
     qDebug() << "Send::doConnect()";
     connect(m_add_output_btn, &QPushButton::clicked, this, &Send::onAddOutput, qontrol::UNIQUE);
-    connect(m_sign_btn, &QPushButton::clicked, this, &Send::onSendTransaction, qontrol::UNIQUE);
-    connect(m_broadcast_btn, &QPushButton::clicked, this, &Send::onSendTransaction,
-            qontrol::UNIQUE);
     connect(m_clear_outputs_btn, &QPushButton::clicked, this, &Send::onClearOutputs,
-            qontrol::UNIQUE);
-    connect(m_cancel_signed_btn, &QPushButton::clicked, this, &Send::onCancelSigned,
             qontrol::UNIQUE);
     connect(m_clear_inputs_btn, &QPushButton::clicked, this, &Send::onClearInputs, qontrol::UNIQUE);
     connect(m_auto_coin_selection, &Checkbox::toggled, this, &Send::onAutoSelectionToggled,
             qontrol::UNIQUE);
-    connect(m_controller, &AccountController::updateCoins, this, &Send::onCoinsUpdated,
-            qontrol::UNIQUE);
+    connect(m_backend, &AccountBackend::updateCoins, this, &Send::onCoinsUpdated, qontrol::UNIQUE);
+    connect(m_signing, &SendSigning::lockedChanged, this, &Send::onSigningLocked, qontrol::UNIQUE);
+    connect(m_signing, &SendSigning::estimateChanged, this, &Send::onProcess, qontrol::UNIQUE);
+    connect(m_signing, &SendSigning::sent, this, &Send::onSigningSent, qontrol::UNIQUE);
     connect(m_fee_toggle, &QCheckBox::toggled, this, &Send::onFeeToggled, qontrol::UNIQUE);
     connect(m_fee_value_input, &QLineEdit::textChanged, this, &Send::onProcess, qontrol::UNIQUE);
-    connect(this, &Send::validationReady, this, &Send::onValidationResult, qontrol::UNIQUE);
-    connect(this, &Send::signReady, this, &Send::onSignResult, qontrol::UNIQUE);
-    connect(this, &Send::broadcastReady, this, &Send::onBroadcastResult, qontrol::UNIQUE);
 }
 
 void Send::view() {
@@ -583,7 +567,7 @@ void Send::updateTransactionFlow() {
 
     QList<RustCoin> selectedCoins;
     if (m_auto_coin_selection->isChecked()) {
-        auto availableCoins = m_controller->getCoins();
+        auto availableCoins = m_backend->getCoins();
         for (const auto &coin : availableCoins) {
             auto outpoint = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
             if (m_auto_selected_outpoints.contains(outpoint)) {
@@ -774,25 +758,9 @@ auto Send::transactionView() -> QWidget * {
                           ->pushSpacer(resolve(Spacing::S))
                           ->push(m_fee_estimate_label)
                           ->pushSpacer();
-    bool isSigned = !m_signed_tx_hex.isEmpty();
-    if (isSigned) {
-        actionRow->push(catalog::pillTxSigned())->pushSpacer(resolve(Spacing::S));
-    }
     actionRow->push(m_clear_outputs_btn)
-        ->push(m_cancel_signed_btn)
         ->pushSpacer(resolve(Spacing::S))
-        ->push(m_sign_btn)
-        ->push(m_broadcast_btn);
-    // Signed, the fee is settled: only the processed fee stays, and Cancel discards the
-    // signed transaction where Clear would empty the payments.
-    for (QWidget *feeInput : std::initializer_list<QWidget *>{
-             m_fee_rate_label, m_fee_toggle, m_fee_value_input, m_fee_indicator, m_fee_label}) {
-        feeInput->setVisible(!isSigned);
-    }
-    m_clear_outputs_btn->setVisible(!isSigned);
-    m_cancel_signed_btn->setVisible(isSigned);
-    m_sign_btn->setVisible(!isSigned);
-    m_broadcast_btn->setVisible(isSigned);
+        ->push(m_signing->actions());
 
     // The Coins selection heading's style and height, so the two line up.
     auto *title = new Label(TR("send-transaction-title"), LabelRole::Eyebrow);
@@ -805,20 +773,35 @@ auto Send::transactionView() -> QWidget * {
         ->push(summary)
         ->push(actionRow) // total send sits right on top of the fee + button row
         ->pushSpacer(resolve(Spacing::S))
+        ->push(m_signing)
         ->push(warningRow);
 
+    applyLocked();
     updateTransactionFlow(); // populate the flow + summary with the current state
     return col;
 }
 
-void Send::setSendEnabled(bool enabled) {
-    m_sign_btn->setEnabled(enabled);
-    m_broadcast_btn->setEnabled(enabled);
+void Send::applyLocked() {
+    // Held by the signing step, the fee is settled: only the processed fee stays, and
+    // the step's own Cancel lets go of the transaction where Clear would empty the
+    // payments.
+    for (QWidget *feeInput : std::initializer_list<QWidget *>{
+             m_fee_rate_label, m_fee_toggle, m_fee_value_input, m_fee_indicator, m_fee_label}) {
+        feeInput->setVisible(!m_locked);
+    }
+    m_clear_outputs_btn->setVisible(!m_locked);
+    for (auto *output : m_outputs) {
+        output->widget()->setEnabled(!m_locked);
+    }
+    m_add_output_btn->setEnabled(!m_locked);
+    m_coin_table->setEnabled(!m_locked);
+    m_auto_coin_selection->setEnabled(!m_locked);
+    m_clear_inputs_btn->setEnabled(!m_locked);
 }
 
 auto Send::inputsView() -> QWidget * {
     qDebug() << "Send::inputsView()";
-    auto availableCoins = m_controller->getCoins();
+    auto availableCoins = m_backend->getCoins();
 
     // Unparent persistent rows
     m_inputs_amounts_row->setParent(nullptr);
@@ -945,12 +928,6 @@ void Send::onOutputSetMax(int id) {
     onProcess();
 }
 
-void Send::onSetBroadcastable(bool broadcastable) {
-    qDebug() << "Send::onSetBroadcastable()" << broadcastable;
-    m_broadcastable = broadcastable;
-    setSendEnabled(broadcastable);
-}
-
 void Send::onClearOutputs() {
     qDebug() << "Send::onClearOutputs()";
     for (auto *outp : m_outputs) {
@@ -959,13 +936,6 @@ void Send::onClearOutputs() {
     m_outputs.clear();
     onAddOutput();
     onProcess();
-    view();
-}
-
-void Send::onCancelSigned() {
-    qDebug() << "Send::onCancelSigned()";
-    m_signed_tx_hex.clear();
-    m_tx_template = std::nullopt;
     view();
 }
 
@@ -980,7 +950,7 @@ void Send::onClearInputs() {
 }
 
 void Send::onCoinSelectionChanged(const QString &row_id, bool selected) {
-    auto availableCoins = m_controller->getCoins();
+    auto availableCoins = m_backend->getCoins();
     if (selected) {
         for (const auto &coin : availableCoins) {
             if (QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size()) == row_id) {
@@ -1017,7 +987,7 @@ void Send::onCoinToggled() {
     }
 
     QString outpoint = checkbox->property("outpoint").toString();
-    auto availableCoins = m_controller->getCoins();
+    auto availableCoins = m_backend->getCoins();
 
     if (checkbox->isChecked()) {
         // Add to m_selected_coins if not already present
@@ -1090,7 +1060,7 @@ void Send::onCoinsUpdated(CoinState state) {
 void Send::onUpdateSelectedCoinsFromSimulation() {
     qDebug() << "Send::onUpdateSelectedCoinsFromSimulation()";
     m_selected_coins.clear();
-    auto availableCoins = m_controller->getCoins();
+    auto availableCoins = m_backend->getCoins();
     for (const auto &coin : availableCoins) {
         QString op = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
         if (m_auto_selected_outpoints.contains(op)) {
@@ -1106,7 +1076,7 @@ void Send::onUpdateInputsTotal() {
 
     if (m_auto_coin_selection->isChecked()) {
         // In auto mode, calculate from auto-selected outpoints
-        auto availableCoins = m_controller->getCoins();
+        auto availableCoins = m_backend->getCoins();
         for (const auto &coin : availableCoins) {
             QString op = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
             if (m_auto_selected_outpoints.contains(op)) {
@@ -1309,11 +1279,6 @@ auto Send::txTemplate() -> std::optional<TransactionTemplate> {
     return txTemplate;
 }
 
-void Send::onSetSpendable(bool spendable) {
-    qDebug() << "Send::onSetSpendable()" << spendable;
-    setSendEnabled(spendable);
-}
-
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void Send::onUpdateOutputValidations() {
     qDebug() << "Send::onUpdateOutputValidations()";
@@ -1337,10 +1302,9 @@ void Send::onUpdateFeeValidation() {
 
 void Send::onProcess() {
     qDebug() << "Send::onProcess()";
-    if (!m_signed_tx_hex.isEmpty()) {
-        m_signed_tx_hex.clear();
-        m_warning_label->clear();
-        m_warning_label->setVisible(false);
+    // The signing step holds the transaction: nothing it is made of can change.
+    if (m_locked) {
+        return;
     }
     auto *focused = QApplication::focusWidget();
     for (auto *out : m_outputs) {
@@ -1356,8 +1320,7 @@ void Send::onProcess() {
 
     auto txTemp = txTemplate();
     if (!txTemp.has_value()) {
-        onSetSpendable(false);
-        onSetBroadcastable(false);
+        m_signing->setTransaction(std::nullopt, {});
         m_fee_estimate_label->setVisible(false);
         // Clear auto selection when outputs are invalid
         if (m_auto_coin_selection->isChecked() && !m_auto_selected_outpoints.isEmpty()) {
@@ -1369,17 +1332,11 @@ void Send::onProcess() {
         return;
     }
 
-    auto simu = m_controller->simulateTx(txTemp.value());
+    auto simu = m_backend->simulateTx(txTemp.value());
 
     if (simu.error.empty()) {
         if (simu.is_valid) {
-            onSetSpendable(true);
             m_warning_label->setVisible(false);
-
-            // Display estimated fee
-            m_estimated_fee = simu.fee;
-            m_fee_estimate_label->setText(TR("send-fee-estimate").arg(toBitcoin(simu.fee)));
-            m_fee_estimate_label->setVisible(true);
 
             // Fill in estimated max amount for MAX outputs
             for (auto *out : m_outputs) {
@@ -1411,16 +1368,23 @@ void Send::onProcess() {
                 updateCoinCheckboxes();
                 onUpdateInputsTotal();
             }
+            m_signing->setTransaction(txTemp, spentOutpoints());
+
+            // The estimated fee, once the signing step can tell it (a Multikey account
+            // needs its spend path).
+            bool estimates = m_signing->estimatesFee();
+            m_estimated_fee = estimates ? simu.fee : 0;
+            m_fee_estimate_label->setText(TR("send-fee-estimate").arg(toBitcoin(simu.fee)));
+            m_fee_estimate_label->setVisible(estimates);
         } else {
-            onSetSpendable(false);
+            m_signing->setTransaction(std::nullopt, {});
             m_estimated_fee = 0;
             m_fee_estimate_label->setVisible(false);
             m_warning_label->setText(TR("send-transaction-invalid"));
             m_warning_label->setVisible(true);
         }
     } else {
-        onSetSpendable(false);
-        onSetBroadcastable(false);
+        m_signing->setTransaction(std::nullopt, {});
         m_estimated_fee = 0;
         m_fee_estimate_label->setVisible(false);
         auto rawError = QString::fromStdString(std::string(simu.error.c_str()));
@@ -1432,261 +1396,28 @@ void Send::onProcess() {
     updateTransactionFlow();
 }
 
-void Send::onSendTransaction() {
-    qDebug() << "Send::onSendTransaction()";
-    if (!m_signed_tx_hex.isEmpty()) {
-        onBroadcastConfirmed();
-        return;
+auto Send::spentOutpoints() const -> QStringList {
+    if (m_auto_coin_selection->isChecked()) {
+        return m_auto_selected_outpoints;
     }
-
-    auto txTemp = txTemplate();
-    if (!txTemp.has_value()) {
-        AppController::execModal(
-            new catalog::MessageModal(TR("common-error"), TR("send-invalid-transaction-template")));
-        return;
+    QStringList outpoints;
+    for (const auto &coin : m_selected_coins) {
+        outpoints.append(QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size()));
     }
-
-    auto &account = m_controller->getAccount();
-    if (!account.has_value()) {
-        AppController::execModal(
-            new catalog::MessageModal(TR("common-error"), TR("send-no-account-loaded")));
-        return;
-    }
-
-    // Prepare transaction on main thread (pure computation)
-    auto psbt = account.value()->prepare_transaction(txTemp.value());
-    if (!psbt->is_ok()) {
-        auto error = QString::fromStdString(std::string(psbt->get_psbt_error().c_str()));
-        auto text = mapBackendErrorSummary(error) + "\n\n" + formatBackendErrorDetails(error);
-        AppController::execModal(new catalog::MessageModal(TR("send-prepare-failed"), text));
-        return;
-    }
-
-    // Store psbt and tx template for use in validation / onSendConfirmed / logging
-    m_psbt_result = std::make_optional(std::move(psbt));
-    m_tx_template = txTemp;
-
-    // Run PSBT validation on background thread before showing confirm modal
-    setSendEnabled(false);
-    const Account *workerAccount = &*account.value();
-    auto *thread = QThread::create([this, workerAccount]() {
-        auto result = workerAccount->validate_before_sign(*m_psbt_result.value());
-        emit validationReady(result);
-    });
-    m_controller->startWorker(thread);
+    return outpoints;
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-void Send::onValidationResult(PsbtValidation result) {
-    qDebug() << "Send::onValidationResult() is_ok:" << result.is_ok
-             << "is_valid:" << result.is_valid;
-
-    setSendEnabled(true);
-
-    if (!result.is_ok) {
-        // Connection/protocol error: warn but don't block
-        auto error = QString::fromStdString(std::string(result.error.c_str()));
-        auto text = mapBackendErrorSummary(error) + "\n\n" + formatBackendErrorDetails(error);
-        AppController::execModal(new catalog::MessageModal(TR("send-validation-error"), text));
-        // Fall through and let the user confirm the transaction anyway
-    } else if (result.spent_input_count > 0) {
-        // Spent inputs: block the transaction
-        auto issues = QString::fromStdString(std::string(result.issues.c_str()));
-        AppController::execModal(new catalog::MessageModal(
-            TR("common-error"), TR("send-inputs-already-spent").arg(issues)));
-        m_psbt_result = std::nullopt;
-        m_tx_template = std::nullopt;
-        return;
-    } else if (result.reused_output_count > 0) {
-        // Address reuse: warn and ask user via accept/reject modal
-        if (!showReuseWarning(result)) {
-            return;
-        }
-    }
-
-    if (!m_psbt_result.has_value() || !m_tx_template.has_value()) {
-        return;
-    }
-
-    showSignerStep();
-}
-
-auto Send::showReuseWarning(PsbtValidation result) -> bool {
-    auto issues = QString::fromStdString(std::string(result.issues.c_str()));
-    auto *modal = new qontrol::Modal();
-    catalog::fixedDialog(modal);
-    modal->setWindowTitle(TR("send-address-reuse-warning"));
-    auto *label = new Label(issues + "\n\n" + TR("send-proceed-anyway"));
-    label->setWordWrap(true);
-    auto *proceedBtn = catalog::btnProceed();
-    connect(proceedBtn, &QPushButton::clicked, modal, &QDialog::accept);
-    auto *actions = new catalog::ModalActions;
-    actions->addAction(proceedBtn);
-    auto *col = (new qontrol::Column)->spacing(resolve(Spacing::M))->push(label)->push(actions);
-    modal->setMainWidget(margin(col, resolve(Padding::L)));
-    int dialogResult = modal->exec();
-    delete modal;
-    if (dialogResult != QDialog::Accepted) {
-        m_psbt_result = std::nullopt;
-        m_tx_template = std::nullopt;
-        return false;
-    }
-    return true;
-}
-
-void Send::showSignerStep() {
-    if (!m_psbt_result.has_value() || Host::get()->keys() == nullptr) {
-        AppController::execModal(
-            new catalog::MessageModal(TR("common-error"), TR("send-transaction-state-lost")));
-        return;
-    }
-
-    connect(Host::get()->keys(), &IKeys::signed_, this, &Send::onSignerSigned, qontrol::UNIQUE);
-    connect(Host::get()->keys(), &IKeys::error, this, &Send::onSignerError, qontrol::UNIQUE);
-    connect(Host::get()->keys(), &IKeys::cancelled, this, &Send::onSignerCancelled,
-            qontrol::UNIQUE);
-    onSendConfirmed();
-}
-
-void Send::onSendConfirmed() {
-    qDebug() << "Send::onSendConfirmed()";
-    auto &account = m_controller->getAccount();
-    if (!account.has_value() || !m_psbt_result.has_value() || Host::get()->keys() == nullptr) {
-        AppController::execModal(
-            new catalog::MessageModal(TR("common-error"), TR("send-transaction-state-lost")));
-        return;
-    }
-
-    auto psbtV2Hex =
-        QString::fromStdString(std::string(m_psbt_result.value()->bytes_v2_hex().c_str()));
-    auto descriptor = QString::fromStdString(std::string(m_controller->getDescriptor().c_str()));
-    auto walletName = QString::fromStdString(std::string(account.value()->name()));
-    m_sign_req_id = Host::get()->keys()->newRequest();
-    Host::get()->keys()->sign(m_sign_req_id, m_controller->network(), psbtV2Hex,
-                              QStringList{descriptor}, walletName);
-}
-
-void Send::onSignerSigned(ReqId req_id, const QString &psbt_v2_hex) {
-    if (req_id != m_sign_req_id) {
-        return;
-    }
-
-    // finalize_psbt() still takes base64: convert the v2 hex the keys module
-    // handed back, exactly as prepare_transaction's own bytes_hex() used to.
-    auto signedPsbtBase64 =
-        QString::fromLatin1(QByteArray::fromHex(psbt_v2_hex.toLatin1()).toBase64()).toStdString();
-    auto &account = m_controller->getAccount();
-    if (!account.has_value()) {
-        return;
-    }
-    const Account *workerAccount = &*account.value();
-    auto *thread = QThread::create([this, workerAccount, signedPsbtBase64]() {
-        auto result = workerAccount->finalize_psbt(rust::String(signedPsbtBase64));
-        emit signReady(result);
-    });
-    m_controller->startWorker(thread);
-}
-
-void Send::onSignerError(std::optional<ReqId> req_id, const QString &message) {
-    if (!req_id.has_value() || req_id.value() != m_sign_req_id) {
-        return;
-    }
-
-    disconnectSigner();
-    TxResult result;
-    result.is_ok = false;
-    result.error = rust::String(message.toStdString());
-    result.value = rust::String();
-    onSignResult(result);
-}
-
-void Send::onSignerCancelled(ReqId req_id) {
-    if (req_id != m_sign_req_id) {
-        return;
-    }
-    disconnectSigner();
-    m_psbt_result = std::nullopt;
-    m_tx_template = std::nullopt;
-    m_sign_req_id = 0;
-}
-
-void Send::disconnectSigner() const {
-    if (Host::get()->keys() != nullptr) {
-        disconnect(Host::get()->keys(), &IKeys::signed_, this, &Send::onSignerSigned);
-        disconnect(Host::get()->keys(), &IKeys::error, this, &Send::onSignerError);
-        disconnect(Host::get()->keys(), &IKeys::cancelled, this, &Send::onSignerCancelled);
+void Send::onSigningLocked(bool locked) {
+    m_locked = locked;
+    applyLocked();
+    if (!locked) {
+        onProcess();
     }
 }
 
-void Send::onSignResult(TxResult result) {
-    qDebug() << "Send::onSignResult() ok:" << result.is_ok;
-    disconnectSigner();
-
-    if (!result.is_ok) {
-        auto error = QString::fromStdString(std::string(result.error.c_str()));
-        m_psbt_result = std::nullopt;
-        m_tx_template = std::nullopt;
-        m_sign_req_id = 0;
-        AppController::execModal(new catalog::MessageModal(TR("send-signing-failed"), error));
-        return;
-    }
-
-    m_signed_tx_hex = QString::fromStdString(std::string(result.value.c_str()));
-    m_psbt_result = std::nullopt;
-    m_sign_req_id = 0;
-    view();
-}
-
-void Send::onBroadcastConfirmed() {
-    setSendEnabled(false);
-    m_warning_label->setText(TR("confirm-send-broadcasting"));
-    m_warning_label->setVisible(true);
-    auto signedHex = m_signed_tx_hex.toStdString();
-    auto &account = m_controller->getAccount();
-    if (!account.has_value()) {
-        return;
-    }
-    const Account *workerAccount = &*account.value();
-    auto *thread = QThread::create([this, workerAccount, signedHex]() {
-        auto broadcastResult = workerAccount->broadcast_transaction(rust::String(signedHex));
-        emit broadcastReady(broadcastResult);
-    });
-    m_controller->startWorker(thread);
-}
-
-void Send::onBroadcastResult(TxResult result) {
-    qDebug() << "Send::onBroadcastResult() ok:" << result.is_ok;
-    setSendEnabled(true);
-
-    if (!result.is_ok && m_tx_template.has_value() && !m_signed_tx_hex.isEmpty()) {
-        auto &account = m_controller->getAccount();
-        if (account.has_value()) {
-            account.value()->log_failed_broadcast(m_tx_template.value(),
-                                                  m_signed_tx_hex.toStdString());
-        }
-    }
-
-    m_signed_tx_hex.clear();
-    m_tx_template = std::nullopt;
-
-    if (result.is_ok) {
-        auto txid = QString::fromStdString(std::string(result.value.c_str()));
-        AppController::execModal(
-            new catalog::MessageModal(TR("confirm-transaction-title"), TR("confirm-send-success"),
-                                      catalog::MessageModal::Tone::Success, txid));
-    } else {
-        auto error = QString::fromStdString(std::string(result.error.c_str()));
-        AppController::execModal(
-            new catalog::MessageModal(TR("common-error"), TR("confirm-send-failed").arg(error)));
-    }
-
-    // Refresh coin state
-    m_controller->pollCoins();
-
-    if (result.is_ok) {
-        onClearOutputs();
-        onClearInputs();
-    }
+void Send::onSigningSent() {
+    onClearOutputs();
+    onClearInputs();
 }
 
 void Send::onOutputDeleteClicked() {
@@ -1728,4 +1459,4 @@ void Send::onOutputMaxToggled() {
     }
 }
 
-} // namespace view
+} // namespace account::view

@@ -51,7 +51,7 @@
 #include "modules/musig/creator/CreatePolicy.h"
 #include "modules/musig/creator/PathEditor.h"
 #include "modules/musig/creator/PolicyEditor.h"
-#include "modules/musig/views/Send.h"
+#include "modules/musig/SigningSection.h"
 #include "modules/sp/SpPlugin.h"
 #include "qr/QrTypes.h"
 #include "resources/font/noto_sans.h"
@@ -60,6 +60,7 @@
 #include "resources/font/noto_sans_mono_bold.h"
 #include "theme/Theme.h"
 #include "account/views/Receive.h"
+#include "account/views/Send.h"
 #include "catalog/panels/receive/AddressRow.h"
 #include "views/modals/AccountType.h"
 #undef private
@@ -464,9 +465,15 @@ auto widget() -> MusigAccountWidget * {
     return g_window->findChild<MusigAccountWidget *>();
 }
 
-auto send() -> musig::view::Send * {
+auto sendScreen() -> account::view::Send * {
     auto *w = widget();
-    return w == nullptr ? nullptr : w->findChild<musig::view::Send *>();
+    return w == nullptr ? nullptr : w->findChild<account::view::Send *>();
+}
+
+// The Multikey signing step of Send: spend path, Prepare, the rounds, Broadcast.
+auto section() -> musig::SigningSection * {
+    auto *w = widget();
+    return w == nullptr ? nullptr : w->findChild<musig::SigningSection *>();
 }
 
 auto receive() -> account::view::Receive * {
@@ -512,7 +519,7 @@ auto confirmedCoin() -> bool {
 }
 
 // The leaf of Send whose signers are exactly `fps`, -1 when none.
-auto leafOf(musig::view::Send *s, QStringList fps) -> int {
+auto leafOf(musig::SigningSection *s, QStringList fps) -> int {
     fps.sort(Qt::CaseInsensitive);
     for (std::size_t i = 0; i < s->m_leaves.leaves.size(); ++i) {
         QStringList leaf;
@@ -780,10 +787,10 @@ struct RoundSigner {
 
 // One sign() of the Send view: each signer picked in order and approved.
 void signRoundSteps(const QString &tag, const std::vector<RoundSigner> &signers, bool lost) {
-    step(tag + ": sign", [] { return send()->m_sign_btn->isEnabled(); }, [tag] {
+    step(tag + ": sign", [] { return section()->m_sign_btn->isEnabled(); }, [tag] {
         std::printf("[%s] round %s\n", tag.toStdString().c_str(),
                     currentRound().toStdString().c_str());
-        later([] { send()->m_sign_btn->click(); });
+        later([] { section()->m_sign_btn->click(); });
     });
     const QString *previous = nullptr;
     for (const auto &signer : signers) {
@@ -828,7 +835,7 @@ void signRoundSteps(const QString &tag, const std::vector<RoundSigner> &signers,
     step(tag + ": round done",
          [] { return visible<SigningFlow>() == nullptr && unsealShown() == nullptr; },
          [tag, lost] {
-             auto *s = send();
+             auto *s = section();
              bool notice = s->m_notice->isVisibleTo(s);
              auto title = s->m_notice->m_title != nullptr ? s->m_notice->m_title->text()
                                                           : QString();
@@ -849,7 +856,7 @@ void signRoundSteps(const QString &tag, const std::vector<RoundSigner> &signers,
 }
 
 void broadcastSteps(const QString &ready_shot, const QString &success_shot) {
-    step("ready to broadcast", [] { return send()->m_broadcast_btn->isVisible(); },
+    step("ready to broadcast", [] { return section()->m_broadcast_btn->isVisible(); },
          [ready_shot] {
              check(currentRound() == "Ready", "round 2 done: ready");
              if (!ready_shot.isEmpty()) {
@@ -858,7 +865,7 @@ void broadcastSteps(const QString &ready_shot, const QString &success_shot) {
              g_broadcast_answered = false;
              QObject::connect(widget()->controller(), &MusigAccountController::broadcastDone,
                               g_driver, &Driver::onBroadcastDone, qontrol::UNIQUE);
-             later([] { send()->m_broadcast_btn->click(); });
+             later([] { section()->m_broadcast_btn->click(); });
          });
     step("broadcast", [] { return g_broadcast_answered; }, [] {
         check(g_last_error.isEmpty(), "broadcast: " +
@@ -1111,29 +1118,26 @@ void addSteps() {
     step("coin confirmed", confirmedCoin, [] { widget()->controller()->sendClicked(); });
 
     // ===== Spend 1: the Ledger + Coldcard leaf =====
-    step("send shown", [] { return send() != nullptr; }, [] {
-        auto *s = send();
-        auto *payment = s->m_payments.begin().value();
+    step("send shown", [] { return sendScreen() != nullptr && section() != nullptr; }, [] {
+        auto *payment = sendScreen()->m_outputs.begin().value();
         payment->m_address_input->setText(chain("newaddr"));
         payment->m_amount_input->setText("0.005");
-        s->onCoinsSelected({});
     });
-    step("leaf picker", [] { return send()->m_leaf_combo->count() > 0; }, [] {
-        auto *s = send();
+    step("leaf picker", [] { return section()->m_leaf_combo->count() > 0; }, [] {
+        auto *s = section();
         int bc = leafOf(s, {g_fp_b, g_fp_c});
         check(bc >= 0, "a Ledger + Coldcard leaf");
         s->m_leaf_combo->setCurrentIndex(bc);
-        s->onSpendLeafChosen(bc);
-        s->onProcess();
+        sendScreen()->onProcess();
         later([s] { s->m_leaf_combo->showPopup(); });
     });
     step("leaf popup", always(), [] {
         shot("15-send-leaf-picker");
-        send()->m_leaf_combo->hidePopup();
+        section()->m_leaf_combo->hidePopup();
     });
-    step("prepare", [] { return send()->m_prepare_btn->isEnabled(); },
-         [] { later([] { send()->m_prepare_btn->click(); }); });
-    step("prepared", [] { return send()->m_signing_card->isVisible(); }, [] {
+    step("prepare", [] { return section()->m_prepare_btn->isEnabled(); },
+         [] { later([] { section()->m_prepare_btn->click(); }); });
+    step("prepared", [] { return section()->m_signing_card->isVisible(); }, [] {
         check(currentRound() == "Nonces", "prepared: round 1");
         shot("16-signing-card-round1");
     });
@@ -1241,27 +1245,24 @@ void addSteps() {
     // ===== Spend 2: the Ledger + hot leaf =====
     step("change confirmed", [] { return visible<catalog::Modal>() == nullptr && confirmedCoin(); },
          [] { widget()->controller()->sendClicked(); });
-    step("send again", [] { return send() != nullptr && !send()->m_signing_card->isVisible(); },
-         [] {
-             auto *s = send();
-             auto *payment = s->m_payments.begin().value();
+    step("send again",
+         [] { return section() != nullptr && !section()->m_signing_card->isVisible(); }, [] {
+             auto *payment = sendScreen()->m_outputs.begin().value();
              payment->m_address_input->setText(chain("newaddr"));
              payment->m_amount_input->setText("0.004");
-             s->onCoinsSelected({});
          });
-    step("hot leaf", [] { return send()->m_leaf_combo->count() > 0; }, [] {
-        auto *s = send();
+    step("hot leaf", [] { return section()->m_leaf_combo->count() > 0; }, [] {
+        auto *s = section();
         int ab = leafOf(s, {g_fp_a, g_fp_b});
         check(ab >= 0, "a Ledger + hot leaf");
         s->m_leaf_combo->setCurrentIndex(ab);
-        s->onSpendLeafChosen(ab);
-        s->onProcess();
+        sendScreen()->onProcess();
     });
-    step("prepare 2", [] { return send()->m_prepare_btn->isEnabled(); }, [] {
+    step("prepare 2", [] { return section()->m_prepare_btn->isEnabled(); }, [] {
         shot("27-send-ledger-hot-leaf");
-        later([] { send()->m_prepare_btn->click(); });
+        later([] { section()->m_prepare_btn->click(); });
     });
-    step("prepared 2", [] { return send()->m_signing_card->isVisible(); },
+    step("prepared 2", [] { return section()->m_signing_card->isVisible(); },
          [] { check(currentRound() == "Nonces", "prepared 2: round 1"); });
     signRoundSteps("spend 2 round 1",
                    {{&g_fp_a, Kind::Hot, "28-round1-hot-password"},

@@ -3,13 +3,14 @@
 #include "account/views/Coins.h"
 #include "account/views/History.h"
 #include "account/views/Receive.h"
+#include "account/views/Send.h"
 #include "account/views/Settings.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/SettingsExtras.h"
-#include "modules/musig/views/Send.h"
+#include "modules/musig/SigningSection.h"
 #include "views/utils.h"
 
 #include <QDebug>
@@ -75,7 +76,7 @@ void MusigAccountController::loadPanels() {
     m_panels.insert("history", new qontrol::Panel(new account::view::History(this), "history"));
     m_panels.insert("coins", new qontrol::Panel(new account::view::Coins(this), "coins"));
     m_panels.insert("receive", new qontrol::Panel(new account::view::Receive(this), "receive"));
-    m_panels.insert("send", new qontrol::Panel(new musig::view::Send(this), "send"));
+    m_panels.insert("send", new qontrol::Panel(new account::view::Send(this), "send"));
     m_panels.insert("settings", new qontrol::Panel(new account::view::Settings(this), "settings"));
 }
 
@@ -192,6 +193,10 @@ auto MusigAccountController::saveSettings(const QHash<Endpoint, QString> &urls,
 
 auto MusigAccountController::settingsExtras() -> QWidget * {
     return new musig::SettingsExtras(this);
+}
+
+auto MusigAccountController::sendSigning() -> account::SendSigning * {
+    return new musig::SigningSection(this);
 }
 
 void MusigAccountController::startWorker(QThread *worker) {
