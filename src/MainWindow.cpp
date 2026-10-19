@@ -4,6 +4,7 @@
 #include "host/Host.h"
 #include "i18n/Tr.h"
 #include "interfaces/instance.h"
+#include "theme/Icon.h"
 #include "theme/Palette.h"
 #include "views/DashboardLayout.h"
 #include "views/MenuTab.h"
@@ -120,7 +121,8 @@ void MainWindow::updateModuleTabs() {
         m_module_bar->removeTab(0);
     }
     for (const auto &[page, title] : modulePages()) {
-        int index = m_module_bar->addTab(page == m_settings_tab ? QStringLiteral("⚙") : title);
+        int index = page == m_settings_tab ? m_module_bar->addTab(icon::settings(), QString())
+                                           : m_module_bar->addTab(title);
         if (page == m_settings_tab) {
             m_module_bar->setTabToolTip(index, title);
         }
