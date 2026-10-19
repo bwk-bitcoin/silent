@@ -169,6 +169,10 @@ void Table::onEditFinished() {
     finishEdit(true);
 }
 
+void Table::emitCellEdited(const QString &row_id, int column, const QString &text) {
+    emit cellEdited(row_id, column, text);
+}
+
 void Table::scheduleRebuild() {
     if (m_rebuild_scheduled) {
         return;
@@ -431,7 +435,9 @@ void Table::finishEdit(bool commit) {
                 break;
             }
         }
-        emit cellEdited(rowId, column, text);
+        // Queued: the input and this table are still on the call stack.
+        QMetaObject::invokeMethod(this, "emitCellEdited", Qt::QueuedConnection,
+                                  Q_ARG(QString, rowId), Q_ARG(int, column), Q_ARG(QString, text));
     }
 
     m_edit_row_id.clear();

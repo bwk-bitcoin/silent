@@ -58,6 +58,9 @@ public slots:
     void onEditFinished();
     // Runs a coalesced rebuild posted by scheduleRebuild().
     void doScheduledRebuild();
+    // Emits cellEdited, posted by finishEdit() once the edit's own call stack is done:
+    // a listener may rebuild the screen and delete this table (ws-plaude/silent#42).
+    void emitCellEdited(const QString &row_id, int column, const QString &text);
 
 private:
     struct Row {
