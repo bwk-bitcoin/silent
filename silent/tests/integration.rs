@@ -104,9 +104,39 @@ fn test_wallet_creation_from_descriptor() {
     let account_result = Account::new(config.clone());
     assert!(account_result.is_ok(), "Account creation should succeed");
 
-    let account = account_result.unwrap();
+    let mut account = account_result.unwrap();
     assert_eq!(account.name(), account_name);
     assert_eq!(account.balance(), 0);
+
+    // bwk's version file is sealed like its stores, never left in clear
+    // (ws-plaude/silent#37). It is stamped when the stores are first written, here as
+    // the account closes.
+    account.new_taproot_addr();
+    drop(account);
+    let mut versions = Vec::new();
+    let mut stack = vec![silent::config::datadir()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.file_stem().and_then(|s| s.to_str()) == Some("version") {
+                versions.push(path);
+            }
+        }
+    }
+    assert!(!versions.is_empty(), "bwk stamps a version");
+    for version in versions {
+        assert_eq!(
+            version.extension().and_then(|e| e.to_str()),
+            Some("bip138"),
+            "{} in clear",
+            version.display()
+        );
+        assert!(silent::state_crypt::is_sealed(
+            &std::fs::read(&version).unwrap()
+        ));
+    }
 
     cleanup_test_account(&account_name);
 }

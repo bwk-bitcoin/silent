@@ -129,11 +129,14 @@ fn the_state_opens_with_its_unlock_key_only() {
     assert_eq!(envelope_paths(&sealed), device_path);
     assert!(state_crypt::write_plugin_state("../escape", b"x").is_err());
 
-    // A state file in clear is found, and refused: bwk's stores too. Its bookkeeping
-    // files stay in clear.
-    fs::write(base.join("account").join("version"), "1").unwrap();
+    // A state file in clear is found, and refused: bwk's stores and its version file
+    // too. Only its lock sentinels stay in clear.
     fs::write(base.join("account").join(".lock"), "").unwrap();
     assert_eq!(state_crypt::clear_state_file(), None);
+    let version = base.join("account").join("version");
+    fs::write(&version, "1").unwrap();
+    assert_eq!(state_crypt::clear_state_file(), Some(version.clone()));
+    fs::remove_file(&version).unwrap();
     let bwk_file = base.join("account").join("account.json");
     fs::write(&bwk_file, "{}").unwrap();
     assert_eq!(state_crypt::clear_state_file(), Some(bwk_file.clone()));
