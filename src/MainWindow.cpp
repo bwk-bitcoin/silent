@@ -9,6 +9,9 @@
 #include "views/DashboardLayout.h"
 #include "views/MenuTab.h"
 #include "views/modals/AppSettings.h"
+#include <QPointer>
+#include <QStyle>
+#include <QToolButton>
 #include <QVariant>
 #include <Qontrol>
 #include <algorithm>
@@ -24,6 +27,18 @@ public:
     ModuleTabBar(QTabWidget *tabs, QWidget *menu) : m_tabs(tabs), m_menu(menu) {
     }
 
+    void setGear(int index) {
+        auto *button = new QToolButton(this);
+        button->setIcon(icon::settings());
+        button->setIconSize(QSize(metric::TAB_ICON_SIZE, metric::TAB_ICON_SIZE));
+        button->setFixedSize(resolve(Spacing::M), resolve(Spacing::M));
+        button->setAutoRaise(true);
+        button->setAttribute(Qt::WA_TransparentForMouseEvents);
+        m_gear = button;
+        setTabButton(index, QTabBar::RightSide, button);
+        centerGear();
+    }
+
 protected:
     [[nodiscard]] auto tabSizeHint(int index) const -> QSize override {
         QSize size = QTabBar::tabSizeHint(index);
@@ -33,9 +48,32 @@ protected:
         return size;
     }
 
+    void tabLayoutChange() override {
+        QTabBar::tabLayoutChange();
+        centerGear();
+    }
+
+    void paintEvent(QPaintEvent *event) override {
+        centerGear();
+        QTabBar::paintEvent(event);
+    }
+
+    void centerGear() {
+        if (m_gear == nullptr || count() == 0 ||
+            tabButton(count() - 1, QTabBar::RightSide) != m_gear) {
+            return;
+        }
+        QRect centered = QStyle::alignedRect(layoutDirection(), Qt::AlignCenter, m_gear->size(),
+                                             tabRect(count() - 1));
+        if (m_gear->pos() != centered.topLeft()) {
+            m_gear->move(centered.topLeft());
+        }
+    }
+
 private:
     QTabWidget *m_tabs = nullptr;
     QWidget *m_menu = nullptr;
+    QPointer<QToolButton> m_gear;
 };
 } // namespace
 
@@ -142,9 +180,9 @@ void MainWindow::updateModuleTabs() {
         m_module_bar->removeTab(0);
     }
     for (const auto &[page, title] : modulePages()) {
-        int index = page == m_settings_tab ? m_module_bar->addTab(icon::settings(), QString())
-                                           : m_module_bar->addTab(title);
+        int index = m_module_bar->addTab(page == m_settings_tab ? QString() : title);
         if (page == m_settings_tab) {
+            static_cast<ModuleTabBar *>(m_module_bar)->setGear(index);
             m_module_bar->setTabToolTip(index, title);
         }
         m_module_bar->setTabData(index, QVariant::fromValue(static_cast<QObject *>(page)));
