@@ -77,6 +77,8 @@ public slots:
     void onWorkerFinished();
     // A lost Electrum connection starts again.
     void onElectrumReconnect();
+    // The reconnect gave up: the user is told, the connection stays down.
+    void onElectrumGaveUp(int losses);
 
     // Screen button actions
     auto historyClicked() -> void;

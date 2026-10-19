@@ -104,6 +104,8 @@ public slots:
     void stopElectrum();
     // A lost Electrum connection starts again.
     void onElectrumReconnect();
+    // The reconnect gave up: the user is told, the connection stays down.
+    void onElectrumGaveUp(int losses);
     void stop();
     // Prepares, then restricts the PSBT to `spend` before round 1.
     void prepareTransaction(TransactionTemplate tx, MusigSpendLeaf spend);

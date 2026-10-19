@@ -272,6 +272,13 @@ btn-create => "Create"
 
 btn-done => "Done"
 
+electrum-gave-up-title => "Electrum Disconnected"
+
+electrum-the-server => "the server"
+
+electrum-gave-up-message
+=> "The connection to %1 dropped %2 times in the last minute, so Silent stopped reconnecting. Check the server, then connect again from the status bar or the Settings.";;
+
 btn-get-descriptor => "Get Descriptor"
 
 btn-get-xpub => "Get Xpub"

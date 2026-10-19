@@ -29,6 +29,8 @@ public:
 signals:
     // Start the connection again.
     void reconnect();
+    // More than MAX_LOSSES losses within LOSS_WINDOW_MS: no more reconnects.
+    void gaveUp(int losses);
 
 public slots:
     void onRetry();

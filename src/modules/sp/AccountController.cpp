@@ -7,6 +7,7 @@
 #include "account/views/Receive.h"
 #include "account/views/Send.h"
 #include "account/views/Settings.h"
+#include "catalog/feedback/MessageModal.h"
 #include "i18n/Tr.h"
 #include <Qontrol>
 #include <common.h>
@@ -40,6 +41,8 @@ auto AccountController::init(const QString &account) -> void {
     m_electrum_expected_count = static_cast<int>(m_account.value()->sub_account_count());
     connect(m_reconnect, &account::ElectrumReconnect::reconnect, this,
             &AccountController::onElectrumReconnect, qontrol::UNIQUE);
+    connect(m_reconnect, &account::ElectrumReconnect::gaveUp, this,
+            &AccountController::onElectrumGaveUp, qontrol::UNIQUE);
 
     // Take the notification receiver and spawn a blocking listener thread
     connect(this, &AccountController::notificationReceived, this,
@@ -486,6 +489,15 @@ void AccountController::onElectrumReconnect() {
     }
 }
 
+void AccountController::onElectrumGaveUp(int losses) {
+    auto server = endpointUrl(Endpoint::Electrum);
+    if (server.isEmpty()) {
+        server = TR("electrum-the-server");
+    }
+    AppController::execModal(new catalog::MessageModal(
+        TR("electrum-gave-up-title"), TR("electrum-gave-up-message").arg(server).arg(losses)));
+}
+
 auto AccountController::networkEditable() const -> bool {
     return true;
 }
@@ -540,3 +552,4 @@ void AccountController::updateCoinLabel(const QString &outpoint, const QString &
 auto AccountController::getAccount() -> std::optional<rust::Box<Account>> & {
     return m_account;
 }
+

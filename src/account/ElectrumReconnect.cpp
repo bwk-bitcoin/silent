@@ -43,7 +43,10 @@ void ElectrumReconnect::lost() {
         // Dropping again and again: left down until started again.
         qWarning() << "electrum: disconnected" << m_losses.size()
                    << "times in the last minute, not reconnecting";
+        auto losses = static_cast<int>(m_losses.size());
+        m_losses.clear();
         stopped();
+        emit gaveUp(losses);
         return;
     }
     m_retry->start();

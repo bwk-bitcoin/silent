@@ -1,10 +1,12 @@
 #include "modules/musig/MusigAccountController.h"
 
+#include "AppController.h"
 #include "account/views/Coins.h"
 #include "account/views/History.h"
 #include "account/views/Receive.h"
 #include "account/views/Send.h"
 #include "account/views/Settings.h"
+#include "catalog/feedback/MessageModal.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
@@ -51,6 +53,8 @@ void MusigAccountController::init(const QString &account) {
     m_account = std::make_optional(std::move(acc));
     connect(m_reconnect, &account::ElectrumReconnect::reconnect, this,
             &MusigAccountController::onElectrumReconnect, qontrol::UNIQUE);
+    connect(m_reconnect, &account::ElectrumReconnect::gaveUp, this,
+            &MusigAccountController::onElectrumGaveUp, qontrol::UNIQUE);
 
     // Before any view connects, so the controller state is clear when views react.
     connect(this, &MusigAccountController::broadcastDone, this,
@@ -387,6 +391,15 @@ void MusigAccountController::onElectrumReconnect() {
     }
 }
 
+void MusigAccountController::onElectrumGaveUp(int losses) {
+    auto server = electrumUrl();
+    if (server.isEmpty()) {
+        server = TR("electrum-the-server");
+    }
+    AppController::execModal(new catalog::MessageModal(
+        TR("electrum-gave-up-title"), TR("electrum-gave-up-message").arg(server).arg(losses)));
+}
+
 void MusigAccountController::stop() {
     if (m_stopping) {
         return;
@@ -635,3 +648,4 @@ void MusigAccountController::receiveClicked() {
 void MusigAccountController::settingsClicked() {
     loadPanel("settings");
 }
+
