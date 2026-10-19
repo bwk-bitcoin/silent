@@ -1016,6 +1016,7 @@ struct PsbtPayloadResult;
 struct CameraListResult;
 struct CameraFrameResult;
 struct QrDisplayLevels;
+struct StateUnlockInfo;
 enum class PluginGrant : ::std::uint8_t;
 struct PluginAccess;
 struct PsbtFileResult;
@@ -1868,6 +1869,26 @@ struct QrDisplayLevels final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_QrDisplayLevels
+
+#ifndef CXXBRIDGE1_STRUCT_StateUnlockInfo
+#define CXXBRIDGE1_STRUCT_StateUnlockInfo
+// The app state's unlock key, as `unlock.json` names it.
+struct StateUnlockInfo final {
+  // The state has an unlock key: false before it is created.
+  bool exists CXX_DEFAULT_VALUE(false);
+  // A signing device, else a password.
+  bool device CXX_DEFAULT_VALUE(false);
+  ::rust::String fingerprint;
+  ::rust::String alias;
+  ::std::uint32_t index CXX_DEFAULT_VALUE(0);
+  // The device's network, read only when `device`.
+  ::Network network;
+  // Set when `unlock.json` cannot be read.
+  ::rust::String error;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_StateUnlockInfo
 
 #ifndef CXXBRIDGE1_ENUM_PluginGrant
 #define CXXBRIDGE1_ENUM_PluginGrant
@@ -2997,6 +3018,36 @@ void app_set_qr_camera_contrast_level(::std::uint8_t level) noexcept;
 
 // Remember the `server` address an account on `network` was created with.
 void app_set_last_endpoint(::BackendServer server, ::Network network, ::rust::String url) noexcept;
+
+// The app state's unlock key, before anything else reads the state.
+::StateUnlockInfo state_unlock_info() noexcept;
+
+// A state file found in clear, empty when there is none: the app stops.
+::rust::String state_clear_file() noexcept;
+
+// Forgets the key: the state cannot be read or written until the next unlock.
+void state_lock() noexcept;
+
+// A hardened index for a new device key.
+::std::uint32_t state_draw_index() noexcept;
+
+// The path a device unlock key is fetched at, "m/138'/1936225652'/<index>'".
+::rust::String state_device_path(::std::uint32_t index) noexcept;
+
+// Creates the state, unlocked by the device whose xpub at the device path is
+// `xpub`. Answers the error, empty on success.
+::rust::String state_create_with_device(::rust::String fingerprint, ::rust::String alias, ::std::uint32_t index, ::Network network, ::rust::String xpub) noexcept;
+
+// Creates the state, unlocked by `password`. Blocks on Argon2id: off the GUI
+// thread. Answers the error, empty on success.
+::rust::String state_create_with_password(::rust::String password) noexcept;
+
+// Unlocks with the device xpub. Answers the error, empty on success.
+::rust::String state_unlock_with_device(::rust::String xpub) noexcept;
+
+// Unlocks with `password`. Blocks on Argon2id: off the GUI thread. Answers the
+// error, empty on success.
+::rust::String state_unlock_with_password(::rust::String password) noexcept;
 
 // The answers given to external plugin libraries, in the order they were given.
 ::rust::Vec<::PluginAccess> app_plugin_access() noexcept;

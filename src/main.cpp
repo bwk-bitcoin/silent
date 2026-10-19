@@ -13,6 +13,7 @@
 #include "resources/font/noto_sans_bold.h"
 #include "resources/font/noto_sans_mono.h"
 #include "resources/font/noto_sans_mono_bold.h"
+#include "state/StateGate.h"
 #include "theme/Icon.h"
 #include "theme/Theme.h"
 #include <QApplication>
@@ -83,6 +84,15 @@ auto main(int argc, char *argv[]) -> int {
 
     // Initialize i18n before creating UI widgets
     i18n::I18nManager::get()->init(&app);
+
+    // The state is encrypted: nothing reads it before it is unlocked. The language
+    // picked is in it, so the unlock screens are in the default one.
+    if (!state::unlockAtStartup()) {
+        return 0;
+    }
+    if (QString locale = QString::fromStdString(std::string(app_language())); !locale.isEmpty()) {
+        (void)i18n::I18nManager::get()->applyLocale(locale, false);
+    }
 
     // Initialize application controller
     AppController::init();

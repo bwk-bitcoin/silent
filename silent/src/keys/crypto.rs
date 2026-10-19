@@ -92,23 +92,26 @@ pub fn seal(
     network: Network,
     password: Password,
 ) -> Result<SecretEnvelope, Error> {
+    seal_with_aad(secret, &associated_data(fingerprint, network)?, password)
+}
+
+/// Seals `secret` under `password`, bound to `aad`: an envelope opens only with the
+/// same associated data.
+pub fn seal_with_aad(
+    secret: &[u8],
+    aad: &[u8],
+    password: Password,
+) -> Result<SecretEnvelope, Error> {
     let mut salt = [0u8; SALT_LEN];
     getrandom::getrandom(&mut salt).map_err(|e| Error::Random(e.to_string()))?;
     let mut nonce = [0u8; NONCE_LEN];
     getrandom::getrandom(&mut nonce).map_err(|e| Error::Random(e.to_string()))?;
 
     let key = derive_key(password.0.as_bytes(), &salt, M_COST_KIB, T_COST, P_COST)?;
-    let aad = associated_data(fingerprint, network)?;
 
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key.as_ref()));
     let ciphertext = cipher
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: secret,
-                aad: &aad,
-            },
-        )
+        .encrypt(XNonce::from_slice(&nonce), Payload { msg: secret, aad })
         .map_err(|e| Error::Crypto(format!("encryption failed: {e}")))?;
 
     Ok(SecretEnvelope {
@@ -128,6 +131,15 @@ pub fn open(
     envelope: &SecretEnvelope,
     fingerprint: Fingerprint,
     network: Network,
+    password: Password,
+) -> Result<Zeroizing<Vec<u8>>, Error> {
+    open_with_aad(envelope, &associated_data(fingerprint, network)?, password)
+}
+
+/// Opens an envelope sealed by `seal_with_aad` with the same `aad`.
+pub fn open_with_aad(
+    envelope: &SecretEnvelope,
+    aad: &[u8],
     password: Password,
 ) -> Result<Zeroizing<Vec<u8>>, Error> {
     if envelope.version > SECRET_ENVELOPE_VERSION {
@@ -194,7 +206,6 @@ pub fn open(
         envelope.t_cost,
         envelope.p_cost,
     )?;
-    let aad = associated_data(fingerprint, network)?;
 
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key.as_ref()));
     let plaintext = cipher
@@ -202,7 +213,7 @@ pub fn open(
             XNonce::from_slice(&nonce),
             Payload {
                 msg: &ciphertext,
-                aad: &aad,
+                aad,
             },
         )
         .map_err(|_| Error::WrongPassword)?;

@@ -22,6 +22,7 @@ use bwk_sp::bwk_sign::miniscript::{Descriptor as MiniscriptDescriptor, Descripto
 use serde::{Deserialize, Serialize};
 
 use crate::ffi::Network;
+use crate::state_crypt;
 
 /// Internal Network type for serialization (since CXX enums don't support Serde).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -172,8 +173,14 @@ impl Config {
     /// Load Config from file.
     pub fn from_file(account_name: String) -> Result<Self, ConfigError> {
         let path = Self::config_path_for_account(&account_name);
-        let content = fs::read_to_string(&path)
-            .map_err(|e| ConfigError::Io(format!("failed to read config: {e}")))?;
+        let content = state_crypt::read_state(&path)
+            .map_err(|e| ConfigError::Io(format!("failed to read config: {e}")))?
+            .ok_or_else(|| {
+                ConfigError::Io(format!(
+                    "failed to read config: {} not found",
+                    path.display()
+                ))
+            })?;
         let mut config: Config = serde_json::from_str(&content)
             .map_err(|e| ConfigError::Parse(format!("failed to parse config: {e}")))?;
         config.account_name = account_name;
@@ -196,7 +203,7 @@ impl Config {
         }
         let content =
             serde_json::to_string_pretty(self).map_err(|e| format!("failed to serialize: {e}"))?;
-        fs::write(&path, content).map_err(|e| format!("failed to write: {e}"))
+        state_crypt::write_state(&path, &content).map_err(|e| format!("failed to write: {e}"))
     }
 
     /// Check if the config was loaded successfully.

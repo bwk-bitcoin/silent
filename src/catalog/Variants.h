@@ -32,6 +32,7 @@ auto btnDisablePlugin() -> Button *;
 auto btnPluginAccess() -> Button *;
 auto btnForgetAccess() -> Button *;
 auto btnAllowAccess() -> Button *;
+auto btnUnlock() -> Button *;
 auto btnDenyAccess() -> Button *;
 auto btnAddKey() -> Button *;
 auto btnBroadcast() -> Button *;

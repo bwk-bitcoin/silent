@@ -254,6 +254,14 @@ set(SILENT_APP_SOURCES
     src/views/modals/ConfirmDelete.cpp
     src/views/modals/PluginAccessPrompt.h
     src/views/modals/PluginAccessPrompt.cpp
+    src/state/DeviceUnlock.h
+    src/state/DeviceUnlock.cpp
+    src/state/StateGate.h
+    src/state/StateGate.cpp
+    src/state/StateSetup.h
+    src/state/StateSetup.cpp
+    src/state/UnlockDevices.h
+    src/state/UnlockDevices.cpp
     src/views/modals/AccountType.cpp
     src/theme/Icon.h
     src/theme/Icon.cpp

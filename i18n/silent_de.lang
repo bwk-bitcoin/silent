@@ -76,6 +76,7 @@ btn-show-words => "Show Words" => "NONE"
 btn-sign => "Sign" => "NONE"
 btn-test-ok => "✓ Test" => "NONE"
 btn-try-again => "Try Again" => "NONE"
+btn-unlock => "Unlock" => "NONE"
 coins-height => "Height" => "Blockhoehe"
 coins-label => "Label" => "Bezeichnung"
 coins-outpoint => "OutPoint" => "OutPoint"
@@ -1042,6 +1043,59 @@ sp-account-type => "Silent Payment Wallet" => "Silent Payment Wallet"
 sp-instance-not-found
 => "SP instance not found: %1"
 => "SP-Instanz nicht gefunden: %1";;
+state-choice-device => "Signing Device" => "NONE"
+state-choice-device-sub
+=> "Plug it in and unlock it at every start. The key is derived on the device and never stored."
+=> "NONE";;
+state-choice-password => "Password" => "NONE"
+state-choice-password-sub
+=> "Type it at every start. Forget it and the accounts and keys kept here are lost."
+=> "NONE";;
+state-clear-text
+=> "Silent found data it did not encrypt: %1. Silent now encrypts everything it keeps and does not convert older data. Move ~/.silent/ away or delete it, then start Silent again."
+=> "NONE";;
+state-clear-title => "Unencrypted Data Found" => "NONE"
+state-device-confirm => "Confirm on Your Device" => "NONE"
+state-device-confirm-sub => "Silent asks %1 for the key at %2." => "NONE"
+state-device-failed => "The device did not give the key: %1" => "NONE"
+state-device-pick => "Pick a ready device." => "NONE"
+state-device-text
+=> "Plug in the device and unlock it, open its app for the network below, then pick it."
+=> "NONE";;
+state-device-title => "Protect Silent · Signing Device" => "NONE"
+state-device-unreachable
+=> "The device did not take the request. Unplug it and try again."
+=> "NONE";;
+state-no-device => "No Device Connected" => "NONE"
+state-no-device-sub => "Plug in your signing device and unlock it." => "NONE"
+state-password-sealing => "Sealing the Key" => "NONE"
+state-password-sealing-sub
+=> "Encrypting the key with the password. This takes a few seconds."
+=> "NONE";;
+state-password-text
+=> "The password opens Silent at every start. If you forget it, Silent cannot open what it keeps here: wipe ~/.silent/ and start again."
+=> "NONE";;
+state-password-title => "Protect Silent · Password" => "NONE"
+state-setup-text
+=> "Silent encrypts everything it keeps on this computer: accounts, keys and settings. Pick what unlocks it at every start. It cannot be changed later."
+=> "NONE";;
+state-setup-title => "Protect Silent" => "NONE"
+state-unlock-device-text
+=> "Plug in %1 (%2) and unlock it: Silent asks it for its key."
+=> "NONE";;
+state-unlock-locked => "Unlock the device." => "NONE"
+state-unlock-password-text => "Enter the password that unlocks Silent." => "NONE"
+state-unlock-plug => "Plug it in and unlock it." => "NONE"
+state-unlock-ready => "Asking the device for its key." => "NONE"
+state-unlock-title => "Unlock Silent" => "NONE"
+state-unlock-wrong-key
+=> "This device's key does not open Silent. Plug in the device Silent was protected with."
+=> "NONE";;
+state-unlocking => "Unlocking" => "NONE"
+state-unlocking-sub
+=> "Opening the key with the password. This takes a few seconds."
+=> "NONE";;
+state-unreadable-title => "Silent Cannot Start" => "NONE"
 status-connected-blindbit
 => "Connected to blindbit-oracle at %1"
 => "Connected to blindbit-oracle at %1";;

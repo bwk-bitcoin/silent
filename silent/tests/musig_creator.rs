@@ -35,6 +35,7 @@ static DATADIR_GUARD: OnceLock<TempDir> = OnceLock::new();
 fn shared_datadir() {
     let tmp = DATADIR_GUARD.get_or_init(|| TempDir::new().expect("create temp dir"));
     set_datadir(tmp.path().to_path_buf());
+    silent::state_crypt::unlock_for_tests();
 }
 
 /// The key of `mnemonic` with its account xpub at `m/87'/1'/0'` (Regtest).

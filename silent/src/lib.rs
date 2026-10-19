@@ -14,6 +14,7 @@ pub mod image;
 pub mod keys;
 pub mod musig;
 pub mod policy;
+pub mod state_crypt;
 pub mod sync_estimator;
 
 use bwk_sp::bwk::bwk_electrum::url::ElectrumScheme;
@@ -655,6 +656,22 @@ mod ffi {
         pub speed: u8,
     }
 
+    /// The app state's unlock key, as `unlock.json` names it.
+    #[derive(Debug, Clone)]
+    pub struct StateUnlockInfo {
+        /// The state has an unlock key: false before it is created.
+        pub exists: bool,
+        /// A signing device, else a password.
+        pub device: bool,
+        pub fingerprint: String,
+        pub alias: String,
+        pub index: u32,
+        /// The device's network, read only when `device`.
+        pub network: Network,
+        /// Set when `unlock.json` cannot be read.
+        pub error: String,
+    }
+
     /// The user's answer to one use an external plugin asked for.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum PluginGrant {
@@ -1060,6 +1077,42 @@ mod ffi {
 
         /// Remember the `server` address an account on `network` was created with.
         fn app_set_last_endpoint(server: BackendServer, network: Network, url: String);
+
+        /// The app state's unlock key, before anything else reads the state.
+        fn state_unlock_info() -> StateUnlockInfo;
+
+        /// A state file found in clear, empty when there is none: the app stops.
+        fn state_clear_file() -> String;
+
+        /// Forgets the key: the state cannot be read or written until the next unlock.
+        fn state_lock();
+
+        /// A hardened index for a new device key.
+        fn state_draw_index() -> u32;
+
+        /// The path a device unlock key is fetched at, "m/138'/1936225652'/<index>'".
+        fn state_device_path(index: u32) -> String;
+
+        /// Creates the state, unlocked by the device whose xpub at the device path is
+        /// `xpub`. Answers the error, empty on success.
+        fn state_create_with_device(
+            fingerprint: String,
+            alias: String,
+            index: u32,
+            network: Network,
+            xpub: String,
+        ) -> String;
+
+        /// Creates the state, unlocked by `password`. Blocks on Argon2id: off the GUI
+        /// thread. Answers the error, empty on success.
+        fn state_create_with_password(password: String) -> String;
+
+        /// Unlocks with the device xpub. Answers the error, empty on success.
+        fn state_unlock_with_device(xpub: String) -> String;
+
+        /// Unlocks with `password`. Blocks on Argon2id: off the GUI thread. Answers the
+        /// error, empty on success.
+        fn state_unlock_with_password(password: String) -> String;
 
         /// The answers given to external plugin libraries, in the order they were given.
         fn app_plugin_access() -> Vec<PluginAccess>;
@@ -2302,6 +2355,11 @@ pub use musig::{
 };
 pub use policy::{
     bip87_account_path, compile_policy, preview_policy, renewable_height, review_policy,
+};
+pub use state_crypt::{
+    state_clear_file, state_create_with_device, state_create_with_password, state_device_path,
+    state_draw_index, state_lock, state_unlock_info, state_unlock_with_device,
+    state_unlock_with_password,
 };
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};
 

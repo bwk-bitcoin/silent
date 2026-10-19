@@ -13,6 +13,8 @@ use crate::keys::record::RouteKind;
 pub enum Error {
     #[error("unsupported network '{0}'")]
     UnsupportedNetwork(String),
+    #[error("app state: {0}")]
+    State(String),
     #[error("route '{0}' is already present")]
     DuplicateRoute(RouteKind),
     #[error("the hot route must be first")]

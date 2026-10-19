@@ -207,6 +207,10 @@ auto btnAllowAccess() -> Button * {
         {.role = ButtonRole::Primary, .label = TR("btn-allow-access"), .width = BtnWidth::M});
 }
 
+auto btnUnlock() -> Button * {
+    return make({.role = ButtonRole::Primary, .label = TR("btn-unlock"), .width = BtnWidth::M});
+}
+
 auto btnDenyAccess() -> Button * {
     return make(
         {.role = ButtonRole::Default, .label = TR("btn-deny-access"), .width = BtnWidth::M});

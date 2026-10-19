@@ -160,6 +160,12 @@ auto main(int argc, char *argv[]) -> int {
     qRegisterMetaType<std::optional<ReqId>>();
     i18n::I18nManager::get()->init(&app);
 
+    // The app state is encrypted: a throwaway one, opened with a password.
+    auto stateError = ::state_unlock_info().exists
+                          ? ::state_unlock_with_password(rust::String("host smoke"))
+                          : ::state_create_with_password(rust::String("host smoke"));
+    check(stateError.empty(), "the app state should open");
+
     // Initialise the host singleton before the registry connects to its events.
     Host::get();
 

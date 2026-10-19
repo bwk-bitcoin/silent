@@ -19,6 +19,7 @@ use crate::keys::{
     network_name,
     record::{KeyRecord, RouteKind},
 };
+use crate::state_crypt;
 
 const LOCK_FILE_NAME: &str = ".lock";
 const RECORD_EXTENSION: &str = "json";
@@ -113,12 +114,16 @@ impl KeyStore {
             path: path.to_path_buf(),
             source,
         })?;
-        let mut content = String::new();
-        file.read_to_string(&mut content)
-            .map_err(|source| Error::Io {
-                path: path.to_path_buf(),
-                source,
-            })?;
+        let mut sealed = Vec::new();
+        file.read_to_end(&mut sealed).map_err(|source| Error::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if !state_crypt::is_sealed(&sealed) {
+            return Err(Error::State(format!("{} is not encrypted", path.display())));
+        }
+        let content = state_crypt::open(&sealed)
+            .map_err(|e| Error::State(format!("{}: {e}", path.display())))?;
         serde_json::from_str(&content).map_err(|source| Error::Parse {
             path: path.to_path_buf(),
             source,
@@ -264,10 +269,11 @@ impl KeyStore {
     }
 
     fn write_temp(&self, temp_path: &Path, record: &KeyRecord) -> Result<(), Error> {
-        let content = serde_json::to_vec_pretty(record).map_err(|source| Error::Parse {
+        let text = serde_json::to_string_pretty(record).map_err(|source| Error::Parse {
             path: temp_path.to_path_buf(),
             source,
         })?;
+        let content = state_crypt::seal(&text).map_err(Error::State)?;
 
         let mut file = std::fs::File::create(temp_path).map_err(|source| Error::Io {
             path: temp_path.to_path_buf(),
@@ -317,8 +323,12 @@ impl KeyStore {
             let stem = fingerprint.to_string();
             let record = Self::read_record(&path)?;
             let mut record = self.validate(record, &path, &stem)?;
+            let before = record.clone();
             apply(&mut record)?;
-            self.save_locked(dir, &record)?;
+            // A sealed file changes on every write: leave it alone when nothing did.
+            if record != before {
+                self.save_locked(dir, &record)?;
+            }
             Ok(record)
         })
     }
@@ -496,7 +506,8 @@ mod tests {
             .expect("record path for corrupt file");
         std::fs::create_dir_all(corrupt_path.parent().expect("parent dir"))
             .expect("create dir for corrupt file");
-        std::fs::write(&corrupt_path, "not json").expect("write corrupt file");
+        std::fs::write(&corrupt_path, state_crypt::seal("not json").expect("seal"))
+            .expect("write corrupt file");
 
         let listed = store.list().expect("list should succeed");
         assert_eq!(
@@ -521,7 +532,8 @@ mod tests {
 
         let path = store.record_path(fingerprint(7)).expect("record path");
         std::fs::create_dir_all(path.parent().expect("parent dir")).expect("create dir");
-        let bytes = serde_json::to_vec_pretty(&record).expect("serialize record");
+        let text = serde_json::to_string_pretty(&record).expect("serialize record");
+        let bytes = state_crypt::seal(&text).expect("seal record");
         std::fs::write(&path, &bytes).expect("write newer record");
 
         let load_result = store.load(fingerprint(7));
@@ -551,7 +563,8 @@ mod tests {
 
         let wrong_path = store.record_path(fingerprint(9)).expect("record path");
         std::fs::create_dir_all(wrong_path.parent().expect("parent dir")).expect("create dir");
-        let bytes = serde_json::to_vec_pretty(&record).expect("serialize record");
+        let text = serde_json::to_string_pretty(&record).expect("serialize record");
+        let bytes = state_crypt::seal(&text).expect("seal record");
         std::fs::write(&wrong_path, bytes).expect("write mismatched record");
 
         let load_result = store.load(fingerprint(9));

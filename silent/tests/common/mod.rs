@@ -90,6 +90,7 @@ pub fn create_test_account(account_name: &str, blindbit_url: &str) -> Account {
 
 /// Generate unique test account name.
 pub fn test_account_name() -> String {
+    isolated_state();
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
@@ -97,6 +98,15 @@ pub fn test_account_name() -> String {
         .expect("system time should be after epoch")
         .as_nanos();
     format!("test_account_{}_{}_{}", std::process::id(), nanos, seq)
+}
+
+/// Points the state at a temporary directory for the whole test binary and unlocks
+/// it with the test key, so no test writes into the user's `~/.silent`.
+pub fn isolated_state() {
+    static STATE_DIR: std::sync::OnceLock<temp_dir::TempDir> = std::sync::OnceLock::new();
+    let dir = STATE_DIR.get_or_init(|| temp_dir::TempDir::new().expect("create temp dir"));
+    silent::set_datadir(dir.path().to_path_buf());
+    silent::state_crypt::unlock_for_tests();
 }
 
 /// Cleanup test account directory.

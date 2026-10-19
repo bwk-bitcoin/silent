@@ -22,6 +22,7 @@ fn shared_datadir() -> PathBuf {
     let tmp = DATADIR_GUARD.get_or_init(|| TempDir::new().expect("create temp dir"));
     let base = tmp.path().to_path_buf();
     set_datadir(base.clone());
+    silent::state_crypt::unlock_for_tests();
     base
 }
 
@@ -75,7 +76,8 @@ fn a_config_written_before_the_setting_verifies_the_certificate() {
         }}"#,
         descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest)
     );
-    std::fs::write(account_dir.join("config.json"), json).expect("write old config");
+    silent::state_crypt::write_state(&account_dir.join("config.json"), &json)
+        .expect("write old config");
 
     let config = config_from_file(account_name.to_string());
 

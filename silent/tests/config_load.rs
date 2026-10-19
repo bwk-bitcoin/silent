@@ -24,6 +24,7 @@ fn shared_datadir() -> PathBuf {
     let tmp = DATADIR_GUARD.get_or_init(|| TempDir::new().expect("create temp dir"));
     let base = tmp.path().to_path_buf();
     set_datadir(base.clone());
+    silent::state_crypt::unlock_for_tests();
     base
 }
 
@@ -95,7 +96,7 @@ fn config_from_file_corrupt_json_is_not_ok() {
     // The config lives at <datadir>/<account_name>/config.json.
     let account_dir = base.join(account_name);
     std::fs::create_dir_all(&account_dir).expect("create account dir");
-    std::fs::write(account_dir.join("config.json"), "{ not valid json")
+    silent::state_crypt::write_state(&account_dir.join("config.json"), "{ not valid json")
         .expect("write corrupt config");
 
     let config = config_from_file(account_name.to_string());
@@ -126,7 +127,8 @@ fn config_from_file_defaults_plugin_id_to_sp() {
         }}"#,
         descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest)
     );
-    std::fs::write(account_dir.join("config.json"), json).expect("write config without plugin_id");
+    silent::state_crypt::write_state(&account_dir.join("config.json"), &json)
+        .expect("write config without plugin_id");
 
     let config = config_from_file(account_name.to_string());
 

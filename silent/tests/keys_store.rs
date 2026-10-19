@@ -20,6 +20,7 @@ fn datadir() -> &'static std::path::Path {
         .get_or_init(|| {
             let tmp = temp_dir::TempDir::new().expect("create temp dir");
             silent::set_datadir(tmp.path().to_path_buf());
+            silent::state_crypt::unlock_for_tests();
             tmp
         })
         .path()
@@ -509,7 +510,11 @@ fn test_corrupt_file_is_skipped_when_listing_and_errors_on_load() {
     let corrupt_path = key_store
         .record_path(corrupt_fp)
         .expect("corrupt record path");
-    std::fs::write(&corrupt_path, "{ not json").expect("write corrupt file");
+    std::fs::write(
+        &corrupt_path,
+        silent::state_crypt::seal("{ not json").expect("seal"),
+    )
+    .expect("write corrupt file");
     let corrupt_bytes_before = std::fs::read(&corrupt_path).expect("read corrupt file");
 
     let listed = key_store.list().expect("list should succeed");
@@ -547,7 +552,8 @@ fn test_future_version_is_refused_and_not_rewritten() {
     record.version = KEY_RECORD_VERSION + 1;
 
     let path = key_store.record_path(fp).expect("record path");
-    let bytes = serde_json::to_vec_pretty(&record).expect("serialize record");
+    let text = serde_json::to_string_pretty(&record).expect("serialize record");
+    let bytes = silent::state_crypt::seal(&text).expect("seal record");
     std::fs::write(&path, &bytes).expect("write future-version record");
 
     let load_result = key_store.load(fp);
@@ -593,7 +599,8 @@ fn test_filename_must_match_the_record_fingerprint() {
     key_store.save(&record).expect("save record a");
 
     let wrong_path = key_store.record_path(fp_b).expect("record path for b");
-    let bytes = serde_json::to_vec_pretty(&record).expect("serialize record");
+    let text = serde_json::to_string_pretty(&record).expect("serialize record");
+    let bytes = silent::state_crypt::seal(&text).expect("seal record");
     std::fs::write(&wrong_path, &bytes).expect("write mismatched record");
 
     let load_result = key_store.load(fp_b);

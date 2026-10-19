@@ -18,6 +18,9 @@
 #include "AppController.h"
 #include "MainWindow.h"
 #include "catalog/Button.h"
+#include "state/DeviceUnlock.h"
+#include "state/StateSetup.h"
+#include "state/UnlockDevices.h"
 #include "catalog/SelectRow.h"
 #include "catalog/containers/Card.h"
 #include "catalog/containers/Modal.h"
@@ -359,10 +362,13 @@ auto ledgerScreensText() -> QString {
 // ===== Window helpers =====
 
 int g_shot_count = 0;
+// The window shot before the main window exists: the state's setup and unlock.
+QWidget *g_first_window = nullptr;
 
 void shot(const QString &name) {
     spin(SHOT_SETTLE_MS);
-    auto g = g_window->frameGeometry();
+    auto g = (g_window != nullptr ? static_cast<QWidget *>(g_window) : g_first_window)
+                 ->frameGeometry();
     auto pixmap = QGuiApplication::primaryScreen()->grabWindow(0, g.x(), g.y(), g.width(),
                                                                 g.height());
     QString path = g_env.run_dir + "/shots/" + name + ".png";
@@ -1690,6 +1696,86 @@ void addSteps() {
     });
 }
 
+// Waits up to `ms` for `done`, the events running meanwhile.
+auto waitFor(int ms, const std::function<bool()> &done) -> bool {
+    QElapsedTimer t;
+    t.start();
+    while (!done()) {
+        if (t.elapsed() > ms) {
+            return false;
+        }
+        spin(100);
+    }
+    return true;
+}
+
+// The app state (ws-plaude/silent#37), created at the first start with the Coldcard
+// as its unlock device through the setup screens, then locked and unlocked with it.
+auto openStateWithColdcard() -> bool {
+    auto *setup = new state::StateSetup();
+    g_first_window = setup;
+    setup->move(0, 0);
+    setup->show();
+    shot("00a-state-setup-choice");
+    emit setup->m_device_choice->clicked();
+    int regtest = setup->m_network->findData(static_cast<int>(Network::Regtest));
+    setup->m_network->setCurrentIndex(regtest);
+    setup->onNetworkActivated(regtest);
+
+    QString coldcardId;
+    QString coldcardFp;
+    bool seen = waitFor(60000, [&] {
+        for (const auto &device : setup->m_devices->devices()) {
+            QString kind = QString::fromStdString(std::string(device.kind));
+            if (kind.startsWith(QStringLiteral("coldcard")) &&
+                device.state == HwiDeviceState::Supported) {
+                coldcardId = QString::fromStdString(std::string(device.id));
+                coldcardFp = QString::fromStdString(std::string(device.fingerprint));
+                return true;
+            }
+        }
+        return false;
+    });
+    check(seen, "state setup: the Coldcard is listed ready");
+    if (!seen) {
+        return false;
+    }
+    for (auto *row : setup->m_device_rows->findChildren<catalog::SelectRow *>()) {
+        if (row->property("deviceId").toString() == coldcardId) {
+            emit row->clicked();
+        }
+    }
+    check(setup->m_device_continue->isEnabled(), "state setup: Continue once picked");
+    shot("00b-state-setup-device");
+    setup->m_device_continue->click();
+    bool created = waitFor(60000, [&] { return !setup->isVisible(); });
+    check(created && setup->result() == QDialog::Accepted,
+          "state setup: created with the Coldcard key");
+    auto info = ::state_unlock_info();
+    check(info.exists && info.device &&
+              QString::fromStdString(std::string(info.fingerprint)) == coldcardFp &&
+              info.network == Network::Regtest,
+          "unlock.json names the Coldcard " + coldcardFp + " on regtest, index " +
+              QString::number(info.index));
+    QFile clear(QDir::homePath() + "/.silent/unlock.json");
+    clear.open(QIODevice::ReadOnly);
+    check(!clear.readAll().contains("pub"), "unlock.json holds no xpub");
+    delete setup;
+
+    ::state_lock();
+    auto *unlock = new state::DeviceUnlock(info);
+    g_first_window = unlock;
+    unlock->move(0, 0);
+    unlock->show();
+    shot("00c-state-unlock");
+    bool unlocked = waitFor(60000, [&] { return !unlock->isVisible(); });
+    check(unlocked && unlock->result() == QDialog::Accepted,
+          "state unlock: the Coldcard's key opens the state");
+    delete unlock;
+    g_first_window = nullptr;
+    return unlocked;
+}
+
 } // namespace
 
 auto main(int argc, char *argv[]) -> int {
@@ -1749,6 +1835,11 @@ auto main(int argc, char *argv[]) -> int {
     Theme::init();
     Theme::get()->apply();
     i18n::I18nManager::get()->init(&app);
+    if (!openStateWithColdcard()) {
+        std::printf("FAIL: the app state did not open, stopping\n");
+        std::fflush(stdout);
+        std::_Exit(1);
+    }
     AppController::init();
     auto *controller = AppController::get();
     Host::get();

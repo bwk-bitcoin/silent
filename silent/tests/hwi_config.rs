@@ -18,6 +18,7 @@ fn pairing() -> NoiseConfigData {
 fn test_hwi_config_network_and_pairing_do_not_clobber_each_other() {
     let tmp = TempDir::new().expect("create temp dir");
     set_datadir(tmp.path().to_path_buf());
+    silent::state_crypt::unlock_for_tests();
 
     // No file yet: the defaults answer, and nothing is written just by reading.
     assert_eq!(
@@ -89,7 +90,7 @@ fn test_hwi_config_network_and_pairing_do_not_clobber_each_other() {
     );
 
     // A corrupt file falls back to the defaults instead of failing.
-    std::fs::write(HwiConfig::path(), "{ not json").expect("write garbage");
+    silent::state_crypt::write_state(&HwiConfig::path(), "{ not json").expect("write garbage");
     assert_eq!(
         hwi_config_network(),
         Network::Bitcoin,

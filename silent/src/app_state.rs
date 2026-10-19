@@ -8,6 +8,7 @@ use crate::config::datadir;
 #[cfg(test)]
 use crate::config::set_datadir;
 use crate::ffi::{BackendServer, Network, PluginAccess, PluginGrant, QrDisplayLevels};
+use crate::state_crypt;
 
 const DEFAULT_THEME: &str = "light";
 /// The QR display steppers' middle level, as the C++ side's `qr::DEFAULT_LEVEL`.
@@ -112,9 +113,13 @@ impl AppState {
 
     pub fn load() -> Self {
         let path = Self::path();
-        let content = match fs::read_to_string(&path) {
-            Ok(content) => content,
-            Err(_) => return Self::default(),
+        let content = match state_crypt::read_state(&path) {
+            Ok(Some(content)) => content,
+            Ok(None) => return Self::default(),
+            Err(e) => {
+                log::error!("AppState::load() {e}");
+                return Self::default();
+            }
         };
 
         match serde_json::from_str::<Self>(&content) {
@@ -143,8 +148,8 @@ impl AppState {
 
         match serde_json::to_string_pretty(&state) {
             Ok(content) => {
-                if let Err(e) = fs::write(&path, content) {
-                    log::error!("AppState::save() failed to write {}: {e}", path.display());
+                if let Err(e) = state_crypt::write_state(&path, &content) {
+                    log::error!("AppState::save() {e}");
                 }
             }
             Err(e) => log::error!("AppState::save() failed to serialize: {e}"),
@@ -456,7 +461,9 @@ mod tests {
                 access("aa", PluginGrant::Allowed, PluginGrant::Allowed),
                 "a new answer replaces the one stored for the same hash"
             );
-            let stored = fs::read_to_string(base.join("app.json")).expect("read app.json");
+            let stored = state_crypt::read_state(&base.join("app.json"))
+                .expect("read app.json")
+                .expect("app.json written");
             assert!(
                 stored.contains("\"keys\": \"allowed\""),
                 "grants are stored by name: {stored}"
@@ -501,7 +508,7 @@ mod tests {
     #[test]
     fn load_corrupt_json_falls_back_to_default() {
         with_isolated_datadir(|base| {
-            fs::write(base.join("app.json"), "{ this is not valid json")
+            state_crypt::write_state(&base.join("app.json"), "{ this is not valid json")
                 .expect("write corrupt app.json");
 
             let state = AppState::load();
@@ -521,8 +528,8 @@ mod tests {
     #[test]
     fn load_empty_theme_normalizes_to_default() {
         with_isolated_datadir(|base| {
-            fs::write(
-                base.join("app.json"),
+            state_crypt::write_state(
+                &base.join("app.json"),
                 r#"{"enabled_plugins":[],"active_theme":""}"#,
             )
             .expect("write app.json with empty theme");
@@ -539,8 +546,8 @@ mod tests {
     #[test]
     fn load_dedups_duplicate_plugin_ids() {
         with_isolated_datadir(|base| {
-            fs::write(
-                base.join("app.json"),
+            state_crypt::write_state(
+                &base.join("app.json"),
                 r#"{"enabled_plugins":["sp","sp","cj","sp","cj"],"active_theme":"light"}"#,
             )
             .expect("write app.json with duplicate plugins");

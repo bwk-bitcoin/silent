@@ -44,6 +44,7 @@ fn datadir() -> &'static std::path::Path {
         .get_or_init(|| {
             let tmp = temp_dir::TempDir::new().expect("create temp dir");
             silent::set_datadir(tmp.path().to_path_buf());
+            silent::state_crypt::unlock_for_tests();
             tmp
         })
         .path()

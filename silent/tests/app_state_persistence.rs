@@ -13,6 +13,7 @@ use temp_dir::TempDir;
 fn app_state_plugin_and_theme_roundtrip() {
     let tmp = TempDir::new().expect("create temp dir");
     set_datadir(tmp.path().to_path_buf());
+    silent::state_crypt::unlock_for_tests();
 
     // Fresh datadir: no plugins enabled, default theme.
     assert!(

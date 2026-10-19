@@ -8,6 +8,7 @@ use temp_dir::TempDir;
 fn test_list_accounts_after_create_delete() {
     let tmp = TempDir::new().expect("create temp dir");
     set_datadir(tmp.path().to_path_buf());
+    silent::state_crypt::unlock_for_tests();
 
     // Initially empty
     assert!(list_configs().is_empty(), "should start empty");

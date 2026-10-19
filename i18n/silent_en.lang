@@ -272,6 +272,8 @@ btn-allow-access => "Allow"
 
 btn-deny-access => "Deny"
 
+btn-unlock => "Unlock"
+
 btn-add-key => "Add Key"
 
 btn-check => "Check"
@@ -1101,6 +1103,75 @@ plugin-access-refused-keys
 plugin-access-no-account => "The account is gone."
 
 plugin-access-no-keys => "The keys module is not running."
+
+state-setup-title => "Protect Silent"
+
+state-setup-text
+=> "Silent encrypts everything it keeps on this computer: accounts, keys and settings. Pick what unlocks it at every start. It cannot be changed later.";;
+
+state-choice-device => "Signing Device"
+
+state-choice-device-sub
+=> "Plug it in and unlock it at every start. The key is derived on the device and never stored.";;
+
+state-choice-password => "Password"
+
+state-choice-password-sub
+=> "Type it at every start. Forget it and the accounts and keys kept here are lost.";;
+
+state-device-title => "Protect Silent · Signing Device"
+
+state-device-text
+=> "Plug in the device and unlock it, open its app for the network below, then pick it.";;
+
+state-device-pick => "Pick a ready device."
+
+state-no-device => "No Device Connected"
+
+state-no-device-sub => "Plug in your signing device and unlock it."
+
+state-device-confirm => "Confirm on Your Device"
+
+state-device-confirm-sub => "Silent asks %1 for the key at %2."
+
+state-device-unreachable => "The device did not take the request. Unplug it and try again."
+
+state-device-failed => "The device did not give the key: %1"
+
+state-password-title => "Protect Silent · Password"
+
+state-password-text
+=> "The password opens Silent at every start. If you forget it, Silent cannot open what it keeps here: wipe ~/.silent/ and start again.";;
+
+state-password-sealing => "Sealing the Key"
+
+state-password-sealing-sub => "Encrypting the key with the password. This takes a few seconds."
+
+state-unlock-title => "Unlock Silent"
+
+state-unlock-device-text => "Plug in %1 (%2) and unlock it: Silent asks it for its key."
+
+state-unlock-plug => "Plug it in and unlock it."
+
+state-unlock-locked => "Unlock the device."
+
+state-unlock-ready => "Asking the device for its key."
+
+state-unlock-wrong-key
+=> "This device's key does not open Silent. Plug in the device Silent was protected with.";;
+
+state-unlock-password-text => "Enter the password that unlocks Silent."
+
+state-unlocking => "Unlocking"
+
+state-unlocking-sub => "Opening the key with the password. This takes a few seconds."
+
+state-clear-title => "Unencrypted Data Found"
+
+state-clear-text
+=> "Silent found data it did not encrypt: %1. Silent now encrypts everything it keeps and does not convert older data. Move ~/.silent/ away or delete it, then start Silent again.";;
+
+state-unreadable-title => "Silent Cannot Start"
 
 musig-account-type => "Multikey Wallet"
 
