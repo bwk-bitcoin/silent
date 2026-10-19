@@ -3,6 +3,7 @@
 #include "AppController.h"
 #include "catalog/Button.h"
 #include "catalog/Variants.h"
+#include "catalog/containers/ScrollArea.h"
 #include "catalog/display/Label.h"
 #include "catalog/feedback/MessageModal.h"
 #include "catalog/inputs/ComboBox.h"
@@ -69,10 +70,15 @@ auto SigningSection::estimatesFee() const -> bool {
 void SigningSection::init() {
     m_leaf_title = new Label(TR("musig-send-spend-path"), LabelRole::Eyebrow);
     m_leaf_combo = new catalog::ComboBox;
-    // As wide as the coins table above it, which fills the same column.
+    // As wide as the coin rows above it and the recipient cards below: both sit inside
+    // a scroll area, inset by its gutters, so the combobox takes the same inset. The
+    // eyebrow stays on the column edge, with the other section titles.
     m_leaf_combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    auto *comboRow = (new qontrol::Row)->push(m_leaf_combo, 1);
+    comboRow->layout()->setContentsMargins(catalog::ScrollArea::insetH(), 0,
+                                           catalog::ScrollArea::insetH(), 0);
     m_leaf_widget =
-        (new qontrol::Column)->spacing(resolve(Spacing::S))->push(m_leaf_title)->push(m_leaf_combo);
+        (new qontrol::Column)->spacing(resolve(Spacing::S))->push(m_leaf_title)->push(comboRow);
 
     m_reason_label = new Label(LabelRole::Caption);
     m_reason_label->setVisible(false);
