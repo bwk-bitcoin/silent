@@ -28,7 +28,7 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use zeroize::Zeroizing;
 
 use crate::config::datadir;
-use crate::ffi::{PluginStateResult, StateUnlockInfo};
+use crate::ffi::{PluginStateResult, StateIndexResult, StateUnlockInfo};
 use crate::keys::crypto::{self, Password};
 use crate::keys::record::SecretEnvelope;
 
@@ -458,8 +458,23 @@ pub fn state_lock() {
     lock();
 }
 
-pub fn state_draw_index() -> u32 {
-    draw_index().unwrap_or(0)
+pub fn state_draw_index() -> StateIndexResult {
+    index_result(draw_index())
+}
+
+fn index_result(drawn: Result<u32, String>) -> StateIndexResult {
+    match drawn {
+        Ok(index) => StateIndexResult {
+            is_ok: true,
+            index,
+            error: String::new(),
+        },
+        Err(error) => StateIndexResult {
+            is_ok: false,
+            index: 0,
+            error: format!("no random index for the device key: {error}"),
+        },
+    }
 }
 
 pub fn state_device_path(index: u32) -> String {
@@ -504,6 +519,16 @@ mod tests {
             "m/138'/1936225652'/<index>'"
         );
         assert!(draw_index().unwrap() < 0x8000_0000);
+    }
+
+    #[test]
+    fn a_failed_draw_is_an_error_not_index_zero() {
+        let failed = index_result(Err("no entropy".to_string()));
+        assert!(!failed.is_ok, "a failed draw is not ok");
+        assert!(failed.error.contains("no entropy"));
+        let drawn = index_result(Ok(42));
+        assert!(drawn.is_ok && drawn.index == 42 && drawn.error.is_empty());
+        assert!(state_draw_index().is_ok, "the system source draws");
     }
 
     #[test]

@@ -1017,6 +1017,7 @@ struct CameraListResult;
 struct CameraFrameResult;
 struct QrDisplayLevels;
 struct StateUnlockInfo;
+struct StateIndexResult;
 enum class PluginGrant : ::std::uint8_t;
 struct PluginAccess;
 struct PluginStateResult;
@@ -1887,6 +1888,19 @@ struct StateUnlockInfo final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_StateUnlockInfo
+
+#ifndef CXXBRIDGE1_STRUCT_StateIndexResult
+#define CXXBRIDGE1_STRUCT_StateIndexResult
+// A device key's index, as `state_draw_index` answers it.
+struct StateIndexResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // Below 2^31, set only when `is_ok`.
+  ::std::uint32_t index CXX_DEFAULT_VALUE(0);
+  ::rust::String error;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_StateIndexResult
 
 #ifndef CXXBRIDGE1_ENUM_PluginGrant
 #define CXXBRIDGE1_ENUM_PluginGrant
@@ -3045,8 +3059,9 @@ void app_set_last_endpoint(::BackendServer server, ::Network network, ::rust::St
 // Forgets the key: the state cannot be read or written until the next unlock.
 void state_lock() noexcept;
 
-// A hardened index for a new device key.
-::std::uint32_t state_draw_index() noexcept;
+// A hardened index for a new device key, drawn from the system random source.
+// A failed draw is an error: never a fixed index.
+::StateIndexResult state_draw_index() noexcept;
 
 // The path a device unlock key is fetched at, "m/138'/1936225652'/<index>'".
 ::rust::String state_device_path(::std::uint32_t index) noexcept;

@@ -325,7 +325,14 @@ void StateSetup::onDeviceContinueClicked() {
     if (m_selected_id.isEmpty() || m_devices == nullptr) {
         return;
     }
-    m_index = ::state_draw_index();
+    auto drawn = ::state_draw_index();
+    if (!drawn.is_ok) {
+        // No random index, no state: never a fixed one.
+        m_device_error->setText(toQt(drawn.error));
+        m_device_error->setVisible(true);
+        return;
+    }
+    m_index = drawn.index;
     QString path = toQt(::state_device_path(m_index));
     m_xpub_req = m_devices->fetchXpub(m_selected_id, path);
     if (m_xpub_req == 0) {

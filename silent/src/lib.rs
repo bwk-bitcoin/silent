@@ -669,6 +669,15 @@ mod ffi {
         pub error: String,
     }
 
+    /// A device key's index, as `state_draw_index` answers it.
+    #[derive(Debug, Clone)]
+    pub struct StateIndexResult {
+        pub is_ok: bool,
+        /// Below 2^31, set only when `is_ok`.
+        pub index: u32,
+        pub error: String,
+    }
+
     /// The user's answer to one use an external plugin asked for.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum PluginGrant {
@@ -1096,8 +1105,9 @@ mod ffi {
         /// Forgets the key: the state cannot be read or written until the next unlock.
         fn state_lock();
 
-        /// A hardened index for a new device key.
-        fn state_draw_index() -> u32;
+        /// A hardened index for a new device key, drawn from the system random source.
+        /// A failed draw is an error: never a fixed index.
+        fn state_draw_index() -> StateIndexResult;
 
         /// The path a device unlock key is fetched at, "m/138'/1936225652'/<index>'".
         fn state_device_path(index: u32) -> String;
