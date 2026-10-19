@@ -1,7 +1,5 @@
 #include "MainWindow.h"
 #include "AppController.h"
-#include "catalog/Button.h"
-#include "catalog/Variants.h"
 #include "catalog/containers/Tabs.h"
 #include "host/Host.h"
 #include "i18n/Tr.h"
@@ -9,7 +7,7 @@
 #include "theme/Palette.h"
 #include "views/DashboardLayout.h"
 #include "views/MenuTab.h"
-#include <QFrame>
+#include "views/modals/AppSettings.h"
 #include <QVariant>
 #include <Qontrol>
 #include <algorithm>
@@ -36,34 +34,23 @@ auto MainWindow::initWindow() -> void {
     m_tab = new catalog::Tabs(this);
     m_menu_tab = new MenuTab(this);
     m_keys_tab = AppController::get()->keysTab();
+    m_settings_tab = new modal::AppSettings;
 
     m_tab->setTabsClosable(true);
     m_tab->setMovable(true);
 
-    m_settings_btn = catalog::btnSettingsGear();
-    connect(m_settings_btn, &QPushButton::clicked, AppController::get(),
-            &AppController::openAppSettings, qontrol::UNIQUE);
-    // The gear has its own slot after the tabs: they scroll in what is left, never under it.
-    auto *settingsSlot = new QFrame;
-    settingsSlot->setProperty("class", "tabstrip-end");
-    (new qontrol::Row)
-        ->margins(resolve(Padding::S), 0, 0, resolve(Padding::XXS))
-        ->push(m_settings_btn)
-        ->into(settingsSlot);
     // A tab bar always has a current tab: while an account or the launcher shows, the
     // bar is idle and its current tab is drawn as not selected.
     m_module_bar = new QTabBar;
     m_module_bar->setProperty("class", "module-tabs");
     m_module_bar->setDrawBase(false);
     m_module_bar->setExpanding(false);
-    // As wide as its tabs: no room kept for scroll buttons, right before the gear.
+    // As wide as its tabs: no room kept for scroll buttons, at the end of the strip.
     m_module_bar->setUsesScrollButtons(false);
     m_module_bar->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     auto *corner = (new qontrol::Row)
                        ->margins(resolve(Spacing::XS), 0, resolve(Padding::XS), 0)
-                       ->pushAligned(m_module_bar, Qt::AlignBottom)
-                       ->pushSpacer(resolve(Spacing::XS))
-                       ->push(settingsSlot);
+                       ->pushAligned(m_module_bar, Qt::AlignBottom);
     m_tab->setCornerWidget(corner, Qt::TopRightCorner);
     m_tab->setUsesScrollButtons(true);
 
@@ -105,10 +92,10 @@ auto MainWindow::updateTabs() -> void {
 
     // A module's page sits in the tab widget, its tab hidden there: the module bar
     // shows it on the right.
-    if (m_keys_tab != nullptr) {
-        int keysIndex = m_tab->addTab(m_keys_tab, TR("main-keys-tab"));
-        m_tab->tabBar()->setTabButton(keysIndex, QTabBar::RightSide, nullptr);
-        m_tab->tabBar()->setTabVisible(keysIndex, false);
+    for (const auto &[page, title] : modulePages()) {
+        int index = m_tab->addTab(page, title);
+        m_tab->tabBar()->setTabButton(index, QTabBar::RightSide, nullptr);
+        m_tab->tabBar()->setTabVisible(index, false);
     }
     updateModuleTabs();
 
@@ -118,13 +105,23 @@ auto MainWindow::updateTabs() -> void {
     onCurrentTabChanged();
 }
 
+auto MainWindow::modulePages() const -> QList<QPair<QWidget *, QString>> {
+    QList<QPair<QWidget *, QString>> pages;
+    if (m_keys_tab != nullptr) {
+        pages.append({m_keys_tab, TR("main-keys-tab")});
+    }
+    // The global settings, right of Keys (ws-plaude/silent#46).
+    pages.append({m_settings_tab, TR("main-settings-tab")});
+    return pages;
+}
+
 void MainWindow::updateModuleTabs() {
     while (m_module_bar->count() > 0) {
         m_module_bar->removeTab(0);
     }
-    if (m_keys_tab != nullptr) {
-        int index = m_module_bar->addTab(TR("main-keys-tab"));
-        m_module_bar->setTabData(index, QVariant::fromValue(static_cast<QObject *>(m_keys_tab)));
+    for (const auto &[page, title] : modulePages()) {
+        int index = m_module_bar->addTab(title);
+        m_module_bar->setTabData(index, QVariant::fromValue(static_cast<QObject *>(page)));
     }
 }
 
@@ -198,9 +195,6 @@ auto MainWindow::changeEvent(QEvent *event) -> void {
 
 auto MainWindow::retranslateUi() -> void {
     setWindowTitle(TR("main-window-title"));
-    if (m_settings_btn != nullptr) {
-        m_settings_btn->setToolTip(TR("btn-settings"));
-    }
 }
 
 auto MainWindow::closeEvent(QCloseEvent *event) -> void {
@@ -219,7 +213,8 @@ auto MainWindow::closeEvent(QCloseEvent *event) -> void {
 
 auto MainWindow::onTabCloseRequested(int index) -> void {
     auto *hosted = m_tab->widget(index);
-    if (hosted != nullptr && hosted != m_menu_tab && hosted != m_keys_tab) {
+    if (hosted != nullptr && hosted != m_menu_tab && hosted != m_keys_tab &&
+        hosted != m_settings_tab) {
         emit hostedTabCloseRequested(hosted);
     }
 }

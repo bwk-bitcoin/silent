@@ -1,6 +1,5 @@
 #pragma once
 
-#include "catalog/containers/Modal.h"
 #include "interfaces/host.h"
 #include "interfaces/types.h"
 #include "theme/Palette.h"
@@ -9,10 +8,12 @@
 #include <QString>
 #include <QStringList>
 #include <QWidget>
+#include <Qontrol>
 
 class QDragEnterEvent;
 class QDropEvent;
 class QEvent;
+class QHideEvent;
 
 namespace catalog {
 class Button;
@@ -38,15 +39,16 @@ namespace modal {
 
 class AppSettingsFlow;
 
-// The global Settings: General, Plugin Manager and Extension Settings on the main
-// step; disabling a plugin and a module's settings section are flows embedded in its
-// place.
-class AppSettings : public catalog::Modal {
+// The global Settings, the page of the Settings tab right of Keys
+// (ws-plaude/silent#46): General, Plugin Manager and Extension Settings on the main
+// view; disabling a plugin, a plugin's access and a module's settings section are
+// flows shown in its place, each with its way back.
+class AppSettings : public QWidget {
     Q_OBJECT
 
 public:
-    AppSettings();
-    void done(int result) override;
+    explicit AppSettings(QWidget *parent = nullptr);
+    ~AppSettings() override;
 
 public slots:
     void onThemeSelectionChanged(int index);
@@ -92,11 +94,20 @@ protected:
     // Shared
     // Shared
     void changeEvent(QEvent *event) override;
+    // Leaving the tab ends what was open in it, as closing the window did.
+    void hideEvent(QHideEvent *event) override;
+    // The title and the content width of the view now shown, the title inset as its
+    // content is.
+    void setView(const QString &title, int width, int title_inset);
     void retranslateUi();
     void openFlow(AppSettingsFlow *flow);
     void closeFlow();
 
 private:
+    catalog::Label *m_title = nullptr;
+    qontrol::Row *m_title_row = nullptr;
+    qontrol::Column *m_column = nullptr;
+    catalog::ViewSlots *m_slots = nullptr;
     catalog::ScrollArea *m_main = nullptr;
 
     catalog::Section *m_general = nullptr;
@@ -135,7 +146,7 @@ private:
     bool m_updating_theme_picker = false;
     QString m_pending_theme_to_apply;
 
-    // The flow picked off the main view, deleted once it goes back or the window closes.
+    // The flow picked off the main view, deleted once it goes back or the tab is left.
     AppSettingsFlow *m_flow = nullptr;
 };
 

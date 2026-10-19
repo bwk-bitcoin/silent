@@ -2,6 +2,7 @@
 
 #include "theme/Palette.h"
 
+#include <QDialog>
 #include <Qontrol>
 
 namespace catalog {
@@ -64,7 +65,11 @@ void ViewSlots::replace(qontrol::Row *slot, QWidget *&current, QWidget *widget, 
         widget->show();
     }
     slot->setVisible(widget != nullptr);
-    window()->adjustSize();
+    // A modal fits its new view; a page of the main window (the Settings tab) leaves
+    // the window its size.
+    if (qobject_cast<QDialog *>(window()) != nullptr) {
+        window()->adjustSize();
+    }
 }
 
 } // namespace catalog

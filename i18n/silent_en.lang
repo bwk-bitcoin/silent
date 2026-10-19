@@ -225,6 +225,7 @@ keys-xpub-other-key => "The device answered with the xpub of another key."
 keys-xpub-rejected => "%1 declined to share the xpub."
 
 main-keys-tab => "Keys"
+main-settings-tab => "Settings"
 
 receive-show-qr => "Show QR code"
 
@@ -348,7 +349,6 @@ btn-show-words => "Show Words"
 
 btn-delete-wallet => "Delete wallet"
 
-btn-settings => "Settings"
 
 btn-dismiss => "Dismiss"
 

@@ -38,6 +38,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QEvent>
+#include <QHideEvent>
 #include <QLabel>
 #include <QMimeData>
 #include <QUrl>
@@ -85,7 +86,7 @@ auto withNote(catalog::FieldGroup *field, catalog::FieldNote *note) -> QWidget *
 
 } // namespace
 
-AppSettings::AppSettings() {
+AppSettings::AppSettings(QWidget *parent) : QWidget(parent) {
     init();
     doConnect();
     view();
@@ -95,9 +96,8 @@ AppSettings::AppSettings() {
     showMain();
 }
 
-void AppSettings::done(int result) {
+AppSettings::~AppSettings() {
     closeFlow();
-    catalog::Modal::done(result);
 }
 
 void AppSettings::init() {
@@ -124,6 +124,19 @@ void AppSettings::doConnect() {
 
 void AppSettings::view() {
     m_main = viewMain();
+    // As the Keys page: a centred column under its title, its width the view's.
+    // Its views keep their height, top-packed; the main one scrolls when the window is
+    // shorter.
+    m_title = new Label(TR("settings-title"), LabelRole::Title);
+    m_title_row = (new qontrol::Row)->push(m_title)->pushSpacer();
+    m_slots = new catalog::ViewSlots;
+    m_column = (new qontrol::Column)
+                   ->margins(resolve(Spacing::S))
+                   ->spacing(resolve(Spacing::L))
+                   ->push(m_title_row)
+                   ->push(m_slots)
+                   ->pushStretch(1);
+    (new qontrol::Row)->pushSpacer()->push(m_column)->pushSpacer()->into(this);
     retranslateUi();
 }
 
@@ -204,10 +217,6 @@ auto AppSettings::viewMain() -> catalog::ScrollArea * {
                        ->push(buildPlugins())
                        ->push(m_extensions_separator)
                        ->push(m_extensions);
-    for (auto *section : {m_general, m_plugins, m_extensions}) {
-        connect(section->header(), &catalog::SectionHeader::toggled, this, &AppSettings::adjustSize,
-                qontrol::UNIQUE);
-    }
     auto *scroll = new catalog::ScrollArea;
     scroll->setFitContent(true);
     // One width whatever the rows hold, as the design's column: longer texts wrap in it.
@@ -243,11 +252,18 @@ auto AppSettings::buildPlugins() -> QWidget * {
 }
 
 void AppSettings::showMain() {
-    setWindowTitle(TR("settings-title"));
-    setHeader(nullptr);
-    setBody(m_main);
-    setFooter(nullptr);
-    setWidth(ModalWidth::Wide);
+    m_slots->setHeader(nullptr);
+    m_slots->setBody(m_main);
+    m_slots->setFooter(nullptr);
+    // The sections sit in the scroll area, inset by its gutters: the title too.
+    setView(TR("settings-title"), metric::SETTINGS_BODY_WIDTH + (2 * catalog::ScrollArea::insetH()),
+            catalog::ScrollArea::insetH());
+}
+
+void AppSettings::setView(const QString &title, int width, int title_inset) {
+    m_title->setText(title);
+    m_title_row->layout()->setContentsMargins(title_inset, 0, 0, 0);
+    m_column->setFixedWidth(width + (2 * resolve(Spacing::S)));
 }
 
 auto AppSettings::pluginRow(const QString &id, const QString &meta) -> catalog::SelectRow * {
@@ -325,7 +341,6 @@ void AppSettings::rebuildSettingSectionRows() {
     m_extensions->header()->setCount(QString::number(count));
     m_extensions->setVisible(count > 0);
     m_extensions_separator->setVisible(count > 0);
-    adjustSize();
 }
 
 auto AppSettings::sectionModuleName(Host::SectionId section) const -> QString {
@@ -463,13 +478,27 @@ void AppSettings::changeEvent(QEvent *event) {
     if (event->type() == QEvent::LanguageChange) {
         retranslateUi();
     }
-    catalog::Modal::changeEvent(event);
+    QWidget::changeEvent(event);
+}
+
+void AppSettings::hideEvent(QHideEvent *event) {
+    QWidget::hideEvent(event);
+    // Another tab shown, not the window minimized: a flow left open goes back to the
+    // main view, and a result shown is done with.
+    if (event->spontaneous()) {
+        return;
+    }
+    if (m_flow != nullptr) {
+        onFlowBack();
+    }
+    m_plugin_notice->setVisible(false);
+    m_plugin_result->setVisible(false);
 }
 
 void AppSettings::retranslateUi() {
     // The language is picked on the main view: a flow is always opened in it.
     if (m_flow == nullptr) {
-        setWindowTitle(TR("settings-title"));
+        m_title->setText(TR("settings-title"));
     }
 
     m_general->header()->setLabel(TR("settings-general"));
@@ -498,7 +527,7 @@ void AppSettings::openFlow(AppSettingsFlow *flow) {
     connect(m_flow, &AppSettingsFlow::back, this, &AppSettings::onFlowBack, qontrol::UNIQUE);
     connect(m_flow, &AppSettingsFlow::confirmed, this, &AppSettings::onFlowConfirmed,
             qontrol::UNIQUE);
-    setPage(m_flow);
+    m_slots->setPage(m_flow);
     m_flow->start();
 }
 
@@ -518,7 +547,6 @@ void AppSettings::onThemeSelectionChanged(int index) {
         return;
     }
     updateThemeNote();
-    adjustSize();
 
     QString themeName = m_theme_picker->itemData(index).toString().trimmed();
     if (themeName.isEmpty()) {
@@ -556,7 +584,6 @@ void AppSettings::onLanguageSelectionChanged(int index) {
     static_cast<void>(i18n::I18nManager::get()->applyLocale(locale, true));
     m_language_note->setText(TR("settings-language-saved"));
     m_language_note->setVisible(true);
-    adjustSize();
 }
 
 void AppSettings::dragEnterEvent(QDragEnterEvent *event) {
@@ -600,7 +627,6 @@ void AppSettings::dropEvent(QDropEvent *event) {
     }
     m_plugin_result->setText(lines.join(QLatin1Char('\n')));
     m_plugin_result->setVisible(!lines.isEmpty());
-    adjustSize();
 }
 
 void AppSettings::onPluginToggled(bool enabled) {
@@ -664,7 +690,6 @@ void AppSettings::onPluginsChanged() {
     }
     m_plugins->header()->setCount(count > 0 ? QString::number(count) : QString());
     m_plugins_column->setVisible(count > 0);
-    adjustSize();
 }
 
 void AppSettings::onOpenSectionClicked() {
@@ -757,8 +782,8 @@ void AppSettings::onThemePalette(ReqId req_id, theme::Palette palette) {
 }
 
 void AppSettings::onFlowViewChanged(const QString &title, ModalWidth width) {
-    setWindowTitle(title);
-    setWidth(width);
+    // The width its content had in the window, without the window's padding.
+    setView(title, resolve(width) - (2 * resolve(Padding::L)), 0);
 }
 
 void AppSettings::onFlowBack() {

@@ -18,9 +18,7 @@ auto Tab::qss(const Palette &p) -> QString {
                "QTabBar[class=\"module-tabs\"][idle=\"true\"]::tab:selected { background: %2; "
                "  color: %3; }"
                "QTabBar[class=\"module-tabs\"][idle=\"true\"]::tab:selected:hover { "
-               "  background: %6; }"
-               // The settings gear's slot after the tabs.
-               "QFrame[class=\"tabstrip-end\"] { border: none; border-left: 1px solid %12; }")
+               "  background: %6; }")
         .arg(p.border.name())        // %1
         .arg(p.bgSecondary.name())   // %2
         .arg(p.textSecondary.name()) // %3
@@ -31,8 +29,7 @@ auto Tab::qss(const Palette &p) -> QString {
         .arg(resolve(Padding::M))    // %8
         .arg(radius::TAB)            // %9
         .arg(resolve(Spacing::XXS))  // %10
-        .arg(size::BODY)             // %11
-        .arg(p.borderLight.name());  // %12
+        .arg(size::BODY);            // %11
 }
 
 } // namespace catalog

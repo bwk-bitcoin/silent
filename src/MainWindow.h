@@ -9,7 +9,6 @@
 #include <Qontrol>
 
 namespace catalog {
-class Button;
 class Tabs;
 } // namespace catalog
 
@@ -43,14 +42,16 @@ protected:
     auto initWindow() -> void;
     auto retranslateUi() -> void;
     void updateModuleTabs();
+    // The module pages, in the order of their tabs: Keys, then Settings.
+    [[nodiscard]] auto modulePages() const -> QList<QPair<QWidget *, QString>>;
 
 private:
     bool m_init = false;
     catalog::Tabs *m_tab = nullptr;
-    // The module tabs (Keys), right aligned before the gear, apart from the accounts.
+    // The module tabs (Keys, Settings), right aligned, apart from the accounts.
     QTabBar *m_module_bar = nullptr;
-    catalog::Button *m_settings_btn = nullptr;
     QList<QPair<QString, QWidget *>> m_tabs;
     QWidget *m_menu_tab = nullptr;
     QWidget *m_keys_tab = nullptr;
+    QWidget *m_settings_tab = nullptr;
 };

@@ -450,14 +450,6 @@ auto btnVerifyOnDevice() -> Button * {
         {.role = ButtonRole::Icon, .icon = icon::usb, .iconSize = 20, .width = BtnWidth::IconLg});
 }
 
-auto btnSettingsGear() -> Button * {
-    return make({.role = ButtonRole::InlineIcon,
-                 .icon = icon::settings,
-                 .iconSize = 16,
-                 .tooltip = TR("btn-settings"),
-                 .width = BtnWidth::Icon});
-}
-
 auto btnDismissNotice() -> Button * {
     return make({.role = ButtonRole::InlineIcon,
                  .icon = icon::x,

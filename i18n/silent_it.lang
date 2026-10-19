@@ -68,7 +68,6 @@ btn-save-unsigned-psbt => "Save Unsigned PSBT…" => "NONE"
 btn-scan-address => "Scan an Address QR Code" => "Scan an Address QR Code"
 btn-scan-again => "Scan Again" => "NONE"
 btn-seal-key => "Seal Key" => "NONE"
-btn-settings => "Settings" => "NONE"
 btn-show-mnemonic => "Show Mnemonic" => "NONE"
 btn-show-words => "Show Words" => "NONE"
 btn-sign => "Sign" => "NONE"
@@ -568,6 +567,7 @@ keys-xpubs-empty-offline
 => "NONE";;
 main-keys-tab => "Keys" => "NONE"
 main-menu-tab => "+" => "+"
+main-settings-tab => "Settings" => "NONE"
 main-window-title
 => "Silent - Silent Payments Wallet"
 => "Silent - Wallet Silent Payments";;

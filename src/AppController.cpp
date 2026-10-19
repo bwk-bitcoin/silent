@@ -7,7 +7,6 @@
 #include "interfaces/theme.h"
 #include "modules/keys/KeysModule.h"
 #include "theme/Theme.h"
-#include "views/modals/AppSettings.h"
 #include "views/modals/ConfirmDelete.h"
 #include <algorithm>
 #include <common.h>
@@ -251,11 +250,6 @@ auto AppController::deleteAccount(const QString &name) -> void {
     connect(modal, &modal::ConfirmDelete::confirmed, this, &AppController::onDeleteConfirmed,
             qontrol::UNIQUE);
     AppController::execModal(modal);
-}
-
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-auto AppController::openAppSettings() -> void {
-    AppController::execModal(new modal::AppSettings());
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)

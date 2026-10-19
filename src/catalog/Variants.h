@@ -81,7 +81,6 @@ auto btnHideWords() -> Button *;
 auto btnShowWords() -> Button *;
 auto btnDeleteWallet() -> Button *;
 auto btnVerifyOnDevice() -> Button *;
-auto btnSettingsGear() -> Button *;
 auto btnDismissNotice() -> Button *;
 auto btnEditLabel() -> Button *;
 auto btnEditLabelRow() -> Button *;
