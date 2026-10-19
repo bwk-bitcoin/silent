@@ -13,6 +13,8 @@
 
 #include "interfaces/module.h"
 
+class PluginLibrary;
+
 class PluginRegistry final : public QObject {
     Q_OBJECT
 
@@ -32,8 +34,6 @@ public:
     void reloadEnabledPlugins();
     // False when the plugin refused: it failed to load, or to unload.
     auto setEnabled(const QString &plugin_id, bool enabled) -> bool;
-    // False when the plugins folder exists but cannot be read.
-    [[nodiscard]] auto isAvailable() const -> bool;
     [[nodiscard]] auto pluginName(const QString &plugin_id) const -> QString;
     [[nodiscard]] auto pluginDescription(const QString &plugin_id) const -> QString;
     // Why the plugin failed to load, empty when it did not fail.
@@ -96,13 +96,15 @@ private:
         QString id;
         QString name;
         QString version;
-        QString library_path;
         QString i18n_dir;
+        // An external plugin's catalogs, opened from its bundle, by file name.
+        QHash<QString, QString> catalogs;
         QString load_error;
         // The library's sha256, taken before it was loaded.
         QString plugin_hash;
         QMap<QString, QString> meta;
-        QPluginLoader *loader = nullptr;
+        // The loaded library of an external plugin, null until loaded.
+        PluginLibrary *library = nullptr;
         QObject *plugin_object = nullptr;
         IPlugin *plugin = nullptr;
         QList<IModule *> modules;
@@ -125,8 +127,6 @@ private:
     void stopPluginInstances(const QString &plugin_id);
     [[nodiscard]] bool hasLiveOwnedInstances(const QString &plugin_id) const;
     void rebuildPluginList();
-    [[nodiscard]] QString resolvePluginLibraryPath(const QString &plugin_dir,
-                                                   const QMap<QString, QString> &meta) const;
 
     QList<QString> m_plugin_order;
     QHash<QString, PluginRecord> m_records;
@@ -141,5 +141,4 @@ private:
     QHash<IModule *, QPair<ReqId, QList<QPair<QString, QString>>>> m_sync_list_responses;
     QHash<IModule *, QPair<ReqId, QStringList>> m_sync_auto_start_responses;
     bool m_signer_polling = false;
-    bool m_available = true;
 };

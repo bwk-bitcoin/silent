@@ -1,5 +1,7 @@
 #include "PluginRegistry.h"
 #include "Host.h"
+#include "PluginLibrary.h"
+#include "i18n/I18nManager.h"
 #include "i18n/Tr.h"
 #include "interfaces/instance.h"
 
@@ -35,17 +37,11 @@ private:
     QMap<QString, QString> m_meta;
 };
 
-QMap<QString, QString> readSidecarMeta(const QString &path) {
-    QFile sidecar(path);
-    if (!sidecar.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qWarning() << "Plugin sidecar open failed:" << path << sidecar.errorString();
-        return {};
-    }
-
+QMap<QString, QString> parseSidecarMeta(const QByteArray &json) {
     QJsonParseError parseError;
-    auto doc = QJsonDocument::fromJson(sidecar.readAll(), &parseError);
+    auto doc = QJsonDocument::fromJson(json, &parseError);
     if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        qWarning() << "Plugin sidecar parse failed:" << path << parseError.errorString();
+        qWarning() << "Plugin sidecar parse failed:" << parseError.errorString();
         return {};
     }
 
@@ -104,10 +100,8 @@ PluginRegistry::~PluginRegistry() {
             continue;
         }
         disablePlugin(it.key());
-        if (it->loader != nullptr) {
-            delete it->loader;
-            it->loader = nullptr;
-        }
+        delete it->library;
+        it->library = nullptr;
     }
     qDeleteAll(m_metadata_plugins);
     m_metadata_plugins.clear();
@@ -129,34 +123,13 @@ auto PluginRegistry::rescanDiscoveredPlugins() -> int {
         }
     }
 
-    QString pluginsRoot = QDir::homePath() + QStringLiteral("/.silent/plugins");
-    QDir rootDir(pluginsRoot);
-    // A missing folder only means no plugin is installed yet.
-    m_available = !rootDir.exists() || QFileInfo(pluginsRoot).isReadable();
-    if (!rootDir.exists()) {
-        rebuildPluginList();
-        emit enabledPluginsChanged();
-        return 0;
-    }
-
+    // Only the plugins sealed in the app state: nothing found loose in
+    // ~/.silent/plugins/ is ever read (ws-plaude/silent#41).
     int found = 0;
-    auto pluginDirs = rootDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-    for (const auto &pluginDirInfo : pluginDirs) {
-        QString pluginDir = pluginDirInfo.absoluteFilePath();
-        QString pluginId = pluginDirInfo.fileName().trimmed();
+    for (const auto &sidecar : ::plugin_bundles()) {
+        auto meta = parseSidecarMeta(QByteArray::fromStdString(std::string(sidecar)));
+        QString pluginId = meta.value(QStringLiteral("id")).trimmed();
         if (pluginId.isEmpty()) {
-            continue;
-        }
-
-        QString sidecarPath = pluginDir + QStringLiteral("/%1.json").arg(pluginId);
-        auto meta = readSidecarMeta(sidecarPath);
-        if (meta.isEmpty()) {
-            continue;
-        }
-
-        QString metaId = meta.value(QStringLiteral("id")).trimmed();
-        if (metaId.isEmpty() || metaId != pluginId) {
-            qWarning() << "Plugin sidecar id mismatch:" << sidecarPath;
             continue;
         }
 
@@ -166,8 +139,6 @@ auto PluginRegistry::rescanDiscoveredPlugins() -> int {
         record.name = meta.value(QStringLiteral("name")).trimmed();
         record.version = meta.value(QStringLiteral("version")).trimmed();
         record.meta = meta;
-        record.i18n_dir = pluginDir + QStringLiteral("/i18n");
-        record.library_path = resolvePluginLibraryPath(pluginDir, meta);
         record.discovered = true;
         if (!known.contains(pluginId)) {
             ++found;
@@ -458,10 +429,6 @@ auto PluginRegistry::setEnabled(const QString &plugin_id, bool enabled) -> bool 
     return true;
 }
 
-auto PluginRegistry::isAvailable() const -> bool {
-    return m_available;
-}
-
 auto PluginRegistry::pluginName(const QString &plugin_id) const -> QString {
     auto recordIt = m_records.find(plugin_id);
     if (recordIt == m_records.end()) {
@@ -664,6 +631,17 @@ void PluginRegistry::syncPluginTranslations(const QString &plugin_id, bool enabl
         return;
     }
 
+    // An external plugin's catalogs come from its bundle, never from disk.
+    auto recordIt = m_records.find(plugin_id);
+    if (recordIt != m_records.end() && recordIt->external) {
+        if (recordIt->catalogs.isEmpty()) {
+            host->i18n()->unregisterPluginTranslations(plugin_id);
+        } else {
+            i18n::I18nManager::get()->registerPluginCatalogs(plugin_id, recordIt->catalogs);
+        }
+        return;
+    }
+
     QString dir = pluginI18nDir(plugin);
     if (dir.isEmpty() || !QFileInfo::exists(dir) || !QFileInfo(dir).isDir()) {
         host->i18n()->unregisterPluginTranslations(plugin_id);
@@ -705,56 +683,47 @@ bool PluginRegistry::enablePlugin(const QString &plugin_id) {
         syncPluginTranslations(plugin_id, true);
         return true;
     }
-    if (record.loader != nullptr) {
+    if (record.library != nullptr) {
         qWarning()
             << "Enable blocked: plugin still has active loader; disable/unload cleanup required"
             << plugin_id;
         return false;
     }
 
-    if (record.library_path.isEmpty()) {
-        qWarning() << "Enable failed: plugin library missing" << plugin_id;
-        record.load_error = TR("settings-plugin-no-library");
+    // The bytes opened from the app state are the ones hashed and the ones loaded:
+    // no file on disk between the two.
+    auto opened = ::plugin_library(rust::String(plugin_id.toStdString()));
+    if (!opened.is_ok) {
+        qWarning() << "Enable failed: plugin unreadable" << plugin_id;
+        record.load_error = QString::fromStdString(std::string(opened.error));
         return false;
+    }
+    QByteArray bytes(reinterpret_cast<const char *>(opened.library.data()),
+                     static_cast<qsizetype>(opened.library.size()));
+    record.plugin_hash =
+        QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+    record.catalogs.clear();
+    for (const auto &catalog : opened.catalogs) {
+        record.catalogs.insert(QString::fromStdString(std::string(catalog.name)),
+                               QString::fromStdString(std::string(catalog.text)));
     }
 
-    // Hashed before the load, so the hash names the code that runs.
-    QFile library(record.library_path);
-    QCryptographicHash hash(QCryptographicHash::Sha256);
-    if (!library.open(QIODevice::ReadOnly) || !hash.addData(&library)) {
-        qWarning() << "Enable failed: plugin library unreadable" << plugin_id;
-        record.load_error = library.errorString();
+    record.library = new PluginLibrary();
+    if (!record.library->load(bytes, QString::fromStdString(std::string(opened.library_name)))) {
+        qWarning() << "Plugin load failed:" << plugin_id << record.library->errorString();
+        record.load_error = record.library->errorString();
+        delete record.library;
+        record.library = nullptr;
         return false;
     }
-    library.close();
-    record.plugin_hash = QString::fromLatin1(hash.result().toHex());
-
-    record.loader = new QPluginLoader(record.library_path);
-    if (!record.loader->load()) {
-        qWarning() << "Plugin load failed:" << plugin_id << record.loader->errorString();
-        record.load_error = record.loader->errorString();
-        delete record.loader;
-        record.loader = nullptr;
-        return false;
-    }
-
-    QObject *root = record.loader->instance();
-    if (root == nullptr) {
-        qWarning() << "Plugin instance failed:" << plugin_id << record.loader->errorString();
-        record.load_error = record.loader->errorString();
-        record.loader->unload();
-        delete record.loader;
-        record.loader = nullptr;
-        return false;
-    }
+    QObject *root = record.library->instance();
 
     auto *plugin = qobject_cast<IPlugin *>(root);
     if (plugin == nullptr) {
-        qWarning() << "Plugin interface cast failed:" << plugin_id << record.loader->errorString();
+        qWarning() << "Plugin interface cast failed:" << plugin_id;
         record.load_error = TR("settings-plugin-not-silent");
-        record.loader->unload();
-        delete record.loader;
-        record.loader = nullptr;
+        delete record.library;
+        record.library = nullptr;
         return false;
     }
 
@@ -838,18 +807,18 @@ bool PluginRegistry::unloadPlugin(const QString &plugin_id) {
     }
 
     auto &record = *recordIt;
-    if (record.loader == nullptr) {
+    if (record.library == nullptr) {
         return true;
     }
 
-    bool ok = record.loader->unload();
+    bool ok = record.library->unload();
     if (!ok) {
-        qWarning() << "Plugin unload error:" << plugin_id << record.loader->errorString();
+        qWarning() << "Plugin unload error:" << plugin_id << record.library->errorString();
         return false;
     }
 
-    delete record.loader;
-    record.loader = nullptr;
+    delete record.library;
+    record.library = nullptr;
     return true;
 }
 
@@ -1082,46 +1051,3 @@ void PluginRegistry::rebuildPluginList() {
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-QString PluginRegistry::resolvePluginLibraryPath(const QString &plugin_dir,
-                                                 const QMap<QString, QString> &meta) const {
-    QString explicitLibrary = meta.value(QStringLiteral("library")).trimmed();
-    if (!explicitLibrary.isEmpty()) {
-        QFileInfo explicitInfo(QDir(plugin_dir).absoluteFilePath(explicitLibrary));
-        if (explicitInfo.exists() && explicitInfo.isFile()) {
-            return explicitInfo.absoluteFilePath();
-        }
-    }
-
-    QString pluginId = meta.value(QStringLiteral("id")).trimmed();
-    if (!pluginId.isEmpty()) {
-#ifdef Q_OS_MAC
-        QString candidate =
-            QDir(plugin_dir).absoluteFilePath(QStringLiteral("lib%1.dylib").arg(pluginId));
-#elif defined(Q_OS_WIN)
-        QString candidate =
-            QDir(plugin_dir).absoluteFilePath(QStringLiteral("%1.dll").arg(pluginId));
-#else
-        QString candidate =
-            QDir(plugin_dir).absoluteFilePath(QStringLiteral("lib%1.so").arg(pluginId));
-#endif
-        if (QFileInfo::exists(candidate) && QFileInfo(candidate).isFile()) {
-            return candidate;
-        }
-    }
-
-#ifdef Q_OS_MAC
-    QStringList filters{QStringLiteral("*.dylib")};
-#elif defined(Q_OS_WIN)
-    QStringList filters{QStringLiteral("*.dll")};
-#else
-    QStringList filters{QStringLiteral("*.so")};
-#endif
-
-    QDir dir(plugin_dir);
-    auto candidates = dir.entryInfoList(filters, QDir::Files, QDir::Name);
-    if (!candidates.isEmpty()) {
-        return candidates.first().absoluteFilePath();
-    }
-
-    return {};
-}

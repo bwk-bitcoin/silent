@@ -1017,6 +1017,9 @@ struct CameraListResult;
 struct CameraFrameResult;
 struct QrDisplayLevels;
 struct StateUnlockInfo;
+struct PluginInstallResult;
+struct PluginCatalog;
+struct PluginLibraryResult;
 struct StateIndexResult;
 enum class PluginGrant : ::std::uint8_t;
 struct PluginAccess;
@@ -1888,6 +1891,44 @@ struct StateUnlockInfo final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_StateUnlockInfo
+
+#ifndef CXXBRIDGE1_STRUCT_PluginInstallResult
+#define CXXBRIDGE1_STRUCT_PluginInstallResult
+// What installing a dropped plugin gave.
+struct PluginInstallResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String plugin_id;
+  ::rust::String error;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PluginInstallResult
+
+#ifndef CXXBRIDGE1_STRUCT_PluginCatalog
+#define CXXBRIDGE1_STRUCT_PluginCatalog
+// One translation catalog of a plugin, by file name (`silent_en.lang`).
+struct PluginCatalog final {
+  ::rust::String name;
+  ::rust::String text;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PluginCatalog
+
+#ifndef CXXBRIDGE1_STRUCT_PluginLibraryResult
+#define CXXBRIDGE1_STRUCT_PluginLibraryResult
+// An installed plugin's library and catalogs, opened from the state.
+struct PluginLibraryResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // The library's file name, for its type.
+  ::rust::String library_name;
+  ::rust::Vec<::std::uint8_t> library;
+  ::rust::Vec<::PluginCatalog> catalogs;
+  ::rust::String error;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PluginLibraryResult
 
 #ifndef CXXBRIDGE1_STRUCT_StateIndexResult
 #define CXXBRIDGE1_STRUCT_StateIndexResult
@@ -3080,6 +3121,19 @@ void state_lock() noexcept;
 // Unlocks with `password`. Blocks on Argon2id: off the GUI thread. Answers the
 // error, empty on success.
 ::rust::String state_unlock_with_password(::rust::String password) noexcept;
+
+// Seals the plugin dropped at `path` (its folder, or its library with the
+// sidecar beside it) into the state, replacing an earlier version of it.
+::PluginInstallResult plugin_install(::rust::String path) noexcept;
+
+// Every installed plugin's sidecar, as JSON text.
+::rust::Vec<::rust::String> plugin_bundles() noexcept;
+
+// The library and catalogs of the installed plugin `plugin_id`.
+::PluginLibraryResult plugin_library(::rust::String plugin_id) noexcept;
+
+// Removes the installed plugin `plugin_id`. Answers the error, empty on success.
+::rust::String plugin_remove(::rust::String plugin_id) noexcept;
 
 // The state `plugin_id` saved, sealed with the app state key.
 ::PluginStateResult plugin_state_load(::rust::String plugin_id) noexcept;

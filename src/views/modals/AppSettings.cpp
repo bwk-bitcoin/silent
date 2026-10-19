@@ -9,6 +9,7 @@
 #include "catalog/ClearRows.h"
 #include "catalog/SelectRow.h"
 #include "catalog/Variants.h"
+#include "catalog/containers/Card.h"
 #include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/Section.h"
 #include "catalog/containers/SectionHeader.h"
@@ -34,7 +35,12 @@
 #include "theme/Icon.h"
 #include "theme/Theme.h"
 #include <QCheckBox>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QEvent>
+#include <QLabel>
+#include <QMimeData>
+#include <QUrl>
 #include <QVariant>
 #include <Qontrol>
 #include <common.h>
@@ -99,10 +105,6 @@ void AppSettings::init() {
     if (controller != nullptr) {
         m_plugin_registry = controller->pluginRegistry();
     }
-    // The unavailable notice asks to reopen Settings once the folder is fixed: look again.
-    if (m_plugin_registry != nullptr && !m_plugin_registry->isAvailable()) {
-        m_plugin_registry->rescanDiscoveredPlugins();
-    }
     m_host = Host::get();
     if (m_host != nullptr) {
         m_host_events = m_host->events();
@@ -148,22 +150,30 @@ void AppSettings::initMain() {
     m_language_note = new catalog::FieldNote(QString(), catalog::FieldNote::Tone::Success);
     m_language_note->setVisible(false);
 
-    m_scan_btn = catalog::btnScanPlugins();
-    m_scanning_btn = catalog::btnScanningPlugins();
-    m_scanning_btn->setEnabled(false);
-    m_scanning_btn->setVisible(false);
-    m_registry_notice = new Notice(Notice::Tone::Error);
+    m_plugin_drop = new catalog::Card(catalog::Card::Role::Inset);
+    m_plugin_drop->setPad(catalog::Card::Pad::M);
+    auto *dropIcon = new QLabel;
+    dropIcon->setPixmap(
+        icon::puzzle(IconColor::Muted).pixmap(metric::DROP_ICON_SIZE, metric::DROP_ICON_SIZE));
+    m_plugin_drop_caption = new Label(QString(), LabelRole::Caption);
+    m_plugin_drop_caption->setTone(LabelTone::Muted);
+    m_plugin_drop_caption->setWordWrap(true);
+    m_plugin_drop_caption->setAlignment(Qt::AlignHCenter);
+    m_plugin_drop->setContent((new qontrol::Column)
+                                  ->margins(0, resolve(Spacing::M), 0, resolve(Spacing::M))
+                                  ->spacing(resolve(Spacing::S))
+                                  ->pushAligned(dropIcon, Qt::AlignHCenter)
+                                  // Full width: a wrapped caption pushed centered is
+                                  // measured too narrow and loses its last line.
+                                  ->push(m_plugin_drop_caption));
     m_plugin_notice = new Notice(Notice::Tone::Error);
     m_plugin_notice->setVisible(false);
-    m_scan_result = new Label(LabelRole::Caption);
-    m_scan_result->setTone(LabelTone::Success);
-    m_scan_result->setVisible(false);
+    m_plugin_result = new Label(LabelRole::Caption);
+    m_plugin_result->setTone(LabelTone::Success);
+    m_plugin_result->setWordWrap(true);
+    m_plugin_result->setVisible(false);
     m_plugins_column = (new qontrol::Column)->spacing(resolve(Spacing::S));
-    m_plugins_empty = new catalog::EmptyState(icon::puzzle, QString());
-    m_scanning = new catalog::ModalStatus;
-    m_scanning->setSpinner();
-    m_scanning->setPadding(resolve(Spacing::M), resolve(Spacing::M));
-    m_scanning->setVisible(false);
+    setAcceptDrops(true);
 
     m_extensions_separator = new catalog::Separator;
     m_section_column = (new qontrol::Column)->spacing(resolve(Spacing::S));
@@ -174,7 +184,6 @@ void AppSettings::connectMain() {
             &AppSettings::onThemeSelectionChanged, qontrol::UNIQUE);
     connect(m_language_picker, qOverload<int>(&QComboBox::currentIndexChanged), this,
             &AppSettings::onLanguageSelectionChanged, qontrol::UNIQUE);
-    connect(m_scan_btn, &QPushButton::clicked, this, &AppSettings::onScanClicked, qontrol::UNIQUE);
     if (m_plugin_registry != nullptr) {
         connect(m_plugin_registry, &PluginRegistry::enabledPluginsChanged, this,
                 &AppSettings::onPluginsChanged, qontrol::UNIQUE);
@@ -224,15 +233,12 @@ auto AppSettings::buildGeneral() -> QWidget * {
 
 auto AppSettings::buildPlugins() -> QWidget * {
     m_plugins = foldable(QString());
-    m_plugins->header()->setAction((new qontrol::Row)->push(m_scan_btn)->push(m_scanning_btn));
     m_plugins->setContent((new qontrol::Column)
                               ->spacing(resolve(Spacing::S))
-                              ->push(m_registry_notice)
                               ->push(m_plugin_notice)
-                              ->push(m_scan_result)
+                              ->push(m_plugin_result)
                               ->push(m_plugins_column)
-                              ->push(m_plugins_empty)
-                              ->push(m_scanning));
+                              ->push(m_plugin_drop));
     return m_plugins;
 }
 
@@ -279,13 +285,6 @@ auto AppSettings::pluginRow(const QString &id, const QString &meta) -> catalog::
         row->setTrailing(toggle);
     }
     return row;
-}
-
-void AppSettings::setScanning(bool scanning) {
-    m_scanning_plugins = scanning;
-    m_scan_btn->setVisible(!scanning);
-    m_scanning_btn->setVisible(scanning);
-    onPluginsChanged();
 }
 
 void AppSettings::rebuildSettingSectionRows() {
@@ -485,13 +484,7 @@ void AppSettings::retranslateUi() {
 
     // Helper buttons keep the language they were built in: retitle them here.
     m_plugins->header()->setLabel(TR("settings-plugin-manager"));
-    m_scan_btn->setText(TR("btn-scan-for-plugins"));
-    m_scanning_btn->setText(TR("btn-scanning"));
-    m_registry_notice->setTitle(TR("settings-registry-unavailable"));
-    m_registry_notice->setText(TR("settings-registry-unavailable-text"));
-    m_plugins_empty->setTitle(TR("settings-no-plugin"));
-    m_plugins_empty->setSubtitle(TR("settings-no-plugin-text"));
-    m_scanning->setTitle(TR("settings-scanning-plugins"));
+    m_plugin_drop_caption->setText(TR("settings-plugin-drop"));
     m_extensions->header()->setLabel(TR("settings-extension-settings"));
 
     onPluginsChanged();
@@ -566,22 +559,48 @@ void AppSettings::onLanguageSelectionChanged(int index) {
     adjustSize();
 }
 
-void AppSettings::onScanClicked() {
-    if (m_plugin_registry == nullptr) {
+void AppSettings::dragEnterEvent(QDragEnterEvent *event) {
+    if (m_flow == nullptr && event->mimeData()->hasUrls()) {
+        event->acceptProposedAction();
+    }
+}
+
+// Each dropped folder or library is sealed into the state: the plugin is listed,
+// off, until turned on.
+void AppSettings::dropEvent(QDropEvent *event) {
+    if (m_flow != nullptr || m_plugin_registry == nullptr || !event->mimeData()->hasUrls()) {
         return;
     }
+    event->acceptProposedAction();
     m_plugin_notice->setVisible(false);
-    m_scan_result->setVisible(false);
-    setScanning(true);
-    // The scan reads the plugins folder on this thread: paint Scanning before it starts.
-    repaint();
-    int found = m_plugin_registry->rescanDiscoveredPlugins();
-    if (found > 0) {
-        m_scan_result->setText(found == 1 ? TR("settings-plugin-found-one")
-                                          : TR("settings-plugins-found").arg(found));
-        m_scan_result->setVisible(true);
+    m_plugin_result->setVisible(false);
+    QStringList added;
+    QStringList updated;
+    for (const auto &url : event->mimeData()->urls()) {
+        if (!url.isLocalFile()) {
+            continue;
+        }
+        auto result = ::plugin_install(rust::String(url.toLocalFile().toStdString()));
+        if (!result.is_ok) {
+            m_plugin_notice->setTitle(TR("settings-plugin-add-failed"));
+            m_plugin_notice->setText(QString::fromStdString(std::string(result.error)));
+            m_plugin_notice->setVisible(true);
+            continue;
+        }
+        QString id = QString::fromStdString(std::string(result.plugin_id));
+        (m_plugin_registry->isPluginEnabled(id) ? updated : added).append(id);
     }
-    setScanning(false);
+    m_plugin_registry->rescanDiscoveredPlugins();
+    QStringList lines;
+    for (const auto &id : added) {
+        lines.append(TR("settings-plugin-added").arg(m_plugin_registry->pluginName(id)));
+    }
+    for (const auto &id : updated) {
+        lines.append(TR("settings-plugin-updated").arg(m_plugin_registry->pluginName(id)));
+    }
+    m_plugin_result->setText(lines.join(QLatin1Char('\n')));
+    m_plugin_result->setVisible(!lines.isEmpty());
+    adjustSize();
 }
 
 void AppSettings::onPluginToggled(bool enabled) {
@@ -591,7 +610,7 @@ void AppSettings::onPluginToggled(bool enabled) {
     }
     QString id = toggle->property(K_PLUGIN_ID).toString();
     m_plugin_notice->setVisible(false);
-    m_scan_result->setVisible(false);
+    m_plugin_result->setVisible(false);
     if (!enabled) {
         m_disabling_id = id;
         openFlow(new DisableFlow(m_plugin_registry, id, m_plugin_meta.value(id), m_theme_plugin));
@@ -609,7 +628,7 @@ void AppSettings::onPluginAccessClicked() {
         return;
     }
     m_plugin_notice->setVisible(false);
-    m_scan_result->setVisible(false);
+    m_plugin_result->setVisible(false);
     openFlow(new AccessFlow(m_plugin_registry, sender()->property(K_PLUGIN_ID).toString()));
 }
 
@@ -619,9 +638,7 @@ void AppSettings::onPluginsChanged() {
     m_plugins_column->spacing(resolve(Spacing::S));
     m_plugin_meta.clear();
 
-    bool available = m_plugin_registry != nullptr && m_plugin_registry->isAvailable();
-    m_registry_notice->setVisible(!available);
-    m_scan_btn->setEnabled(available);
+    bool available = m_plugin_registry != nullptr;
     int count = 0;
     if (available) {
         for (auto *plugin : m_plugin_registry->plugins()) {
@@ -647,8 +664,6 @@ void AppSettings::onPluginsChanged() {
     }
     m_plugins->header()->setCount(count > 0 ? QString::number(count) : QString());
     m_plugins_column->setVisible(count > 0);
-    m_plugins_empty->setVisible(available && count == 0 && !m_scanning_plugins);
-    m_scanning->setVisible(m_scanning_plugins && count == 0);
     adjustSize();
 }
 

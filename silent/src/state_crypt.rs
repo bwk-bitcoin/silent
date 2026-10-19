@@ -331,7 +331,7 @@ pub fn unlock_with_password(password: Password) -> Result<(), String> {
 
 /// A state file left in clear, `None` when every one is sealed. An unencrypted
 /// state is never migrated: the user wipes it. Every file under the data directory
-/// is checked but the plugin libraries, the unlock files, and the bookkeeping files
+/// is checked, the plugins included, but the password key and the bookkeeping files
 /// bwk keeps in clear (`version`, the `.lock` sentinels).
 pub fn clear_state_file() -> Option<PathBuf> {
     let root = datadir();
@@ -343,9 +343,7 @@ pub fn clear_state_file() -> Option<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                if path != root.join("plugins") {
-                    stack.push(path);
-                }
+                stack.push(path);
                 continue;
             }
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");

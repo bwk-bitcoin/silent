@@ -168,22 +168,6 @@ auto btnOpenFile() -> Button * {
                  .width = BtnWidth::L});
 }
 
-auto btnScanPlugins() -> Button * {
-    return make({.role = ButtonRole::Default,
-                 .label = TR("btn-scan-for-plugins"),
-                 .icon = icon::refresh,
-                 .iconSize = 14,
-                 .width = BtnWidth::XL});
-}
-
-auto btnScanningPlugins() -> Button * {
-    return make({.role = ButtonRole::Default,
-                 .label = TR("btn-scanning"),
-                 .icon = icon::refresh,
-                 .iconSize = 14,
-                 .width = BtnWidth::XL});
-}
-
 auto btnDisablePlugin() -> Button * {
     return make(
         {.role = ButtonRole::Destructive, .label = TR("btn-disable-plugin"), .width = BtnWidth::L});

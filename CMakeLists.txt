@@ -57,6 +57,8 @@ set(SILENT_APP_SOURCES
     src/host/Host.cpp
     src/host/PluginAccess.h
     src/host/PluginAccess.cpp
+    src/host/PluginLibrary.h
+    src/host/PluginLibrary.cpp
     src/host/PluginRegistry.h
     src/host/PluginRegistry.cpp
     src/interfaces/host.h

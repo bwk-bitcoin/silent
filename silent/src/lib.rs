@@ -13,6 +13,7 @@ pub mod hwi_config;
 pub mod image;
 pub mod keys;
 pub mod musig;
+pub mod plugin_bundle;
 pub mod policy;
 pub mod state_crypt;
 pub mod sync_estimator;
@@ -669,6 +670,32 @@ mod ffi {
         pub error: String,
     }
 
+    /// What installing a dropped plugin gave.
+    #[derive(Debug, Clone)]
+    pub struct PluginInstallResult {
+        pub is_ok: bool,
+        pub plugin_id: String,
+        pub error: String,
+    }
+
+    /// One translation catalog of a plugin, by file name (`silent_en.lang`).
+    #[derive(Debug, Clone)]
+    pub struct PluginCatalog {
+        pub name: String,
+        pub text: String,
+    }
+
+    /// An installed plugin's library and catalogs, opened from the state.
+    #[derive(Debug, Clone)]
+    pub struct PluginLibraryResult {
+        pub is_ok: bool,
+        /// The library's file name, for its type.
+        pub library_name: String,
+        pub library: Vec<u8>,
+        pub catalogs: Vec<PluginCatalog>,
+        pub error: String,
+    }
+
     /// A device key's index, as `state_draw_index` answers it.
     #[derive(Debug, Clone)]
     pub struct StateIndexResult {
@@ -1126,6 +1153,19 @@ mod ffi {
         /// Unlocks with `password`. Blocks on Argon2id: off the GUI thread. Answers the
         /// error, empty on success.
         fn state_unlock_with_password(password: String) -> String;
+
+        /// Seals the plugin dropped at `path` (its folder, or its library with the
+        /// sidecar beside it) into the state, replacing an earlier version of it.
+        fn plugin_install(path: String) -> PluginInstallResult;
+
+        /// Every installed plugin's sidecar, as JSON text.
+        fn plugin_bundles() -> Vec<String>;
+
+        /// The library and catalogs of the installed plugin `plugin_id`.
+        fn plugin_library(plugin_id: String) -> PluginLibraryResult;
+
+        /// Removes the installed plugin `plugin_id`. Answers the error, empty on success.
+        fn plugin_remove(plugin_id: String) -> String;
 
         /// The state `plugin_id` saved, sealed with the app state key.
         fn plugin_state_load(plugin_id: String) -> PluginStateResult;
@@ -2375,6 +2415,7 @@ pub use musig::{
     musig_descriptor_fingerprints, musig_first_receive_address, new_musig_account,
     validate_musig_descriptor, MusigAccount, MUSIG_PLUGIN_ID,
 };
+pub use plugin_bundle::{plugin_bundles, plugin_install, plugin_library, plugin_remove};
 pub use policy::{
     bip87_account_path, compile_policy, preview_policy, renewable_height, review_policy,
 };

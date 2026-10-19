@@ -81,6 +81,18 @@ public:
         }
 
         QTextStream input(&file);
+        return parse(input, id_prefix);
+    }
+
+    // A catalog held in memory: a plugin's, opened from the app state.
+    auto loadLangText(const QString &text, const QString &id_prefix) -> bool {
+        m_messages.clear();
+        QString copy = text;
+        QTextStream input(&copy);
+        return parse(input, id_prefix);
+    }
+
+    auto parse(QTextStream &input, const QString &id_prefix) -> bool {
         QString currentId;
         QStringList blockValues;
         while (!input.atEnd()) {
@@ -278,7 +290,18 @@ auto I18nManager::applyLocale(const QString &locale, bool persist) -> bool {
         bool pluginLoaded = false;
         const QString prefix = entry.plugin_id + '.';
         for (const auto &candidate : candidates) {
-            auto filePath = QDir(entry.dir).filePath(QString("silent_%1.lang").arg(candidate));
+            QString name = QString("silent_%1.lang").arg(candidate);
+            if (entry.catalogs.contains(name)) {
+                if (pluginTranslator->loadLangText(entry.catalogs.value(name), prefix)) {
+                    pluginLoaded = true;
+                    break;
+                }
+                continue;
+            }
+            if (entry.dir.isEmpty()) {
+                continue;
+            }
+            auto filePath = QDir(entry.dir).filePath(name);
             if (pluginTranslator->loadLangResource(filePath, prefix)) {
                 pluginLoaded = true;
                 break;
@@ -318,6 +341,28 @@ auto I18nManager::registerPluginTranslations(const QString &plugin_id, const QSt
     entry.translator = new CatalogTranslator();
     entry.plugin_id = normalizedId;
     entry.dir = normalizedDir;
+
+    m_plugin_translators.insert(normalizedId, entry);
+    return applyLocale(m_current_locale.isEmpty() ? QStringLiteral("en") : m_current_locale, false);
+}
+
+auto I18nManager::registerPluginCatalogs(const QString &plugin_id,
+                                         const QHash<QString, QString> &catalogs) -> bool {
+    if (m_app == nullptr) {
+        qWarning() << "registerPluginCatalogs called before init";
+        return false;
+    }
+    QString normalizedId = plugin_id.trimmed();
+    if (normalizedId.isEmpty() || catalogs.isEmpty()) {
+        return false;
+    }
+
+    unregisterPluginTranslations(normalizedId);
+
+    PluginTranslatorEntry entry;
+    entry.translator = new CatalogTranslator();
+    entry.plugin_id = normalizedId;
+    entry.catalogs = catalogs;
 
     m_plugin_translators.insert(normalizedId, entry);
     return applyLocale(m_current_locale.isEmpty() ? QStringLiteral("en") : m_current_locale, false);

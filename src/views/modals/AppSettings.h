@@ -10,11 +10,14 @@
 #include <QStringList>
 #include <QWidget>
 
+class QDragEnterEvent;
+class QDropEvent;
 class QEvent;
 
 namespace catalog {
 class Button;
 class ComboBox;
+class Card;
 class EmptyState;
 class FieldGroup;
 class FieldNote;
@@ -48,7 +51,6 @@ public:
 public slots:
     void onThemeSelectionChanged(int index);
     void onLanguageSelectionChanged(int index);
-    void onScanClicked();
     void onPluginToggled(bool enabled);
     void onPluginAccessClicked();
     void onPluginsChanged();
@@ -75,7 +77,9 @@ protected:
     auto buildPlugins() -> QWidget *;
     void showMain();
     auto pluginRow(const QString &id, const QString &meta) -> catalog::SelectRow *;
-    void setScanning(bool scanning);
+    // Adds the plugins dropped on the window (ws-plaude/silent#41).
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
     void rebuildSettingSectionRows();
     [[nodiscard]] auto sectionModuleName(Host::SectionId section) const -> QString;
     void refreshThemeProviders();
@@ -104,14 +108,12 @@ private:
     catalog::FieldNote *m_language_note = nullptr;
 
     catalog::Section *m_plugins = nullptr;
-    catalog::Button *m_scan_btn = nullptr;
-    catalog::Button *m_scanning_btn = nullptr;
-    catalog::Notice *m_registry_notice = nullptr;
+    // The only way a plugin comes in: dropped on the window, sealed into the state.
+    catalog::Card *m_plugin_drop = nullptr;
+    catalog::Label *m_plugin_drop_caption = nullptr;
     catalog::Notice *m_plugin_notice = nullptr;
-    catalog::Label *m_scan_result = nullptr;
+    catalog::Label *m_plugin_result = nullptr;
     qontrol::Column *m_plugins_column = nullptr;
-    catalog::EmptyState *m_plugins_empty = nullptr;
-    catalog::ModalStatus *m_scanning = nullptr;
 
     catalog::Separator *m_extensions_separator = nullptr;
     catalog::Section *m_extensions = nullptr;
@@ -123,7 +125,6 @@ private:
     QHash<QString, QString> m_plugin_meta;
     QString m_disabling_id;
     QString m_unloading_id;
-    bool m_scanning_plugins = false;
 
     QList<IThemeProvider *> m_theme_providers;
     QHash<IThemeProvider *, QString> m_provider_plugin;

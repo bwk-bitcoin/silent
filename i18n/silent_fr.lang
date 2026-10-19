@@ -67,8 +67,6 @@ btn-save-spend-path => "Save Path" => "Save Path"
 btn-save-unsigned-psbt => "Save Unsigned PSBT…" => "NONE"
 btn-scan-address => "Scan an Address QR Code" => "Scan an Address QR Code"
 btn-scan-again => "Scan Again" => "NONE"
-btn-scan-for-plugins => "Scan for Plugins" => "NONE"
-btn-scanning => "Scanning…" => "NONE"
 btn-seal-key => "Seal Key" => "NONE"
 btn-settings => "Settings" => "NONE"
 btn-show-mnemonic => "Show Mnemonic" => "NONE"
@@ -1013,28 +1011,22 @@ settings-language-saved
 => "NONE";;
 settings-network => "Network:" => "Reseau:"
 settings-no-account-loaded => "No account loaded" => "Aucun compte charge"
-settings-no-plugin => "No Plugin Found" => "NONE"
-settings-no-plugin-text
-=> "Put a plugin and its metadata file in ~/.silent/plugins/, then scan. Built-in modules are not listed here."
-=> "NONE";;
 settings-placeholder-blindbit
 => "https://blindbit.example.com"
 => "https://blindbit.example.com";;
 settings-placeholder-electrum
 => "host:port (e.g. 127.0.0.1:50001)"
 => "hote:port (ex. 127.0.0.1:50001)";;
-settings-plugin-found-one => "1 new plugin found." => "NONE"
-settings-plugin-manager => "Plugin Manager" => "Gestionnaire de plugins"
-settings-plugin-no-library => "No plugin library found in its folder." => "NONE"
-settings-plugin-not-silent => "This library is not a Silent plugin." => "NONE"
-settings-plugins-found => "%1 new plugins found." => "NONE"
-settings-registry-unavailable
-=> "Plugin registry unavailable"
-=> "Registre de plugins indisponible";;
-settings-registry-unavailable-text
-=> "Silent could not read the plugin folder ~/.silent/plugins/. Check that it exists and is readable, then reopen Settings."
+settings-plugin-add-failed => "Could not add the plugin" => "NONE"
+settings-plugin-added => "%1 added, off: turn it on to load it." => "NONE"
+settings-plugin-drop
+=> "Drop a plugin's folder, or its library with its metadata file beside it, on this window to add it. Built-in modules are not listed here."
 => "NONE";;
-settings-scanning-plugins => "Scanning for plugins…" => "NONE"
+settings-plugin-manager => "Plugin Manager" => "Gestionnaire de plugins"
+settings-plugin-not-silent => "This library is not a Silent plugin." => "NONE"
+settings-plugin-updated
+=> "%1 updated: it loads the new version once turned off and on again."
+=> "NONE";;
 settings-section-belongs
 => "These settings belong to %1. Changes apply when you leave this page."
 => "NONE";;
