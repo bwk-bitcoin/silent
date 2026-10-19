@@ -14,6 +14,9 @@ auto Tab::qss(const Palette &p) -> QString {
                "  border-top-right-radius: %9px; margin-right: %10px; }"
                "QTabBar::tab:selected { background: %4; color: %5; }"
                "QTabBar::tab:hover:!selected { background: %6; }"
+               "QTabBar[class=\"module-tabs\"]::tab:last { padding: 0; }"
+               "QTabBar[class=\"module-tabs\"] QToolButton { border: none; padding: 0; "
+               "background: transparent; }"
                // An idle module bar's current tab is not the page shown: drawn unselected.
                "QTabBar[class=\"module-tabs\"][idle=\"true\"]::tab:selected { background: %2; "
                "  color: %3; }"

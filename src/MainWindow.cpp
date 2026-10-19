@@ -9,6 +9,7 @@
 #include "views/DashboardLayout.h"
 #include "views/MenuTab.h"
 #include "views/modals/AppSettings.h"
+#include <QToolButton>
 #include <QVariant>
 #include <Qontrol>
 #include <algorithm>
@@ -39,6 +40,7 @@ auto MainWindow::initWindow() -> void {
 
     m_tab->setTabsClosable(true);
     m_tab->setMovable(true);
+    m_tab->tabBar()->setExpanding(false);
 
     // A tab bar always has a current tab: while an account or the launcher shows, the
     // bar is idle and its current tab is drawn as not selected.
@@ -121,13 +123,33 @@ void MainWindow::updateModuleTabs() {
         m_module_bar->removeTab(0);
     }
     for (const auto &[page, title] : modulePages()) {
-        int index = page == m_settings_tab ? m_module_bar->addTab(icon::settings(), QString())
-                                           : m_module_bar->addTab(title);
+        int index = m_module_bar->addTab(page == m_settings_tab ? QString() : title);
         if (page == m_settings_tab) {
+            auto *gear = new QToolButton;
+            gear->setIcon(icon::settings());
+            gear->setFixedSize(gear->iconSize());
+            gear->setAutoRaise(true);
+            auto *handle = (new qontrol::Row)
+                               ->margins(resolve(Padding::XS), resolve(Padding::XS), 0, 0)
+                               ->spacing(0)
+                               ->pushSpacer()
+                               ->pushAligned(gear, Qt::AlignVCenter)
+                               ->pushSpacer();
+            handle->setAttribute(Qt::WA_TransparentForMouseEvents);
+            m_module_bar->ensurePolished();
+            handle->ensurePolished();
+            m_module_bar->setTabButton(index, QTabBar::LeftSide, handle);
+            m_tab->tabBar()->ensurePolished();
+            auto launcher = m_tab->tabBar()->tabRect(m_tab->indexOf(m_menu_tab));
+            auto frame = m_module_bar->tabRect(index).size() - handle->size();
+            handle->setFixedWidth(launcher.width() - frame.width());
+            m_module_bar->setTabButton(index, QTabBar::LeftSide, handle);
+            handle->show();
             m_module_bar->setTabToolTip(index, title);
         }
         m_module_bar->setTabData(index, QVariant::fromValue(static_cast<QObject *>(page)));
     }
+    m_module_bar->adjustSize();
 }
 
 void MainWindow::showKeysTab() {
