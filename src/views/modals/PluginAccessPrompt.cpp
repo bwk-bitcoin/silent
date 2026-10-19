@@ -20,13 +20,12 @@ constexpr int SHORT_HASH = 16;
 } // namespace
 
 PluginAccessPrompt::PluginAccessPrompt(QString name, QString plugin_id, QString version,
-                                       QString hash, bool account, bool keys)
+                                       QString hash, plugin::Access asked)
     : m_name(std::move(name)),
       m_plugin_id(std::move(plugin_id)),
       m_version(std::move(version)),
       m_hash(std::move(hash)),
-      m_account(account),
-      m_keys(keys) {
+      m_asked(asked) {
     init();
     doConnect();
     view();
@@ -39,12 +38,17 @@ void PluginAccessPrompt::init() {
     m_account_row->setIcon(icon::coins);
     m_account_row->setChevron(false);
     m_account_row->setClickable(false);
-    m_account_row->setVisible(m_account);
+    m_account_row->setVisible(m_asked.account);
     m_keys_row = new catalog::SelectRow;
     m_keys_row->setIcon(icon::key);
     m_keys_row->setChevron(false);
     m_keys_row->setClickable(false);
-    m_keys_row->setVisible(m_keys);
+    m_keys_row->setVisible(m_asked.keys);
+    m_state_row = new catalog::SelectRow;
+    m_state_row->setIcon(icon::folder);
+    m_state_row->setChevron(false);
+    m_state_row->setClickable(false);
+    m_state_row->setVisible(m_asked.state);
     m_library = new catalog::Label;
     m_library->setRole(catalog::LabelRole::Caption);
     m_library->setTone(catalog::LabelTone::Muted);
@@ -85,7 +89,8 @@ void PluginAccessPrompt::view() {
                      ->push((new qontrol::Column)
                                 ->spacing(resolve(Spacing::S))
                                 ->push(m_account_row)
-                                ->push(m_keys_row))
+                                ->push(m_keys_row)
+                                ->push(m_state_row))
                      ->push((new qontrol::Column)
                                 ->spacing(resolve(Spacing::XS))
                                 ->push(m_library)
@@ -110,6 +115,8 @@ void PluginAccessPrompt::retranslateUi() {
     m_account_row->setSub(TR("plugin-access-accounts-sub"));
     m_keys_row->setTitle(TR("plugin-access-keys"));
     m_keys_row->setSub(TR("plugin-access-keys-sub"));
+    m_state_row->setTitle(TR("plugin-access-state"));
+    m_state_row->setSub(TR("plugin-access-state-sub"));
     m_library->setText(TR("plugin-access-library").arg(m_hash.left(SHORT_HASH)));
     m_note->setText(TR("plugin-access-prompt-note"));
     m_deny_btn->setText(TR("btn-deny-access"));

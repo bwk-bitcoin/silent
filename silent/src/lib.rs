@@ -691,6 +691,18 @@ mod ffi {
         pub account: PluginGrant,
         /// May call `IKeys`.
         pub keys: PluginGrant,
+        /// May open the plugin's own saved state.
+        pub state: PluginGrant,
+    }
+
+    /// A plugin's saved state, as `plugin_state_load` answers it.
+    #[derive(Debug, Clone)]
+    pub struct PluginStateResult {
+        pub is_ok: bool,
+        /// False when the plugin never saved anything.
+        pub exists: bool,
+        pub data: Vec<u8>,
+        pub error: String,
     }
 
     #[derive(Debug, Clone)]
@@ -1113,6 +1125,13 @@ mod ffi {
         /// Unlocks with `password`. Blocks on Argon2id: off the GUI thread. Answers the
         /// error, empty on success.
         fn state_unlock_with_password(password: String) -> String;
+
+        /// The state `plugin_id` saved, sealed with the app state key.
+        fn plugin_state_load(plugin_id: String) -> PluginStateResult;
+
+        /// Saves `data` as the state of `plugin_id`, replacing it. Answers the error,
+        /// empty on success.
+        fn plugin_state_save(plugin_id: String, data: Vec<u8>) -> String;
 
         /// The answers given to external plugin libraries, in the order they were given.
         fn app_plugin_access() -> Vec<PluginAccess>;
@@ -2357,9 +2376,9 @@ pub use policy::{
     bip87_account_path, compile_policy, preview_policy, renewable_height, review_policy,
 };
 pub use state_crypt::{
-    state_clear_file, state_create_with_device, state_create_with_password, state_device_path,
-    state_draw_index, state_lock, state_unlock_info, state_unlock_with_device,
-    state_unlock_with_password,
+    plugin_state_load, plugin_state_save, state_clear_file, state_create_with_device,
+    state_create_with_password, state_device_path, state_draw_index, state_lock, state_unlock_info,
+    state_unlock_with_device, state_unlock_with_password,
 };
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};
 

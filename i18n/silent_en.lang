@@ -1073,6 +1073,11 @@ plugin-access-accounts-sub
 
 plugin-access-keys => "Keys"
 
+plugin-access-state => "Saved Data"
+
+plugin-access-state-sub
+=> "Its own data, kept encrypted with Silent's. A new version of the plugin asks again.";;
+
 plugin-access-keys-sub
 => "Your registered keys: signing requests, xpubs and address checks.";;
 

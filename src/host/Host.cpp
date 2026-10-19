@@ -264,9 +264,18 @@ auto HostImpl::allowed(IModule *module, host::Grant grant, bool ask) -> bool {
         return true;
     }
     plugin::Access wanted{.account = grant == host::Grant::Account,
-                          .keys = grant == host::Grant::Keys};
+                          .keys = grant == host::Grant::Keys,
+                          .state = grant == host::Grant::State};
     auto access = ask ? requestAccess(module, wanted) : pluginaccess::stored(known->pluginHash);
-    return grant == host::Grant::Account ? access.account : access.keys;
+    switch (grant) {
+    case host::Grant::Account:
+        return access.account;
+    case host::Grant::Keys:
+        return access.keys;
+    case host::Grant::State:
+        return access.state;
+    }
+    return false;
 }
 
 auto HostImpl::requestAccess(IModule *caller, plugin::Access wanted) -> plugin::Access {
@@ -276,25 +285,29 @@ auto HostImpl::requestAccess(IModule *caller, plugin::Access wanted) -> plugin::
         return {};
     }
     if (!known->external) {
-        return {.account = true, .keys = true};
+        return {.account = true, .keys = true, .state = true};
     }
     auto answers = pluginaccess::answers(known->pluginId, known->pluginHash);
-    bool askAccount = wanted.account && answers.account == PluginGrant::Unasked;
-    bool askKeys = wanted.keys && answers.keys == PluginGrant::Unasked;
+    plugin::Access ask{.account = wanted.account && answers.account == PluginGrant::Unasked,
+                       .keys = wanted.keys && answers.keys == PluginGrant::Unasked,
+                       .state = wanted.state && answers.state == PluginGrant::Unasked};
     bool onGuiThread = qApp != nullptr && QThread::currentThread() == qApp->thread();
-    if ((askAccount || askKeys) && onGuiThread && !m_asking_access) {
+    if ((ask.account || ask.keys || ask.state) && onGuiThread && !m_asking_access) {
         m_asking_access = true;
         auto *prompt = new modal::PluginAccessPrompt(
             registry->pluginName(known->pluginId), known->pluginId,
-            registry->pluginVersion(known->pluginId), known->pluginHash, askAccount, askKeys);
+            registry->pluginVersion(known->pluginId), known->pluginHash, ask);
         prompt->exec();
         if (prompt->answered()) {
             auto answer = prompt->allowed() ? PluginGrant::Allowed : PluginGrant::Denied;
-            if (askAccount) {
+            if (ask.account) {
                 answers.account = answer;
             }
-            if (askKeys) {
+            if (ask.keys) {
                 answers.keys = answer;
+            }
+            if (ask.state) {
+                answers.state = answer;
             }
             ::app_set_plugin_access(answers);
         }
@@ -302,7 +315,44 @@ auto HostImpl::requestAccess(IModule *caller, plugin::Access wanted) -> plugin::
         m_asking_access = false;
     }
     return {.account = answers.account == PluginGrant::Allowed,
-            .keys = answers.keys == PluginGrant::Allowed};
+            .keys = answers.keys == PluginGrant::Allowed,
+            .state = answers.state == PluginGrant::Allowed};
+}
+
+auto HostImpl::loadState(IModule *caller) -> std::optional<QByteArray> {
+    assertGuiThread();
+    auto known = caller == nullptr ? plugin::Caller{} : HostImpl::caller(caller);
+    if (known.pluginId.isEmpty() || !allowed(caller, host::Grant::State, true)) {
+        return std::nullopt;
+    }
+    auto result = ::plugin_state_load(rust::String(known.pluginId.toStdString()));
+    if (!result.is_ok) {
+        qWarning() << "Host: plugin state of" << known.pluginId
+                   << QString::fromStdString(std::string(result.error));
+        return std::nullopt;
+    }
+    return QByteArray(reinterpret_cast<const char *>(result.data.data()),
+                      static_cast<qsizetype>(result.data.size()));
+}
+
+auto HostImpl::saveState(IModule *caller, const QByteArray &state) -> bool {
+    assertGuiThread();
+    auto known = caller == nullptr ? plugin::Caller{} : HostImpl::caller(caller);
+    if (known.pluginId.isEmpty() || !allowed(caller, host::Grant::State, true)) {
+        return false;
+    }
+    rust::Vec<std::uint8_t> data;
+    data.reserve(state.size());
+    for (char byte : state) {
+        data.push_back(static_cast<std::uint8_t>(byte));
+    }
+    auto error = ::plugin_state_save(rust::String(known.pluginId.toStdString()), std::move(data));
+    if (!error.empty()) {
+        qWarning() << "Host: saving the plugin state of" << known.pluginId
+                   << QString::fromStdString(std::string(error));
+        return false;
+    }
+    return true;
 }
 
 void HostImpl::dropCaller(IModule *module) {

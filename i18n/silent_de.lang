@@ -884,6 +884,10 @@ plugin-access-refused-account
 plugin-access-refused-keys
 => "This plugin may not use your keys. Allow it in Settings, Plugin Manager, Access."
 => "NONE";;
+plugin-access-state => "Saved Data" => "NONE"
+plugin-access-state-sub
+=> "Its own data, kept encrypted with Silent's. A new version of the plugin asks again."
+=> "NONE";;
 plugin-access-unasked => "Not asked yet: %1." => "NONE"
 receive-awaiting-segwit
 => "Segwit Addresses Awaiting Payment"

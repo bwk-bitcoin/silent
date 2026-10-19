@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Mutex;
 
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use bip138::{Decrypted, EncryptedBackup};
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpub};
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
@@ -24,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::config::datadir;
-use crate::ffi::{Network, StateUnlockInfo};
+use crate::ffi::{Network, PluginStateResult, StateUnlockInfo};
 use crate::keys::crypto::{self, Password};
 use crate::keys::record::SecretEnvelope;
 
@@ -317,6 +319,12 @@ pub fn clear_state_file() -> Option<PathBuf> {
         if !dir.is_dir() || dir == root.join("plugins") {
             continue;
         }
+        if dir == root.join(PLUGIN_STATE_DIR) {
+            for state in fs::read_dir(&dir).into_iter().flatten().flatten() {
+                files.push(state.path());
+            }
+            continue;
+        }
         if dir == root.join(crate::keys::KEYS_DIR_NAME) {
             // keys/<network>/<fingerprint>.json
             for network in fs::read_dir(&dir).into_iter().flatten().flatten() {
@@ -337,7 +345,64 @@ pub fn clear_state_file() -> Option<PathBuf> {
     })
 }
 
+/// Where a plugin's own state lives.
+pub const PLUGIN_STATE_DIR: &str = "plugin-state";
+
+fn plugin_state_path(plugin_id: &str) -> Result<PathBuf, String> {
+    let valid = !plugin_id.is_empty()
+        && plugin_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        && !plugin_id.starts_with('.');
+    if !valid {
+        return Err(format!("invalid plugin id '{plugin_id}'"));
+    }
+    Ok(datadir()
+        .join(PLUGIN_STATE_DIR)
+        .join(format!("{plugin_id}.json")))
+}
+
+/// The bytes `plugin_id` saved, `None` when it never saved anything.
+pub fn read_plugin_state(plugin_id: &str) -> Result<Option<Vec<u8>>, String> {
+    let Some(text) = read_state(&plugin_state_path(plugin_id)?)? else {
+        return Ok(None);
+    };
+    BASE64_STANDARD
+        .decode(text.trim())
+        .map(Some)
+        .map_err(|e| format!("plugin state of '{plugin_id}': {e}"))
+}
+
+/// Saves `data` as the state of `plugin_id`, sealed with the app state key.
+pub fn write_plugin_state(plugin_id: &str, data: &[u8]) -> Result<(), String> {
+    write_state(
+        &plugin_state_path(plugin_id)?,
+        &BASE64_STANDARD.encode(data),
+    )
+}
+
 // ===== Bridge =====
+
+pub fn plugin_state_load(plugin_id: String) -> PluginStateResult {
+    match read_plugin_state(&plugin_id) {
+        Ok(data) => PluginStateResult {
+            is_ok: true,
+            exists: data.is_some(),
+            data: data.unwrap_or_default(),
+            error: String::new(),
+        },
+        Err(error) => PluginStateResult {
+            is_ok: false,
+            exists: false,
+            data: Vec::new(),
+            error,
+        },
+    }
+}
+
+pub fn plugin_state_save(plugin_id: String, data: Vec<u8>) -> String {
+    error_of(write_plugin_state(&plugin_id, &data))
+}
 
 fn network_name(network: Network) -> &'static str {
     match network {

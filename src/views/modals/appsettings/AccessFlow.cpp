@@ -19,6 +19,7 @@
 #include <common.h>
 
 #include <string>
+#include <tuple>
 #include <utility>
 
 namespace modal {
@@ -32,8 +33,10 @@ constexpr const char *K_HASH = "accessHash";
 constexpr const char *K_GRANT = "accessGrant";
 constexpr const char *GRANT_ACCOUNT = "account";
 constexpr const char *GRANT_KEYS = "keys";
-// The hash as a row shows it: enough to tell two versions apart.
-constexpr int SHORT_HASH = 16;
+constexpr const char *GRANT_STATE = "state";
+// The hash as a row shows it: enough to tell two versions apart, short enough to
+// leave room for the three grants.
+constexpr int SHORT_HASH = 8;
 
 auto toQString(const rust::String &value) -> QString {
     return QString::fromStdString(std::string(value));
@@ -123,35 +126,29 @@ void AccessFlow::rebuildRows() {
     for (const auto &entry : entries) {
         QString hash = toQString(entry.hash);
 
-        auto *account = grantToggle(entry.account, hash, GRANT_ACCOUNT);
-        auto *keys = grantToggle(entry.keys, hash, GRANT_KEYS);
-        connect(account, &QCheckBox::toggled, this, &AccessFlow::onGrantToggled, qontrol::UNIQUE);
-        connect(keys, &QCheckBox::toggled, this, &AccessFlow::onGrantToggled, qontrol::UNIQUE);
+        auto *grants = new qontrol::Row;
+        QStringList unasked;
+        for (const auto &[grant, which, label] :
+             {std::tuple{entry.account, GRANT_ACCOUNT, TR("plugin-access-accounts")},
+              std::tuple{entry.keys, GRANT_KEYS, TR("plugin-access-keys")},
+              std::tuple{entry.state, GRANT_STATE, TR("plugin-access-state")}}) {
+            auto *toggle = grantToggle(grant, hash, which);
+            connect(toggle, &QCheckBox::toggled, this, &AccessFlow::onGrantToggled,
+                    qontrol::UNIQUE);
+            auto *caption = new Label(LabelRole::Caption);
+            caption->setText(label);
+            grants->push(caption)
+                ->pushSpacer(resolve(Spacing::XS))
+                ->push(toggle)
+                ->pushSpacer(resolve(Spacing::S));
+            if (grant == PluginGrant::Unasked) {
+                unasked.append(label);
+            }
+        }
         auto *forget = catalog::btnForgetAccess();
         forget->setProperty(K_HASH, hash);
         connect(forget, &QPushButton::clicked, this, &AccessFlow::onForgetClicked, qontrol::UNIQUE);
-        auto *accountLabel = new Label(LabelRole::Caption);
-        accountLabel->setText(TR("plugin-access-accounts"));
-        auto *keysLabel = new Label(LabelRole::Caption);
-        keysLabel->setText(TR("plugin-access-keys"));
-        auto *grants = (new qontrol::Row)
-                           ->push(accountLabel)
-                           ->pushSpacer(resolve(Spacing::XS))
-                           ->push(account)
-                           ->pushSpacer(resolve(Spacing::L))
-                           ->push(keysLabel)
-                           ->pushSpacer(resolve(Spacing::XS))
-                           ->push(keys)
-                           ->pushSpacer(resolve(Spacing::L))
-                           ->push(forget);
-
-        QStringList unasked;
-        if (entry.account == PluginGrant::Unasked) {
-            unasked.append(TR("plugin-access-accounts"));
-        }
-        if (entry.keys == PluginGrant::Unasked) {
-            unasked.append(TR("plugin-access-keys"));
-        }
+        grants->push(forget);
 
         auto *row = new catalog::SelectRow;
         row->setIcon(icon::puzzle);
@@ -186,10 +183,13 @@ void AccessFlow::onGrantToggled(bool allowed) {
     QString hash = toggle->property(K_HASH).toString();
     auto entry = pluginaccess::answers(m_id, hash);
     auto grant = allowed ? PluginGrant::Allowed : PluginGrant::Denied;
-    if (toggle->property(K_GRANT).toString() == QLatin1String(GRANT_ACCOUNT)) {
+    QString which = toggle->property(K_GRANT).toString();
+    if (which == QLatin1String(GRANT_ACCOUNT)) {
         entry.account = grant;
-    } else {
+    } else if (which == QLatin1String(GRANT_KEYS)) {
         entry.keys = grant;
+    } else {
+        entry.state = grant;
     }
     ::app_set_plugin_access(entry);
     rebuildRows();
@@ -203,6 +203,7 @@ void AccessFlow::onForgetClicked() {
     auto entry = pluginaccess::answers(m_id, button->property(K_HASH).toString());
     entry.account = PluginGrant::Unasked;
     entry.keys = PluginGrant::Unasked;
+    entry.state = PluginGrant::Unasked;
     ::app_set_plugin_access(entry);
     rebuildRows();
 }

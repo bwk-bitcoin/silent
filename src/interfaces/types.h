@@ -57,11 +57,12 @@ struct Caller {
     QString pluginHash;
 };
 
-// What a plugin may use: IAccount (every account) and IKeys. An internal module may
-// use both.
+// What a plugin may use: IAccount (every account), IKeys, and its own saved state
+// (Host::loadState / saveState). An internal module may use all three.
 struct Access {
     bool account{};
     bool keys{};
+    bool state{};
 };
 
 // Why a sign request failed, beyond its message.

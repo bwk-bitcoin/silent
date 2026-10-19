@@ -51,6 +51,8 @@ pub struct StoredAccess {
     pub account: StoredGrant,
     #[serde(default)]
     pub keys: StoredGrant,
+    #[serde(default)]
+    pub state: StoredGrant,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,6 +282,7 @@ pub fn app_plugin_access() -> Vec<PluginAccess> {
             hash: access.hash,
             account: access.account.into(),
             keys: access.keys.into(),
+            state: access.state.into(),
         })
         .collect()
 }
@@ -291,8 +294,11 @@ pub fn app_set_plugin_access(access: PluginAccess) {
         hash: access.hash.to_lowercase(),
         account: access.account.into(),
         keys: access.keys.into(),
+        state: access.state.into(),
     };
-    let unasked = stored.account == StoredGrant::Unasked && stored.keys == StoredGrant::Unasked;
+    let unasked = [stored.account, stored.keys, stored.state]
+        .iter()
+        .all(|grant| *grant == StoredGrant::Unasked);
     match state
         .plugin_access
         .iter()
@@ -443,6 +449,7 @@ mod tests {
                 hash: hash.to_string(),
                 account,
                 keys,
+                state: PluginGrant::Unasked,
             };
             assert!(app_plugin_access().is_empty());
             app_set_plugin_access(access("AA", PluginGrant::Allowed, PluginGrant::Unasked));

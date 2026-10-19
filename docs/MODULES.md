@@ -282,6 +282,11 @@ public:
     // external plugin has no answer for yet. GUI thread only.
     plugin::Access requestAccess(IModule *caller, plugin::Access wanted);
 
+    // the calling plugin's own state, one per plugin id, sealed with the app state key:
+    // an empty array when nothing was saved, std::nullopt when refused. GUI thread only.
+    std::optional<QByteArray> loadState(IModule *caller);
+    bool saveState(IModule *caller, const QByteArray &state);
+
     // a module states whether it needs signing devices polled. One flag per module,
     // ORed: polling runs while any module wants it. Asking twice is asking once.
     void requestSignerPolling(IModule *requester, bool enabled);
@@ -353,9 +358,10 @@ back, or allocated with `newRequest()`); updates an account pushes with `ReqId =
 errors tied to no request, go to every caller allowed to use accounts (or keys).
 
 The host hashes an external plugin's library before `QPluginLoader::load()`, so a plugin
-update has a new hash. Built-in modules may use everything. An external plugin needs two
+update has a new hash. Built-in modules may use everything. An external plugin needs
 separate grants, kept in `~/.silent/app.json` per library hash: **Accounts** (`IAccount`,
-on every account) and **Keys** (`IKeys`). On its first call needing a grant it has no
+on every account), **Keys** (`IKeys`) and **Saved Data** (`loadState()` /
+`saveState()`). On its first call needing a grant it has no
 answer for, the host asks the user (Allow / Deny) and keeps the answer; a denied grant
 is not asked again. A refused request answers `error()` (IKeys) or returns `0` and
 answers `error(std::nullopt, ...)` (IAccount). A plugin can ask up front, at a moment it
@@ -363,6 +369,16 @@ picks, with `requestAccess()`. The user changes or forgets the answers in global
 Settings, Plugin Manager, Access, per library hash.
 
 An account can enforce a finer whitelist of its own on top, since it knows the caller.
+
+### Plugin state
+
+A plugin persists its own state through the host rather than writing files of its own:
+`Host::get()->saveState(this, bytes)` and `Host::get()->loadState(this)`. There is one
+state per plugin id, in `~/.silent/plugin-state/<id>.json`, sealed with BIP138 to the
+app state's unlock key like the rest of `~/.silent/` (ws-plaude/silent#37). The bytes
+are the plugin's own format. Every library hash of the plugin the user allowed the
+Saved Data grant opens the same state: an update is asked again, and a rollback to a
+version allowed before finds its state again.
 
 Plugins run in Silent's process: a hostile plugin can bypass the handles. The access
 check gates well-behaved plugins, it is not a security boundary.

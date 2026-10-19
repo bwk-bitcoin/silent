@@ -1,9 +1,11 @@
 #pragma once
 
+#include <QByteArray>
 #include <QList>
 #include <QObject>
 #include <QString>
 #include <QtGlobal>
+#include <optional>
 
 #include <interfaces/types.h>
 
@@ -77,6 +79,15 @@ public:
     // also asks on a plugin's first IAccount or IKeys call, so asking here first is
     // only needed to ask at a moment the plugin picks. GUI thread only.
     virtual auto requestAccess(IModule *caller, plugin::Access wanted) -> plugin::Access = 0;
+
+    // The calling plugin's own state: one per plugin id, sealed with the app state key.
+    // Any version of the plugin the user allowed opens it (the Saved Data grant, asked
+    // on a version's first use), so a rollback finds its state again. loadState()
+    // answers an empty array when nothing was saved, std::nullopt when refused or
+    // unreadable; saveState() replaces it and answers whether it was saved. GUI thread
+    // only.
+    virtual auto loadState(IModule *caller) -> std::optional<QByteArray> = 0;
+    virtual auto saveState(IModule *caller, const QByteArray &state) -> bool = 0;
 
     // A module states whether it currently needs signing devices polled. The host keeps
     // one flag per module and polls while any of them is true, so asking twice is the

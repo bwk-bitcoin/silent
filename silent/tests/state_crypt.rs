@@ -88,6 +88,19 @@ fn the_state_opens_with_its_unlock_key_only() {
         Some("{\"name\":\"b\"}")
     );
 
+    // A plugin's own state: bytes, sealed, by plugin id.
+    assert_eq!(state_crypt::read_plugin_state("example").unwrap(), None);
+    state_crypt::write_plugin_state("example", b"\x00plugin bytes").unwrap();
+    assert_eq!(
+        state_crypt::read_plugin_state("example")
+            .unwrap()
+            .as_deref(),
+        Some(&b"\x00plugin bytes"[..])
+    );
+    let sealed = fs::read(base.join("plugin-state").join("example.json")).unwrap();
+    assert!(state_crypt::is_sealed(&sealed));
+    assert!(state_crypt::write_plugin_state("../escape", b"x").is_err());
+
     // A state file in clear is found, and refused. bwk's own files are not silent's
     // to check yet.
     fs::write(base.join("account").join("account.json"), "{}").unwrap();

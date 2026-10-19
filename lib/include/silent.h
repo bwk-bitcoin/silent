@@ -1019,6 +1019,7 @@ struct QrDisplayLevels;
 struct StateUnlockInfo;
 enum class PluginGrant : ::std::uint8_t;
 struct PluginAccess;
+struct PluginStateResult;
 struct PsbtFileResult;
 struct DescriptorBackupResult;
 struct MusigDescriptorResult;
@@ -1912,12 +1913,28 @@ struct PluginAccess final {
   ::PluginGrant account;
   // May call `IKeys`.
   ::PluginGrant keys;
+  // May open the plugin's own saved state.
+  ::PluginGrant state;
 
   bool operator==(PluginAccess const &) const noexcept;
   bool operator!=(PluginAccess const &) const noexcept;
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_PluginAccess
+
+#ifndef CXXBRIDGE1_STRUCT_PluginStateResult
+#define CXXBRIDGE1_STRUCT_PluginStateResult
+// A plugin's saved state, as `plugin_state_load` answers it.
+struct PluginStateResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  // False when the plugin never saved anything.
+  bool exists CXX_DEFAULT_VALUE(false);
+  ::rust::Vec<::std::uint8_t> data;
+  ::rust::String error;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PluginStateResult
 
 #ifndef CXXBRIDGE1_STRUCT_PsbtFileResult
 #define CXXBRIDGE1_STRUCT_PsbtFileResult
@@ -3048,6 +3065,13 @@ void state_lock() noexcept;
 // Unlocks with `password`. Blocks on Argon2id: off the GUI thread. Answers the
 // error, empty on success.
 ::rust::String state_unlock_with_password(::rust::String password) noexcept;
+
+// The state `plugin_id` saved, sealed with the app state key.
+::PluginStateResult plugin_state_load(::rust::String plugin_id) noexcept;
+
+// Saves `data` as the state of `plugin_id`, replacing it. Answers the error,
+// empty on success.
+::rust::String plugin_state_save(::rust::String plugin_id, ::rust::Vec<::std::uint8_t> data) noexcept;
 
 // The answers given to external plugin libraries, in the order they were given.
 ::rust::Vec<::PluginAccess> app_plugin_access() noexcept;

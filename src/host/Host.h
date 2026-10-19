@@ -27,6 +27,8 @@ public:
     void setKeys(IKeys *keys, IModule *owner) override;
     [[nodiscard]] IKeys *keys(IModule *caller) override;
     auto requestAccess(IModule *caller, plugin::Access wanted) -> plugin::Access override;
+    auto loadState(IModule *caller) -> std::optional<QByteArray> override;
+    auto saveState(IModule *caller, const QByteArray &state) -> bool override;
     void requestSignerPolling(IModule *requester, bool enabled) override;
     void refreshLauncher() override;
 
