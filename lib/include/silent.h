@@ -1873,18 +1873,15 @@ struct QrDisplayLevels final {
 
 #ifndef CXXBRIDGE1_STRUCT_StateUnlockInfo
 #define CXXBRIDGE1_STRUCT_StateUnlockInfo
-// The app state's unlock key, as `unlock.json` names it.
+// How the app state unlocks.
 struct StateUnlockInfo final {
   // The state has an unlock key: false before it is created.
   bool exists CXX_DEFAULT_VALUE(false);
   // A signing device, else a password.
   bool device CXX_DEFAULT_VALUE(false);
-  ::rust::String fingerprint;
-  ::rust::String alias;
-  ::std::uint32_t index CXX_DEFAULT_VALUE(0);
-  // The device's network, read only when `device`.
-  ::Network network;
-  // Set when `unlock.json` cannot be read.
+  // The path to ask the device for its key at, "m/138'/1936225652'/<index>'".
+  ::rust::String path;
+  // Set when the check file cannot be read.
   ::rust::String error;
 
   using IsRelocatable = ::std::true_type;
@@ -2541,6 +2538,9 @@ struct HwiService final : public ::rust::Opaque {
   // notification carrying the same req_id.
   bool get_xpub(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str path) const noexcept;
 
+  // Like get_xpub, shown on the device: a Ledger gives a non-standard path only so.
+  bool get_xpub_shown(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str path) const noexcept;
+
   bool is_descriptor_registered(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str descriptor) const noexcept;
   bool register_descriptor(::std::uint64_t req_id, ::rust::Str device_id, ::rust::Str descriptor) const noexcept;
 
@@ -3051,9 +3051,9 @@ void state_lock() noexcept;
 // The path a device unlock key is fetched at, "m/138'/1936225652'/<index>'".
 ::rust::String state_device_path(::std::uint32_t index) noexcept;
 
-// Creates the state, unlocked by the device whose xpub at the device path is
-// `xpub`. Answers the error, empty on success.
-::rust::String state_create_with_device(::rust::String fingerprint, ::rust::String alias, ::std::uint32_t index, ::Network network, ::rust::String xpub) noexcept;
+// Creates the state, unlocked by the device whose xpub at the device path of
+// `index` is `xpub`. Answers the error, empty on success.
+::rust::String state_create_with_device(::std::uint32_t index, ::rust::String xpub) noexcept;
 
 // Creates the state, unlocked by `password`. Blocks on Argon2id: off the GUI
 // thread. Answers the error, empty on success.

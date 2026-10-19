@@ -93,10 +93,10 @@ fn config_from_file_corrupt_json_is_not_ok() {
     let base = shared_datadir();
 
     let account_name = "corrupt_account";
-    // The config lives at <datadir>/<account_name>/config.json.
-    let account_dir = base.join(account_name);
+    // The config lives at <datadir>/<opaque account dir>/config.bip138.
+    let account_dir = base.join(silent::state_crypt::opaque_name("account", account_name).unwrap());
     std::fs::create_dir_all(&account_dir).expect("create account dir");
-    silent::state_crypt::write_state(&account_dir.join("config.json"), "{ not valid json")
+    silent::state_crypt::write_state(&account_dir.join(silent::CONFIG_FILE), "{ not valid json")
         .expect("write corrupt config");
 
     let config = config_from_file(account_name.to_string());
@@ -113,7 +113,7 @@ fn config_from_file_defaults_plugin_id_to_sp() {
     let base = shared_datadir();
 
     let account_name = "no_plugin_account";
-    let account_dir = base.join(account_name);
+    let account_dir = base.join(silent::state_crypt::opaque_name("account", account_name).unwrap());
     std::fs::create_dir_all(&account_dir).expect("create account dir");
     // A valid config that omits plugin_id entirely.
     let json = format!(
@@ -127,7 +127,7 @@ fn config_from_file_defaults_plugin_id_to_sp() {
         }}"#,
         descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest)
     );
-    silent::state_crypt::write_state(&account_dir.join("config.json"), &json)
+    silent::state_crypt::write_state(&account_dir.join(silent::CONFIG_FILE), &json)
         .expect("write config without plugin_id");
 
     let config = config_from_file(account_name.to_string());

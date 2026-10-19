@@ -4,12 +4,12 @@
 
 #include <QString>
 #include <cstdint>
+#include <silent.h>
 
 class QEvent;
 
 namespace catalog {
 class Button;
-class ComboBox;
 class FieldGroup;
 class FieldNote;
 class Input;
@@ -35,7 +35,9 @@ class StateSetup final : public catalog::Modal {
     Q_OBJECT
 
 public:
-    StateSetup();
+    // Devices are asked on mainnet; `network` is for tests against devices running a
+    // test network app.
+    explicit StateSetup(Network network = Network::Bitcoin);
     ~StateSetup() override;
     // Ignored while the password is being sealed: the worker answers to this window.
     void reject() override;
@@ -44,7 +46,6 @@ public slots:
     void onDeviceChosen();
     void onPasswordChosen();
     void onBackClicked();
-    void onNetworkActivated(int index);
     void onDevicesChanged();
     void onDeviceRowClicked();
     void onDeviceContinueClicked();
@@ -95,7 +96,7 @@ private:
 
     QWidget *m_device = nullptr;
     catalog::Label *m_device_text = nullptr;
-    catalog::ComboBox *m_network = nullptr;
+    Network m_network = Network::Bitcoin;
     qontrol::Column *m_device_rows = nullptr;
     catalog::ModalStatus *m_no_device = nullptr;
     catalog::Notice *m_device_error = nullptr;
@@ -103,7 +104,6 @@ private:
     catalog::Button *m_device_continue = nullptr;
     UnlockDevices *m_devices = nullptr;
     QString m_selected_id;
-    QString m_selected_fingerprint;
     QString m_selected_name;
     quint32 m_index = 0;
     quint64 m_xpub_req = 0;

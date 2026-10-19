@@ -7,9 +7,12 @@
 //! key itself: the device's is never written anywhere, so the device is needed at
 //! every unlock.
 //!
-//! What stays in clear: `unlock.json` (the key's kind, the device fingerprint and
-//! alias, the index) and, for a password, `unlock.key` (the key sealed with Argon2id
-//! and XChaCha20-Poly1305). Every other state file goes through `read_state` and
+//! Nothing about the key is written in clear. `unlock.bip138` is a known text sealed
+//! to the key at setup, which proves a key is the right one; for a device key, its
+//! BIP138 envelope carries the device path among the derivation paths BIP138 keeps
+//! readable, so the app knows which xpub to ask for. A password key is sealed in
+//! `unlock.key` with Argon2id and XChaCha20-Poly1305: its presence is what tells a
+//! password from a device. Every other state file goes through `read_state` and
 //! `write_state`, which refuse to run locked and refuse a file found in clear.
 
 use std::fs;
@@ -22,20 +25,19 @@ use base64::Engine;
 use bip138::{Decrypted, EncryptedBackup};
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpub};
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
-use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::config::datadir;
-use crate::ffi::{Network, PluginStateResult, StateUnlockInfo};
+use crate::ffi::{PluginStateResult, StateUnlockInfo};
 use crate::keys::crypto::{self, Password};
 use crate::keys::record::SecretEnvelope;
 
-/// The clear file naming the unlock key.
-pub const UNLOCK_FILE: &str = "unlock.json";
 /// The password key, sealed under the password.
 pub const KEY_FILE: &str = "unlock.key";
 /// A known text sealed to the key at setup: opening it proves a key is the right one.
-const CHECK_FILE: &str = "unlock.check";
+pub const CHECK_FILE: &str = "unlock.bip138";
+/// The extension of every file sealed to the unlock key.
+pub const SEALED_EXTENSION: &str = "bip138";
 const CHECK_TEXT: &str = "silent-state-v1";
 
 /// BIP138's purpose.
@@ -49,31 +51,10 @@ const KEY_AAD: &[u8] = b"silent-state-key-v1";
 /// The unlock key held while the app runs, `None` while locked.
 static KEY: Mutex<Option<PublicKey>> = Mutex::new(None);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnlockKind {
     Device,
     Password,
-}
-
-/// `unlock.json`: in clear, so the unlock screen names the device to plug and asks
-/// it for the right path.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UnlockInfo {
-    pub kind: UnlockKind,
-    /// The device's master fingerprint, empty for a password.
-    #[serde(default)]
-    pub fingerprint: String,
-    /// The device's alias in the keys, empty for a password.
-    #[serde(default)]
-    pub alias: String,
-    /// The hardened index of the device path, 0 for a password.
-    #[serde(default)]
-    pub index: u32,
-    /// The network the device's app is asked on ("bitcoin", "regtest"...), empty for a
-    /// password: the key is the same on every network, the app to open is not.
-    #[serde(default)]
-    pub network: String,
 }
 
 /// The path the device unlock key is fetched at.
@@ -93,20 +74,31 @@ pub fn draw_index() -> Result<u32, String> {
     Ok(u32::from_le_bytes(bytes) & 0x7fff_ffff)
 }
 
-fn unlock_path() -> PathBuf {
-    datadir().join(UNLOCK_FILE)
+/// How the state unlocks, `None` before it is created: with a password when its
+/// sealed key is on disk, else with a device.
+pub fn unlock_kind() -> Option<UnlockKind> {
+    if !datadir().join(CHECK_FILE).exists() {
+        return None;
+    }
+    Some(if datadir().join(KEY_FILE).exists() {
+        UnlockKind::Password
+    } else {
+        UnlockKind::Device
+    })
 }
 
-/// The unlock key's description, `None` before the state is created.
-pub fn unlock_info() -> Result<Option<UnlockInfo>, String> {
-    let path = unlock_path();
-    if !path.exists() {
-        return Ok(None);
-    }
-    let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    serde_json::from_str(&text)
-        .map(Some)
-        .map_err(|e| format!("{}: {e}", path.display()))
+/// The path to ask the device for its key at: in the check envelope, readable
+/// without the key.
+pub fn device_unlock_path() -> Result<DerivationPath, String> {
+    let path = datadir().join(CHECK_FILE);
+    let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let metadata = bip138::EncryptedMetadata::from_encrypted_payload(&bytes)
+        .map_err(|e| format!("{}: {e:?}", path.display()))?;
+    metadata
+        .derivation_paths
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("{} names no device path", path.display()))
 }
 
 /// What bwk writes (each account's stores, its sub-accounts, the header cache) goes
@@ -117,6 +109,10 @@ struct StateCipher;
 impl bwk::persist::cipher::Cipher for StateCipher {
     fn seal(&self, plain: &[u8]) -> Result<Vec<u8>, bwk::persist::PersistError> {
         seal(&BASE64_STANDARD.encode(plain)).map_err(bwk::persist::PersistError::Cipher)
+    }
+
+    fn extension(&self) -> &str {
+        SEALED_EXTENSION
     }
 
     fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, bwk::persist::PersistError> {
@@ -150,6 +146,26 @@ fn key() -> Result<PublicKey, String> {
 fn test_key() -> PublicKey {
     let secret = SecretKey::from_slice(&[7u8; 32]).expect("valid secret");
     PublicKey::from_secret_key(&Secp256k1::new(), &secret)
+}
+
+/// The on-disk name of `name` in the `kind` namespace ("account", "key", "plugin"):
+/// a keyed hash, so a directory or file name tells nothing of the account, the key or
+/// the plugin it holds. The real name lives in the sealed content. Needs the state
+/// unlocked: the key is the unlock key, never stored in clear.
+pub fn opaque_name(kind: &str, name: &str) -> Result<String, String> {
+    use bitcoin::hashes::{sha256, Hash, HashEngine};
+    let key = key()?;
+    let mut engine = sha256::Hash::engine();
+    engine.input(b"silent-name-v1\0");
+    engine.input(&key.serialize());
+    engine.input(kind.as_bytes());
+    engine.input(b"\0");
+    engine.input(name.as_bytes());
+    let hash = sha256::Hash::from_engine(engine);
+    Ok(hash.to_byte_array()[..16]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 pub fn is_unlocked() -> bool {
@@ -241,15 +257,21 @@ fn write_clear(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// Creates the state's unlock files for `key` and unlocks with it.
-fn create(info: &UnlockInfo, key: PublicKey) -> Result<(), String> {
-    if unlock_path().exists() {
+/// Creates the state's check file for `key`, the device path in its clear part for
+/// a device key, and unlocks with it.
+fn create(key: PublicKey, device_path: Option<DerivationPath>) -> Result<(), String> {
+    if datadir().join(CHECK_FILE).exists() {
         return Err("the app state already has an unlock key".to_string());
     }
-    let check = seal_with(key, CHECK_TEXT)?;
+    let check = EncryptedBackup::new()
+        .set_payload(&CHECK_TEXT.to_string())
+        .map_err(|e| format!("{e:?}"))?
+        .set_keys(vec![key])
+        .set_derivation_paths(device_path.into_iter().collect())
+        .encrypt()
+        .map(|encrypted| encrypted.bytes)
+        .map_err(|e| format!("{e:?}"))?;
     write_clear(&datadir().join(CHECK_FILE), &check)?;
-    let text = serde_json::to_string_pretty(info).map_err(|e| e.to_string())?;
-    write_clear(&unlock_path(), text.as_bytes())?;
     set_key(Some(key));
     Ok(())
 }
@@ -267,23 +289,10 @@ fn unlock_with(key: PublicKey) -> Result<(), String> {
     }
 }
 
-/// Creates the state unlocked by the device `fingerprint`, whose xpub at
-/// `device_path(index)` is `xpub`. The xpub is never written.
-pub fn create_with_device(
-    fingerprint: &str,
-    alias: &str,
-    index: u32,
-    network: &str,
-    xpub: &str,
-) -> Result<(), String> {
-    let info = UnlockInfo {
-        kind: UnlockKind::Device,
-        fingerprint: fingerprint.to_string(),
-        alias: alias.to_string(),
-        index,
-        network: network.to_string(),
-    };
-    create(&info, xpub_key(xpub)?)
+/// Creates the state unlocked by the device whose xpub at `device_path(index)` is
+/// `xpub`. The xpub is never written.
+pub fn create_with_device(index: u32, xpub: &str) -> Result<(), String> {
+    create(xpub_key(xpub)?, Some(device_path(index)?))
 }
 
 /// Creates the state unlocked by `password`: a random key, sealed under it.
@@ -301,17 +310,10 @@ pub fn create_with_password(password: Password) -> Result<(), String> {
         crypto::seal_with_aad(&key.serialize(), KEY_AAD, password).map_err(|e| e.to_string())?;
     let sealed = serde_json::to_string_pretty(&envelope).map_err(|e| e.to_string())?;
     write_clear(&datadir().join(KEY_FILE), sealed.as_bytes())?;
-    let info = UnlockInfo {
-        kind: UnlockKind::Password,
-        fingerprint: String::new(),
-        alias: String::new(),
-        index: 0,
-        network: String::new(),
-    };
-    create(&info, key)
+    create(key, None)
 }
 
-/// Unlocks with the device's xpub at `device_path(index)`.
+/// Unlocks with the device's xpub at `device_unlock_path()`.
 pub fn unlock_with_device(xpub: &str) -> Result<(), String> {
     unlock_with(xpub_key(xpub)?)
 }
@@ -347,7 +349,7 @@ pub fn clear_state_file() -> Option<PathBuf> {
                 continue;
             }
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            let bookkeeping = [UNLOCK_FILE, KEY_FILE, CHECK_FILE, "version"].contains(&name)
+            let bookkeeping = [KEY_FILE, CHECK_FILE, "version"].contains(&name)
                 || name.ends_with(".lock")
                 || name.ends_with(".tmp");
             if bookkeeping {
@@ -374,9 +376,10 @@ fn plugin_state_path(plugin_id: &str) -> Result<PathBuf, String> {
     if !valid {
         return Err(format!("invalid plugin id '{plugin_id}'"));
     }
-    Ok(datadir()
-        .join(PLUGIN_STATE_DIR)
-        .join(format!("{plugin_id}.json")))
+    Ok(datadir().join(PLUGIN_STATE_DIR).join(format!(
+        "{}.{SEALED_EXTENSION}",
+        opaque_name("plugin", plugin_id)?
+    )))
 }
 
 /// The bytes `plugin_id` saved, `None` when it never saved anything.
@@ -421,50 +424,27 @@ pub fn plugin_state_save(plugin_id: String, data: Vec<u8>) -> String {
     error_of(write_plugin_state(&plugin_id, &data))
 }
 
-fn network_name(network: Network) -> &'static str {
-    match network {
-        Network::Testnet => "testnet",
-        Network::Signet => "signet",
-        Network::Regtest => "regtest",
-        _ => "bitcoin",
-    }
-}
-
-fn network_of(name: &str) -> Network {
-    match name {
-        "testnet" => Network::Testnet,
-        "signet" => Network::Signet,
-        "regtest" => Network::Regtest,
-        _ => Network::Bitcoin,
-    }
-}
-
 fn error_of(result: Result<(), String>) -> String {
     result.err().unwrap_or_default()
 }
 
 pub fn state_unlock_info() -> StateUnlockInfo {
-    let none = StateUnlockInfo {
-        exists: false,
-        device: false,
-        fingerprint: String::new(),
-        alias: String::new(),
-        index: 0,
-        network: Network::Bitcoin,
-        error: String::new(),
+    let kind = unlock_kind();
+    let device = kind == Some(UnlockKind::Device);
+    let path = if device {
+        device_unlock_path().map(|path| format!("m/{path}"))
+    } else {
+        Ok(String::new())
     };
-    match unlock_info() {
-        Ok(Some(info)) => StateUnlockInfo {
-            exists: true,
-            device: info.kind == UnlockKind::Device,
-            network: network_of(&info.network),
-            fingerprint: info.fingerprint,
-            alias: info.alias,
-            index: info.index,
-            error: String::new(),
-        },
-        Ok(None) => none,
-        Err(error) => StateUnlockInfo { error, ..none },
+    let (path, error) = match path {
+        Ok(path) => (path, String::new()),
+        Err(error) => (String::new(), error),
+    };
+    StateUnlockInfo {
+        exists: kind.is_some(),
+        device,
+        path,
+        error,
     }
 }
 
@@ -488,20 +468,8 @@ pub fn state_device_path(index: u32) -> String {
         .unwrap_or_default()
 }
 
-pub fn state_create_with_device(
-    fingerprint: String,
-    alias: String,
-    index: u32,
-    network: Network,
-    xpub: String,
-) -> String {
-    error_of(create_with_device(
-        &fingerprint,
-        &alias,
-        index,
-        network_name(network),
-        &xpub,
-    ))
+pub fn state_create_with_device(index: u32, xpub: String) -> String {
+    error_of(create_with_device(index, &xpub))
 }
 
 pub fn state_create_with_password(password: String) -> String {

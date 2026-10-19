@@ -16,17 +16,16 @@ fn the_state_opens_with_its_unlock_key_only() {
     let tmp = temp_dir::TempDir::new().expect("create temp dir");
     let base = tmp.path().to_path_buf();
     set_datadir(base.clone());
-    let file = base.join("account").join("config.json");
+    let file = base.join("account").join("config.bip138");
 
     // Nothing created yet: locked, nothing can be written.
-    assert_eq!(state_crypt::unlock_info().unwrap(), None);
+    assert_eq!(state_crypt::unlock_kind(), None);
     assert!(!state_crypt::is_unlocked());
     assert!(state_crypt::write_state(&file, "{}").is_err(), "locked");
 
     // A password key.
     state_crypt::create_with_password(Password::new("correct horse".into())).unwrap();
-    let info = state_crypt::unlock_info().unwrap().expect("unlock.json");
-    assert_eq!(info.kind, UnlockKind::Password);
+    assert_eq!(state_crypt::unlock_kind(), Some(UnlockKind::Password));
     state_crypt::write_state(&file, "{\"name\":\"a\"}").unwrap();
     let sealed = fs::read(&file).unwrap();
     assert!(state_crypt::is_sealed(&sealed));
@@ -45,32 +44,35 @@ fn the_state_opens_with_its_unlock_key_only() {
     );
 
     // A second key is refused: the unlock key is fixed when the state is created.
-    assert!(state_crypt::create_with_device("73c5da0a", "Ledger", 5, "regtest", XPUB).is_err());
+    assert!(state_crypt::create_with_device(5, XPUB).is_err());
 
     // A device key, on a fresh state.
     state_crypt::lock();
-    for name in [
-        state_crypt::UNLOCK_FILE,
-        state_crypt::KEY_FILE,
-        "unlock.check",
-    ] {
+    for name in [state_crypt::KEY_FILE, state_crypt::CHECK_FILE] {
         let _ = fs::remove_file(base.join(name));
     }
     let index = state_crypt::draw_index().unwrap();
-    state_crypt::create_with_device("73c5da0a", "Ledger", index, "regtest", XPUB).unwrap();
-    let info = state_crypt::unlock_info().unwrap().expect("unlock.json");
+    state_crypt::create_with_device(index, XPUB).unwrap();
+    assert_eq!(state_crypt::unlock_kind(), Some(UnlockKind::Device));
+    // The path is readable without the key, the rest is not: nothing else in clear.
     assert_eq!(
-        (
-            info.kind,
-            info.fingerprint.as_str(),
-            info.alias.as_str(),
-            info.index,
-            info.network.as_str()
-        ),
-        (UnlockKind::Device, "73c5da0a", "Ledger", index, "regtest")
+        state_crypt::device_unlock_path().unwrap(),
+        state_crypt::device_path(index).unwrap()
     );
-    let clear = fs::read_to_string(base.join(state_crypt::UNLOCK_FILE)).unwrap();
-    assert!(!clear.contains(XPUB), "the device xpub is never written");
+    let entries: Vec<String> = fs::read_dir(&base)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert!(
+        !entries.iter().any(|name| name == "unlock.json"),
+        "no unlock.json"
+    );
+    let check = fs::read(base.join(state_crypt::CHECK_FILE)).unwrap();
+    assert!(
+        !String::from_utf8_lossy(&check).contains(XPUB),
+        "the device xpub is never written"
+    );
     assert!(
         state_crypt::read_state(&file).is_err(),
         "a file sealed to the password key does not open with the device key"
@@ -97,7 +99,11 @@ fn the_state_opens_with_its_unlock_key_only() {
             .as_deref(),
         Some(&b"\x00plugin bytes"[..])
     );
-    let sealed = fs::read(base.join("plugin-state").join("example.json")).unwrap();
+    let sealed = fs::read(base.join("plugin-state").join(format!(
+        "{}.bip138",
+        state_crypt::opaque_name("plugin", "example").unwrap()
+    )))
+    .unwrap();
     assert!(state_crypt::is_sealed(&sealed));
     assert!(state_crypt::write_plugin_state("../escape", b"x").is_err());
 

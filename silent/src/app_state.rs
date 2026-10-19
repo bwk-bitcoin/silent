@@ -110,7 +110,7 @@ impl Default for AppState {
 
 impl AppState {
     fn path() -> PathBuf {
-        datadir().join("app.json")
+        datadir().join("app.bip138")
     }
 
     pub fn load() -> Self {
@@ -334,7 +334,7 @@ mod tests {
         let tmp = DATADIR_GUARD.get_or_init(|| TempDir::new().expect("create temp dir"));
         let base = tmp.path().to_path_buf();
         set_datadir(base.clone());
-        let _ = fs::remove_file(base.join("app.json"));
+        let _ = fs::remove_file(base.join("app.bip138"));
         test(base);
     }
 
@@ -342,7 +342,7 @@ mod tests {
     fn load_missing_file_returns_defaults() {
         with_isolated_datadir(|base| {
             assert!(
-                !base.join("app.json").exists(),
+                !base.join("app.bip138").exists(),
                 "app.json should be absent at test start"
             );
 
@@ -468,7 +468,7 @@ mod tests {
                 access("aa", PluginGrant::Allowed, PluginGrant::Allowed),
                 "a new answer replaces the one stored for the same hash"
             );
-            let stored = state_crypt::read_state(&base.join("app.json"))
+            let stored = state_crypt::read_state(&base.join("app.bip138"))
                 .expect("read app.json")
                 .expect("app.json written");
             assert!(
@@ -515,7 +515,7 @@ mod tests {
     #[test]
     fn load_corrupt_json_falls_back_to_default() {
         with_isolated_datadir(|base| {
-            state_crypt::write_state(&base.join("app.json"), "{ this is not valid json")
+            state_crypt::write_state(&base.join("app.bip138"), "{ this is not valid json")
                 .expect("write corrupt app.json");
 
             let state = AppState::load();
@@ -536,7 +536,7 @@ mod tests {
     fn load_empty_theme_normalizes_to_default() {
         with_isolated_datadir(|base| {
             state_crypt::write_state(
-                &base.join("app.json"),
+                &base.join("app.bip138"),
                 r#"{"enabled_plugins":[],"active_theme":""}"#,
             )
             .expect("write app.json with empty theme");
@@ -554,7 +554,7 @@ mod tests {
     fn load_dedups_duplicate_plugin_ids() {
         with_isolated_datadir(|base| {
             state_crypt::write_state(
-                &base.join("app.json"),
+                &base.join("app.bip138"),
                 r#"{"enabled_plugins":["sp","sp","cj","sp","cj"],"active_theme":"light"}"#,
             )
             .expect("write app.json with duplicate plugins");

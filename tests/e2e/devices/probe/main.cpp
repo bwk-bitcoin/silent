@@ -1712,15 +1712,13 @@ auto waitFor(int ms, const std::function<bool()> &done) -> bool {
 // The app state (ws-plaude/silent#37), created at the first start with the Coldcard
 // as its unlock device through the setup screens, then locked and unlocked with it.
 auto openStateWithColdcard() -> bool {
-    auto *setup = new state::StateSetup();
+    // The simulators run a test network app: the app asks on mainnet.
+    auto *setup = new state::StateSetup(Network::Regtest);
     g_first_window = setup;
     setup->move(0, 0);
     setup->show();
     shot("00a-state-setup-choice");
     emit setup->m_device_choice->clicked();
-    int regtest = setup->m_network->findData(static_cast<int>(Network::Regtest));
-    setup->m_network->setCurrentIndex(regtest);
-    setup->onNetworkActivated(regtest);
 
     QString coldcardId;
     QString coldcardFp;
@@ -1752,18 +1750,19 @@ auto openStateWithColdcard() -> bool {
     check(created && setup->result() == QDialog::Accepted,
           "state setup: created with the Coldcard key");
     auto info = ::state_unlock_info();
-    check(info.exists && info.device &&
-              QString::fromStdString(std::string(info.fingerprint)) == coldcardFp &&
-              info.network == Network::Regtest,
-          "unlock.json names the Coldcard " + coldcardFp + " on regtest, index " +
-              QString::number(info.index));
-    QFile clear(QDir::homePath() + "/.silent/unlock.json");
-    clear.open(QIODevice::ReadOnly);
-    check(!clear.readAll().contains("pub"), "unlock.json holds no xpub");
+    QString path = QString::fromStdString(std::string(info.path));
+    check(info.exists && info.device && path.startsWith(QStringLiteral("m/138'/1936225652'/")),
+          "the device path " + path + " is read from unlock.bip138");
+    check(!QFile::exists(QDir::homePath() + "/.silent/unlock.json"), "no unlock.json");
+    QFile check_file(QDir::homePath() + "/.silent/unlock.bip138");
+    check_file.open(QIODevice::ReadOnly);
+    QByteArray sealed = check_file.readAll();
+    check(sealed.startsWith("BIP138") && !sealed.contains(coldcardFp.toLatin1()),
+          "unlock.bip138 is sealed and does not name the Coldcard");
     delete setup;
 
     ::state_lock();
-    auto *unlock = new state::DeviceUnlock(info);
+    auto *unlock = new state::DeviceUnlock(info, Network::Regtest);
     g_first_window = unlock;
     unlock->move(0, 0);
     unlock->show();

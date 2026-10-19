@@ -28,10 +28,12 @@ signals:
 private:
     explicit Theme(QObject *parent = nullptr);
     static Theme *s_instance; // NOLINT(readability-identifier-naming)
-    ThemeMode m_mode = ThemeMode::Dark;
-    Palette m_palette = Palette::dark();
-    FontPalette m_font_palette = FontPalette::dark();
-    ButtonPalette m_button_palette = ButtonPalette::dark();
-    IconPalette m_icon_palette = IconPalette::dark();
-    InputPalette m_input_palette = InputPalette::dark();
+    // Light, the default theme: the app state, which holds the theme picked, is read
+    // only once unlocked, so the screens before it use this.
+    ThemeMode m_mode = ThemeMode::Light;
+    Palette m_palette = Palette::light();
+    FontPalette m_font_palette = FontPalette::light();
+    ButtonPalette m_button_palette = ButtonPalette::light();
+    IconPalette m_icon_palette = IconPalette::light();
+    InputPalette m_input_palette = InputPalette::light();
 };

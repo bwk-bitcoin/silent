@@ -140,6 +140,18 @@ impl HwiService {
     }
 
     pub fn get_xpub(&self, req_id: u64, device_id: &str, path: &str) -> bool {
+        // No display: a device shows the path on its own when it asks the user.
+        self.request_xpub(req_id, device_id, path, false)
+    }
+
+    /// The xpub at a path a device only gives once the user saw it: a Ledger refuses
+    /// a path outside the standard ones unless it shows it (the app state's unlock
+    /// path, m/138'/1936225652'/<index>').
+    pub fn get_xpub_shown(&self, req_id: u64, device_id: &str, path: &str) -> bool {
+        self.request_xpub(req_id, device_id, path, true)
+    }
+
+    fn request_xpub(&self, req_id: u64, device_id: &str, path: &str, display: bool) -> bool {
         let Ok(deriv) = DerivationPath::from_str(path) else {
             log::error!("HwiService::get_xpub() invalid derivation path: {path}");
             return false;
@@ -147,8 +159,7 @@ impl HwiService {
         let Some(device) = self.supported(device_id) else {
             return false;
         };
-        // No display: a device shows the path on its own when it asks the user.
-        device.get_extended_pubkey(req_id, &deriv, false);
+        device.get_extended_pubkey(req_id, &deriv, display);
         true
     }
 

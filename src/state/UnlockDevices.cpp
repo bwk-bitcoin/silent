@@ -69,7 +69,8 @@ auto UnlockDevices::devices() const -> QList<HwiDevice> {
 
 auto UnlockDevices::fetchXpub(const QString &device_id, const QString &path) -> quint64 {
     quint64 reqId = ++m_next_req_id;
-    if (!m_service->get_xpub(reqId, device_id.toStdString(), path.toStdString())) {
+    // Shown: a Ledger gives the unlock path, outside the standard ones, only so.
+    if (!m_service->get_xpub_shown(reqId, device_id.toStdString(), path.toStdString())) {
         return 0;
     }
     return reqId;

@@ -289,7 +289,9 @@ void AppSettings::setScanning(bool scanning) {
 }
 
 void AppSettings::rebuildSettingSectionRows() {
+    // clear() also resets the layout spacing.
     catalog::clearRows(m_section_column);
+    m_section_column->spacing(resolve(Spacing::S));
     QList<Host::SettingSectionView> sections;
     if (m_host != nullptr) {
         sections = m_host->settingSections();
@@ -612,7 +614,9 @@ void AppSettings::onPluginAccessClicked() {
 }
 
 void AppSettings::onPluginsChanged() {
+    // clear() also resets the layout spacing.
     catalog::clearRows(m_plugins_column);
+    m_plugins_column->spacing(resolve(Spacing::S));
     m_plugin_meta.clear();
 
     bool available = m_plugin_registry != nullptr && m_plugin_registry->isAvailable();

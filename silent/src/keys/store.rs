@@ -22,8 +22,8 @@ use crate::keys::{
 use crate::state_crypt;
 
 const LOCK_FILE_NAME: &str = ".lock";
-const RECORD_EXTENSION: &str = "json";
-const TEMP_EXTENSION: &str = "json.tmp";
+const RECORD_EXTENSION: &str = state_crypt::SEALED_EXTENSION;
+const TEMP_EXTENSION: &str = "tmp";
 const DIR_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
 
@@ -47,11 +47,18 @@ impl KeyStore {
     }
 
     pub fn record_path(&self, fingerprint: Fingerprint) -> Result<PathBuf, Error> {
-        Ok(self.dir()?.join(Self::file_name(fingerprint)))
+        Ok(self.dir()?.join(self.file_name(fingerprint)?))
     }
 
-    fn file_name(fingerprint: Fingerprint) -> String {
-        format!("{fingerprint}.{RECORD_EXTENSION}")
+    /// A record's file stem: opaque, so the fingerprint is not written in clear on
+    /// disk. The fingerprint lives in the sealed record.
+    fn stem(&self, fingerprint: Fingerprint) -> Result<String, Error> {
+        let name = format!("{}:{fingerprint}", network_name(self.network)?);
+        state_crypt::opaque_name("key", &name).map_err(Error::State)
+    }
+
+    fn file_name(&self, fingerprint: Fingerprint) -> Result<String, Error> {
+        Ok(format!("{}.{RECORD_EXTENSION}", self.stem(fingerprint)?))
     }
 
     /// A missing directory is an empty list, not an error, and reading never creates
@@ -87,7 +94,7 @@ impl KeyStore {
             let stem = stem.to_string();
 
             match Self::read_record(&path) {
-                Ok(record) => match self.validate(record, &path, &stem) {
+                Ok(record) => match self.validate(record, &path, &stem, None) {
                     Ok(record) => records.push(record),
                     Err(e) => log::error!("keys::store::list: skipping {}: {e}", path.display()),
                 },
@@ -104,9 +111,9 @@ impl KeyStore {
         if !path.exists() {
             return Err(Error::NotFound(fingerprint));
         }
-        let stem = fingerprint.to_string();
+        let stem = self.stem(fingerprint)?;
         let record = Self::read_record(&path)?;
-        self.validate(record, &path, &stem)
+        self.validate(record, &path, &stem, Some(fingerprint))
     }
 
     fn read_record(path: &Path) -> Result<KeyRecord, Error> {
@@ -130,22 +137,30 @@ impl KeyStore {
         })
     }
 
-    fn validate(&self, record: KeyRecord, path: &Path, stem: &str) -> Result<KeyRecord, Error> {
+    /// `stem` is the file's, `expected` the fingerprint asked for when there is one.
+    fn validate(
+        &self,
+        record: KeyRecord,
+        path: &Path,
+        stem: &str,
+        expected: Option<Fingerprint>,
+    ) -> Result<KeyRecord, Error> {
         record.check_version()?;
 
-        let fingerprint_str = record.fingerprint.to_string();
-        if fingerprint_str != stem {
-            return match Fingerprint::from_hex(stem) {
-                Ok(expected) => Err(Error::FingerprintMismatch {
+        if let Some(expected) = expected {
+            if record.fingerprint != expected {
+                return Err(Error::FingerprintMismatch {
                     path: path.to_path_buf(),
                     expected,
                     found: record.fingerprint,
-                }),
-                Err(_) => Err(Error::InvalidFingerprintFileName {
-                    path: path.to_path_buf(),
-                    stem: stem.to_string(),
-                }),
-            };
+                });
+            }
+        }
+        if self.stem(record.fingerprint)? != stem {
+            return Err(Error::InvalidFingerprintFileName {
+                path: path.to_path_buf(),
+                stem: stem.to_string(),
+            });
         }
 
         let expected_network = network_name(self.network)?;
@@ -224,7 +239,7 @@ impl KeyStore {
     /// overwrite a record another process wrote in the meantime.
     pub fn insert(&self, record: &KeyRecord) -> Result<(), Error> {
         self.with_lock(|dir| {
-            let path = dir.join(Self::file_name(record.fingerprint));
+            let path = dir.join(self.file_name(record.fingerprint)?);
             if path.exists() {
                 return Err(Error::DuplicateKey(record.fingerprint));
             }
@@ -250,8 +265,9 @@ impl KeyStore {
         }
         record.check_version()?;
 
-        let final_path = dir.join(Self::file_name(record.fingerprint));
-        let temp_path = dir.join(format!("{}.{TEMP_EXTENSION}", record.fingerprint));
+        let stem = self.stem(record.fingerprint)?;
+        let final_path = dir.join(format!("{stem}.{RECORD_EXTENSION}"));
+        let temp_path = dir.join(format!("{stem}.{TEMP_EXTENSION}"));
 
         let write_result = self.write_temp(&temp_path, record);
         if let Err(e) = write_result {
@@ -303,7 +319,7 @@ impl KeyStore {
 
     pub fn delete(&self, fingerprint: Fingerprint) -> Result<(), Error> {
         self.with_lock(|dir| {
-            let path = dir.join(Self::file_name(fingerprint));
+            let path = dir.join(self.file_name(fingerprint)?);
             if !path.exists() {
                 return Err(Error::NotFound(fingerprint));
             }
@@ -316,13 +332,13 @@ impl KeyStore {
         F: FnOnce(&mut KeyRecord) -> Result<(), Error>,
     {
         self.with_lock(|dir| {
-            let path = dir.join(Self::file_name(fingerprint));
+            let path = dir.join(self.file_name(fingerprint)?);
             if !path.exists() {
                 return Err(Error::NotFound(fingerprint));
             }
-            let stem = fingerprint.to_string();
+            let stem = self.stem(fingerprint)?;
             let record = Self::read_record(&path)?;
-            let mut record = self.validate(record, &path, &stem)?;
+            let mut record = self.validate(record, &path, &stem, Some(fingerprint))?;
             let before = record.clone();
             apply(&mut record)?;
             // A sealed file changes on every write: leave it alone when nothing did.

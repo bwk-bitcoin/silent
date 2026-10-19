@@ -1060,7 +1060,7 @@ state-device-confirm-sub => "Silent asks %1 for the key at %2." => "NONE"
 state-device-failed => "The device did not give the key: %1" => "NONE"
 state-device-pick => "Pick a ready device." => "NONE"
 state-device-text
-=> "Plug in the device and unlock it, open its app for the network below, then pick it."
+=> "Plug in the device, unlock it and open its Bitcoin app, then pick it."
 => "NONE";;
 state-device-title => "Protect Silent · Signing Device" => "NONE"
 state-device-unreachable
@@ -1081,15 +1081,12 @@ state-setup-text
 => "NONE";;
 state-setup-title => "Protect Silent" => "NONE"
 state-unlock-device-text
-=> "Plug in %1 (%2) and unlock it: Silent asks it for its key."
+=> "Plug in the signing device Silent was protected with, unlock it and open its Bitcoin app: Silent asks it for its key."
 => "NONE";;
-state-unlock-locked => "Unlock the device." => "NONE"
 state-unlock-password-text => "Enter the password that unlocks Silent." => "NONE"
-state-unlock-plug => "Plug it in and unlock it." => "NONE"
-state-unlock-ready => "Asking the device for its key." => "NONE"
 state-unlock-title => "Unlock Silent" => "NONE"
 state-unlock-wrong-key
-=> "This device's key does not open Silent. Plug in the device Silent was protected with."
+=> "No connected device's key opens Silent. Plug in the device Silent was protected with."
 => "NONE";;
 state-unlocking => "Unlocking" => "NONE"
 state-unlocking-sub

@@ -120,7 +120,9 @@ void AccessFlow::showAccess() {
 }
 
 void AccessFlow::rebuildRows() {
+    // clear() also resets the layout spacing.
     catalog::clearRows(m_rows);
+    m_rows->spacing(resolve(Spacing::S));
     QString current = m_plugin_registry->pluginHash(m_id);
     auto entries = pluginaccess::forPlugin(m_id);
     for (const auto &entry : entries) {

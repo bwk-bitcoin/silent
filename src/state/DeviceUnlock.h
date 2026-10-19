@@ -2,6 +2,8 @@
 
 #include "catalog/containers/Modal.h"
 
+#include <QHash>
+#include <QSet>
 #include <QString>
 #include <cstdint>
 #include <silent.h>
@@ -14,21 +16,27 @@ class Label;
 class ModalActions;
 class ModalStatus;
 class Notice;
-class SelectRow;
 } // namespace catalog
+
+namespace qontrol {
+class Column;
+}
 
 namespace state {
 
 class UnlockDevices;
 
-// Unlocks the app state with its signing device: names the device to plug, asks it
-// for the key at the stored path as soon as it is ready, and unlocks with it.
-// Accepted once unlocked; closing it leaves the app.
+// Unlocks the app state with its signing device. Nothing on disk names the device:
+// every ready device in sight is asked for its key at the path the check file carries,
+// all at once (one waiting on its user does not hold the others), until one key opens
+// the state. Accepted once unlocked; closing it leaves the app.
 class DeviceUnlock final : public catalog::Modal {
     Q_OBJECT
 
 public:
-    explicit DeviceUnlock(const StateUnlockInfo &info);
+    // Devices are asked on mainnet; `network` is for tests against devices running a
+    // test network app.
+    explicit DeviceUnlock(const StateUnlockInfo &info, Network network = Network::Bitcoin);
 
 public slots:
     void onDevicesChanged();
@@ -47,7 +55,11 @@ protected:
     void initWaiting();
     [[nodiscard]] auto viewWaiting() -> QWidget *;
     void showWaiting();
-    void updateDevice();
+    void rebuildDevices();
+    // Asks every ready device not asked yet; back to waiting when none is pending.
+    void askAll();
+    // A device answered without opening the state: `error` shown once none is pending.
+    void settle(const QString &error);
 
     // Busy view
     void initBusy();
@@ -58,17 +70,18 @@ protected:
 
 private:
     View m_view = View::Waiting;
-    QString m_fingerprint;
-    QString m_alias;
     QString m_path;
     UnlockDevices *m_devices = nullptr;
-    quint64 m_xpub_req = 0;
-    // A failure stops the automatic request until Try Again.
-    bool m_held = false;
+    // The requests waiting, to the name of the device asked.
+    QHash<quint64, QString> m_pending;
+    // Devices asked already, by id: a key that did not open is not asked again until
+    // Try Again.
+    QSet<QString> m_asked;
 
     QWidget *m_waiting = nullptr;
     catalog::Label *m_text = nullptr;
-    catalog::SelectRow *m_device = nullptr;
+    qontrol::Column *m_device_rows = nullptr;
+    catalog::ModalStatus *m_no_device = nullptr;
     catalog::Notice *m_error = nullptr;
     catalog::ModalActions *m_actions = nullptr;
     catalog::Button *m_try_again = nullptr;

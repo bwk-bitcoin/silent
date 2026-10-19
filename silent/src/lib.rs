@@ -656,19 +656,16 @@ mod ffi {
         pub speed: u8,
     }
 
-    /// The app state's unlock key, as `unlock.json` names it.
+    /// How the app state unlocks.
     #[derive(Debug, Clone)]
     pub struct StateUnlockInfo {
         /// The state has an unlock key: false before it is created.
         pub exists: bool,
         /// A signing device, else a password.
         pub device: bool,
-        pub fingerprint: String,
-        pub alias: String,
-        pub index: u32,
-        /// The device's network, read only when `device`.
-        pub network: Network,
-        /// Set when `unlock.json` cannot be read.
+        /// The path to ask the device for its key at, "m/138'/1936225652'/<index>'".
+        pub path: String,
+        /// Set when the check file cannot be read.
         pub error: String,
     }
 
@@ -1105,15 +1102,9 @@ mod ffi {
         /// The path a device unlock key is fetched at, "m/138'/1936225652'/<index>'".
         fn state_device_path(index: u32) -> String;
 
-        /// Creates the state, unlocked by the device whose xpub at the device path is
-        /// `xpub`. Answers the error, empty on success.
-        fn state_create_with_device(
-            fingerprint: String,
-            alias: String,
-            index: u32,
-            network: Network,
-            xpub: String,
-        ) -> String;
+        /// Creates the state, unlocked by the device whose xpub at the device path of
+        /// `index` is `xpub`. Answers the error, empty on success.
+        fn state_create_with_device(index: u32, xpub: String) -> String;
 
         /// Creates the state, unlocked by `password`. Blocks on Argon2id: off the GUI
         /// thread. Answers the error, empty on success.
@@ -1421,6 +1412,8 @@ mod ffi {
         /// Requests. Each returns whether it was dispatched; the result arrives on the
         /// notification carrying the same req_id.
         fn get_xpub(self: &HwiService, req_id: u64, device_id: &str, path: &str) -> bool;
+        /// Like get_xpub, shown on the device: a Ledger gives a non-standard path only so.
+        fn get_xpub_shown(self: &HwiService, req_id: u64, device_id: &str, path: &str) -> bool;
         fn is_descriptor_registered(
             self: &HwiService,
             req_id: u64,
@@ -2343,7 +2336,7 @@ pub use bbqr::{bbqr_frames, bbqr_scanner_new, bbqr_text_scanner_new, BbqrFrames,
 pub use camera::{camera_list, camera_open, CameraHandle};
 pub use config::{
     config_from_file, delete_config, list_configs, new_config, segwit_descriptor_for, set_datadir,
-    taproot_descriptor_for, Config,
+    taproot_descriptor_for, Config, CONFIG_FILE,
 };
 pub use ffi::{
     BackendInfo, CameraFrameResult, CameraListResult, FingerprintsResult, KeyDescriptor, KeyDevice,

@@ -2,6 +2,7 @@
 
 #include "UnlockDevices.h"
 #include "catalog/Button.h"
+#include "catalog/ClearRows.h"
 #include "catalog/SelectRow.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/ModalActions.h"
@@ -10,19 +11,19 @@
 #include "catalog/feedback/ModalStatus.h"
 #include "catalog/feedback/Notice.h"
 #include "i18n/Tr.h"
+#include "modules/keys/DeviceName.h"
 #include "theme/Icon.h"
 #include "theme/Palette.h"
 
+#include <QStringList>
 #include <Qontrol>
 #include <common.h>
-#include <optional>
 #include <string>
 
 namespace state {
 
 using catalog::Label;
 using catalog::LabelRole;
-using catalog::LabelTone;
 
 namespace {
 auto toQt(const rust::String &value) -> QString {
@@ -30,11 +31,9 @@ auto toQt(const rust::String &value) -> QString {
 }
 } // namespace
 
-DeviceUnlock::DeviceUnlock(const StateUnlockInfo &info)
-    : m_fingerprint(toQt(info.fingerprint)),
-      m_alias(toQt(info.alias)),
-      m_path(toQt(::state_device_path(info.index))),
-      m_devices(new UnlockDevices(info.network, this)) {
+DeviceUnlock::DeviceUnlock(const StateUnlockInfo &info, Network network)
+    : m_path(toQt(info.path)),
+      m_devices(new UnlockDevices(network, this)) {
     init();
     doConnect();
     view();
@@ -69,12 +68,10 @@ void DeviceUnlock::view() {
 void DeviceUnlock::initWaiting() {
     m_text = new Label(LabelRole::Body);
     m_text->setWordWrap(true);
-    m_device = new catalog::SelectRow;
-    m_device->setIcon(icon::usb);
-    m_device->setTitle(m_alias);
-    m_device->setMeta(m_fingerprint);
-    m_device->setChevron(false);
-    m_device->setClickable(false);
+    m_device_rows = new qontrol::Column;
+    m_no_device = new catalog::ModalStatus;
+    m_no_device->setIcon(icon::usb);
+    m_no_device->setPadding(resolve(Spacing::M), resolve(Spacing::M));
     m_error = new catalog::Notice(catalog::Notice::Tone::Error);
     m_error->setVisible(false);
     m_actions = new catalog::ModalActions;
@@ -87,7 +84,8 @@ auto DeviceUnlock::viewWaiting() -> QWidget * {
     return (new qontrol::Column)
         ->spacing(resolve(Spacing::M))
         ->push(m_text)
-        ->push(m_device)
+        ->push(m_device_rows)
+        ->push(m_no_device)
         ->push(m_error);
 }
 
@@ -100,35 +98,63 @@ void DeviceUnlock::showWaiting() {
     setWidth(ModalWidth::M);
 }
 
-// The device's row: not connected, locked or ready, and its request sent once ready.
-void DeviceUnlock::updateDevice() {
-    std::optional<HwiDevice> found;
-    bool seenLocked = false;
-    for (const auto &device : m_devices->devices()) {
-        if (device.state == HwiDeviceState::Supported &&
-            toQt(device.fingerprint) == m_fingerprint) {
-            found = device;
+// Each device in sight, ready or not, so the user sees what to unlock.
+void DeviceUnlock::rebuildDevices() {
+    // clear() also resets the layout spacing.
+    catalog::clearRows(m_device_rows);
+    m_device_rows->spacing(resolve(Spacing::S));
+    auto devices = m_devices->devices();
+    for (const auto &device : devices) {
+        bool ready = device.state == HwiDeviceState::Supported;
+        auto *row = new catalog::SelectRow;
+        row->setIcon(icon::usb);
+        row->setTitle(keys::deviceName(toQt(device.kind), QString()));
+        row->setSub(ready ? toQt(device.fingerprint) : toQt(device.detail));
+        if (ready) {
+            row->setStatus(catalog::pillDeviceReady());
         } else if (device.state == HwiDeviceState::Locked) {
-            seenLocked = true;
+            row->setStatus(catalog::pillDeviceLocked());
+        } else {
+            row->setStatus(catalog::pillDeviceUnsupported());
+        }
+        row->setChevron(false);
+        row->setClickable(false);
+        m_device_rows->push(row);
+        row->show();
+    }
+    m_device_rows->setVisible(!devices.isEmpty());
+    m_no_device->setVisible(devices.isEmpty());
+    adjustSize();
+}
+
+void DeviceUnlock::askAll() {
+    for (const auto &device : m_devices->devices()) {
+        QString id = toQt(device.id);
+        if (device.state != HwiDeviceState::Supported || m_asked.contains(id)) {
+            continue;
+        }
+        m_asked.insert(id);
+        quint64 reqId = m_devices->fetchXpub(id, m_path);
+        if (reqId != 0) {
+            m_pending.insert(reqId, keys::deviceName(toQt(device.kind), QString()));
         }
     }
-    if (found.has_value()) {
-        m_device->setStatus(catalog::pillDeviceReady());
-        m_device->setSub(TR("state-unlock-ready"));
-    } else if (seenLocked) {
-        m_device->setStatus(catalog::pillDeviceLocked());
-        m_device->setSub(TR("state-unlock-locked"));
-    } else {
-        m_device->setStatus(catalog::pillSignerDisconnected());
-        m_device->setSub(TR("state-unlock-plug"));
+    if (!m_pending.isEmpty()) {
+        showBusy();
+    } else if (m_view == View::Busy) {
+        showWaiting();
     }
-    if (!found.has_value() || m_held || m_xpub_req != 0) {
+}
+
+void DeviceUnlock::settle(const QString &error) {
+    if (!m_pending.isEmpty()) {
+        showBusy();
         return;
     }
-    m_xpub_req = m_devices->fetchXpub(toQt(found->id), m_path);
-    if (m_xpub_req != 0) {
-        showBusy();
-    }
+    m_error->setText(error);
+    m_error->setVisible(true);
+    m_try_again->setVisible(true);
+    showWaiting();
 }
 
 // ===== Busy view =====
@@ -141,8 +167,11 @@ void DeviceUnlock::initBusy() {
 
 void DeviceUnlock::showBusy() {
     m_view = View::Busy;
+    QStringList names = m_pending.values();
+    names.sort();
     m_busy->setTitle(TR("state-device-confirm"));
-    m_busy->setSubtitle(TR("state-device-confirm-sub").arg(m_alias, m_path));
+    m_busy->setSubtitle(
+        TR("state-device-confirm-sub").arg(names.join(QStringLiteral(", ")), m_path));
     setHeader(nullptr);
     setBody(m_busy);
     setFooter(nullptr);
@@ -152,45 +181,37 @@ void DeviceUnlock::showBusy() {
 // ===== Slots =====
 
 void DeviceUnlock::onDevicesChanged() {
-    updateDevice();
+    rebuildDevices();
+    // A device seen for the first time is asked, Try Again shown or not.
+    askAll();
 }
 
 void DeviceUnlock::onXpubFetched(quint64 req_id, const QString &xpub) {
-    if (req_id != m_xpub_req) {
+    if (!m_pending.contains(req_id)) {
         return;
     }
-    m_xpub_req = 0;
+    m_pending.remove(req_id);
     QString error = toQt(::state_unlock_with_device(rust::String(xpub.toStdString())));
     if (error.isEmpty()) {
         accept();
         return;
     }
-    m_held = true;
-    m_error->setText(TR("state-unlock-wrong-key"));
-    m_error->setVisible(true);
-    m_try_again->setVisible(true);
-    showWaiting();
-    updateDevice();
+    settle(TR("state-unlock-wrong-key"));
 }
 
 void DeviceUnlock::onXpubFailed(quint64 req_id, const QString &error) {
-    if (req_id != m_xpub_req) {
+    if (!m_pending.contains(req_id)) {
         return;
     }
-    m_xpub_req = 0;
-    m_held = true;
-    m_error->setText(TR("state-device-failed").arg(error));
-    m_error->setVisible(true);
-    m_try_again->setVisible(true);
-    showWaiting();
-    updateDevice();
+    m_pending.remove(req_id);
+    settle(TR("state-device-failed").arg(error));
 }
 
 void DeviceUnlock::onTryAgainClicked() {
-    m_held = false;
+    m_asked.clear();
     m_error->setVisible(false);
     m_try_again->setVisible(false);
-    updateDevice();
+    askAll();
 }
 
 void DeviceUnlock::changeEvent(QEvent *event) {
@@ -201,7 +222,9 @@ void DeviceUnlock::changeEvent(QEvent *event) {
 }
 
 void DeviceUnlock::retranslateUi() {
-    m_text->setText(TR("state-unlock-device-text").arg(m_alias, m_fingerprint));
+    m_text->setText(TR("state-unlock-device-text"));
+    m_no_device->setTitle(TR("state-no-device"));
+    m_no_device->setSubtitle(TR("state-no-device-sub"));
     m_try_again->setText(TR("btn-try-again"));
 }
 

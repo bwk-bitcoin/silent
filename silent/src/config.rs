@@ -24,6 +24,9 @@ use serde::{Deserialize, Serialize};
 use crate::ffi::Network;
 use crate::state_crypt;
 
+/// An account's config, sealed in its directory.
+pub const CONFIG_FILE: &str = "config.bip138";
+
 /// Internal Network type for serialization (since CXX enums don't support Serde).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(crate) enum NetworkInternal {
@@ -216,19 +219,33 @@ impl Config {
         self.load_error.clone().unwrap_or_default()
     }
 
-    /// Get account directory path.
+    /// The account's directory name: opaque, so the account name is not written in
+    /// clear on disk. It is also the account name bwk is given, which names its stores
+    /// and sub-accounts after it. Needs the state unlocked.
+    pub fn dir_name(&self) -> Result<String, String> {
+        Self::dir_name_for(&self.account_name)
+    }
+
+    fn dir_name_for(account_name: &str) -> Result<String, String> {
+        state_crypt::opaque_name("account", account_name)
+    }
+
+    /// Get account directory path. Locked, it names no account: nothing can be read
+    /// or written there.
     pub fn account_dir(&self) -> PathBuf {
-        self.data_dir.join(&self.account_name)
+        self.data_dir
+            .join(self.dir_name().unwrap_or_else(|_| "locked".to_string()))
     }
 
     /// Get config file path.
     pub fn config_path(&self) -> PathBuf {
-        self.account_dir().join("config.json")
+        self.account_dir().join(CONFIG_FILE)
     }
 
     /// Get config file path for a specific account.
     fn config_path_for_account(account_name: &str) -> PathBuf {
-        datadir().join(account_name).join("config.json")
+        let dir = Self::dir_name_for(account_name).unwrap_or_else(|_| "locked".to_string());
+        datadir().join(dir).join(CONFIG_FILE)
     }
 
     /// Convert to bwk-sp::Config.
@@ -243,7 +260,7 @@ impl Config {
             return Err(crate::keys::error::Error::SpSpendDescriptor.to_string());
         }
         let mut config = SpConfig::from_descriptor(
-            self.account_name.clone(),
+            self.dir_name()?,
             self.network.into(),
             descriptor,
             self.blindbit_url.clone(),
@@ -392,7 +409,7 @@ impl Config {
         }
         let mut config = bwk::config::Config::new_from_descriptor(
             None,
-            self.account_name.clone(),
+            self.dir_name()?,
             self.network.into(),
             &self.descriptor,
             self.data_dir.clone(),
@@ -591,7 +608,14 @@ fn sub_account_descriptor(script: &str, fingerprint: &str, xpub: &str, network: 
 /// Delete an account's data from disk.
 pub fn delete_config(account_name: String) -> bool {
     let data_dir = datadir();
-    match SpConfig::delete_account_dir(&data_dir, &account_name) {
+    let dir_name = match Config::dir_name_for(&account_name) {
+        Ok(dir_name) => dir_name,
+        Err(e) => {
+            log::error!("failed to delete account '{account_name}': {e}");
+            return false;
+        }
+    };
+    match SpConfig::delete_account_dir(&data_dir, &dir_name) {
         Ok(()) => true,
         Err(e) => {
             log::error!("failed to delete account '{account_name}': {e}");
@@ -630,9 +654,18 @@ pub fn list_configs() -> Vec<String> {
         for entry in folders.flatten() {
             if let Ok(md) = entry.metadata() {
                 if md.is_dir() {
-                    let acc_name = entry.file_name().to_string_lossy().to_string();
-                    if Config::from_file(acc_name.clone()).is_ok() {
-                        out.push(acc_name);
+                    // The directory is opaque: the account's name is in its config.
+                    let path = entry.path().join(CONFIG_FILE);
+                    let Ok(Some(content)) = state_crypt::read_state(&path) else {
+                        continue;
+                    };
+                    let Ok(config) = serde_json::from_str::<Config>(&content) else {
+                        continue;
+                    };
+                    if Config::dir_name_for(&config.account_name).ok().as_deref()
+                        == entry.file_name().to_str()
+                    {
+                        out.push(config.account_name);
                     }
                 }
             }

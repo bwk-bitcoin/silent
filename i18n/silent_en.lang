@@ -1126,8 +1126,7 @@ state-choice-password-sub
 
 state-device-title => "Protect Silent · Signing Device"
 
-state-device-text
-=> "Plug in the device and unlock it, open its app for the network below, then pick it.";;
+state-device-text => "Plug in the device, unlock it and open its Bitcoin app, then pick it."
 
 state-device-pick => "Pick a ready device."
 
@@ -1154,16 +1153,14 @@ state-password-sealing-sub => "Encrypting the key with the password. This takes 
 
 state-unlock-title => "Unlock Silent"
 
-state-unlock-device-text => "Plug in %1 (%2) and unlock it: Silent asks it for its key."
+state-unlock-device-text
+=> "Plug in the signing device Silent was protected with, unlock it and open its Bitcoin app: Silent asks it for its key.";;
 
-state-unlock-plug => "Plug it in and unlock it."
 
-state-unlock-locked => "Unlock the device."
 
-state-unlock-ready => "Asking the device for its key."
 
 state-unlock-wrong-key
-=> "This device's key does not open Silent. Plug in the device Silent was protected with.";;
+=> "No connected device's key opens Silent. Plug in the device Silent was protected with.";;
 
 state-unlock-password-text => "Enter the password that unlocks Silent."
 

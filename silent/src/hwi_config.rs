@@ -18,7 +18,7 @@ use crate::config::{datadir, network_serde};
 use crate::ffi::Network;
 use crate::state_crypt;
 
-pub(crate) const FILE_NAME: &str = "hwi.json";
+pub(crate) const FILE_NAME: &str = "hwi.bip138";
 
 /// BitBox02 pairing material: the app's static key plus the paired devices' pubkeys.
 #[derive(Debug, Clone, Serialize, Deserialize)]

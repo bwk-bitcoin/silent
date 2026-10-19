@@ -10,14 +10,11 @@
 #include "catalog/display/Label.h"
 #include "catalog/feedback/ModalStatus.h"
 #include "catalog/feedback/Notice.h"
-#include "catalog/form/Field.h"
 #include "catalog/form/FieldGroup.h"
 #include "catalog/form/FieldNote.h"
-#include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
 #include "i18n/Tr.h"
 #include "modules/keys/DeviceName.h"
-#include "modules/keys/KeysView.h"
 #include "theme/Icon.h"
 #include "theme/Palette.h"
 
@@ -44,7 +41,7 @@ auto toQt(const rust::String &value) -> QString {
 }
 } // namespace
 
-StateSetup::StateSetup() {
+StateSetup::StateSetup(Network network) : m_network(network) {
     init();
     doConnect();
     view();
@@ -73,8 +70,6 @@ void StateSetup::doConnect() {
     connect(m_device_choice, &catalog::SelectRow::clicked, this, &StateSetup::onDeviceChosen,
             qontrol::UNIQUE);
     connect(m_password_choice, &catalog::SelectRow::clicked, this, &StateSetup::onPasswordChosen,
-            qontrol::UNIQUE);
-    connect(m_network, &QComboBox::activated, this, &StateSetup::onNetworkActivated,
             qontrol::UNIQUE);
     connect(m_device_continue, &QPushButton::clicked, this, &StateSetup::onDeviceContinueClicked,
             qontrol::UNIQUE);
@@ -141,11 +136,6 @@ void StateSetup::initDevice() {
     m_device_text = new Label(LabelRole::Body);
     m_device_text->setTone(LabelTone::Secondary);
     m_device_text->setWordWrap(true);
-    m_network = new catalog::ComboBox;
-    for (auto network : {Network::Bitcoin, Network::Testnet, Network::Signet, Network::Regtest}) {
-        m_network->addItem(keys::networkLabel(network), static_cast<int>(network));
-    }
-    m_network->setWidth(Size::S);
     m_device_rows = new qontrol::Column;
     m_device_rows->spacing(resolve(Spacing::S));
     m_no_device = new catalog::ModalStatus;
@@ -163,7 +153,6 @@ auto StateSetup::viewDevice() -> QWidget * {
     return (new qontrol::Column)
         ->spacing(resolve(Spacing::M))
         ->push(m_device_text)
-        ->push(new catalog::Field(TR("keys-network"), m_network))
         ->push(m_device_rows)
         ->push(m_no_device)
         ->push(m_device_error);
@@ -172,8 +161,7 @@ auto StateSetup::viewDevice() -> QWidget * {
 void StateSetup::showDevice() {
     m_view = View::Device;
     if (m_devices == nullptr) {
-        auto network = static_cast<Network>(m_network->currentData().toInt());
-        m_devices = new UnlockDevices(network, this);
+        m_devices = new UnlockDevices(m_network, this);
         connect(m_devices, &UnlockDevices::devicesChanged, this, &StateSetup::onDevicesChanged,
                 qontrol::UNIQUE);
         connect(m_devices, &UnlockDevices::xpubFetched, this, &StateSetup::onXpubFetched,
@@ -190,7 +178,9 @@ void StateSetup::showDevice() {
 }
 
 void StateSetup::rebuildDevices() {
+    // clear() also resets the layout spacing.
     catalog::clearRows(m_device_rows);
+    m_device_rows->spacing(resolve(Spacing::S));
     QList<HwiDevice> devices = m_devices == nullptr ? QList<HwiDevice>() : m_devices->devices();
     bool selectedSeen = false;
     for (const auto &device : devices) {
@@ -217,7 +207,6 @@ void StateSetup::rebuildDevices() {
         row->show();
         if (ready && id == m_selected_id) {
             selectedSeen = true;
-            m_selected_fingerprint = toQt(device.fingerprint);
             m_selected_name = keys::deviceName(toQt(device.kind), QString());
         }
     }
@@ -317,15 +306,6 @@ void StateSetup::onBackClicked() {
     showChoice();
 }
 
-void StateSetup::onNetworkActivated(int index) {
-    Q_UNUSED(index);
-    // A device's app is network specific: look again with the network picked.
-    delete m_devices;
-    m_devices = nullptr;
-    m_selected_id.clear();
-    showDevice();
-}
-
 void StateSetup::onDevicesChanged() {
     if (m_view == View::Device) {
         rebuildDevices();
@@ -361,11 +341,7 @@ void StateSetup::onXpubFetched(quint64 req_id, const QString &xpub) {
         return;
     }
     m_xpub_req = 0;
-    auto network = static_cast<Network>(m_network->currentData().toInt());
-    QString error =
-        toQt(::state_create_with_device(rust::String(m_selected_fingerprint.toStdString()),
-                                        rust::String(m_selected_name.toStdString()), m_index,
-                                        network, rust::String(xpub.toStdString())));
+    QString error = toQt(::state_create_with_device(m_index, rust::String(xpub.toStdString())));
     if (error.isEmpty()) {
         accept();
         return;

@@ -25,6 +25,8 @@ use crate::ffi::{
 /// Valid account state (created successfully).
 struct AccountInner {
     account: SpAccount,
+    /// The account's name: bwk only knows its opaque directory name.
+    name: String,
     receiver: Option<mpsc::Receiver<BwkNotification>>,
     network: bitcoin::Network,
     electrum_url: String,
@@ -81,6 +83,7 @@ impl Account {
 
         Ok(AccountInner {
             account,
+            name: config.account_name.clone(),
             receiver,
             network,
             electrum_url: config.electrum_url.clone(),
@@ -140,7 +143,7 @@ impl Account {
             return false;
         };
 
-        let config = match crate::config::Config::from_file(inner.account.name().to_string()) {
+        let config = match crate::config::Config::from_file(inner.name.clone()) {
             Ok(c) => c,
             Err(e) => {
                 log::error!("start_electrum: failed to load config: {e}");
@@ -196,7 +199,7 @@ impl Account {
     /// Get account name.
     pub fn name(&self) -> String {
         match &self.inner {
-            Some(inner) => inner.account.name().to_string(),
+            Some(inner) => inner.name.clone(),
             None => String::new(),
         }
     }
@@ -378,7 +381,7 @@ impl Account {
         let Some(inner) = &self.inner else {
             return String::new();
         };
-        match crate::config::Config::from_file(inner.account.name().to_string()) {
+        match crate::config::Config::from_file(inner.name.clone()) {
             Ok(config) => config.get_descriptor(),
             Err(e) => {
                 log::error!("failed to load descriptor: {e}");

@@ -63,7 +63,7 @@ fn musig_descriptor() -> String {
 fn a_config_written_before_the_setting_verifies_the_certificate() {
     let base = shared_datadir();
     let account_name = "cert_old_account";
-    let account_dir = base.join(account_name);
+    let account_dir = base.join(silent::state_crypt::opaque_name("account", account_name).unwrap());
     std::fs::create_dir_all(&account_dir).expect("create account dir");
     let json = format!(
         r#"{{
@@ -76,7 +76,7 @@ fn a_config_written_before_the_setting_verifies_the_certificate() {
         }}"#,
         descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest)
     );
-    silent::state_crypt::write_state(&account_dir.join("config.json"), &json)
+    silent::state_crypt::write_state(&account_dir.join(silent::CONFIG_FILE), &json)
         .expect("write old config");
 
     let config = config_from_file(account_name.to_string());

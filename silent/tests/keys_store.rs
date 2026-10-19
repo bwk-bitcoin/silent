@@ -97,10 +97,14 @@ fn test_file_layout_and_permissions() {
         ))
         .expect("save should succeed");
 
-    let expected_path = datadir()
-        .join(KEYS_DIR_NAME)
-        .join("regtest")
-        .join(format!("{fp}.json"));
+    let expected_path = datadir().join(KEYS_DIR_NAME).join("regtest").join(format!(
+        "{}.bip138",
+        silent::state_crypt::opaque_name("key", &format!("regtest:{fp}")).unwrap()
+    ));
+    assert!(
+        !expected_path.to_string_lossy().contains(&fp.to_string()),
+        "the fingerprint is not in the file name"
+    );
     let actual_path = key_store.record_path(fp).expect("record path");
     assert_eq!(
         actual_path,
