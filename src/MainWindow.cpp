@@ -18,6 +18,27 @@
 #include <qtabwidget.h>
 #include <qwidget.h>
 
+namespace {
+class ModuleTabBar final : public QTabBar {
+public:
+    ModuleTabBar(QTabWidget *tabs, QWidget *menu) : m_tabs(tabs), m_menu(menu) {
+    }
+
+protected:
+    [[nodiscard]] auto tabSizeHint(int index) const -> QSize override {
+        QSize size = QTabBar::tabSizeHint(index);
+        if (index == count() - 1) {
+            size.setWidth(m_tabs->tabBar()->tabRect(m_tabs->indexOf(m_menu)).width());
+        }
+        return size;
+    }
+
+private:
+    QTabWidget *m_tabs = nullptr;
+    QWidget *m_menu = nullptr;
+};
+} // namespace
+
 MainWindow::MainWindow(QWidget *parent) : Window(parent) {
     resize(1024, 768);
     // Never shrink below the sidebar plus the dashboard's minimum content width
@@ -42,7 +63,7 @@ auto MainWindow::initWindow() -> void {
 
     // A tab bar always has a current tab: while an account or the launcher shows, the
     // bar is idle and its current tab is drawn as not selected.
-    m_module_bar = new QTabBar;
+    m_module_bar = new ModuleTabBar(m_tab, m_menu_tab);
     m_module_bar->setProperty("class", "module-tabs");
     m_module_bar->setDrawBase(false);
     m_module_bar->setExpanding(false);
