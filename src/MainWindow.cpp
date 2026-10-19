@@ -4,14 +4,10 @@
 #include "host/Host.h"
 #include "i18n/Tr.h"
 #include "interfaces/instance.h"
-#include "theme/Icon.h"
 #include "theme/Palette.h"
 #include "views/DashboardLayout.h"
 #include "views/MenuTab.h"
 #include "views/modals/AppSettings.h"
-#include <QPointer>
-#include <QStyle>
-#include <QToolButton>
 #include <QVariant>
 #include <Qontrol>
 #include <algorithm>
@@ -20,62 +16,6 @@
 #include <qtabbar.h>
 #include <qtabwidget.h>
 #include <qwidget.h>
-
-namespace {
-class ModuleTabBar final : public QTabBar {
-public:
-    ModuleTabBar(QTabWidget *tabs, QWidget *menu) : m_tabs(tabs), m_menu(menu) {
-    }
-
-    void setGear(int index) {
-        auto *button = new QToolButton(this);
-        button->setIcon(icon::settings());
-        button->setIconSize(QSize(metric::TAB_ICON_SIZE, metric::TAB_ICON_SIZE));
-        button->setFixedSize(resolve(Spacing::M), resolve(Spacing::M));
-        button->setAutoRaise(true);
-        button->setAttribute(Qt::WA_TransparentForMouseEvents);
-        m_gear = button;
-        setTabButton(index, QTabBar::RightSide, button);
-        centerGear();
-    }
-
-protected:
-    [[nodiscard]] auto tabSizeHint(int index) const -> QSize override {
-        QSize size = QTabBar::tabSizeHint(index);
-        if (index == count() - 1) {
-            size.setWidth(m_tabs->tabBar()->tabRect(m_tabs->indexOf(m_menu)).width());
-        }
-        return size;
-    }
-
-    void tabLayoutChange() override {
-        QTabBar::tabLayoutChange();
-        centerGear();
-    }
-
-    void paintEvent(QPaintEvent *event) override {
-        centerGear();
-        QTabBar::paintEvent(event);
-    }
-
-    void centerGear() {
-        if (m_gear == nullptr || count() == 0 ||
-            tabButton(count() - 1, QTabBar::RightSide) != m_gear) {
-            return;
-        }
-        QRect centered = QStyle::alignedRect(layoutDirection(), Qt::AlignCenter, m_gear->size(),
-                                             tabRect(count() - 1));
-        if (m_gear->pos() != centered.topLeft()) {
-            m_gear->move(centered.topLeft());
-        }
-    }
-
-private:
-    QTabWidget *m_tabs = nullptr;
-    QWidget *m_menu = nullptr;
-    QPointer<QToolButton> m_gear;
-};
-} // namespace
 
 MainWindow::MainWindow(QWidget *parent) : Window(parent) {
     resize(1024, 768);
@@ -101,7 +41,7 @@ auto MainWindow::initWindow() -> void {
 
     // A tab bar always has a current tab: while an account or the launcher shows, the
     // bar is idle and its current tab is drawn as not selected.
-    m_module_bar = new ModuleTabBar(m_tab, m_menu_tab);
+    m_module_bar = new QTabBar;
     m_module_bar->setProperty("class", "module-tabs");
     m_module_bar->setDrawBase(false);
     m_module_bar->setExpanding(false);
@@ -180,14 +120,12 @@ void MainWindow::updateModuleTabs() {
         m_module_bar->removeTab(0);
     }
     for (const auto &[page, title] : modulePages()) {
-        int index = m_module_bar->addTab(page == m_settings_tab ? QString() : title);
+        int index = m_module_bar->addTab(page == m_settings_tab ? QStringLiteral("⚙") : title);
         if (page == m_settings_tab) {
-            static_cast<ModuleTabBar *>(m_module_bar)->setGear(index);
             m_module_bar->setTabToolTip(index, title);
         }
         m_module_bar->setTabData(index, QVariant::fromValue(static_cast<QObject *>(page)));
     }
-    m_module_bar->setFixedWidth(m_module_bar->sizeHint().width());
 }
 
 void MainWindow::showKeysTab() {

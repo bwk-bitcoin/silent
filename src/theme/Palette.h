@@ -108,7 +108,6 @@ const int TOGGLE_WIDTH = 40;
 const int TOGGLE_HEIGHT = 20;
 const int VALIDATION_MARK_WIDTH = 20;
 const int ICON_SIZE = 24;
-const int TAB_ICON_SIZE = 16;
 const int ICON_STROKE = 2;
 const int BUTTON_MIN_HEIGHT = 36;
 const int COMBO_DROPDOWN_WIDTH = 30;
