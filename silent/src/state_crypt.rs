@@ -50,6 +50,10 @@ const KEY_AAD: &[u8] = b"silent-state-key-v1";
 
 /// The unlock key held while the app runs, `None` while locked.
 static KEY: Mutex<Option<PublicKey>> = Mutex::new(None);
+/// The device path of the unlock key, `None` for a password: written in the clear
+/// part of every envelope, so any single file can be opened for debug with the
+/// device (ws-plaude/silent#44).
+static KEY_PATH: Mutex<Option<DerivationPath>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnlockKind {
@@ -128,8 +132,9 @@ impl bwk::persist::cipher::Cipher for StateCipher {
     }
 }
 
-fn set_key(key: Option<PublicKey>) {
+fn set_key(key: Option<PublicKey>, path: Option<DerivationPath>) {
     *KEY.lock().unwrap_or_else(|e| e.into_inner()) = key;
+    *KEY_PATH.lock().unwrap_or_else(|e| e.into_inner()) = key.and(path);
     bwk::persist::cipher::set_cipher(key.map(|_| {
         std::sync::Arc::new(StateCipher) as std::sync::Arc<dyn bwk::persist::cipher::Cipher>
     }));
@@ -174,7 +179,7 @@ pub fn is_unlocked() -> bool {
 
 /// Forgets the key: the state cannot be read or written until the next unlock.
 pub fn lock() {
-    set_key(None);
+    set_key(None, None);
 }
 
 fn xpub_key(xpub: &str) -> Result<PublicKey, String> {
@@ -183,11 +188,12 @@ fn xpub_key(xpub: &str) -> Result<PublicKey, String> {
         .map_err(|e| format!("invalid xpub: {e}"))
 }
 
-fn seal_with(key: PublicKey, text: &str) -> Result<Vec<u8>, String> {
+fn seal_with(key: PublicKey, text: &str, path: Option<DerivationPath>) -> Result<Vec<u8>, String> {
     EncryptedBackup::new()
         .set_payload(&text.to_string())
         .map_err(|e| format!("{e:?}"))?
         .set_keys(vec![key])
+        .set_derivation_paths(path.into_iter().collect())
         .encrypt()
         .map(|encrypted| encrypted.bytes)
         .map_err(|e| format!("{e:?}"))
@@ -214,9 +220,10 @@ pub fn is_sealed(bytes: &[u8]) -> bool {
     bytes.starts_with(b"BIP138")
 }
 
-/// Seals `text` to the unlock key.
+/// Seals `text` to the unlock key, its device path in the envelope's clear part.
 pub fn seal(text: &str) -> Result<Vec<u8>, String> {
-    seal_with(key()?, text)
+    let path = KEY_PATH.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    seal_with(key()?, text, path)
 }
 
 /// Opens bytes sealed by `seal`.
@@ -263,26 +270,19 @@ fn create(key: PublicKey, device_path: Option<DerivationPath>) -> Result<(), Str
     if datadir().join(CHECK_FILE).exists() {
         return Err("the app state already has an unlock key".to_string());
     }
-    let check = EncryptedBackup::new()
-        .set_payload(&CHECK_TEXT.to_string())
-        .map_err(|e| format!("{e:?}"))?
-        .set_keys(vec![key])
-        .set_derivation_paths(device_path.into_iter().collect())
-        .encrypt()
-        .map(|encrypted| encrypted.bytes)
-        .map_err(|e| format!("{e:?}"))?;
+    let check = seal_with(key, CHECK_TEXT, device_path.clone())?;
     write_clear(&datadir().join(CHECK_FILE), &check)?;
-    set_key(Some(key));
+    set_key(Some(key), device_path);
     Ok(())
 }
 
 /// Checks `key` against the check file sealed at setup, and unlocks with it.
-fn unlock_with(key: PublicKey) -> Result<(), String> {
+fn unlock_with(key: PublicKey, device_path: Option<DerivationPath>) -> Result<(), String> {
     let path = datadir().join(CHECK_FILE);
     let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     match open_with(key, &bytes) {
         Ok(text) if text == CHECK_TEXT => {
-            set_key(Some(key));
+            set_key(Some(key), device_path);
             Ok(())
         }
         _ => Err("this key does not open the app state".to_string()),
@@ -315,7 +315,7 @@ pub fn create_with_password(password: Password) -> Result<(), String> {
 
 /// Unlocks with the device's xpub at `device_unlock_path()`.
 pub fn unlock_with_device(xpub: &str) -> Result<(), String> {
-    unlock_with(xpub_key(xpub)?)
+    unlock_with(xpub_key(xpub)?, Some(device_unlock_path()?))
 }
 
 /// Unlocks with `password`. Blocks on Argon2id: call it off the GUI thread.
@@ -326,7 +326,7 @@ pub fn unlock_with_password(password: Password) -> Result<(), String> {
         serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     let bytes = crypto::open_with_aad(&envelope, KEY_AAD, password).map_err(|e| e.to_string())?;
     let key = PublicKey::from_slice(&bytes).map_err(|e| e.to_string())?;
-    unlock_with(key)
+    unlock_with(key, None)
 }
 
 /// A state file left in clear, `None` when every one is sealed. An unencrypted
@@ -502,7 +502,7 @@ pub fn state_unlock_with_password(password: String) -> String {
 /// Unlocks with a fixed, public key, for tests that write state. Never called by
 /// the app, and not reachable from C++: a state sealed to it has no protection.
 pub fn unlock_for_tests() {
-    set_key(Some(test_key()));
+    set_key(Some(test_key()), None);
 }
 
 #[cfg(test)]
@@ -538,7 +538,7 @@ mod tests {
             &Secp256k1::new(),
             &SecretKey::from_slice(&[9u8; 32]).unwrap(),
         );
-        let sealed = seal_with(key, "{\"a\":1}").unwrap();
+        let sealed = seal_with(key, "{\"a\":1}", None).unwrap();
         assert!(is_sealed(&sealed));
         assert!(
             !sealed.windows(5).any(|w| w == b"\"a\":1"),

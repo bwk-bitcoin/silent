@@ -1,5 +1,6 @@
 //! The app state's unlock key: created with a password or a device xpub, required to
 //! read or write the state, and a file left in clear is found (ws-plaude/silent#37).
+//! Every envelope sealed to a device key names its path in clear (ws-plaude/silent#44).
 
 use std::fs;
 
@@ -8,6 +9,16 @@ use silent::set_datadir;
 use silent::state_crypt::{self, UnlockKind};
 
 const XPUB: &str = "tpubDEGU7K8ab62XbG1bKoCnHDtUx44DxVKyAQVS96EN1EUVTQRW2KnFEvTtmnUJSonudSK8HcXTexf56Kir1JzoQAzFRHfvNLEcqV7KxUHZVYa";
+/// The derivation paths an envelope names in its clear part.
+fn envelope_paths(bytes: &[u8]) -> Vec<String> {
+    bip138::EncryptedMetadata::from_encrypted_payload(bytes)
+        .expect("a BIP138 envelope")
+        .derivation_paths
+        .iter()
+        .map(|path| path.to_string())
+        .collect()
+}
+
 const OTHER_XPUB: &str = "tpubDDzMtUDKwjvTehAmAfwYiBGzUFDcF8AyEaJf78JhQam5knvsGTgqF7VvhuuDZLYityND66FG88sS3q28Yi5Ysumvx5DfMgdm6nc6zntvpHM";
 
 // One test: the data directory and the unlock key are process wide.
@@ -30,6 +41,10 @@ fn the_state_opens_with_its_unlock_key_only() {
     let sealed = fs::read(&file).unwrap();
     assert!(state_crypt::is_sealed(&sealed));
     assert!(!String::from_utf8_lossy(&sealed).contains("\"name\""));
+    assert!(
+        envelope_paths(&sealed).is_empty(),
+        "a password key has no path"
+    );
 
     state_crypt::lock();
     assert!(state_crypt::read_state(&file).is_err(), "locked again");
@@ -78,6 +93,9 @@ fn the_state_opens_with_its_unlock_key_only() {
         "a file sealed to the password key does not open with the device key"
     );
     state_crypt::write_state(&file, "{\"name\":\"b\"}").unwrap();
+    let device_path = vec![state_crypt::device_path(index).unwrap().to_string()];
+    assert_eq!(envelope_paths(&fs::read(&file).unwrap()), device_path);
+    assert_eq!(envelope_paths(&check), device_path);
 
     state_crypt::lock();
     assert!(
@@ -89,6 +107,9 @@ fn the_state_opens_with_its_unlock_key_only() {
         state_crypt::read_state(&file).unwrap().as_deref(),
         Some("{\"name\":\"b\"}")
     );
+    // Unlocked again, the files it writes still name the path.
+    state_crypt::write_state(&file, "{\"name\":\"b2\"}").unwrap();
+    assert_eq!(envelope_paths(&fs::read(&file).unwrap()), device_path);
 
     // A plugin's own state: bytes, sealed, by plugin id.
     assert_eq!(state_crypt::read_plugin_state("example").unwrap(), None);
@@ -105,6 +126,7 @@ fn the_state_opens_with_its_unlock_key_only() {
     )))
     .unwrap();
     assert!(state_crypt::is_sealed(&sealed));
+    assert_eq!(envelope_paths(&sealed), device_path);
     assert!(state_crypt::write_plugin_state("../escape", b"x").is_err());
 
     // A state file in clear is found, and refused: bwk's stores too. Its bookkeeping
