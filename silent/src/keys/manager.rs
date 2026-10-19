@@ -212,10 +212,65 @@ pub trait KeyManagerImpl {
     fn signing_plan(&self, psbt_bytes: &[u8]) -> Result<SigningPlan, Error>;
 }
 
+/// The records by fingerprint, active ones apart from removed ones.
+fn split_deleted(
+    records: Vec<KeyRecord>,
+) -> (
+    BTreeMap<Fingerprint, KeyRecord>,
+    BTreeMap<Fingerprint, KeyRecord>,
+) {
+    let (deleted, active): (Vec<_>, Vec<_>) = records.into_iter().partition(|r| r.deleted);
+    let by_fingerprint = |records: Vec<KeyRecord>| {
+        records
+            .into_iter()
+            .map(|record| (record.fingerprint, record))
+            .collect()
+    };
+    (by_fingerprint(active), by_fingerprint(deleted))
+}
+
+/// `previous`, a removed record, taken up again by `added`: the new alias, routes and
+/// secret, every device and cached xpub of both (the cached ones kept, with their used
+/// flags), the descriptors it had registered.
+fn revive(mut previous: KeyRecord, added: KeyRecord) -> KeyRecord {
+    previous.deleted = false;
+    previous.alias = added.alias;
+    previous.routes = added.routes;
+    if added.secret.is_some() {
+        previous.secret = added.secret;
+    }
+    for device in added.devices {
+        if !previous
+            .devices
+            .iter()
+            .any(|known| known.same_device(&device))
+        {
+            previous.devices.push(device);
+        }
+    }
+    for xpub in added.xpubs {
+        if !previous.xpubs.iter().any(|known| known.path == xpub.path) {
+            previous.xpubs.push(xpub);
+        }
+    }
+    for descriptor in added.descriptors {
+        if !previous
+            .descriptors
+            .iter()
+            .any(|known| known.descriptor == descriptor.descriptor)
+        {
+            previous.descriptors.push(descriptor);
+        }
+    }
+    previous
+}
+
 /// Owns the in-memory view of every registered key on one network.
 pub struct KeyManager {
     network: Network,
     records: BTreeMap<Fingerprint, KeyRecord>,
+    // Removed keys, kept with their whole state; out of `records` and every list.
+    deleted: BTreeMap<Fingerprint, KeyRecord>,
     store: KeyStore,
     live: Vec<LiveDevice>,
     secp: Secp256k1<All>,
@@ -223,14 +278,11 @@ pub struct KeyManager {
 
 impl KeyManager {
     pub fn new(store: KeyStore, network: Network) -> Result<Self, Error> {
-        let records = store
-            .list()?
-            .into_iter()
-            .map(|record| (record.fingerprint, record))
-            .collect();
+        let (records, deleted) = split_deleted(store.list()?);
         Ok(Self {
             network,
             records,
+            deleted,
             store,
             live: Vec::new(),
             secp: Secp256k1::new(),
@@ -239,12 +291,7 @@ impl KeyManager {
 
     /// Re-reads every record from the store, for when another process wrote one.
     pub fn reload(&mut self) -> Result<(), Error> {
-        self.records = self
-            .store
-            .list()?
-            .into_iter()
-            .map(|record| (record.fingerprint, record))
-            .collect();
+        (self.records, self.deleted) = split_deleted(self.store.list()?);
         Ok(())
     }
 
@@ -479,6 +526,14 @@ impl KeyManagerImpl for KeyManager {
             });
         }
         let fingerprint = record.fingerprint;
+        // The same key removed before: taken up again, with what it held.
+        if let Some(previous) = self.deleted.get(&fingerprint) {
+            let revived = revive(previous.clone(), record);
+            self.store.save(&revived)?;
+            self.deleted.remove(&fingerprint);
+            self.records.insert(fingerprint, revived);
+            return Ok(());
+        }
         match self.store.insert(&record) {
             Ok(()) => {
                 self.records.insert(fingerprint, record);
@@ -555,8 +610,13 @@ impl KeyManagerImpl for KeyManager {
                 count: descriptor_count,
             });
         }
-        self.store.delete(fingerprint)?;
+        // Kept on disk with its whole state, marked deleted.
+        let saved = self.store.update(fingerprint, |record| {
+            record.deleted = true;
+            Ok(())
+        })?;
         self.records.remove(&fingerprint);
+        self.deleted.insert(fingerprint, saved);
         Ok(())
     }
 
@@ -1184,6 +1244,51 @@ mod tests {
         assert!(
             manager.key(fingerprint(1)).is_none(),
             "key should be gone after a forced remove"
+        );
+    }
+
+    #[test]
+    fn removed_key_keeps_its_state_and_comes_back_with_it() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        let mut record = KeyRecord::new(fingerprint(1), Network::Regtest, "old".to_string());
+        let xpub = Xpub::from_priv(
+            &Secp256k1::new(),
+            &bitcoin::bip32::Xpriv::new_master(Network::Regtest, &[7; 32]).expect("master"),
+        );
+        record.xpubs.push(XpubEntry {
+            path: DerivationPath::from_str("m/87'/1'/0'/0").expect("path"),
+            xpub,
+            used: true,
+        });
+        manager.add_key(record).expect("add key");
+        manager.remove_key(fingerprint(1), false).expect("remove");
+
+        assert!(
+            manager.key(fingerprint(1)).is_none(),
+            "out of the keys once removed"
+        );
+        let store = KeyStore::new(tmp.path().to_path_buf(), Network::Regtest);
+        let listed = store.list().expect("list");
+        assert!(
+            listed.len() == 1 && listed[0].deleted && listed[0].xpubs.len() == 1,
+            "kept on disk, marked deleted, its xpub with it: {listed:?}"
+        );
+        let reopened = manager_over(tmp.path(), Network::Regtest);
+        assert!(
+            reopened.key(fingerprint(1)).is_none(),
+            "a removed key stays out after a reload"
+        );
+
+        let added = KeyRecord::new(fingerprint(1), Network::Regtest, "new".to_string());
+        manager.add_key(added).expect("added back");
+        let back = manager.key(fingerprint(1)).expect("back in the keys");
+        assert_eq!(back.alias, "new", "the new alias");
+        assert!(!back.deleted, "no longer deleted");
+        assert!(
+            back.xpubs.len() == 1 && back.xpubs[0].used,
+            "the cached xpub came back, still used: {:?}",
+            back.xpubs
         );
     }
 

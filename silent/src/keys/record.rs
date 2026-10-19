@@ -211,6 +211,11 @@ pub struct KeyRecord {
     pub descriptors: Vec<DescriptorEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret: Option<SecretEnvelope>,
+    /// Removed by the user: kept on disk with everything it held (cached xpubs, their
+    /// used flags, registered descriptors), out of every list, and taken up again if
+    /// the same key is added back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleted: bool,
 }
 
 impl KeyRecord {
@@ -225,6 +230,7 @@ impl KeyRecord {
             xpubs: Vec::new(),
             descriptors: Vec::new(),
             secret: None,
+            deleted: false,
         }
     }
 
