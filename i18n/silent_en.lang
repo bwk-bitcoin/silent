@@ -109,6 +109,8 @@ send-validation-error => "Validation Error"
 settings-backend-info => "Backend Info:"
 settings-blindbit-url => "BlindBit URL:"
 settings-block-height => "Block Height:"
+
+settings-electrum-height => "Electrum Block Height:"
 settings-capabilities => "Capabilities:"
 settings-capabilities-template => "Tweaks Only: %1\nFull Basic: %2\nFull + Dust Filter: %3\nCut-Through + Dust Filter: %4"
 settings-connection => "Connection"

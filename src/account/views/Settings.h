@@ -18,6 +18,8 @@ class Input;
 class Label;
 } // namespace catalog
 
+class QTimer;
+
 namespace account::view {
 
 // One row per server the account syncs from, each tested before Save; the network
@@ -32,6 +34,7 @@ public:
 signals:
     void backendInfoReady(BackendInfo info);
     void electrumTestReady(ConnectionResult result);
+    void electrumHeightReady(ElectrumTipResult result);
 
 public slots:
     void onSaveClicked();
@@ -43,6 +46,9 @@ public slots:
     void onScanProgress(uint32_t height, uint32_t tip);
     void onBackendInfoReady(const BackendInfo &info);
     void onElectrumTestReady(const ConnectionResult &result);
+    void onElectrumHeightReady(const ElectrumTipResult &result);
+    // Asks the connected Electrum server its tip, "--" when not connected.
+    void refreshElectrumHeight();
 
 protected:
     enum class TestState : std::uint8_t { Untested, Testing, Ok };
@@ -65,6 +71,9 @@ protected:
     void doConnect() override;
     void view() override;
     void changeEvent(QEvent *event) override;
+    // The Electrum height is refreshed while the screen shows.
+    void showEvent(QShowEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
     void retranslateUi();
     // The row `widget` (its input or one of its buttons) belongs to, nullptr when none.
     [[nodiscard]] auto rowOf(const QObject *widget) -> EndpointRow *;
@@ -88,6 +97,9 @@ private:
     catalog::Label *m_info_network_label = nullptr;
     catalog::Label *m_info_height_label = nullptr;
     catalog::Label *m_capabilities = nullptr;
+    // The block height of the account's Electrum server, "--" when not connected.
+    catalog::Label *m_electrum_height_label = nullptr;
+    QTimer *m_height_timer = nullptr;
     catalog::Button *m_save_btn = nullptr;
     QWidget *m_extras = nullptr;
     uint32_t m_current_height = 0;

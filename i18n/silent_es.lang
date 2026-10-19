@@ -956,6 +956,7 @@ settings-disable-themes
 => "Its themes (%1) are removed. If one is in use, Silent switches to Light."
 => "NONE";;
 settings-disable-title => "Disable Plugin" => "NONE"
+settings-electrum-height => "Electrum Block Height:" => "Electrum Block Height:"
 settings-electrum-server => "Electrum Server:" => "Servidor Electrum:"
 settings-extension-settings => "Extension Settings" => "Ajustes de extensiones"
 settings-failed-start-electrum

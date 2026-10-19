@@ -52,6 +52,7 @@
 #include "modules/musig/creator/CreatePolicy.h"
 #include "modules/musig/RegisterDescriptor.h"
 #include "modules/musig/SettingsExtras.h"
+#include "account/views/Settings.h"
 #include "modules/musig/SignModal.h"
 #include "modules/musig/SigningSection.h"
 #include "modules/sp/SpPlugin.h"
@@ -1608,6 +1609,17 @@ void addSteps() {
     // the hot key Not Needed; nothing is registered again.
     step("settings", [] { return visible<catalog::Modal>() == nullptr; },
          [] { widget()->controller()->settingsClicked(); });
+    step("electrum height", [] {
+        auto *settings = widget()->findChild<account::view::Settings *>();
+        bool ok = false;
+        return settings != nullptr && settings->isVisible() &&
+               (settings->m_electrum_height_label->text().toUInt(&ok), ok);
+    }, [] {
+        auto *settings = widget()->findChild<account::view::Settings *>();
+        auto shown = settings->m_electrum_height_label->text();
+        auto tip = chain("mine 0");
+        check(shown == tip, "Settings show the Electrum block height " + shown + " (chain " + tip + ")");
+    });
     step("register descriptor button", [] {
         auto *extras = widget()->findChild<musig::SettingsExtras *>();
         return extras != nullptr && extras->m_register_btn->isVisible();

@@ -17,9 +17,17 @@
 
 #include <QHash>
 #include <QThread>
+#include <QTimer>
 #include <Qontrol>
 #include <common.h>
 #include <string>
+
+namespace {
+
+// How often the Electrum block height is asked while Settings shows.
+constexpr int ELECTRUM_HEIGHT_REFRESH_MS = 30000;
+
+} // namespace
 
 namespace account::view {
 
@@ -74,6 +82,9 @@ void Settings::init() {
     m_info_network_label = new catalog::Label("--");
     m_info_height_label = new catalog::Label("--");
     m_capabilities = new catalog::Label("--");
+    m_electrum_height_label = new catalog::Label("--");
+    m_height_timer = new QTimer(this);
+    m_height_timer->setInterval(ELECTRUM_HEIGHT_REFRESH_MS);
     m_save_btn = catalog::btnSaveSettings();
     m_extras = m_backend->settingsExtras();
 
@@ -103,6 +114,10 @@ void Settings::doConnect() {
             qontrol::UNIQUE);
     connect(this, &Settings::electrumTestReady, this, &Settings::onElectrumTestReady,
             qontrol::UNIQUE);
+    connect(this, &Settings::electrumHeightReady, this, &Settings::onElectrumHeightReady,
+            qontrol::UNIQUE);
+    connect(m_height_timer, &QTimer::timeout, this, &Settings::refreshElectrumHeight,
+            qontrol::UNIQUE);
 }
 
 void Settings::view() {
@@ -116,6 +131,9 @@ void Settings::view() {
                             ->push(endpointRow.test_ok);
         connectionContent->addField(label(endpointRow.endpoint), control)
             ->addNote(endpointRow.note);
+    }
+    if (row(Endpoint::Electrum) != nullptr) {
+        connectionContent->addField(TR("settings-electrum-height"), m_electrum_height_label);
     }
     if (m_network_selector != nullptr) {
         connectionContent->addField(TR("settings-network"), m_network_selector);
@@ -256,6 +274,35 @@ void Settings::testEndpoint(const EndpointRow &row) {
     m_backend->startWorker(thread);
 }
 
+void Settings::refreshElectrumHeight() {
+    auto url = m_backend->endpointUrl(Endpoint::Electrum);
+    if (!m_backend->isEndpointRunning(Endpoint::Electrum) || url.isEmpty()) {
+        m_electrum_height_label->setText("--");
+        return;
+    }
+    auto *thread = QThread::create(
+        [this, url = url.toStdString(), verify = m_backend->verifiesCertificate()]() -> void {
+            emit electrumHeightReady(::electrum_tip_height(rust::String(url), verify));
+        });
+    m_backend->startWorker(thread);
+}
+
+void Settings::onElectrumHeightReady(const ElectrumTipResult &result) {
+    m_electrum_height_label->setText(result.is_ok ? QString::number(result.height)
+                                                  : QStringLiteral("--"));
+}
+
+void Settings::showEvent(QShowEvent *event) {
+    refreshElectrumHeight();
+    m_height_timer->start();
+    qontrol::Screen::showEvent(event);
+}
+
+void Settings::hideEvent(QHideEvent *event) {
+    m_height_timer->stop();
+    qontrol::Screen::hideEvent(event);
+}
+
 void Settings::clearBackendInfo() {
     m_info_network_label->setText("--");
     m_info_height_label->setText("--");
@@ -345,8 +392,11 @@ void Settings::onUrlEdited() {
     updateButtons();
 }
 
-void Settings::onEndpointStateChanged([[maybe_unused]] Endpoint endpoint) {
+void Settings::onEndpointStateChanged(Endpoint endpoint) {
     updateButtons();
+    if (endpoint == Endpoint::Electrum) {
+        refreshElectrumHeight();
+    }
 }
 
 void Settings::onScanProgress(uint32_t height, [[maybe_unused]] uint32_t tip) {
