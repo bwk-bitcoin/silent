@@ -101,10 +101,15 @@ fn the_state_opens_with_its_unlock_key_only() {
     assert!(state_crypt::is_sealed(&sealed));
     assert!(state_crypt::write_plugin_state("../escape", b"x").is_err());
 
-    // A state file in clear is found, and refused. bwk's own files are not silent's
-    // to check yet.
-    fs::write(base.join("account").join("account.json"), "{}").unwrap();
+    // A state file in clear is found, and refused: bwk's stores too. Its bookkeeping
+    // files stay in clear.
+    fs::write(base.join("account").join("version"), "1").unwrap();
+    fs::write(base.join("account").join(".lock"), "").unwrap();
     assert_eq!(state_crypt::clear_state_file(), None);
+    let bwk_file = base.join("account").join("account.json");
+    fs::write(&bwk_file, "{}").unwrap();
+    assert_eq!(state_crypt::clear_state_file(), Some(bwk_file.clone()));
+    fs::remove_file(&bwk_file).unwrap();
     let clear_file = base.join("old").join("config.json");
     fs::create_dir_all(clear_file.parent().unwrap()).unwrap();
     fs::write(&clear_file, "{\"name\":\"c\"}").unwrap();

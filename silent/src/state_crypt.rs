@@ -109,8 +109,34 @@ pub fn unlock_info() -> Result<Option<UnlockInfo>, String> {
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// What bwk writes (each account's stores, its sub-accounts, the header cache) goes
+/// through the same key: bwk seals and opens through this cipher while it is set.
+#[derive(Debug)]
+struct StateCipher;
+
+impl bwk::persist::cipher::Cipher for StateCipher {
+    fn seal(&self, plain: &[u8]) -> Result<Vec<u8>, bwk::persist::PersistError> {
+        seal(&BASE64_STANDARD.encode(plain)).map_err(bwk::persist::PersistError::Cipher)
+    }
+
+    fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, bwk::persist::PersistError> {
+        if !is_sealed(sealed) {
+            return Err(bwk::persist::PersistError::Cipher(
+                "not encrypted".to_string(),
+            ));
+        }
+        let text = open(sealed).map_err(bwk::persist::PersistError::Cipher)?;
+        BASE64_STANDARD
+            .decode(text.trim())
+            .map_err(|e| bwk::persist::PersistError::Cipher(e.to_string()))
+    }
+}
+
 fn set_key(key: Option<PublicKey>) {
     *KEY.lock().unwrap_or_else(|e| e.into_inner()) = key;
+    bwk::persist::cipher::set_cipher(key.map(|_| {
+        std::sync::Arc::new(StateCipher) as std::sync::Arc<dyn bwk::persist::cipher::Cipher>
+    }));
 }
 
 fn key() -> Result<PublicKey, String> {
@@ -301,48 +327,39 @@ pub fn unlock_with_password(password: Password) -> Result<(), String> {
     unlock_with(key)
 }
 
-/// A state file silent writes left in clear, `None` when every one is sealed. An
-/// unencrypted state is never migrated: the user wipes it. Only silent's own files
-/// are checked (`app.json`, the hwi config, each account's `config.json`, the key
-/// records): the files bwk writes stay in clear until it takes a backend from silent.
+/// A state file left in clear, `None` when every one is sealed. An unencrypted
+/// state is never migrated: the user wipes it. Every file under the data directory
+/// is checked but the plugin libraries, the unlock files, and the bookkeeping files
+/// bwk keeps in clear (`version`, the `.lock` sentinels).
 pub fn clear_state_file() -> Option<PathBuf> {
     let root = datadir();
-    let mut files = vec![
-        root.join("app.json"),
-        root.join(crate::hwi_config::FILE_NAME),
-    ];
-    let Ok(entries) = fs::read_dir(&root) else {
-        return None;
-    };
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        if !dir.is_dir() || dir == root.join("plugins") {
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
             continue;
-        }
-        if dir == root.join(PLUGIN_STATE_DIR) {
-            for state in fs::read_dir(&dir).into_iter().flatten().flatten() {
-                files.push(state.path());
-            }
-            continue;
-        }
-        if dir == root.join(crate::keys::KEYS_DIR_NAME) {
-            // keys/<network>/<fingerprint>.json
-            for network in fs::read_dir(&dir).into_iter().flatten().flatten() {
-                for record in fs::read_dir(network.path()).into_iter().flatten().flatten() {
-                    let path = record.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                        files.push(path);
-                    }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path != root.join("plugins") {
+                    stack.push(path);
                 }
+                continue;
             }
-            continue;
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let bookkeeping = [UNLOCK_FILE, KEY_FILE, CHECK_FILE, "version"].contains(&name)
+                || name.ends_with(".lock")
+                || name.ends_with(".tmp");
+            if bookkeeping {
+                continue;
+            }
+            match fs::read(&path) {
+                Ok(bytes) if !bytes.is_empty() && !is_sealed(&bytes) => return Some(path),
+                _ => {}
+            }
         }
-        files.push(dir.join("config.json"));
     }
-    files.into_iter().find(|path| match fs::read(path) {
-        Ok(bytes) => !bytes.is_empty() && !is_sealed(&bytes),
-        Err(_) => false,
-    })
+    None
 }
 
 /// Where a plugin's own state lives.
