@@ -187,6 +187,7 @@ void MainWindow::updateModuleTabs() {
         }
         m_module_bar->setTabData(index, QVariant::fromValue(static_cast<QObject *>(page)));
     }
+    m_module_bar->setFixedWidth(m_module_bar->sizeHint().width());
 }
 
 void MainWindow::showKeysTab() {
