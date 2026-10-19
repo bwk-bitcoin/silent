@@ -658,6 +658,10 @@ auto pillMusigOnDevice() -> Badge * {
     return makePill(Badge::Role::Off, TR("pill-on-device"), PillWidth::L);
 }
 
+auto pillMusigSigning() -> Badge * {
+    return makePill(Badge::Role::Off, TR("pill-signing"), PillWidth::L);
+}
+
 auto pillSignerWaiting() -> Badge * {
     return makePill(Badge::Role::Off, TR("pill-waiting"), PillWidth::L);
 }

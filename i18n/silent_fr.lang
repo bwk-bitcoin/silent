@@ -759,6 +759,7 @@ musig-sign-lead-single
 musig-sign-reason => "%1 cosigners still to go." => "%1 cosigners still to go."
 musig-sign-reason-on-device => "On the device…" => "On the device…"
 musig-sign-reason-one => "1 cosigner still to go." => "1 cosigner still to go."
+musig-sign-reason-signing => "Signing…" => "Signing…"
 musig-sign-session-lost-title
 => "MuSig2 session missing or mismatch"
 => "MuSig2 session missing or mismatch";;
@@ -845,6 +846,7 @@ pill-ready => "Ready" => "NONE"
 pill-registered => "Registered" => "NONE"
 pill-registering => "Registering…" => "Registering…"
 pill-signed => "Signed" => "NONE"
+pill-signing => "Signing…" => "Signing…"
 pill-signs-first => "Signs First" => "NONE"
 pill-unloading => "Unloading…" => "NONE"
 pill-unsupported => "Unsupported" => "NONE"

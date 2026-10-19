@@ -127,6 +127,7 @@ auto pillSignerSigned() -> Badge *;
 auto pillMusigNeeded() -> Badge *;
 auto pillMusigNonceAdded() -> Badge *;
 auto pillMusigOnDevice() -> Badge *;
+auto pillMusigSigning() -> Badge *;
 auto pillSignerWaiting() -> Badge *;
 auto pillSignerDisconnected() -> Badge *;
 auto pillSignerNoHot() -> Badge *;

@@ -5,6 +5,7 @@
 #include "KeysView.h"
 #include "modules/hwi/HwiModule.h"
 #include "modules/hwi/HwiSigner.h"
+#include "modules/keys/flow/HotSign.h"
 #include "modules/keys/flow/SigningFlow.h"
 #include "modules/keys/flow/signingflow/DeviceQuery.h"
 #include "modules/keys/flow/signingflow/DeviceSign.h"
@@ -481,6 +482,22 @@ void KeysModule::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringLis
     auto plan = rust()->signing_plan(rust::String(psbt_v2_hex.toStdString()));
     if (!plan.is_ok) {
         m_bus->deliverError(req_id, toQt(plan.error));
+        return;
+    }
+    for (const auto &candidate : plan.candidates) {
+        if (candidate.route != KeyRouteKind::Hot || !candidate.can_sign ||
+            toQt(candidate.fingerprint).compare(fingerprint, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        auto *sign = new flow::HotSign(this, req_id, activeNetwork(), fingerprint,
+                                       toQt(candidate.alias), psbt_v2_hex);
+        connect(sign, &flow::HotSign::signedPsbt, m_bus.get(), &KeysBus::deliverSigned,
+                qontrol::UNIQUE);
+        connect(sign, &flow::HotSign::failed, m_bus.get(), &KeysBus::deliverError, qontrol::UNIQUE);
+        connect(sign, &flow::HotSign::cancelled, m_bus.get(), &KeysBus::deliverCancelled,
+                qontrol::UNIQUE);
+        connect(sign, &flow::HotSign::finished, sign, &QObject::deleteLater, qontrol::UNIQUE);
+        sign->start();
         return;
     }
     runFlow(new flow::SigningFlow(

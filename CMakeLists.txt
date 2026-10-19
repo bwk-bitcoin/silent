@@ -130,6 +130,8 @@ set(SILENT_APP_SOURCES
     src/modules/keys/flow/CameraStep.cpp
     src/modules/keys/flow/SigningFlow.h
     src/modules/keys/flow/SigningFlow.cpp
+    src/modules/keys/flow/HotSign.h
+    src/modules/keys/flow/HotSign.cpp
     src/modules/keys/flow/signingflow/LiveDevice.h
     src/modules/keys/flow/signingflow/LiveDevice.cpp
     src/modules/keys/flow/signingflow/VerifyResultView.h

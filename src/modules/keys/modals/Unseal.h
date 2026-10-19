@@ -35,6 +35,9 @@ public:
     void setBusy(const QString &title, const QString &subtitle);
     // Back on the password step, closing as the header cross does; shown by default.
     void setBackShown(bool shown);
+    // For a request whose progress is shown by its caller: close when submitted.
+    void setCloseOnSubmit(bool close);
+    void showError(const QString &error);
     // Closes, accepted or not, once the spinner has shown long enough.
     void finish(bool accepted);
     // Back to the password, `error` under it, once the spinner has shown long enough.
@@ -88,6 +91,7 @@ private:
     QTimer *m_busy_hold = nullptr;
     Outcome m_outcome = Outcome::None;
     QString m_retry_error;
+    bool m_close_on_submit = false;
 };
 
 } // namespace keys::modal

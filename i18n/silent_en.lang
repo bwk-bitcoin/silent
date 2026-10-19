@@ -385,6 +385,7 @@ pill-needed => "Needed"
 
 pill-nonce => "Nonce"
 pill-on-device => "On Device…"
+pill-signing => "Signing…"
 
 pill-waiting => "Waiting"
 
@@ -1234,6 +1235,7 @@ musig-sign-lead-single => "Click the cosigner to add its signature."
 
 musig-sign-reason-one => "1 cosigner still to go."
 musig-sign-reason-on-device => "On the device…"
+musig-sign-reason-signing => "Signing…"
 
 musig-sign-why-disconnected => "Its device is not connected: plug it in and unlock it."
 

@@ -175,6 +175,8 @@ void SignModal::render(const MusigRoundStatus &status) {
     bool finalized = !m_controller->finalizedTx().isEmpty();
     // The keys asked to sign now, each on its device (or in its window).
     auto busy = m_controller->signingKeys();
+    bool hotSigning = false;
+    bool deviceSigning = false;
     // The spend path's signers, and whether each gave its part of the step shown.
     QList<std::pair<QString, bool>> signers;
     if (single) {
@@ -195,7 +197,12 @@ void SignModal::render(const MusigRoundStatus &status) {
         if (!in) {
             ++left;
         }
-        bool onDevice = !in && busy.contains(fingerprint.toLower());
+        bool signing = !in && busy.contains(fingerprint.toLower());
+        if (signing && entry.route == KeyRouteKind::Hot) {
+            hotSigning = true;
+        } else if (signing) {
+            deviceSigning = true;
+        }
         // A signer still to sign that cannot: no connected device or route, or a MuSig2
         // round on a device that does not sign MuSig2. Greyed, its reason on its row.
         QString why;
@@ -212,8 +219,9 @@ void SignModal::render(const MusigRoundStatus &status) {
         }
         bool usable = why.isEmpty();
         if (usable) {
-            if (onDevice) {
-                pill = catalog::pillMusigOnDevice();
+            if (signing) {
+                pill = entry.route == KeyRouteKind::Hot ? catalog::pillMusigSigning()
+                                                        : catalog::pillMusigOnDevice();
             } else if (!in) {
                 pill = catalog::pillMusigNeeded();
             } else if (partial) {
@@ -223,9 +231,8 @@ void SignModal::render(const MusigRoundStatus &status) {
             }
         }
         auto *row = keyRow(entry, fingerprint, pill);
-        // One cosigner at a time: none is clicked while a device signs.
         // Each key answers one request at a time; the others stay clickable meanwhile.
-        row->setClickable(!in && usable && !onDevice);
+        row->setClickable(!in && usable && !signing);
         if (!usable) {
             greyRow(row, why);
         }
@@ -278,8 +285,10 @@ void SignModal::render(const MusigRoundStatus &status) {
     }
 
     QString reason;
-    if (!busy.isEmpty()) {
+    if (deviceSigning) {
         reason = TR("musig-sign-reason-on-device");
+    } else if (hotSigning) {
+        reason = TR("musig-sign-reason-signing");
     } else if (left == 1) {
         reason = TR("musig-sign-reason-one");
     } else if (left > 1) {

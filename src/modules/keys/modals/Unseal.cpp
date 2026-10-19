@@ -48,6 +48,15 @@ void Unseal::setBackShown(bool shown) {
                                       : catalog::ModalActions::Back::None);
 }
 
+void Unseal::setCloseOnSubmit(bool close) {
+    m_close_on_submit = close;
+}
+
+void Unseal::showError(const QString &error) {
+    m_password_error->setText(error);
+    m_password_error->setVisible(true);
+}
+
 void Unseal::finish(bool accepted) {
     hold(accepted ? Outcome::Accept : Outcome::Reject);
 }
@@ -125,7 +134,11 @@ void Unseal::proceedPassword() {
     QString password = m_password_input->text();
     m_password_input->clear();
     m_password_error->setVisible(false);
-    showBusy();
+    if (m_close_on_submit) {
+        accept();
+    } else {
+        showBusy();
+    }
     emit passwordEntered(password);
     password.fill(QChar());
     password.clear();
