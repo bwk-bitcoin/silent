@@ -462,7 +462,8 @@ void KeysModule::runFlow(flow::SigningFlow *flow) {
             qontrol::UNIQUE);
     flow->begin();
     if (flow->answered()) {
-        // A route that failed at once has answered already: there is nothing to show.
+        // A route that answered at once (it failed, or a named hot key asked its
+        // password in its own window) has nothing left to show.
         delete flow;
         return;
     }

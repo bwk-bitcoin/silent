@@ -27,6 +27,13 @@ HotRouteFlow::HotRouteFlow(KeysModule *module, SigningFlow::Request request, Flo
 }
 
 void HotRouteFlow::start() {
+    if (!hasPicker()) {
+        // The key is named: the password prompt is the only window, over the one that
+        // asked (ws-plaude/silent#45). It turns to a spinner itself once the password
+        // is given, and the flow has answered before it would be shown.
+        onAskPassword();
+        return;
+    }
     showWaiting();
     // Once the flow is shown, so the prompt opens over it.
     QTimer::singleShot(0, this, &HotRouteFlow::onAskPassword);

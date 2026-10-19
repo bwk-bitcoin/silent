@@ -897,6 +897,8 @@ void signRoundSteps(const QString &tag, const std::vector<RoundSigner> &signers,
             step(tag + ": hot password", [] { return unsealShown() != nullptr; }, [tag, name] {
                 check(signModal() != nullptr,
                       tag + ": the Sign modal stays shown under the password window");
+                check(visible<SigningFlow>() == nullptr,
+                      tag + ": no signing spinner window under the password window");
                 if (!name.isEmpty()) {
                     shot(name);
                 }
@@ -1117,8 +1119,11 @@ void addSteps() {
         auto *row = wizardRow(m->m_xpub_rows, missing.first());
         later([row] { emit row->clicked(); });
     });
-    step("fetch A password", [] { return unsealShown() != nullptr; },
-         [] { enterPassword(unsealShown()); });
+    step("fetch A password", [] { return unsealShown() != nullptr; }, [] {
+        check(visible<SigningFlow>() == nullptr,
+              "fetch A: no signing spinner window under the password window");
+        enterPassword(unsealShown());
+    });
     step("xpubs fetched", [] {
         auto *m = wizardAt(CreatePolicy::View::Xpubs);
         return m != nullptr && m->m_asks.isEmpty() && m->missingXpubs().isEmpty();
