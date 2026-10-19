@@ -202,7 +202,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 [[package]]
 name = "bbqr"
 version = "0.6.0"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bwk-error",
 ]
@@ -275,29 +275,6 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "unicode-normalization",
-]
-
-[[package]]
-name = "bitbox-api"
-version = "0.9.0"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
-dependencies = [
- "base32",
- "bitcoin",
- "bwk-error",
- "byteorder",
- "chrono",
- "getrandom 0.2.17",
- "hex",
- "hidapi",
- "noise-protocol",
- "noise-rust-crypto",
- "num-bigint",
- "prost",
- "semver",
- "serde",
- "serde_json",
- "zeroize",
 ]
 
 [[package]]
@@ -470,7 +447,7 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 [[package]]
 name = "bwk"
 version = "0.0.8"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bip39",
  "bwk-backoff",
@@ -493,7 +470,7 @@ dependencies = [
 [[package]]
 name = "bwk-backoff"
 version = "0.0.3"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "rand 0.9.2",
 ]
@@ -501,7 +478,7 @@ dependencies = [
 [[package]]
 name = "bwk-bup"
 version = "0.1.0"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bwk-descriptor",
  "bwk-keys",
@@ -512,7 +489,7 @@ dependencies = [
 [[package]]
 name = "bwk-coin"
 version = "0.0.1"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bitcoin",
  "bwk-descriptor",
@@ -525,7 +502,7 @@ dependencies = [
 [[package]]
 name = "bwk-descriptor"
 version = "0.0.1"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bwk-error",
  "bwk-keys",
@@ -537,7 +514,7 @@ dependencies = [
 [[package]]
 name = "bwk-electrum"
 version = "0.0.4"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bitcoin_slices",
  "bwk-backoff",
@@ -557,8 +534,8 @@ dependencies = [
 
 [[package]]
 name = "bwk-error"
-version = "0.0.1"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+version = "0.1.0"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -567,32 +544,43 @@ dependencies = [
 
 [[package]]
 name = "bwk-hwi"
-version = "0.0.30"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+version = "0.1.0"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
- "bitbox-api",
+ "base32",
  "bitcoin",
+ "bwk-error",
  "bwk-psbt",
+ "byteorder",
+ "chrono",
  "coldcard",
  "crossbeam",
+ "getrandom 0.2.17",
  "hex",
  "hidapi",
  "ledger-apdu",
- "ledger-bitcoin-client",
- "ledger-transport-hidapi",
+ "log",
+ "miniscript",
+ "noise-protocol",
+ "noise-rust-crypto",
+ "num-bigint",
+ "prost",
  "regex",
+ "semver",
  "serde",
  "serde_bytes",
  "serde_cbor",
+ "serde_json",
  "serialport",
  "tracing",
  "ureq",
+ "zeroize",
 ]
 
 [[package]]
 name = "bwk-keys"
 version = "0.0.1"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bip39",
  "bitcoin",
@@ -604,7 +592,7 @@ dependencies = [
 [[package]]
 name = "bwk-musig"
 version = "0.0.1"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bwk-error",
  "secp256k1 0.33.1",
@@ -613,7 +601,7 @@ dependencies = [
 [[package]]
 name = "bwk-persist"
 version = "0.0.1"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bwk-error",
  "fs2",
@@ -625,7 +613,7 @@ dependencies = [
 [[package]]
 name = "bwk-psbt"
 version = "0.0.1"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bitcoin",
  "bwk-error",
@@ -634,7 +622,7 @@ dependencies = [
 [[package]]
 name = "bwk-qr"
 version = "0.0.1"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bbqr",
  "bwk-error",
@@ -646,7 +634,7 @@ dependencies = [
 [[package]]
 name = "bwk-qr-protocol"
 version = "0.0.1"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bitcoin",
 ]
@@ -654,7 +642,7 @@ dependencies = [
 [[package]]
 name = "bwk-sign"
 version = "0.0.1"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bip39",
  "bwk-descriptor",
@@ -674,7 +662,7 @@ dependencies = [
 [[package]]
 name = "bwk-sp"
 version = "0.1.0"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bech32 0.9.1",
  "bip39",
@@ -702,7 +690,7 @@ dependencies = [
 [[package]]
 name = "bwk-tx"
 version = "0.0.1"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bitcoin",
  "bwk-coin",
@@ -717,7 +705,7 @@ dependencies = [
 [[package]]
 name = "bwk-utils"
 version = "0.0.1"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "bitcoin",
  "bwk-sign",
@@ -912,7 +900,7 @@ dependencies = [
 [[package]]
 name = "coldcard"
 version = "0.13.0"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "aes",
  "base58",
@@ -2024,30 +2012,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ledger-bitcoin-client"
-version = "0.6.0"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
-dependencies = [
- "bitcoin",
- "miniscript",
-]
-
-[[package]]
-name = "ledger-transport-hidapi"
-version = "0.10.0"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
-dependencies = [
- "bwk-error",
- "byteorder",
- "cfg-if",
- "hex",
- "hidapi",
- "ledger-apdu",
- "libc",
- "log",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.180"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3092,7 +3056,7 @@ dependencies = [
 [[package]]
 name = "secp256k1_spscan-sys"
 version = "0.1.0"
-source = "git+https://github.com/pythcoiner/bwk.git?rev=dc419ad1e667dc6076323391fe77e0700756ddef#dc419ad1e667dc6076323391fe77e0700756ddef"
+source = "git+https://github.com/pythcoiner/bwk.git?rev=093524e0a4bdeebacfb4fdf3e8c11e7227def06b#093524e0a4bdeebacfb4fdf3e8c11e7227def06b"
 dependencies = [
  "cc",
 ]

@@ -278,7 +278,7 @@ impl Account {
 
     /// Get all coins (both spent and unspent, SP + sub-accounts).
     pub fn coins(&self) -> Vec<RustCoin> {
-        use bwk_sp::account::unified::CoinOrigin;
+        use bwk_sp::bwk::bwk_electrum::notification::CoinOrigin;
 
         let Some(inner) = &self.inner else {
             return vec![];
@@ -295,11 +295,13 @@ impl Account {
             .map(|coin| {
                 let account_type = match coin.origin {
                     CoinOrigin::Sp => "SP",
-                    CoinOrigin::SubAccount(index) => match scripts.get(index).copied().flatten() {
-                        Some(SubAccountScript::Segwit) => "Segwit",
-                        Some(SubAccountScript::Taproot) => "Taproot",
-                        None => "Unknown",
-                    },
+                    CoinOrigin::SubAccount { index, .. } => {
+                        match scripts.get(index).copied().flatten() {
+                            Some(SubAccountScript::Segwit) => "Segwit",
+                            Some(SubAccountScript::Taproot) => "Taproot",
+                            None => "Unknown",
+                        }
+                    }
                 }
                 .to_string();
                 RustCoin {
@@ -434,7 +436,7 @@ impl Account {
 
         // Parse outputs
         for output in &tx_template.outputs {
-            let addr = RecipientAddress::try_from(output.address.clone())
+            let addr = RecipientAddress::parse(&output.address, network)
                 .map_err(|e| TemplateError::Address(output.address.clone(), format!("{e}")))?;
 
             if output.max {
@@ -1272,6 +1274,11 @@ pub(crate) fn convert_notification(notif: BwkNotification) -> Notification {
             flag: NotificationFlag::CoinUpdate,
             payload: String::new(),
         },
+        // The coin store gained or lost a coin: the coins need a refresh.
+        BwkNotification::CoinReceived { .. } | BwkNotification::CoinSpent { .. } => Notification {
+            flag: NotificationFlag::CoinUpdate,
+            payload: String::new(),
+        },
         BwkNotification::PaymentHistoryUpdated => Notification {
             flag: NotificationFlag::PaymentUpdated,
             payload: String::new(),
@@ -1341,7 +1348,7 @@ fn convert_sp_notification(sp_notif: SpNotification) -> Notification {
             flag: NotificationFlag::StoppingScan,
             payload: String::new(),
         },
-        SpNotification::ScanStopped => Notification {
+        SpNotification::ScanStopped { .. } => Notification {
             flag: NotificationFlag::ScanStopped,
             payload: String::new(),
         },
@@ -1361,6 +1368,20 @@ fn convert_sp_notification(sp_notif: SpNotification) -> Notification {
         SpNotification::OutputSpent(outpoint) => Notification {
             flag: NotificationFlag::OutputSpent,
             payload: outpoint.to_string(),
+        },
+        // A sub-account's coin, as the SP ones above.
+        SpNotification::SubAccountCoinReceived { outpoint, .. } => Notification {
+            flag: NotificationFlag::NewOutput,
+            payload: outpoint.to_string(),
+        },
+        SpNotification::SubAccountCoinSpent { outpoint, .. } => Notification {
+            flag: NotificationFlag::OutputSpent,
+            payload: outpoint.to_string(),
+        },
+        // Blocks were replaced from `fork_height`: the coins change.
+        SpNotification::Reorg { fork_height } => Notification {
+            flag: NotificationFlag::CoinUpdate,
+            payload: fork_height.to_string(),
         },
         // Silent broadcasts through its own Electrum path, so these only arrive when
         // the account broadcasts on its own; both change local state.
@@ -1402,6 +1423,12 @@ fn convert_electrum_notification(notif: TxListenerNotif) -> Notification {
             payload: e.to_string(),
         },
         TxListenerNotif::Stopped => Notification {
+            flag: NotificationFlag::ElectrumStopped,
+            payload: String::new(),
+        },
+        // The connection dropped (a dead socket the keepalive caught, among others):
+        // the listener exited, the account reconnects as on any loss.
+        TxListenerNotif::Disconnected => Notification {
             flag: NotificationFlag::ElectrumStopped,
             payload: String::new(),
         },
@@ -1646,7 +1673,7 @@ fn sp_coin_entry_to_coin(
             script_pubkey: entry.script().clone(),
         },
         outpoint,
-        height: Some(entry.height() as u64),
+        height: entry.height().map(u64::from),
         sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
         status: bwk_sp::bwk::bwk_coin::CoinStatus::Confirmed,
         label: None,

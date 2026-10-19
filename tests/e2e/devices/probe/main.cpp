@@ -302,6 +302,10 @@ private:
 };
 
 ColdcardDriver g_cc_driver;
+// Since the last Electrum event the run caused.
+QElapsedTimer g_since;
+// A ping every 20 s, unanswered after 5 s: a dead link is caught within this.
+constexpr qint64 KEEPALIVE_DETECT_MS = 40000;
 // The relative timelock, in blocks, of the Coldcard's recovery path.
 constexpr int RECOVERY_BLOCKS = 3;
 // Since the wizard sent the Coldcard its enroll request.
@@ -485,6 +489,11 @@ auto unsealShown() -> keys::modal::Unseal * {
 
 auto widget() -> MusigAccountWidget * {
     return g_window->findChild<MusigAccountWidget *>();
+}
+
+// The account's Electrum connection is up.
+auto electrumUp() -> bool {
+    return widget() != nullptr && widget()->controller()->isEndpointRunning(Endpoint::Electrum);
 }
 
 auto sendScreen() -> account::view::Send * {
@@ -1624,6 +1633,35 @@ void addSteps() {
         later([m] { m->accept(); });
     });
 
+    // ===== Electrum going away =====
+    // The server closes the connection (a restart): the account sees it and reconnects.
+    step("electrum connected", [] { return electrumUp(); }, [] {
+        check(chain("relay drop").toInt() >= 1, "the relay dropped the account's connection");
+        g_since.start();
+    });
+    step("electrum drop seen", [] { return !electrumUp(); }, [] {
+        std::printf("drop seen after %lld ms\n", g_since.elapsed());
+        g_since.start();
+    });
+    step("electrum reconnected", [] { return electrumUp(); }, [] {
+        check(true, QStringLiteral("the account reconnected after the server closed, in %1 ms")
+                        .arg(g_since.elapsed()));
+        // A link dead with no close (sleep, NAT, wifi lost): only the keepalive's
+        // unanswered ping can tell.
+        check(chain("relay mute") == "muted", "the relay went silent");
+        g_since.start();
+    });
+    step("electrum silent death seen", [] { return !electrumUp(); }, [] {
+        check(g_since.elapsed() < KEEPALIVE_DETECT_MS,
+              QStringLiteral("the dead link was caught in %1 ms").arg(g_since.elapsed()));
+        check(chain("relay unmute") == "unmuted", "the relay relays again");
+        g_since.start();
+    });
+    step("electrum reconnected after the dead link", [] { return electrumUp(); }, [] {
+        check(true, QStringLiteral("the account reconnected after the dead link, in %1 ms")
+                        .arg(g_since.elapsed()));
+    });
+
     // ===== End =====
     step("history", [] { return visible<catalog::Modal>() == nullptr; },
          [] { widget()->controller()->historyClicked(); });
@@ -1688,8 +1726,10 @@ auto main(int argc, char *argv[]) -> int {
     if (!ready.startsWith("READY ")) {
         return 1;
     }
-    g_electrum = "tcp://127.0.0.1:" + ready.section(':', -1);
-    std::printf("electrum %s\n", g_electrum.toStdString().c_str());
+    // Through the chain's relay: the run can make the server go away under the app.
+    g_electrum = "tcp://127.0.0.1:" + chain("relay");
+    std::printf("electrum %s (relaying %s)\n", g_electrum.toStdString().c_str(),
+                ready.toStdString().c_str());
     g_coldcard.start();
 
     Theme::init();

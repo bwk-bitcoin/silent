@@ -1935,10 +1935,21 @@ pub fn validate_address(address: String) -> String {
     if address.is_empty() {
         return String::new();
     }
-    match bwk_sp::receiver::RecipientAddress::try_from(address) {
-        Ok(_) => String::new(),
-        Err(e) => e.to_string(),
+    // No network here: an address valid on any network passes.
+    let networks = [
+        bitcoin::Network::Bitcoin,
+        bitcoin::Network::Testnet,
+        bitcoin::Network::Signet,
+        bitcoin::Network::Regtest,
+    ];
+    let mut error = String::new();
+    for network in networks {
+        match bwk_sp::receiver::RecipientAddress::parse(&address, network) {
+            Ok(_) => return String::new(),
+            Err(e) => error = e.to_string(),
+        }
     }
+    error
 }
 
 /// Connect over `scheme` and answer a server.version handshake, the client ready for

@@ -147,7 +147,8 @@ impl HwiService {
         let Some(device) = self.supported(device_id) else {
             return false;
         };
-        device.get_extended_pubkey(req_id, &deriv);
+        // No display: a device shows the path on its own when it asks the user.
+        device.get_extended_pubkey(req_id, &deriv, false);
         true
     }
 

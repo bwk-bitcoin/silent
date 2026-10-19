@@ -712,7 +712,7 @@ fn parse_recipient(
     address: &str,
     network: bitcoin::Network,
 ) -> Result<bitcoin::Address, TemplateError> {
-    if let Ok(RecipientAddress::SpAddress(_)) = RecipientAddress::try_from(address.to_string()) {
+    if let Ok(RecipientAddress::SpAddress(_)) = RecipientAddress::parse(address, network) {
         return Err(TemplateError::Address(
             address.to_string(),
             SP_RECIPIENT_UNSUPPORTED.to_string(),
