@@ -19,6 +19,7 @@ public:
     ReqId balance() override;
     ReqId newReceiveAddress() override;
     ReqId newChangeAddress() override;
+    ReqId descriptor() override;
     ReqId raw(const QByteArray &request) override;
 
 private slots:

@@ -98,6 +98,15 @@ ReqId SpAccount::newChangeAddress() {
     return reqId;
 }
 
+ReqId SpAccount::descriptor() {
+    ReqId reqId = nextReqId();
+    if (!accountReady(reqId)) {
+        return reqId;
+    }
+    emit IAccount::descriptor(reqId, toQString(m_controller->getAccount().value()->descriptor()));
+    return reqId;
+}
+
 ReqId SpAccount::raw(const QByteArray &request) {
     Q_UNUSED(request);
     ReqId reqId = nextReqId();

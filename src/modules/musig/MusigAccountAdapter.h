@@ -20,6 +20,7 @@ public:
     auto balance() -> ReqId override;
     auto newReceiveAddress() -> ReqId override;
     auto newChangeAddress() -> ReqId override;
+    auto descriptor() -> ReqId override;
     auto raw(const QByteArray &request) -> ReqId override;
 
 public slots:

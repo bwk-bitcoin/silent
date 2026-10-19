@@ -19,6 +19,7 @@ public:
     ReqId balance() override { return 0; }
     ReqId newReceiveAddress() override { return 0; }
     ReqId newChangeAddress() override { return 0; }
+    ReqId descriptor() override { return 0; }
     ReqId raw(const QByteArray &request) override {
         Q_UNUSED(request);
         return 0;

@@ -96,6 +96,15 @@ auto MusigAccountAdapter::newChangeAddress() -> ReqId {
     return reqId;
 }
 
+auto MusigAccountAdapter::descriptor() -> ReqId {
+    ReqId reqId = nextReqId();
+    if (!accountReady(reqId)) {
+        return reqId;
+    }
+    emit IAccount::descriptor(reqId, toQString(m_controller->getDescriptor()));
+    return reqId;
+}
+
 auto MusigAccountAdapter::raw(const QByteArray &request) -> ReqId {
     Q_UNUSED(request);
     ReqId reqId = nextReqId();

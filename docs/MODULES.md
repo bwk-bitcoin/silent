@@ -434,6 +434,7 @@ public:
     virtual ReqId balance() = 0;
     virtual ReqId newReceiveAddress() = 0;
     virtual ReqId newChangeAddress()  = 0;
+    virtual ReqId descriptor() = 0;    // the full descriptor
     virtual ReqId raw(const QByteArray &request) = 0;   // custom, on demand
 signals:
     void name(ReqId, QString);
@@ -442,6 +443,7 @@ signals:
     void balance(ReqId, plugin::Balance);
     void receiveAddress(ReqId, QString address);
     void changeAddress(ReqId, QString address);
+    void descriptor(ReqId, QString descriptor);
     void raw(ReqId, QByteArray response);
     void error(std::optional<ReqId>, QString message);
 };
@@ -560,6 +562,12 @@ accounts treats them all the same. The account capability covers coins, addresse
 and balance; it **does not include signing methods** (signing is the separate
 `ISigner` capability, see below). Fine-grained, kind-specific extension capabilities
 can be added later if a real cross-account kind-specific operation appears.
+
+`descriptor()` answers the account's **full** descriptor on `descriptor(ReqId,
+QString)`: the sp() descriptor of an sp account (its scan key and spend public key),
+the tr() / musig() descriptor of a Multikey account. Whoever holds an sp descriptor
+can scan the account, so which modules may call it is the host's to decide (see the
+caller whitelist, ws-plaude/silent#35).
 
 ### Feeds
 
