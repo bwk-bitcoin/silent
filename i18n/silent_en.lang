@@ -264,6 +264,14 @@ btn-scanning => "Scanning…"
 
 btn-disable-plugin => "Disable Plugin"
 
+btn-plugin-access => "Access"
+
+btn-forget-access => "Forget"
+
+btn-allow-access => "Allow"
+
+btn-deny-access => "Deny"
+
 btn-add-key => "Add Key"
 
 btn-check => "Check"
@@ -1051,6 +1059,48 @@ settings-section-belongs
 settings-plugin-no-library => "No plugin library found in its folder."
 
 settings-plugin-not-silent => "This library is not a Silent plugin."
+
+plugin-access-prompt-title => "Allow Plugin Access?"
+
+plugin-access-prompt-intro => "%1 (%2  v%3) asks to use:"
+
+plugin-access-accounts => "Accounts"
+
+plugin-access-accounts-sub
+=> "The name, coins, balance, addresses and descriptor of every account.";;
+
+plugin-access-keys => "Keys"
+
+plugin-access-keys-sub
+=> "Your registered keys: signing requests, xpubs and address checks.";;
+
+plugin-access-library => "Library %1…"
+
+plugin-access-prompt-note
+=> "Plugins run inside Silent: allow only one you trust. The answer is kept for this version of the plugin, an update asks again. Change it in Settings, Plugin Manager, Access.";;
+
+plugin-access-flow-title => "%1 Access"
+
+plugin-access-flow-text
+=> "What %1 may use, for each version of its library you answered. A change applies at once. Forget an answer and Silent asks again on the plugin's next use.";;
+
+plugin-access-current => "The version loaded now."
+
+plugin-access-earlier => "An earlier version."
+
+plugin-access-unasked => "Not asked yet: %1."
+
+plugin-access-none => "No answer kept: Silent asks on the plugin's next use."
+
+plugin-access-refused-account
+=> "This plugin may not use your accounts. Allow it in Settings, Plugin Manager, Access.";;
+
+plugin-access-refused-keys
+=> "This plugin may not use your keys. Allow it in Settings, Plugin Manager, Access.";;
+
+plugin-access-no-account => "The account is gone."
+
+plugin-access-no-keys => "The keys module is not running."
 
 musig-account-type => "Multikey Wallet"
 

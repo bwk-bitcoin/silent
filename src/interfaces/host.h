@@ -54,14 +54,29 @@ public:
     virtual void removeInstance(const QString &id, IModule *owner) = 0;
     // An instance retires itself: it holds the device handle, so it sees the disconnect.
     virtual void retireInstance(IInstance *self) = 0;
-    [[nodiscard]] virtual QList<IInstance*> instances() const = 0;
+    // The live instances, as the calling module sees them: each one's account() is a
+    // handle that stamps `caller` on every IAccount call, refuses it when the caller may
+    // not use accounts (see requestAccess()), and passes on only the answers to the
+    // caller's own requests. A refused request returns 0 and answers
+    // error(std::nullopt, ...).
+    [[nodiscard]] virtual QList<IInstance *> instances(IModule *caller) = 0;
     [[nodiscard]] virtual QList<plugin::SignerEntry> signers() const = 0;
 
     // The keys module registers itself once. A second registration from a different
     // module is refused, the way a duplicate instance id is. keys() answers null until
     // the module has registered, so every caller checks.
     virtual void setKeys(IKeys *keys, IModule *owner) = 0;
-    [[nodiscard]] virtual IKeys *keys() const = 0;
+    // The keys, as the calling module sees them: a handle that stamps `caller` on every
+    // request, refuses it with error() when the caller may not use keys, and passes on
+    // only the answers to the requests it allocated with newRequest(). The same handle
+    // for every call of one module.
+    [[nodiscard]] virtual IKeys *keys(IModule *caller) = 0;
+    // What the calling module may use. For an external plugin, asks the user for each
+    // grant in `wanted` its library has no answer for yet, and saves the answer; a grant
+    // already refused is not asked again (the user changes it in Settings). The host
+    // also asks on a plugin's first IAccount or IKeys call, so asking here first is
+    // only needed to ask at a moment the plugin picks. GUI thread only.
+    virtual auto requestAccess(IModule *caller, plugin::Access wanted) -> plugin::Access = 0;
 
     // A module states whether it currently needs signing devices polled. The host keeps
     // one flag per module and polls while any of them is true, so asking twice is the

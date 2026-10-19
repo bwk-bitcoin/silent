@@ -51,8 +51,12 @@ set(CMAKE_AUTOUIC ON)
 # Reused by the optional host smoke target so it links the real Host/PluginRegistry.
 set(SILENT_APP_SOURCES
     src/QtAbiSurface.cpp
+    src/host/CallerHandles.h
+    src/host/CallerHandles.cpp
     src/host/Host.h
     src/host/Host.cpp
+    src/host/PluginAccess.h
+    src/host/PluginAccess.cpp
     src/host/PluginRegistry.h
     src/host/PluginRegistry.cpp
     src/interfaces/host.h
@@ -216,6 +220,8 @@ set(SILENT_APP_SOURCES
     src/views/MenuTab.cpp
     src/views/modals/AppSettings.h
     src/views/modals/AppSettings.cpp
+    src/views/modals/appsettings/AccessFlow.h
+    src/views/modals/appsettings/AccessFlow.cpp
     src/views/modals/appsettings/DisableFlow.h
     src/views/modals/appsettings/DisableFlow.cpp
     src/views/modals/appsettings/SectionFlow.h
@@ -246,6 +252,8 @@ set(SILENT_APP_SOURCES
     src/modules/sp/SpSigning.cpp
     src/views/modals/ConfirmDelete.h
     src/views/modals/ConfirmDelete.cpp
+    src/views/modals/PluginAccessPrompt.h
+    src/views/modals/PluginAccessPrompt.cpp
     src/views/modals/AccountType.cpp
     src/theme/Icon.h
     src/theme/Icon.cpp

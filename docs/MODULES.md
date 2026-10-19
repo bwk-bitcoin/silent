@@ -264,13 +264,23 @@ public:
     void removeInstance(const QString &id, IModule *owner);
     void retireInstance(IInstance *self);
 
-    // discovery: the live instances. A consumer gates each capability on its
-    // implemented() (e.g. inst->account()->implemented()).
-    QList<IInstance*> instances() const;
+    // discovery: the live instances, as the calling module sees them. A consumer
+    // gates each capability on its implemented() (e.g.
+    // inst->account()->implemented()). Each account() is a handle that stamps the
+    // caller on every IAccount call and checks its access (see "Callers and access").
+    QList<IInstance*> instances(IModule *caller);
 
     // the live signers, sorted by instanceId: the pre-filtered form of that walk.
     // Every device a module can see is listed, usable or not; check state().
     QList<plugin::SignerEntry> signers() const;
+
+    // the keys module, as the calling module sees it: a handle that stamps the caller
+    // on every IKeys call and checks its access. Null until the keys module registered.
+    IKeys *keys(IModule *caller);
+
+    // what the calling module may use: asks the user for the grants in `wanted` an
+    // external plugin has no answer for yet. GUI thread only.
+    plugin::Access requestAccess(IModule *caller, plugin::Access wanted);
 
     // a module states whether it needs signing devices polled. One flag per module,
     // ORed: polling runs while any module wants it. Asking twice is asking once.
@@ -320,6 +330,42 @@ signals:
     void launcherRefreshRequested();  // refreshLauncher() was called
 };
 ```
+
+### Callers and access
+
+A module reaches the accounts and the keys only through the handles the host gives it:
+`Host::get()->instances(this)` and `Host::get()->keys(this)`, passing its own
+`IModule *`. Every request through a handle is stamped with its caller, which the
+account or the keys module reads with `caller()` at the start of the request:
+
+```cpp
+struct Caller {
+    QString moduleId;   // the module's meta() "id"
+    QString pluginId;
+    bool external;      // loaded at run time from a plugin library
+    QString pluginHash; // sha256 of the plugin library, empty for an internal module
+};
+```
+
+The host itself calls accounts directly: a request with an empty `moduleId` comes from
+the host. A handle passes on only the answers to its own requests (the ids it got
+back, or allocated with `newRequest()`); updates an account pushes with `ReqId == 0`, and
+errors tied to no request, go to every caller allowed to use accounts (or keys).
+
+The host hashes an external plugin's library before `QPluginLoader::load()`, so a plugin
+update has a new hash. Built-in modules may use everything. An external plugin needs two
+separate grants, kept in `~/.silent/app.json` per library hash: **Accounts** (`IAccount`,
+on every account) and **Keys** (`IKeys`). On its first call needing a grant it has no
+answer for, the host asks the user (Allow / Deny) and keeps the answer; a denied grant
+is not asked again. A refused request answers `error()` (IKeys) or returns `0` and
+answers `error(std::nullopt, ...)` (IAccount). A plugin can ask up front, at a moment it
+picks, with `requestAccess()`. The user changes or forgets the answers in global
+Settings, Plugin Manager, Access, per library hash.
+
+An account can enforce a finer whitelist of its own on top, since it knows the caller.
+
+Plugins run in Silent's process: a hostile plugin can bypass the handles. The access
+check gates well-behaved plugins, it is not a security boundary.
 
 ## Threading Model
 
@@ -566,8 +612,8 @@ can be added later if a real cross-account kind-specific operation appears.
 `descriptor()` answers the account's **full** descriptor on `descriptor(ReqId,
 QString)`: the sp() descriptor of an sp account (its scan key and spend public key),
 the tr() / musig() descriptor of a Multikey account. Whoever holds an sp descriptor
-can scan the account, so which modules may call it is the host's to decide (see the
-caller whitelist, ws-plaude/silent#35).
+can scan the account, so an external plugin calls it only with the Accounts grant (see
+"Callers and access").
 
 ### Feeds
 
@@ -580,11 +626,11 @@ pushes a consumer subscribes to):
 - `raw(ReqId, QByteArray data)`: feed-defined raw bytes for anything not covered by
   the typed signals.
 
-A consumer walks `Host::get()->instances()`, gates on `feed()->implemented()`, and
+A consumer walks `Host::get()->instances(this)`, gates on `feed()->implemented()`, and
 connects the signals it cares about:
 
 ```cpp
-for (auto *inst : Host::get()->instances()) {
+for (auto *inst : Host::get()->instances(this)) {
     auto *f = inst->feed();
     if (!f->implemented()) continue;
     connect(f, &IFeed::conversionRate, this, &MyWidget::onPrice, qontrol::UNIQUE);
@@ -637,7 +683,7 @@ tracks what is actually plugged in.
 
 ### Signing through the keys module (IKeys)
 
-An account never picks a signer. It calls `Host::get()->keys()->sign(...)` with the PSBT
+An account never picks a signer. It calls `Host::get()->keys(module)->sign(...)` with the PSBT
 and its descriptors, and the keys module owns the picker and every route step (USB, QR,
 hot key, SD card). Each request answers exactly once: `signed_`, `error` or `cancelled`.
 
@@ -712,7 +758,7 @@ A key use case is moving funds between sibling accounts (e.g. a consolidation or
 swap plugin). The account capability has no signing methods, so signing always routes
 through one or more `ISigner` instances.
 
-- **Send TO a sibling**: pick a recipient instance from `Host::get()->instances()`
+- **Send TO a sibling**: pick a recipient instance from `Host::get()->instances(this)`
   (gated on `account()->implemented()`), call `account()->newReceiveAddress()`, and
   read the address off its `receiveAddress(ReqId, ...)` signal.
 - **Spend FROM a sibling**: call the source `account()->coins()`, assemble a PSBT

@@ -15,9 +15,24 @@
 #include <string>
 #include <utility>
 
+namespace {
+MusigModule *gMusigModule = nullptr;
+} // namespace
+
 MusigModule::MusigModule() : IModule(nullptr) {
+    gMusigModule = this;
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
             &MusigModule::onInstanceRemoved, qontrol::UNIQUE);
+}
+
+MusigModule::~MusigModule() {
+    if (gMusigModule == this) {
+        gMusigModule = nullptr;
+    }
+}
+
+auto MusigModule::get() -> MusigModule * {
+    return gMusigModule;
 }
 
 auto MusigModule::meta() const -> QMap<QString, QString> {

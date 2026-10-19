@@ -12,6 +12,7 @@
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
+#include "modules/sp/SpModule.h"
 #include "theme/Palette.h"
 #include "views/utils.h"
 
@@ -112,32 +113,31 @@ auto SpSigning::showReuseWarning(PsbtValidation result) -> bool {
 
 void SpSigning::showSignerStep() {
     auto &account = m_controller->getAccount();
-    if (!account.has_value() || !m_psbt_result.has_value() || Host::get()->keys() == nullptr) {
+    auto *keys = Host::get()->keys(SpModule::get());
+    if (!account.has_value() || !m_psbt_result.has_value() || keys == nullptr) {
         AppController::execModal(
             new catalog::MessageModal(TR("common-error"), TR("send-transaction-state-lost")));
         return;
     }
 
-    connect(Host::get()->keys(), &IKeys::signed_, this, &SpSigning::onSignerSigned,
-            qontrol::UNIQUE);
-    connect(Host::get()->keys(), &IKeys::error, this, &SpSigning::onSignerError, qontrol::UNIQUE);
-    connect(Host::get()->keys(), &IKeys::cancelled, this, &SpSigning::onSignerCancelled,
-            qontrol::UNIQUE);
+    connect(keys, &IKeys::signed_, this, &SpSigning::onSignerSigned, qontrol::UNIQUE);
+    connect(keys, &IKeys::error, this, &SpSigning::onSignerError, qontrol::UNIQUE);
+    connect(keys, &IKeys::cancelled, this, &SpSigning::onSignerCancelled, qontrol::UNIQUE);
 
     auto psbtV2Hex =
         QString::fromStdString(std::string(m_psbt_result.value()->bytes_v2_hex().c_str()));
     auto descriptor = QString::fromStdString(std::string(m_controller->getDescriptor().c_str()));
     auto walletName = QString::fromStdString(std::string(account.value()->name()));
-    m_sign_req_id = Host::get()->keys()->newRequest();
-    Host::get()->keys()->sign(m_sign_req_id, m_controller->network(), psbtV2Hex,
-                              QStringList{descriptor}, walletName, QString());
+    m_sign_req_id = keys->newRequest();
+    keys->sign(m_sign_req_id, m_controller->network(), psbtV2Hex, QStringList{descriptor},
+               walletName, QString());
 }
 
 void SpSigning::disconnectSigner() const {
-    if (Host::get()->keys() != nullptr) {
-        disconnect(Host::get()->keys(), &IKeys::signed_, this, &SpSigning::onSignerSigned);
-        disconnect(Host::get()->keys(), &IKeys::error, this, &SpSigning::onSignerError);
-        disconnect(Host::get()->keys(), &IKeys::cancelled, this, &SpSigning::onSignerCancelled);
+    if (auto *keys = Host::get()->keys(SpModule::get()); keys != nullptr) {
+        disconnect(keys, &IKeys::signed_, this, &SpSigning::onSignerSigned);
+        disconnect(keys, &IKeys::error, this, &SpSigning::onSignerError);
+        disconnect(keys, &IKeys::cancelled, this, &SpSigning::onSignerCancelled);
     }
 }
 

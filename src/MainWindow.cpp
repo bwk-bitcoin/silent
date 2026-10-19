@@ -204,9 +204,9 @@ auto MainWindow::retranslateUi() -> void {
 }
 
 auto MainWindow::closeEvent(QCloseEvent *event) -> void {
-    auto *host = Host::get();
+    auto *host = dynamic_cast<HostImpl *>(Host::get());
     if (host != nullptr) {
-        auto activeInstances = host->instances();
+        auto activeInstances = host->liveInstances();
         for (auto *instance : activeInstances) {
             if (instance != nullptr) {
                 instance->stop();

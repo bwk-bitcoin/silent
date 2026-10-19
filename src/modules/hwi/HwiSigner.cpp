@@ -123,7 +123,7 @@ auto HwiSigner::registersBeforeApproval(const QString &kind) -> bool {
 }
 
 auto HwiSigner::storedHmac(const QString &descriptor) const -> QString {
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(m_module);
     if (keys == nullptr) {
         return {};
     }
@@ -131,7 +131,7 @@ auto HwiSigner::storedHmac(const QString &descriptor) const -> QString {
 }
 
 void HwiSigner::storeHmac(const QString &descriptor, const QString &hmac) const {
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(m_module);
     // The device did register: a proof not stored only costs a registration later.
     if (keys == nullptr ||
         !keys->storeRegistrationHmac(HwiModule::network(), m_fingerprint, descriptor, hmac)) {

@@ -351,7 +351,11 @@ auto AppController::requestPersistedThemePalette() -> void {
         return;
     }
 
-    const auto instances = m_host->instances();
+    auto *hostImpl = dynamic_cast<HostImpl *>(m_host);
+    if (hostImpl == nullptr) {
+        return;
+    }
+    const auto instances = hostImpl->liveInstances();
     for (auto *instance : instances) {
         if (instance == nullptr) {
             continue;

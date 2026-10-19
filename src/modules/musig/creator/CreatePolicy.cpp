@@ -24,6 +24,7 @@
 #include "interfaces/host.h"
 #include "modules/keys/KeysView.h"
 #include "modules/musig/MusigModule.h"
+#include "modules/musig/creator/MusigCreatorModule.h"
 #include "modules/musig/creator/PathEditor.h"
 #include "theme/Icon.h"
 #include "theme/Palette.h"
@@ -180,7 +181,7 @@ void CreatePolicy::doConnect() {
                        m_register_next_btn, m_verify_next_btn, m_install_btn}) {
         connect(next, &QPushButton::clicked, this, &CreatePolicy::onNextClicked, qontrol::UNIQUE);
     }
-    auto *bus = Host::get()->keys();
+    auto *bus = Host::get()->keys(MusigCreatorModule::get());
     if (bus != nullptr) {
         connect(bus, &IKeys::xpubReady, this, &CreatePolicy::onXpubReady, qontrol::UNIQUE);
         connect(bus, &IKeys::descriptorRegistered, this, &CreatePolicy::onDescriptorRegistered,
@@ -641,7 +642,7 @@ void CreatePolicy::refreshRegisterRows() {
 }
 
 void CreatePolicy::registerNextQuiet() {
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(MusigCreatorModule::get());
     if (keys == nullptr) {
         return;
     }
@@ -868,7 +869,7 @@ auto CreatePolicy::network() const -> Network {
 }
 
 auto CreatePolicy::networkKeys() const -> QList<KeyEntry> {
-    auto *bus = Host::get()->keys();
+    auto *bus = Host::get()->keys(MusigCreatorModule::get());
     return bus != nullptr ? bus->keys(network()) : QList<KeyEntry>{};
 }
 
@@ -1009,7 +1010,7 @@ void CreatePolicy::showStatus(const QString &text, catalog::LabelTone tone) {
 void CreatePolicy::runFlow() {
     auto flow = m_pending_flow;
     m_pending_flow = Flow::None;
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(MusigCreatorModule::get());
     if (keys == nullptr) {
         return;
     }
@@ -1037,7 +1038,7 @@ void CreatePolicy::runFlow() {
 }
 
 auto CreatePolicy::beginAsk(Ask ask, const QString &fingerprint) -> ReqId {
-    auto req = Host::get()->keys()->newRequest();
+    auto req = Host::get()->keys(MusigCreatorModule::get())->newRequest();
     m_asks.insert(req, {.ask = ask, .fingerprint = fingerprint});
     return req;
 }
@@ -1118,7 +1119,7 @@ void CreatePolicy::onNextClicked() {
             }
         }
         m_account_xpubs.clear();
-        if (auto *keys = Host::get()->keys(); keys != nullptr) {
+        if (auto *keys = Host::get()->keys(MusigCreatorModule::get()); keys != nullptr) {
             for (const auto &fingerprint : m_fingerprints) {
                 auto xpub = keys->cachedXpub(network(), fingerprint, accountPath());
                 if (!xpub.isEmpty()) {
@@ -1212,7 +1213,7 @@ void CreatePolicy::onPathEdited() {
 
 void CreatePolicy::onXpubRowClicked() {
     auto fingerprint = sender()->property(K_FINGERPRINT).toString();
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(MusigCreatorModule::get());
     if (keys == nullptr || busy(fingerprint)) {
         return;
     }
@@ -1269,7 +1270,7 @@ void CreatePolicy::onBackupClicked() {
 
 void CreatePolicy::onRegisterRowClicked() {
     auto fingerprint = sender()->property(K_FINGERPRINT).toString();
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(MusigCreatorModule::get());
     if (keys == nullptr || busy(fingerprint)) {
         return;
     }
@@ -1288,7 +1289,7 @@ void CreatePolicy::onSkipToggled([[maybe_unused]] bool checked) {
 
 void CreatePolicy::onVerifyRowClicked() {
     auto fingerprint = sender()->property(K_FINGERPRINT).toString();
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(MusigCreatorModule::get());
     if (keys == nullptr || busy(fingerprint)) {
         return;
     }

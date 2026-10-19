@@ -10,6 +10,7 @@ btn-add-payment => "+ Add Payment" => "NONE"
 btn-add-route => "Add Route" => "NONE"
 btn-add-this-route => "Add This Route" => "NONE"
 btn-all-settings => "All Settings" => "NONE"
+btn-allow-access => "Allow" => "NONE"
 btn-awaiting-payment => "Addr. awaiting payment (%1)" => "NONE"
 btn-back => "Back" => "NONE"
 btn-backup-descriptor => "Backup Descriptor" => "Backup Descriptor"
@@ -23,6 +24,7 @@ btn-copy-address => "Copy Address" => "NONE"
 btn-create => "Create" => "NONE"
 btn-create-account => "+ Create Account" => "+ Create Account"
 btn-delete-wallet => "Delete wallet" => "NONE"
+btn-deny-access => "Deny" => "NONE"
 btn-disable-plugin => "Disable Plugin" => "NONE"
 btn-disconnect-blindbit => "Disconnect Blindbit" => "NONE"
 btn-disconnect-electrum => "Disconnect Electrum" => "NONE"
@@ -31,6 +33,7 @@ btn-done => "Done" => "NONE"
 btn-edit-label => "Edit label" => "NONE"
 btn-fetch-xpub => "Fetch Xpub" => "NONE"
 btn-fetch-xpubs-from-the-device => "Fetch Xpubs From the Device" => "NONE"
+btn-forget-access => "Forget" => "NONE"
 btn-generate-new => "Generate New" => "NONE"
 btn-get-descriptor => "Get Descriptor" => "NONE"
 btn-get-segwit => "Segwit" => "Segwit"
@@ -49,6 +52,7 @@ btn-open-file => "Open File…" => "NONE"
 btn-open-keys-tab => "Open Keys Tab" => "NONE"
 btn-other-signer => "Other Signer" => "NONE"
 btn-pick-another-file => "Pick Another File…" => "NONE"
+btn-plugin-access => "Access" => "NONE"
 btn-qr-settings => "QR Settings" => "QR Settings"
 btn-register => "Register" => "NONE"
 btn-register-descriptor => "Register Descriptor" => "Register Descriptor"
@@ -848,6 +852,38 @@ pill-unsupported => "Unsupported" => "NONE"
 pill-used => "Used" => "NONE"
 pill-verified => "Verified" => "Verified"
 pill-waiting => "Waiting" => "NONE"
+plugin-access-accounts => "Accounts" => "NONE"
+plugin-access-accounts-sub
+=> "The name, coins, balance, addresses and descriptor of every account."
+=> "NONE";;
+plugin-access-current => "The version loaded now." => "NONE"
+plugin-access-earlier => "An earlier version." => "NONE"
+plugin-access-flow-text
+=> "What %1 may use, for each version of its library you answered. A change applies at once. Forget an answer and Silent asks again on the plugin's next use."
+=> "NONE";;
+plugin-access-flow-title => "%1 Access" => "NONE"
+plugin-access-keys => "Keys" => "NONE"
+plugin-access-keys-sub
+=> "Your registered keys: signing requests, xpubs and address checks."
+=> "NONE";;
+plugin-access-library => "Library %1…" => "NONE"
+plugin-access-no-account => "The account is gone." => "NONE"
+plugin-access-no-keys => "The keys module is not running." => "NONE"
+plugin-access-none
+=> "No answer kept: Silent asks on the plugin's next use."
+=> "NONE";;
+plugin-access-prompt-intro => "%1 (%2  v%3) asks to use:" => "NONE"
+plugin-access-prompt-note
+=> "Plugins run inside Silent: allow only one you trust. The answer is kept for this version of the plugin, an update asks again. Change it in Settings, Plugin Manager, Access."
+=> "NONE";;
+plugin-access-prompt-title => "Allow Plugin Access?" => "NONE"
+plugin-access-refused-account
+=> "This plugin may not use your accounts. Allow it in Settings, Plugin Manager, Access."
+=> "NONE";;
+plugin-access-refused-keys
+=> "This plugin may not use your keys. Allow it in Settings, Plugin Manager, Access."
+=> "NONE";;
+plugin-access-unasked => "Not asked yet: %1." => "NONE"
 receive-awaiting-segwit
 => "Segwit Addresses Awaiting Payment"
 => "Segwit-Adressen warten auf Zahlung";;

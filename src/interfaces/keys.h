@@ -114,6 +114,17 @@ public:
                                            const QString &fingerprint,
                                            const QString &descriptor) = 0;
 
+    // Who makes the request underway: the host's handle stamps it around each call, so
+    // read it at the start of a request.
+    [[nodiscard]] auto caller() const -> const plugin::Caller & {
+        return m_caller;
+    }
+
+    // Set by the host's handle only.
+    void setCaller(const plugin::Caller &caller) {
+        m_caller = caller;
+    }
+
 signals:
     // NOLINTNEXTLINE(readability-identifier-naming)
     void signed_(ReqId req_id, QString psbt_v2_hex);
@@ -133,6 +144,9 @@ signals:
     // The user closed the flow, or it already showed why there is no answer: the
     // caller shows nothing.
     void cancelled(ReqId req_id);
+
+private:
+    plugin::Caller m_caller;
 };
 
 Q_DECLARE_INTERFACE(IKeys, "dev.silent.IKeys/1.0")

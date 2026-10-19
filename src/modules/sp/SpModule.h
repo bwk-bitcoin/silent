@@ -14,6 +14,10 @@ class SpModule final : public IModule {
 
 public:
     SpModule();
+    ~SpModule() override;
+    // The one SpModule, so its views name it as the caller of Host::keys() and
+    // Host::instances(). Null before it is built.
+    [[nodiscard]] static auto get() -> SpModule *;
 
     [[nodiscard]] QMap<QString, QString> meta() const override;
     ReqId list() override;

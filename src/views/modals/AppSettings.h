@@ -50,6 +50,7 @@ public slots:
     void onLanguageSelectionChanged(int index);
     void onScanClicked();
     void onPluginToggled(bool enabled);
+    void onPluginAccessClicked();
     void onPluginsChanged();
     void onOpenSectionClicked();
     void onHostSettingsSectionsChanged();

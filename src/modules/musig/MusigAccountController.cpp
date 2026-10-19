@@ -11,6 +11,7 @@
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "modules/musig/MusigAccountWidget.h"
+#include "modules/musig/MusigModule.h"
 #include "modules/musig/SettingsExtras.h"
 #include "modules/musig/SigningSection.h"
 #include "views/utils.h"
@@ -199,6 +200,10 @@ auto MusigAccountController::saveSettings(const QHash<Endpoint, QString> &urls,
         return TR("musig-settings-invalid-url");
     }
     return {};
+}
+
+auto MusigAccountController::module() -> IModule * {
+    return MusigModule::get();
 }
 
 auto MusigAccountController::settingsExtras() -> QWidget * {
@@ -488,7 +493,7 @@ auto MusigAccountController::beginSignRequest(const QString &fingerprint)
         signingKeys().contains(fingerprint.toLower())) {
         return {nullptr, 0};
     }
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(MusigModule::get());
     if (keys == nullptr) {
         emit signingFailed(TR("musig-send-no-keys"), plugin::SignError::Other);
         return {nullptr, 0};

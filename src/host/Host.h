@@ -1,9 +1,14 @@
 #pragma once
 
+#include "host/CallerHandles.h"
 #include "interfaces/host.h"
 #include <QHash>
 #include <QObject>
 #include <QPointer>
+#include <map>
+#include <memory>
+#include <optional>
+#include <utility>
 
 class IKeys;
 class MainWindow;
@@ -17,10 +22,11 @@ public:
     void registerInstance(const QString &id, IInstance *instance, IModule *owner) override;
     void removeInstance(const QString &id, IModule *owner) override;
     void retireInstance(IInstance *self) override;
-    [[nodiscard]] QList<IInstance *> instances() const override;
+    [[nodiscard]] QList<IInstance *> instances(IModule *caller) override;
     [[nodiscard]] QList<plugin::SignerEntry> signers() const override;
     void setKeys(IKeys *keys, IModule *owner) override;
-    [[nodiscard]] IKeys *keys() const override;
+    [[nodiscard]] IKeys *keys(IModule *caller) override;
+    auto requestAccess(IModule *caller, plugin::Access wanted) -> plugin::Access override;
     void requestSignerPolling(IModule *requester, bool enabled) override;
     void refreshLauncher() override;
 
@@ -37,6 +43,19 @@ public:
 
     HostI18n *i18n() override;
     HostEvents *events() override;
+
+    // The live instances themselves, for the host's own views: modules get handles.
+    [[nodiscard]] auto liveInstances() const -> QList<IInstance *>;
+    // The keys module itself, null until it registered.
+    [[nodiscard]] auto keysModule() const -> IKeys *;
+    // Who `module` is, as its handles stamp it. Empty fields for a module no active
+    // plugin owns.
+    [[nodiscard]] static auto caller(IModule *module) -> plugin::Caller;
+    // Whether `module` may use `grant`. An external plugin with no answer yet is asked
+    // when `ask` is set and the call is on the GUI thread.
+    auto allowed(IModule *module, host::Grant grant, bool ask) -> bool;
+    // Drops the handles a module that goes away was given.
+    void dropCaller(IModule *module);
 
     void onInstanceStopped(const QString &id);
     void onInstanceStopped(IInstance *instance);
@@ -91,6 +110,7 @@ private:
     };
 
     [[nodiscard]] MainWindow *mainWindow() const;
+    void dropInstanceHandles(IInstance *instance);
     void ensureMainWindowHooked();
     void closeOwnedUi(IInstance *owner);
 
@@ -98,6 +118,12 @@ private:
     QHash<QString, IModule *> m_instance_owner;
     IKeys *m_keys = nullptr;
     IModule *m_keys_owner = nullptr;
+    // The handles each module was given, so a module gets the same one every call.
+    QHash<IModule *, host::KeysHandle *> m_keys_handles;
+    std::map<std::pair<IModule *, IInstance *>, std::unique_ptr<host::InstanceHandle>>
+        m_instance_handles;
+    // A plugin is being asked: a call made meanwhile is refused, not asked again.
+    bool m_asking_access = false;
     QHash<IModule *, bool> m_signer_polling_requests;
     bool m_signer_polling = false;
     QHash<TabId, TabEntry> m_tabs;

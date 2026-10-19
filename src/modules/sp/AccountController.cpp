@@ -1,6 +1,7 @@
 #include "AccountController.h"
 #include "AccountWidget.h"
 #include "AppController.h"
+#include "SpModule.h"
 #include "SpSigning.h"
 #include "account/views/Coins.h"
 #include "account/views/History.h"
@@ -520,6 +521,10 @@ auto AccountController::saveSettings(const QHash<Endpoint, QString> &urls, Netwo
     config->set_network(network);
     config->to_file();
     return {};
+}
+
+auto AccountController::module() -> IModule * {
+    return SpModule::get();
 }
 
 auto AccountController::settingsExtras() -> QWidget * {

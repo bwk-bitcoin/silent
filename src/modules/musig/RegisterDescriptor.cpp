@@ -12,6 +12,7 @@
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "modules/musig/MusigAccountController.h"
+#include "modules/musig/MusigModule.h"
 #include "theme/Palette.h"
 
 #include <QEvent>
@@ -27,7 +28,7 @@ const char *const K_FINGERPRINT = "fingerprint";
 
 auto keyEntries(Network network) -> QHash<QString, KeyEntry> {
     QHash<QString, KeyEntry> entries;
-    if (auto *keys = Host::get()->keys(); keys != nullptr) {
+    if (auto *keys = Host::get()->keys(MusigModule::get()); keys != nullptr) {
         for (const auto &entry : keys->keys(network)) {
             entries.insert(entry.fingerprint.toLower(), entry);
         }
@@ -68,7 +69,7 @@ void RegisterDescriptor::init() {
 void RegisterDescriptor::doConnect() {
     connect(m_done_btn, &QPushButton::clicked, this, &RegisterDescriptor::onDoneClicked,
             qontrol::UNIQUE);
-    if (auto *keys = Host::get()->keys(); keys != nullptr) {
+    if (auto *keys = Host::get()->keys(MusigModule::get()); keys != nullptr) {
         connect(keys, &IKeys::registrationChecked, this, &RegisterDescriptor::onRegistrationChecked,
                 qontrol::UNIQUE);
         connect(keys, &IKeys::descriptorRegistered, this,
@@ -117,7 +118,7 @@ auto RegisterDescriptor::onDevice(const QString &fingerprint) const -> bool {
 }
 
 void RegisterDescriptor::check(const QString &fingerprint) {
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(MusigModule::get());
     if (keys == nullptr) {
         return;
     }
@@ -201,7 +202,7 @@ void RegisterDescriptor::refresh() {
 
 void RegisterDescriptor::onRowClicked() {
     auto fingerprint = sender()->property(K_FINGERPRINT).toString();
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(MusigModule::get());
     if (keys == nullptr) {
         return;
     }

@@ -16,6 +16,7 @@
 #include "interfaces/signer.h"
 #include "modules/keys/DeviceName.h"
 #include "modules/musig/MusigAccountController.h"
+#include "modules/musig/MusigModule.h"
 #include "theme/Palette.h"
 
 #include <QDialog>
@@ -166,7 +167,7 @@ void SignModal::render(const MusigRoundStatus &status) {
     }
 
     QHash<QString, KeyEntry> entries;
-    if (auto *keys = Host::get()->keys(); keys != nullptr) {
+    if (auto *keys = Host::get()->keys(MusigModule::get()); keys != nullptr) {
         for (const auto &entry : keys->keys(m_controller->network())) {
             entries.insert(entry.fingerprint.toLower(), entry);
         }
@@ -302,7 +303,7 @@ void SignModal::showFailure(Failure failure, const QString &text) {
 }
 
 auto SignModal::onDevice(const QString &fingerprint) const -> bool {
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(MusigModule::get());
     if (keys == nullptr) {
         return false;
     }

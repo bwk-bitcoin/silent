@@ -11,7 +11,10 @@ class MusigCreatorModule final : public IModule {
 
 public:
     MusigCreatorModule();
-    ~MusigCreatorModule() override = default;
+    ~MusigCreatorModule() override;
+    // The one MusigCreatorModule, so its views name it as the caller of Host::keys() and
+    // Host::instances(). Null before it is built.
+    [[nodiscard]] static auto get() -> MusigCreatorModule *;
     // id "musig.creator"
     [[nodiscard]] auto meta() const -> QMap<QString, QString> override;
     auto list() -> ReqId override;

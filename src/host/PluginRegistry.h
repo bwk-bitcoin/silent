@@ -57,6 +57,13 @@ public:
     [[nodiscard]] bool isPluginBuiltin(const QString &plugin_id) const;
     [[nodiscard]] bool isBuiltinModule(IModule *module) const;
     [[nodiscard]] bool pluginHasBuiltinModules(const QString &plugin_id) const;
+    // The sha256 (hex) of the external plugin's library as it was last loaded, empty
+    // for a built-in plugin or one never loaded.
+    [[nodiscard]] auto pluginHash(const QString &plugin_id) const -> QString;
+    [[nodiscard]] auto pluginVersion(const QString &plugin_id) const -> QString;
+    // Who `module` is, as the host stamps it on its IAccount and IKeys calls. Empty for
+    // a module no active plugin owns.
+    [[nodiscard]] auto caller(IModule *module) const -> std::optional<plugin::Caller>;
 
 signals:
     void enabledPluginsChanged();
@@ -92,6 +99,8 @@ private:
         QString library_path;
         QString i18n_dir;
         QString load_error;
+        // The library's sha256, taken before it was loaded.
+        QString plugin_hash;
         QMap<QString, QString> meta;
         QPluginLoader *loader = nullptr;
         QObject *plugin_object = nullptr;

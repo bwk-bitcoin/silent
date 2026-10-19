@@ -3,10 +3,13 @@
 #include "AppController.h"
 #include "MainWindow.h"
 #include "catalog/containers/Modal.h"
+#include "host/PluginAccess.h"
+#include "host/PluginRegistry.h"
 #include "i18n/I18nManager.h"
 #include "interfaces/instance.h"
 #include "interfaces/keys.h"
 #include "interfaces/signer.h"
+#include "views/modals/PluginAccessPrompt.h"
 
 #include <algorithm>
 
@@ -185,7 +188,20 @@ void HostImpl::onSignerPollingRequested(IModule *requester, bool enabled) {
     emit m_events.signerPollingChanged(m_signer_polling);
 }
 
-QList<IInstance *> HostImpl::instances() const {
+QList<IInstance *> HostImpl::instances(IModule *caller) {
+    assertGuiThread();
+    QList<IInstance *> handles;
+    for (auto *instance : m_instances) {
+        auto &handle = m_instance_handles[{caller, instance}];
+        if (handle == nullptr) {
+            handle = std::make_unique<host::InstanceHandle>(this, caller, instance);
+        }
+        handles.append(handle.get());
+    }
+    return handles;
+}
+
+auto HostImpl::liveInstances() const -> QList<IInstance *> {
     assertGuiThread();
     return m_instances.values();
 }
@@ -212,9 +228,96 @@ QList<plugin::SignerEntry> HostImpl::signers() const {
     return signers;
 }
 
-IKeys *HostImpl::keys() const {
+IKeys *HostImpl::keys(IModule *caller) {
+    assertGuiThread();
+    if (m_keys == nullptr) {
+        return nullptr;
+    }
+    auto *&handle = m_keys_handles[caller];
+    if (handle == nullptr) {
+        handle = new host::KeysHandle(this, caller, m_keys);
+        handle->setParent(this);
+    }
+    return handle;
+}
+
+auto HostImpl::keysModule() const -> IKeys * {
     assertGuiThread();
     return m_keys;
+}
+
+auto HostImpl::caller(IModule *module) -> plugin::Caller {
+    auto *registry = AppController::get()->pluginRegistry();
+    if (registry == nullptr) {
+        return {};
+    }
+    return registry->caller(module).value_or(plugin::Caller{});
+}
+
+auto HostImpl::allowed(IModule *module, host::Grant grant, bool ask) -> bool {
+    auto *registry = AppController::get()->pluginRegistry();
+    auto known = registry == nullptr ? std::nullopt : registry->caller(module);
+    if (!known.has_value()) {
+        return false;
+    }
+    if (!known->external) {
+        return true;
+    }
+    plugin::Access wanted{.account = grant == host::Grant::Account,
+                          .keys = grant == host::Grant::Keys};
+    auto access = ask ? requestAccess(module, wanted) : pluginaccess::stored(known->pluginHash);
+    return grant == host::Grant::Account ? access.account : access.keys;
+}
+
+auto HostImpl::requestAccess(IModule *caller, plugin::Access wanted) -> plugin::Access {
+    auto *registry = AppController::get()->pluginRegistry();
+    auto known = registry == nullptr ? std::nullopt : registry->caller(caller);
+    if (!known.has_value()) {
+        return {};
+    }
+    if (!known->external) {
+        return {.account = true, .keys = true};
+    }
+    auto answers = pluginaccess::answers(known->pluginId, known->pluginHash);
+    bool askAccount = wanted.account && answers.account == PluginGrant::Unasked;
+    bool askKeys = wanted.keys && answers.keys == PluginGrant::Unasked;
+    bool onGuiThread = qApp != nullptr && QThread::currentThread() == qApp->thread();
+    if ((askAccount || askKeys) && onGuiThread && !m_asking_access) {
+        m_asking_access = true;
+        auto *prompt = new modal::PluginAccessPrompt(
+            registry->pluginName(known->pluginId), known->pluginId,
+            registry->pluginVersion(known->pluginId), known->pluginHash, askAccount, askKeys);
+        prompt->exec();
+        if (prompt->answered()) {
+            auto answer = prompt->allowed() ? PluginGrant::Allowed : PluginGrant::Denied;
+            if (askAccount) {
+                answers.account = answer;
+            }
+            if (askKeys) {
+                answers.keys = answer;
+            }
+            ::app_set_plugin_access(answers);
+        }
+        delete prompt;
+        m_asking_access = false;
+    }
+    return {.account = answers.account == PluginGrant::Allowed,
+            .keys = answers.keys == PluginGrant::Allowed};
+}
+
+void HostImpl::dropCaller(IModule *module) {
+    if (auto *handle = m_keys_handles.take(module); handle != nullptr) {
+        handle->deleteLater();
+    }
+    for (auto it = m_instance_handles.begin(); it != m_instance_handles.end();) {
+        it = it->first.first == module ? m_instance_handles.erase(it) : std::next(it);
+    }
+}
+
+void HostImpl::dropInstanceHandles(IInstance *instance) {
+    for (auto it = m_instance_handles.begin(); it != m_instance_handles.end();) {
+        it = it->first.second == instance ? m_instance_handles.erase(it) : std::next(it);
+    }
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
@@ -370,6 +473,7 @@ void HostImpl::removeInstance(const QString &id) {
     auto *instance = m_instances.value(id);
     instance->stop();
     closeOwnedUi(instance);
+    dropInstanceHandles(instance);
     m_instances.remove(id);
     m_instance_owner.remove(id);
     // Emitted last: a module frees its own instance from this signal.

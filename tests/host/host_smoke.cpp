@@ -55,11 +55,11 @@ void check(bool cond, const char *msg) {
 }
 
 auto hostInstanceCount() -> int {
-    return Host::get()->instances().size();
+    return dynamic_cast<HostImpl *>(Host::get())->liveInstances().size();
 }
 
 auto hostInstance(const QString &id) -> IInstance * {
-    for (auto *instance : Host::get()->instances()) {
+    for (auto *instance : dynamic_cast<HostImpl *>(Host::get())->liveInstances()) {
         if (instance != nullptr && instance->id() == id) {
             return instance;
         }

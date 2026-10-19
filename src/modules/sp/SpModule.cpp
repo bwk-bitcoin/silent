@@ -16,11 +16,23 @@
 
 namespace {
 const QString K_CREATE_INSTANCE_ID = QStringLiteral("sp.create");
+SpModule *gSpModule = nullptr;
 } // namespace
 
 SpModule::SpModule() : IModule(nullptr) {
+    gSpModule = this;
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
             &SpModule::onInstanceRemoved, qontrol::UNIQUE);
+}
+
+SpModule::~SpModule() {
+    if (gSpModule == this) {
+        gSpModule = nullptr;
+    }
+}
+
+auto SpModule::get() -> SpModule * {
+    return gSpModule;
 }
 
 QMap<QString, QString> SpModule::meta() const {

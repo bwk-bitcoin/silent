@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::datadir;
 #[cfg(test)]
 use crate::config::set_datadir;
-use crate::ffi::{BackendServer, Network, QrDisplayLevels};
+use crate::ffi::{BackendServer, Network, PluginAccess, PluginGrant, QrDisplayLevels};
 
 const DEFAULT_THEME: &str = "light";
 /// The QR display steppers' middle level, as the C++ side's `qr::DEFAULT_LEVEL`.
@@ -36,6 +36,49 @@ pub struct AppState {
     /// `"<server>:<network>"`, prefilled in Create Account.
     #[serde(default)]
     pub endpoints: BTreeMap<String, String>,
+    /// What each external plugin library may use, by its sha256.
+    #[serde(default)]
+    pub plugin_access: Vec<StoredAccess>,
+}
+
+/// One `PluginAccess`, as `app.json` stores it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredAccess {
+    pub plugin_id: String,
+    pub hash: String,
+    #[serde(default)]
+    pub account: StoredGrant,
+    #[serde(default)]
+    pub keys: StoredGrant,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StoredGrant {
+    #[default]
+    Unasked,
+    Allowed,
+    Denied,
+}
+
+impl From<StoredGrant> for PluginGrant {
+    fn from(grant: StoredGrant) -> Self {
+        match grant {
+            StoredGrant::Unasked => PluginGrant::Unasked,
+            StoredGrant::Allowed => PluginGrant::Allowed,
+            StoredGrant::Denied => PluginGrant::Denied,
+        }
+    }
+}
+
+impl From<PluginGrant> for StoredGrant {
+    fn from(grant: PluginGrant) -> Self {
+        match grant {
+            PluginGrant::Allowed => StoredGrant::Allowed,
+            PluginGrant::Denied => StoredGrant::Denied,
+            _ => StoredGrant::Unasked,
+        }
+    }
 }
 
 fn default_qr_level() -> u8 {
@@ -57,6 +100,7 @@ impl Default for AppState {
             qr_speed: DEFAULT_QR_LEVEL,
             qr_camera_contrast: DEFAULT_QR_LEVEL,
             endpoints: BTreeMap::new(),
+            plugin_access: Vec::new(),
         }
     }
 }
@@ -222,6 +266,43 @@ pub fn app_set_last_endpoint(server: BackendServer, network: Network, url: Strin
     state.save();
 }
 
+pub fn app_plugin_access() -> Vec<PluginAccess> {
+    AppState::load()
+        .plugin_access
+        .into_iter()
+        .map(|access| PluginAccess {
+            plugin_id: access.plugin_id,
+            hash: access.hash,
+            account: access.account.into(),
+            keys: access.keys.into(),
+        })
+        .collect()
+}
+
+pub fn app_set_plugin_access(access: PluginAccess) {
+    let mut state = AppState::load();
+    let stored = StoredAccess {
+        plugin_id: access.plugin_id,
+        hash: access.hash.to_lowercase(),
+        account: access.account.into(),
+        keys: access.keys.into(),
+    };
+    let unasked = stored.account == StoredGrant::Unasked && stored.keys == StoredGrant::Unasked;
+    match state
+        .plugin_access
+        .iter()
+        .position(|entry| entry.hash == stored.hash)
+    {
+        Some(index) if unasked => {
+            state.plugin_access.remove(index);
+        }
+        Some(index) => state.plugin_access[index] = stored,
+        None if unasked => {}
+        None => state.plugin_access.push(stored),
+    }
+    state.save();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,6 +427,46 @@ mod tests {
             assert!(app_last_endpoint(BackendServer::Blindbit, Network::Regtest).is_empty());
             app_set_last_endpoint(BackendServer::Blindbit, Network::Signet, String::new());
             assert!(app_last_endpoint(BackendServer::Blindbit, Network::Signet).is_empty());
+        });
+    }
+
+    #[test]
+    fn plugin_access_is_kept_per_library_hash() {
+        with_isolated_datadir(|base| {
+            let access = |hash: &str, account, keys| PluginAccess {
+                plugin_id: "example".to_string(),
+                hash: hash.to_string(),
+                account,
+                keys,
+            };
+            assert!(app_plugin_access().is_empty());
+            app_set_plugin_access(access("AA", PluginGrant::Allowed, PluginGrant::Unasked));
+            app_set_plugin_access(access("bb", PluginGrant::Denied, PluginGrant::Denied));
+            assert_eq!(
+                app_plugin_access(),
+                vec![
+                    access("aa", PluginGrant::Allowed, PluginGrant::Unasked),
+                    access("bb", PluginGrant::Denied, PluginGrant::Denied),
+                ],
+                "each library hash keeps its own answers, the hash stored lowercase"
+            );
+            app_set_plugin_access(access("aa", PluginGrant::Allowed, PluginGrant::Allowed));
+            assert_eq!(
+                app_plugin_access()[0],
+                access("aa", PluginGrant::Allowed, PluginGrant::Allowed),
+                "a new answer replaces the one stored for the same hash"
+            );
+            let stored = fs::read_to_string(base.join("app.json")).expect("read app.json");
+            assert!(
+                stored.contains("\"keys\": \"allowed\""),
+                "grants are stored by name: {stored}"
+            );
+            app_set_plugin_access(access("bb", PluginGrant::Unasked, PluginGrant::Unasked));
+            assert_eq!(
+                app_plugin_access(),
+                vec![access("aa", PluginGrant::Allowed, PluginGrant::Allowed)],
+                "forgetting both answers drops the entry"
+            );
         });
     }
 

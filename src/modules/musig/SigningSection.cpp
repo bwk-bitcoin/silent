@@ -10,6 +10,7 @@
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "modules/musig/MusigAccountController.h"
+#include "modules/musig/MusigModule.h"
 #include "modules/musig/SignModal.h"
 #include "theme/Palette.h"
 
@@ -129,7 +130,7 @@ void SigningSection::retranslateUi() {
 
 auto SigningSection::keyEntries() const -> QHash<QString, KeyEntry> {
     QHash<QString, KeyEntry> entries;
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(MusigModule::get());
     if (keys == nullptr) {
         return entries;
     }

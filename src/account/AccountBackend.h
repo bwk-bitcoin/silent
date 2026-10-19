@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <silent.h>
 
+class IModule;
 class QThread;
 class QWidget;
 
@@ -36,6 +37,8 @@ public:
     virtual auto getPaymentHistory() -> rust::Vec<RustTx> = 0;
     // The account's network, the one the keys it signs with are registered on.
     virtual auto network() -> Network = 0;
+    // The module the account belongs to: the caller its panels name to the host.
+    virtual auto module() -> IModule * = 0;
     // The kinds of address the account receives on, in the order Receive lists them.
     virtual auto addressKinds() -> QList<AddressKind> = 0;
     // A new address of `kind`, the static one for SilentPayment. Empty on failure.

@@ -30,6 +30,7 @@
 #include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
 #include "catalog/panels/receive/AddressRow.h"
+#include "host/Host.h"
 #include "i18n/I18nManager.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
@@ -49,6 +50,7 @@
 #include "modules/musig/MusigAccountController.h"
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigPlugin.h"
+#include "modules/musig/creator/MusigCreatorModule.h"
 #include "modules/musig/creator/CreatePolicy.h"
 #include "modules/musig/RegisterDescriptor.h"
 #include "modules/musig/SettingsExtras.h"
@@ -1203,7 +1205,7 @@ void addSteps() {
                m->m_registered.contains(g_fp_c) && m->m_registered.contains(g_fp_a);
     }, [] {
         auto *m = wizardAt(CreatePolicy::View::Register);
-        auto hmac = Host::get()->keys()->registrationHmac(Network::Regtest, g_fp_b, g_descriptor);
+        auto hmac = MusigCreatorModule::get() == nullptr ? QString() : Host::get()->keys(MusigCreatorModule::get())->registrationHmac(Network::Regtest, g_fp_b, g_descriptor);
         static const QRegularExpression HEX64(QStringLiteral("^[0-9a-f]{64}$"));
         check(HEX64.match(hmac).hasMatch(), "the Ledger HMAC is stored (" +
                                                 QString::number(hmac.size()) + " chars)");
@@ -1258,13 +1260,13 @@ void addSteps() {
         check(m->m_electrum.state() == catalog::EndpointRow::State::Ok,
               "electrum test passes against electrs");
         shot("11b-creator-electrum");
-        g_instances_before = Host::get()->instances().size();
+        g_instances_before = dynamic_cast<HostImpl *>(Host::get())->liveInstances().size();
         later([m] { m->m_install_btn->click(); });
     });
     step("launcher lists it", [] {
         return visible<CreatePolicy>() == nullptr && launcherButton(ACCOUNT, true) != nullptr;
     }, [] {
-        check(Host::get()->instances().size() == g_instances_before, "installed, not opened");
+        check(dynamic_cast<HostImpl *>(Host::get())->liveInstances().size() == g_instances_before, "installed, not opened");
         shot("12-launcher-after-install");
         auto *b = launcherButton(ACCOUNT, true);
         later([b] { b->click(); });

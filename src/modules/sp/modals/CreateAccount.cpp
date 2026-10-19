@@ -17,6 +17,7 @@
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "modules/keys/KeysView.h"
+#include "modules/sp/SpModule.h"
 #include "theme/Icon.h"
 #include "views/utils.h"
 
@@ -137,7 +138,7 @@ void CreateAccount::doConnect() {
     connect(this, &CreateAccount::electrumTestReady, this, &CreateAccount::onElectrumTestReady,
             qontrol::UNIQUE);
 
-    auto *bus = Host::get()->keys();
+    auto *bus = Host::get()->keys(SpModule::get());
     if (bus != nullptr) {
         connect(bus, &IKeys::spDescriptorReady, this, &CreateAccount::onSpDescriptorReady,
                 qontrol::UNIQUE);
@@ -236,7 +237,7 @@ void CreateAccount::populateKeys() {
     m_key_rows.clear();
     m_keys.clear();
 
-    auto *bus = Host::get()->keys();
+    auto *bus = Host::get()->keys(SpModule::get());
     if (bus != nullptr) {
         m_keys = bus->keys(network());
     }
@@ -352,7 +353,7 @@ void CreateAccount::onOpenKeysTab() {
 }
 
 void CreateAccount::onFetchClicked() {
-    if (m_key_fp.isEmpty() || Host::get()->keys() == nullptr) {
+    if (m_key_fp.isEmpty() || Host::get()->keys(SpModule::get()) == nullptr) {
         return;
     }
     auto *button = sender();
@@ -374,7 +375,7 @@ void CreateAccount::onFetchClicked() {
 }
 
 auto CreateAccount::takeCachedXpub(Fetch fetch) -> bool {
-    auto *bus = Host::get()->keys();
+    auto *bus = Host::get()->keys(SpModule::get());
     if (bus == nullptr) {
         return false;
     }
@@ -393,7 +394,7 @@ auto CreateAccount::takeCachedXpub(Fetch fetch) -> bool {
 }
 
 void CreateAccount::runFetch() {
-    auto *bus = Host::get()->keys();
+    auto *bus = Host::get()->keys(SpModule::get());
     if (!m_pending_fetch.has_value() || bus == nullptr) {
         return;
     }
@@ -502,7 +503,7 @@ void CreateAccount::showFetchError(const QString &message) {
 }
 
 void CreateAccount::onCreate() {
-    auto *bus = Host::get()->keys();
+    auto *bus = Host::get()->keys(SpModule::get());
     if (!disabledReason().isEmpty() || bus == nullptr) {
         return;
     }
@@ -519,7 +520,7 @@ void CreateAccount::onCreate() {
 }
 
 void CreateAccount::registerNext() {
-    auto *bus = Host::get()->keys();
+    auto *bus = Host::get()->keys(SpModule::get());
     if (bus == nullptr) {
         return;
     }

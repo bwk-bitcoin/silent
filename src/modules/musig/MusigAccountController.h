@@ -54,6 +54,7 @@ public:
     auto saveSettings(const QHash<Endpoint, QString> &urls, Network network) -> QString override;
     // The descriptor, the cosigners and Delete.
     auto settingsExtras() -> QWidget * override;
+    auto module() -> IModule * override;
     auto simulateTx(TransactionTemplate tx) -> TransactionSimulation override;
     // The spend path, Prepare and the MuSig2 rounds.
     auto sendSigning() -> account::SendSigning * override;

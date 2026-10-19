@@ -3,6 +3,7 @@
 #include "i18n/Tr.h"
 #include "interfaces/instance.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -320,6 +321,37 @@ bool PluginRegistry::isBuiltinModule(IModule *module) const {
     return m_builtin_modules.contains(module);
 }
 
+auto PluginRegistry::pluginHash(const QString &plugin_id) const -> QString {
+    auto it = m_records.constFind(plugin_id);
+    if (it == m_records.constEnd() || it->builtin) {
+        return {};
+    }
+    return it->plugin_hash;
+}
+
+auto PluginRegistry::pluginVersion(const QString &plugin_id) const -> QString {
+    auto it = m_records.constFind(plugin_id);
+    return it == m_records.constEnd() ? QString() : it->version;
+}
+
+auto PluginRegistry::caller(IModule *module) const -> std::optional<plugin::Caller> {
+    if (module == nullptr) {
+        return std::nullopt;
+    }
+    auto *plugin = m_module_owner.value(module, nullptr);
+    if (plugin == nullptr) {
+        return std::nullopt;
+    }
+    QString id = pluginId(plugin);
+    bool external = !isBuiltinModule(module);
+    return plugin::Caller{
+        .moduleId = module->meta().value(QStringLiteral("id")),
+        .pluginId = id,
+        .external = external,
+        .pluginHash = external ? pluginHash(id) : QString(),
+    };
+}
+
 QList<PluginRegistry::CreatorLauncher> PluginRegistry::externalCreatorLaunchers() const {
     QList<CreatorLauncher> creators;
     for (auto *module : enabledModulesForLauncher()) {
@@ -466,12 +498,12 @@ auto PluginRegistry::pluginLoadError(const QString &plugin_id) const -> QString 
 
 auto PluginRegistry::pluginAccountNames(const QString &plugin_id) const -> QStringList {
     QStringList names;
-    auto *host = Host::get();
+    auto *host = dynamic_cast<HostImpl *>(Host::get());
     auto recordIt = m_records.find(plugin_id);
     if (host == nullptr || recordIt == m_records.end()) {
         return names;
     }
-    for (auto *instance : host->instances()) {
+    for (auto *instance : host->liveInstances()) {
         if (instance == nullptr || m_instance_owner_by_id.value(instance->id()) != plugin_id) {
             continue;
         }
@@ -686,6 +718,17 @@ bool PluginRegistry::enablePlugin(const QString &plugin_id) {
         return false;
     }
 
+    // Hashed before the load, so the hash names the code that runs.
+    QFile library(record.library_path);
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if (!library.open(QIODevice::ReadOnly) || !hash.addData(&library)) {
+        qWarning() << "Enable failed: plugin library unreadable" << plugin_id;
+        record.load_error = library.errorString();
+        return false;
+    }
+    library.close();
+    record.plugin_hash = QString::fromLatin1(hash.result().toHex());
+
     record.loader = new QPluginLoader(record.library_path);
     if (!record.loader->load()) {
         qWarning() << "Plugin load failed:" << plugin_id << record.loader->errorString();
@@ -871,6 +914,9 @@ void PluginRegistry::deactivateModule(IModule *module) {
     if (auto *host = Host::get(); host != nullptr) {
         host->requestSignerPolling(module, false);
     }
+    if (auto *hostImpl = dynamic_cast<HostImpl *>(Host::get()); hostImpl != nullptr) {
+        hostImpl->dropCaller(module);
+    }
     module->setSignerPolling(false);
 }
 
@@ -921,7 +967,7 @@ void PluginRegistry::stopPluginInstances(const QString &plugin_id) {
         hostImpl->removeInstance(instanceId);
 
         bool stillLive = false;
-        auto afterRemove = host->instances();
+        auto afterRemove = hostImpl->liveInstances();
         for (auto *live : afterRemove) {
             if (live != nullptr && live->id() == instanceId) {
                 stillLive = true;
@@ -938,12 +984,12 @@ void PluginRegistry::stopPluginInstances(const QString &plugin_id) {
 }
 
 bool PluginRegistry::hasLiveOwnedInstances(const QString &plugin_id) const {
-    auto *host = Host::get();
+    auto *host = dynamic_cast<HostImpl *>(Host::get());
     if (host == nullptr) {
         return false;
     }
 
-    auto liveInstances = host->instances();
+    auto liveInstances = host->liveInstances();
     return std::ranges::any_of(liveInstances, [this, &plugin_id](const auto *instance) {
         return instance != nullptr && m_instance_owner_by_id.value(instance->id()) == plugin_id;
     });

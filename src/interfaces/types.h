@@ -45,6 +45,25 @@ struct SignerEntry {
     ISigner *signer{};  // routing handle for this session
 };
 
+// Who makes an IAccount or IKeys request. The host stamps it on every call that goes
+// through the handles it gives a module (Host::instances(), Host::keys()).
+struct Caller {
+    QString moduleId; // the module's meta() "id"
+    QString pluginId;
+    // Loaded at run time from a plugin library, not linked into Silent.
+    bool external{};
+    // The sha256 of the plugin library (hex), computed before it was loaded: a plugin
+    // update gives a new one. Empty for an internal module.
+    QString pluginHash;
+};
+
+// What a plugin may use: IAccount (every account) and IKeys. An internal module may
+// use both.
+struct Access {
+    bool account{};
+    bool keys{};
+};
+
 // Why a sign request failed, beyond its message.
 enum class SignError : std::uint8_t {
     Other,

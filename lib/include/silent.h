@@ -1016,6 +1016,8 @@ struct PsbtPayloadResult;
 struct CameraListResult;
 struct CameraFrameResult;
 struct QrDisplayLevels;
+enum class PluginGrant : ::std::uint8_t;
+struct PluginAccess;
 struct PsbtFileResult;
 struct DescriptorBackupResult;
 struct MusigDescriptorResult;
@@ -1866,6 +1868,35 @@ struct QrDisplayLevels final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_QrDisplayLevels
+
+#ifndef CXXBRIDGE1_ENUM_PluginGrant
+#define CXXBRIDGE1_ENUM_PluginGrant
+// The user's answer to one use an external plugin asked for.
+enum class PluginGrant : ::std::uint8_t {
+  // Not asked yet: the host asks on the plugin's first use.
+  Unasked = 0,
+  Allowed = 1,
+  Denied = 2,
+};
+#endif // CXXBRIDGE1_ENUM_PluginGrant
+
+#ifndef CXXBRIDGE1_STRUCT_PluginAccess
+#define CXXBRIDGE1_STRUCT_PluginAccess
+// What one external plugin library may use, by its sha256.
+struct PluginAccess final {
+  ::rust::String plugin_id;
+  // The sha256 of the plugin library, hex.
+  ::rust::String hash;
+  // May call `IAccount`, on every account.
+  ::PluginGrant account;
+  // May call `IKeys`.
+  ::PluginGrant keys;
+
+  bool operator==(PluginAccess const &) const noexcept;
+  bool operator!=(PluginAccess const &) const noexcept;
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PluginAccess
 
 #ifndef CXXBRIDGE1_STRUCT_PsbtFileResult
 #define CXXBRIDGE1_STRUCT_PsbtFileResult
@@ -2966,6 +2997,13 @@ void app_set_qr_camera_contrast_level(::std::uint8_t level) noexcept;
 
 // Remember the `server` address an account on `network` was created with.
 void app_set_last_endpoint(::BackendServer server, ::Network network, ::rust::String url) noexcept;
+
+// The answers given to external plugin libraries, in the order they were given.
+::rust::Vec<::PluginAccess> app_plugin_access() noexcept;
+
+// Stores the answers for `access.hash`, replacing earlier ones. An entry left
+// with both grants unasked is dropped, so the host asks again.
+void app_set_plugin_access(::PluginAccess access) noexcept;
 
 // Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
 ::PsbtFileResult sd_save_psbt(::rust::Str path, ::rust::Str psbt_hex) noexcept;

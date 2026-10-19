@@ -1,5 +1,6 @@
 #include "AppSettings.h"
 
+#include "appsettings/AccessFlow.h"
 #include "appsettings/DisableFlow.h"
 #include "appsettings/SectionFlow.h"
 
@@ -23,6 +24,7 @@
 #include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Toggle.h"
 #include "host/Host.h"
+#include "host/PluginAccess.h"
 #include "host/PluginRegistry.h"
 #include "i18n/I18nManager.h"
 #include "i18n/Tr.h"
@@ -255,6 +257,13 @@ auto AppSettings::pluginRow(const QString &id, const QString &meta) -> catalog::
     row->setMeta(meta);
     if (unloading) {
         row->setStatus(catalog::pillPluginUnloading());
+    } else if (!pluginaccess::forPlugin(id).isEmpty()) {
+        // What it may use, once it has asked for something.
+        auto *accessBtn = catalog::btnPluginAccess();
+        accessBtn->setProperty(K_PLUGIN_ID, id);
+        connect(accessBtn, &QPushButton::clicked, this, &AppSettings::onPluginAccessClicked,
+                qontrol::UNIQUE);
+        row->setStatus(accessBtn);
     }
     // Kept when empty, so the meta lines up on every row.
     row->setTrailingWidth(metric::TOGGLE_WIDTH);
@@ -342,7 +351,11 @@ void AppSettings::refreshThemeProviders() {
         return;
     }
 
-    for (auto *instance : m_host->instances()) {
+    auto *hostImpl = dynamic_cast<HostImpl *>(m_host);
+    if (hostImpl == nullptr) {
+        return;
+    }
+    for (auto *instance : hostImpl->liveInstances()) {
         if (instance == nullptr) {
             continue;
         }
@@ -587,6 +600,15 @@ void AppSettings::onPluginToggled(bool enabled) {
     if (!m_plugin_registry->setEnabled(id, true)) {
         onPluginsChanged();
     }
+}
+
+void AppSettings::onPluginAccessClicked() {
+    if (sender() == nullptr || m_plugin_registry == nullptr) {
+        return;
+    }
+    m_plugin_notice->setVisible(false);
+    m_scan_result->setVisible(false);
+    openFlow(new AccessFlow(m_plugin_registry, sender()->property(K_PLUGIN_ID).toString()));
 }
 
 void AppSettings::onPluginsChanged() {

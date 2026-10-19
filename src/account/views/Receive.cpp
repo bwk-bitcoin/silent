@@ -58,7 +58,7 @@ void Receive::doConnect() {
         connect(section.row, &catalog::AddressRow::verifyRequested, this,
                 &Receive::onVerifyRequested, qontrol::UNIQUE);
     }
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(m_backend->module());
     if (keys != nullptr) {
         connect(keys, &IKeys::error, this, &Receive::onKeysError, qontrol::UNIQUE);
     }
@@ -125,8 +125,8 @@ auto Receive::awaitingTitle(AddressKind kind) -> QString {
                                        : TR("receive-awaiting-taproot");
 }
 
-auto Receive::verifyUnavailableNote() -> QString {
-    if (Host::get()->keys() == nullptr) {
+auto Receive::verifyUnavailableNote() const -> QString {
+    if (Host::get()->keys(m_backend->module()) == nullptr) {
         return TR("receive-verify-unavailable");
     }
     return QString();
@@ -134,7 +134,7 @@ auto Receive::verifyUnavailableNote() -> QString {
 
 void Receive::showVerifyModal(const QString &address) {
     m_verify_error = verifyUnavailableNote();
-    auto *keys = Host::get()->keys();
+    auto *keys = Host::get()->keys(m_backend->module());
     if (keys == nullptr) {
         return;
     }

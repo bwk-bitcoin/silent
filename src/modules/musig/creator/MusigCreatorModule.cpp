@@ -11,9 +11,21 @@
 
 namespace {
 const QString K_CREATE_INSTANCE_ID = QStringLiteral("musig.create");
+MusigCreatorModule *gMusigCreatorModule = nullptr;
 } // namespace
 
 MusigCreatorModule::MusigCreatorModule() : IModule(nullptr) {
+    gMusigCreatorModule = this;
+}
+
+MusigCreatorModule::~MusigCreatorModule() {
+    if (gMusigCreatorModule == this) {
+        gMusigCreatorModule = nullptr;
+    }
+}
+
+auto MusigCreatorModule::get() -> MusigCreatorModule * {
+    return gMusigCreatorModule;
 }
 
 auto MusigCreatorModule::meta() const -> QMap<QString, QString> {

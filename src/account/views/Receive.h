@@ -57,7 +57,7 @@ protected:
     // Runs the verify flow; a reason it could not start is left in m_verify_error.
     void showVerifyModal(const QString &address);
     // Why the addresses cannot be verified here, empty when they can.
-    [[nodiscard]] static auto verifyUnavailableNote() -> QString;
+    [[nodiscard]] auto verifyUnavailableNote() const -> QString;
     void showAddressHistory(Section *section);
 
 private:

@@ -45,6 +45,7 @@ public:
     [[nodiscard]] auto networkEditable() const -> bool override;
     auto saveSettings(const QHash<Endpoint, QString> &urls, Network network) -> QString override;
     auto settingsExtras() -> QWidget * override;
+    auto module() -> IModule * override;
     auto simulateTx(TransactionTemplate tx) -> TransactionSimulation override;
     // Sign, then Broadcast.
     auto sendSigning() -> account::SendSigning * override;

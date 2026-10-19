@@ -189,6 +189,29 @@ auto btnDisablePlugin() -> Button * {
         {.role = ButtonRole::Destructive, .label = TR("btn-disable-plugin"), .width = BtnWidth::L});
 }
 
+auto btnPluginAccess() -> Button * {
+    return make({.role = ButtonRole::Default,
+                 .label = TR("btn-plugin-access"),
+                 .icon = icon::lock,
+                 .iconSize = 14,
+                 .width = BtnWidth::M});
+}
+
+auto btnForgetAccess() -> Button * {
+    return make(
+        {.role = ButtonRole::Default, .label = TR("btn-forget-access"), .width = BtnWidth::M});
+}
+
+auto btnAllowAccess() -> Button * {
+    return make(
+        {.role = ButtonRole::Primary, .label = TR("btn-allow-access"), .width = BtnWidth::M});
+}
+
+auto btnDenyAccess() -> Button * {
+    return make(
+        {.role = ButtonRole::Default, .label = TR("btn-deny-access"), .width = BtnWidth::M});
+}
+
 auto btnAddKey() -> Button * {
     return make({.role = ButtonRole::Primary, .label = TR("btn-add-key"), .width = BtnWidth::M});
 }
