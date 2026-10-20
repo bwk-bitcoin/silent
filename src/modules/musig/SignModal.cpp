@@ -178,7 +178,7 @@ void SignModal::requestPlan() {
     auto *thread = QThread::create([plan, network = m_controller->network(),
                                     psbt = m_plan_psbt.toStdString(),
                                     devices = std::move(devices)]() mutable {
-        *plan = ::ledger_nonce_plan(network, psbt, std::move(devices));
+        *plan = ::musig_session_plan(network, psbt, std::move(devices));
     });
     connect(thread, &QThread::finished, this, &SignModal::onPlanReady, qontrol::UNIQUE);
     connect(thread, &QThread::finished, thread, &QObject::deleteLater, qontrol::UNIQUE);

@@ -1006,6 +1006,8 @@ struct KeyOpResult;
 struct QrMessageResult;
 struct KeyInfoResult;
 struct SigningCandidate;
+struct MusigSessionCreateResult;
+struct HotCachedNonceResult;
 struct LedgerNonceSignResult;
 struct SigningPlan;
 struct FingerprintsResult;
@@ -1716,6 +1718,30 @@ struct SigningCandidate final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_SigningCandidate
+
+#ifndef CXXBRIDGE1_STRUCT_MusigSessionCreateResult
+#define CXXBRIDGE1_STRUCT_MusigSessionCreateResult
+struct MusigSessionCreateResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  bool wrong_password CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_MusigSessionCreateResult
+
+#ifndef CXXBRIDGE1_STRUCT_HotCachedNonceResult
+#define CXXBRIDGE1_STRUCT_HotCachedNonceResult
+struct HotCachedNonceResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  bool needs_password CXX_DEFAULT_VALUE(false);
+  bool musig_session CXX_DEFAULT_VALUE(false);
+  ::rust::String psbt_v2_hex;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_HotCachedNonceResult
 
 #ifndef CXXBRIDGE1_STRUCT_LedgerNonceSignResult
 #define CXXBRIDGE1_STRUCT_LedgerNonceSignResult
@@ -3285,6 +3311,20 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 // keeping its silent-payment input tweaks and ECDH shares. Only signature
 // fields are copied. Cheap; safe to call from the GUI thread.
 ::SignResult usb_merge_signed(::rust::Str original_v2_hex, ::rust::Str signed_v0_base64) noexcept;
+
+::MusigSessionCreateResult hot_create_sessions(::HotMaterial const &material, ::rust::Str password, ::rust::Str policy, ::std::uint32_t quantity) noexcept;
+
+::HotCachedNonceResult hot_cached_nonces(::HotMaterial const &material, ::rust::Str psbt_v2_hex) noexcept;
+
+::KeyOpResult musig_session_refresh(::rust::Str fingerprint) noexcept;
+
+::std::uint32_t musig_session_count(::rust::Str fingerprint, ::rust::Str policy, ::KeyRouteKind provider) noexcept;
+
+::std::uint32_t musig_session_limit() noexcept;
+
+::SigningPlan musig_session_plan(::Network network, ::rust::Str psbt_v2_hex, ::rust::Vec<::LiveDevice> devices) noexcept;
+
+::SignResult musig_session_restart(::Network network, ::rust::Str policy, ::rust::Str original, ::rust::Str prepared) noexcept;
 
 ::rust::Box<::LedgerNonceFetch> ledger_nonce_fetch(::rust::Str fingerprint, ::rust::Str policy, ::std::uint32_t quantity) noexcept;
 

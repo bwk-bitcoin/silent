@@ -541,6 +541,22 @@ mod ffi {
     }
 
     #[derive(Debug, Clone)]
+    pub struct MusigSessionCreateResult {
+        pub is_ok: bool,
+        pub error: String,
+        pub wrong_password: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct HotCachedNonceResult {
+        pub is_ok: bool,
+        pub error: String,
+        pub needs_password: bool,
+        pub musig_session: bool,
+        pub psbt_v2_hex: String,
+    }
+
+    #[derive(Debug, Clone)]
     pub struct LedgerNonceSignResult {
         pub is_ok: bool,
         pub error: String,
@@ -1699,6 +1715,27 @@ mod ffi {
         fn usb_merge_signed(original_v2_hex: &str, signed_v0_base64: &str) -> SignResult;
 
         type LedgerNonceFetch;
+        fn hot_create_sessions(
+            material: &HotMaterial,
+            password: &str,
+            policy: &str,
+            quantity: u32,
+        ) -> MusigSessionCreateResult;
+        fn hot_cached_nonces(material: &HotMaterial, psbt_v2_hex: &str) -> HotCachedNonceResult;
+        fn musig_session_refresh(fingerprint: &str) -> KeyOpResult;
+        fn musig_session_count(fingerprint: &str, policy: &str, provider: KeyRouteKind) -> u32;
+        fn musig_session_limit() -> u32;
+        fn musig_session_plan(
+            network: Network,
+            psbt_v2_hex: &str,
+            devices: Vec<LiveDevice>,
+        ) -> SigningPlan;
+        fn musig_session_restart(
+            network: Network,
+            policy: &str,
+            original: &str,
+            prepared: &str,
+        ) -> SignResult;
         // Disk operations: callers run these on a worker, never the GUI thread.
         fn ledger_nonce_fetch(
             fingerprint: &str,
@@ -2463,12 +2500,13 @@ pub use hwi_config::{
 };
 pub use keys::{
     bridge::{
-        hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, hot_xpub, ledger_nonce_count,
-        ledger_nonce_fetch, ledger_nonce_fetch_for_signing, ledger_nonce_invalidate,
-        ledger_nonce_limit, ledger_nonce_merge, ledger_nonce_plan, ledger_nonce_refresh,
-        ledger_nonce_restart, ledger_nonce_sign, merge_signed_psbt, new_keys_module,
-        usb_merge_signed, usb_sign_payload, HotMaterial, KeysModule, LedgerNonceFetch, QrResponse,
-        SealedHotKey,
+        hot_cached_nonces, hot_create_sessions, hot_reveal, hot_seal, hot_sign, hot_sp_descriptor,
+        hot_xpub, ledger_nonce_count, ledger_nonce_fetch, ledger_nonce_fetch_for_signing,
+        ledger_nonce_invalidate, ledger_nonce_limit, ledger_nonce_merge, ledger_nonce_plan,
+        ledger_nonce_refresh, ledger_nonce_restart, ledger_nonce_sign, merge_signed_psbt,
+        musig_session_count, musig_session_limit, musig_session_plan, musig_session_refresh,
+        musig_session_restart, new_keys_module, usb_merge_signed, usb_sign_payload, HotMaterial,
+        KeysModule, LedgerNonceFetch, QrResponse, SealedHotKey,
     },
     supports_silent_payments,
 };

@@ -855,6 +855,59 @@ void KeysModule::onMnemonicRevealFinished(ReqId req_id, const MnemonicResult &re
     emit mnemonicRevealed(req_id, result);
 }
 
+void KeysModule::createHotSessions(ReqId req_id, const QString &fingerprint, const QString &password,
+                                    const QString &descriptor, unsigned int quantity) {
+    if (rust() == nullptr) {
+        emit hotSessionsCreated(req_id, false, TR("keys-module-not-ready"), false);
+        return;
+    }
+    auto material = rust()->hot_material(fingerprint.toStdString());
+    auto result = std::make_shared<HotWork>();
+    result->kind = HotWorkKind::CreateSessions;
+    result->req_id = req_id;
+    auto *thread = QThread::create([result, material = material.into_raw(), quantity,
+                                    policy = descriptor.toStdString(),
+                                    password = password.toStdString()]() mutable {
+        auto box = rust::Box<HotMaterial>::from_raw(material);
+        auto created = ::hot_create_sessions(*box, password, policy, quantity);
+        password.assign(password.size(), '\0');
+        password.clear();
+        result->is_ok = created.is_ok;
+        result->error = KeysModule::toQt(created.error);
+        result->wrong_password = created.wrong_password;
+    });
+    m_hot_work.insert(thread, result);
+    connect(thread, &QThread::finished, this, &KeysModule::onHotWorkFinished, qontrol::UNIQUE);
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
+void KeysModule::publishHotCached(ReqId req_id, const QString &fingerprint,
+                                  const QString &psbt_v2_hex) {
+    if (rust() == nullptr) {
+        emit hotCachedReady(req_id, false, false, {}, TR("keys-module-not-ready"), false);
+        return;
+    }
+    auto material = rust()->hot_material(rust::String(fingerprint.toStdString()));
+    auto result = std::make_shared<HotWork>();
+    result->kind = HotWorkKind::PublishCached;
+    result->req_id = req_id;
+    auto *thread = QThread::create([result, material = material.into_raw(),
+                                    psbt = psbt_v2_hex.toStdString()] {
+        auto box = rust::Box<HotMaterial>::from_raw(material);
+        auto cached = ::hot_cached_nonces(*box, psbt);
+        result->is_ok = cached.is_ok;
+        result->needs_password = cached.needs_password;
+        result->psbt = KeysModule::toQt(cached.psbt_v2_hex);
+        result->error = KeysModule::toQt(cached.error);
+        result->musig_session = cached.musig_session;
+    });
+    m_hot_work.insert(thread, result);
+    connect(thread, &QThread::finished, this, &KeysModule::onHotWorkFinished, qontrol::UNIQUE);
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
 void KeysModule::signHot(ReqId req_id, const QString &fingerprint, const QString &password,
                          const QString &psbt_v2_hex) {
     if (rust() == nullptr) {
@@ -866,22 +919,54 @@ void KeysModule::signHot(ReqId req_id, const QString &fingerprint, const QString
         emit hotSignFinished(req_id, false, QString(), toQt(material->get_error()), false, false);
         return;
     }
-    auto *thread = QThread::create([this, req_id, material = material.into_raw(),
+    auto result = std::make_shared<HotWork>();
+    result->kind = HotWorkKind::Sign;
+    result->req_id = req_id;
+    auto *thread = QThread::create([result, material = material.into_raw(),
                                     password = password.toStdString(),
                                     psbt = psbt_v2_hex.toStdString()]() mutable {
         auto box = rust::Box<HotMaterial>::from_raw(material);
-        auto result = ::hot_sign(*box, password, psbt);
+        auto signedPsbt = ::hot_sign(*box, password, psbt);
         password.assign(password.size(), '\0');
         password.clear();
-        emit hotSignFinished(req_id, result.is_ok, toQt(result.psbt_v2_hex), toQt(result.error),
-                             result.wrong_password, result.musig_session);
+        result->is_ok = signedPsbt.is_ok;
+        result->psbt = KeysModule::toQt(signedPsbt.psbt_v2_hex);
+        result->error = KeysModule::toQt(signedPsbt.error);
+        result->wrong_password = signedPsbt.wrong_password;
+        result->musig_session = signedPsbt.musig_session;
     });
+    m_hot_work.insert(thread, result);
+    connect(thread, &QThread::finished, this, &KeysModule::onHotWorkFinished, qontrol::UNIQUE);
     connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
     thread->start();
 }
 
+void KeysModule::onHotWorkFinished() {
+    auto *thread = qobject_cast<QThread *>(sender());
+    auto work = m_hot_work.take(thread);
+    if (work->is_ok && !work->needs_password) {
+        emit nonceSessionsChanged();
+    }
+    switch (work->kind) {
+    case HotWorkKind::CreateSessions:
+        emit hotSessionsCreated(work->req_id, work->is_ok, work->error, work->wrong_password);
+        return;
+    case HotWorkKind::PublishCached:
+        emit hotCachedReady(work->req_id, work->needs_password, work->is_ok, work->psbt,
+                            work->error, work->musig_session);
+        return;
+    case HotWorkKind::Sign:
+        emit hotSigned(work->req_id, work->is_ok, work->psbt, work->error,
+                       work->wrong_password, work->musig_session);
+        return;
+    }
+}
+
 void KeysModule::onHotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error,
-                                   bool wrong_password, bool musig_session) {
+                                    bool wrong_password, bool musig_session) {
+    if (is_ok) {
+        emit nonceSessionsChanged();
+    }
     emit hotSigned(req_id, is_ok, std::move(psbt_v2_hex), std::move(error), wrong_password,
                    musig_session);
 }

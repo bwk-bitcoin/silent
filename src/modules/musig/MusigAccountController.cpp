@@ -292,7 +292,7 @@ void MusigAccountController::restartRounds() {
         return;
     }
     m_restart_pending = true;
-    m_sign_reqs.clear();
+    retireSignRequests();
     m_restart_generation = ++m_signing_generation;
     m_restart_source = m_psbt_v2_hex;
     m_restart_result = std::make_shared<SignResult>();
@@ -301,7 +301,7 @@ void MusigAccountController::restartRounds() {
                                         policy = toQString(getDescriptor()).toStdString(),
                                         original = m_restart_source.toStdString(),
                                         prepared = m_prepared_psbt_v2_hex.toStdString()] {
-        *result = ::ledger_nonce_restart(network, policy, original, prepared);
+        *result = ::musig_session_restart(network, policy, original, prepared);
     });
     connect(m_restart_thread, &QThread::finished, this,
             &MusigAccountController::onRestartFinished, qontrol::UNIQUE);
@@ -434,6 +434,7 @@ void MusigAccountController::stop() {
         return;
     }
     m_stopping = true;
+    cancelSigning();
     m_reconnect->stopped();
 
     if (!m_account.has_value() && m_workers.isEmpty()) {
@@ -506,7 +507,7 @@ void MusigAccountController::prepareTransaction(TransactionTemplate tx, MusigSpe
     m_prepared_psbt_v2_hex = toQString(psbt->bytes_v2_hex());
     ++m_signing_generation;
     m_restart_pending = false;
-    m_sign_reqs.clear();
+    retireSignRequests();
     m_psbt_v2_hex = m_prepared_psbt_v2_hex;
     m_spend_signers = signers;
     m_tx_hex.clear();
@@ -538,6 +539,7 @@ auto MusigAccountController::beginSignRequest(const QString &fingerprint)
             qontrol::UNIQUE);
     // The answer may arrive during the request: the id is stored first.
     auto req = keys->newRequest();
+    m_signing_keys = keys;
     m_sign_reqs.insert(req, fingerprint);
     return {keys, req};
 }
@@ -567,6 +569,16 @@ void MusigAccountController::signRoundOnDevice(const QString &fingerprint) {
     keys->signOnDevice(req, network(), m_psbt_v2_hex, toQString(getDescriptor()), fingerprint);
 }
 
+void MusigAccountController::retireSignRequests() {
+    auto requests = m_sign_reqs.keys();
+    m_sign_reqs.clear();
+    if (!m_signing_keys.isNull()) {
+        for (auto req : requests) {
+            m_signing_keys->cancelRequest(req);
+        }
+    }
+}
+
 void MusigAccountController::cancelSigning() {
     ++m_signing_generation;
     m_restart_pending = false;
@@ -574,7 +586,7 @@ void MusigAccountController::cancelSigning() {
     m_prepared_psbt_v2_hex.clear();
     m_psbt_v2_hex.clear();
     m_tx_hex.clear();
-    m_sign_reqs.clear();
+    retireSignRequests();
 }
 
 void MusigAccountController::broadcast() {
@@ -629,7 +641,7 @@ void MusigAccountController::onKeysError(std::optional<ReqId> req_id, const QStr
     m_sign_reqs.remove(req_id.value());
     if (kind == plugin::SignError::MusigSession) {
         // Every nonce is dropped: the answers still to come are for the old ones.
-        m_sign_reqs.clear();
+        retireSignRequests();
         m_restart_message = message;
         restartRounds();
         return;

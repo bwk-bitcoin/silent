@@ -145,9 +145,14 @@ SigningFlow::SigningFlow(KeysModule *module, Request request)
     view();
     connect(m_module, &KeysModule::liveDevicesChanged, this, &SigningFlow::onDevicesChanged,
             qontrol::UNIQUE);
+    connect(module->bus(), &IKeys::requestCancelled, this, &SigningFlow::onRequestCancelled,
+            qontrol::UNIQUE);
 }
 
 void SigningFlow::begin() {
+    if (m_answered) {
+        return;
+    }
     if (m_request.context == Context::Sign && !m_nonce_loaded) {
         QStringList fingerprints;
         for (const auto &key : m_module->keys()) {
@@ -155,9 +160,9 @@ void SigningFlow::begin() {
         }
         auto *thread = QThread::create([fingerprints] {
             for (const auto &fingerprint : fingerprints) {
-                auto result = ::ledger_nonce_refresh(fingerprint.toStdString());
+                auto result = ::musig_session_refresh(fingerprint.toStdString());
                 if (!result.is_ok) {
-                    qWarning() << "Ledger nonce cache:" << KeysModule::toQt(result.error);
+                    qWarning() << "MuSig session cache:" << KeysModule::toQt(result.error);
                 }
             }
         });
@@ -440,6 +445,9 @@ auto SigningFlow::buildRow(const FlowRow &row, int index) const -> catalog::Sele
 // ===== Shared =====
 
 void SigningFlow::startRoute() {
+    if (m_answered) {
+        return;
+    }
     closeFlow();
     m_verify_result.reset();
     switch (m_current->route) {
@@ -606,6 +614,22 @@ void SigningFlow::onXpubFetched(const QString &xpub) {
     m_answered = true;
     emit xpubFetched(m_request.req_id, xpub, m_request.fingerprint, m_request.path);
     accept();
+}
+
+void SigningFlow::onRequestCancelled(ReqId req_id) {
+    if (req_id != m_request.req_id || m_answered) {
+        return;
+    }
+    m_answered = true;
+    if (m_flow != nullptr) {
+        m_flow->cancel();
+        return;
+    }
+    reject();
+}
+
+void SigningRouteFlow::cancel() {
+    emit cancelled();
 }
 
 void SigningFlow::onFailed(const QString &message, plugin::SignError kind) {

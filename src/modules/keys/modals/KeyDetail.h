@@ -146,6 +146,8 @@ private:
     QMap<QString, QString> m_nonce_accounts;
     std::shared_ptr<QString> m_nonce_error;
     bool m_nonce_loading = false;
+    bool m_nonce_hot = false;
+    bool m_nonce_ledger = false;
     catalog::Label *m_accounts_empty = nullptr;
     catalog::Notice *m_register_error = nullptr;
     catalog::Button *m_reveal = nullptr;

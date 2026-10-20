@@ -279,6 +279,9 @@ public:
     void revealMnemonic(ReqId req_id, const QString &fingerprint, const QString &password);
     void signHot(ReqId req_id, const QString &fingerprint, const QString &password,
                  const QString &psbt_v2_hex);
+    void publishHotCached(ReqId req_id, const QString &fingerprint, const QString &psbt_v2_hex);
+    void createHotSessions(ReqId req_id, const QString &fingerprint, const QString &password,
+                           const QString &descriptor, unsigned int quantity);
     void fetchHotSpDescriptor(ReqId req_id, const QString &fingerprint, const QString &password);
     void fetchHotXpub(ReqId req_id, const QString &fingerprint, const QString &password,
                       const QString &path);
@@ -310,6 +313,9 @@ signals:
                          bool wrong_password, bool musig_session);
     void hotSigned(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error,
                    bool wrong_password, bool musig_session);
+    void hotCachedReady(ReqId req_id, bool needs_password, bool is_ok, QString psbt_v2_hex,
+                        QString error, bool musig_session);
+    void hotSessionsCreated(ReqId req_id, bool is_ok, QString error, bool wrong_password);
     void hotSpDescriptorFinished(ReqId req_id, bool is_ok, QString descriptor, QString error,
                                  bool wrong_password);
     void hotSpDescriptorFetched(ReqId req_id, bool is_ok, QString descriptor, QString error,
@@ -322,6 +328,7 @@ signals:
     void sdLoaded(ReqId req_id, bool is_ok, QString psbt_hex, QString error);
 
 private slots:
+    void onHotWorkFinished();
     // Records as used every key xpub the network's accounts are built on, so it stays
     // used once its account is deleted.
     void markAccountXpubsUsed();
@@ -362,6 +369,17 @@ private slots:
     void onDeviceQueryFailed(flow::UsbError error, const QString &message);
 
 protected:
+    enum class HotWorkKind { CreateSessions, PublishCached, Sign };
+    struct HotWork {
+        HotWorkKind kind;
+        ReqId req_id;
+        bool is_ok = false;
+        bool needs_password = false;
+        bool wrong_password = false;
+        bool musig_session = false;
+        QString psbt;
+        QString error;
+    };
     void createModule();
     void teardownModule();
     void refreshLiveDevices();
@@ -416,6 +434,7 @@ private:
     QPointer<KeysTab> m_tab;
     bool m_tab_shown = false;
     ReqId m_next_req_id = 0;
+    QHash<QThread *, std::shared_ptr<HotWork>> m_hot_work;
     // The network the Rust manager holds. network() answers from it rather than from
     // ::hwi_config_network(), which is read from disk and can drift from the manager
     // (a failed config write, another process), so a sealed key always matches.

@@ -711,3 +711,115 @@ fn hot_round2_without_its_session_is_musig_session() {
         result.error
     );
 }
+
+#[test]
+fn persisted_hot_cache_publishes_without_password_and_wrong_password_does_not_burn() {
+    let _ = datadir();
+    let mut module = silent::new_keys_module(FfiNetwork::Regtest);
+    let mnemonic =
+        "letter advice cage absurd amount doctor acoustic avoid letter advice cage above";
+    let a = HotSigner::new_from_mnemonics(Network::Regtest, mnemonic).expect("signer A");
+    let b = HotSigner::new_from_mnemonics(Network::Regtest, TEST_MNEMONIC).expect("signer B");
+    let path = DerivationPath::from_str("m/87'/1'/4'").expect("account path");
+    let descriptor = format!(
+        "tr(musig([{}/87h/1h/4h]{}/<0;1>/*,[{}/87h/1h/4h]{}/<0;1>/*))",
+        a.fingerprint(),
+        a.xpub(&path).xkey,
+        b.fingerprint(),
+        b.xpub(&path).xkey
+    );
+    let committed = seal_and_commit(
+        &mut module,
+        mnemonic,
+        "password",
+        "cached hot",
+        FfiNetwork::Regtest,
+    );
+    assert!(committed.is_ok, "commit hot key: {}", committed.error);
+    let fingerprint = a.fingerprint().to_string();
+    assert!(
+        module.register_descriptor(&fingerprint, &descriptor).is_ok,
+        "register policy"
+    );
+    let material = module.hot_material(&fingerprint);
+    let original = hex::encode(
+        musig_psbt(&descriptor)
+            .serialize()
+            .expect("serialize original"),
+    );
+    let missing = silent::hot_cached_nonces(&material, &original);
+    assert!(
+        missing.is_ok && missing.needs_password,
+        "empty cache requests password for on-demand creation"
+    );
+    let wrong = silent::hot_create_sessions(&material, "wrong", &descriptor, 4);
+    assert!(
+        !wrong.is_ok && wrong.wrong_password,
+        "manual generation validates current password"
+    );
+    let created = silent::hot_create_sessions(&material, "password", &descriptor, 4);
+    assert!(created.is_ok, "manual generation: {}", created.error);
+    assert_eq!(
+        silent::musig_session_count(&fingerprint, &descriptor, silent::KeyRouteKind::Hot),
+        4,
+        "four available hot sessions"
+    );
+    assert_eq!(
+        silent::musig_session_count(&fingerprint, &descriptor, silent::KeyRouteKind::Usb),
+        0,
+        "hardware count stays independent"
+    );
+    let nonces = silent::hot_cached_nonces(&material, &original);
+    assert!(
+        nonces.is_ok && !nonces.needs_password,
+        "cached publication needs no password: {}",
+        nonces.error
+    );
+    assert_eq!(
+        silent::musig_session_count(&fingerprint, &descriptor, silent::KeyRouteKind::Hot),
+        3,
+        "publication allocates one whole session"
+    );
+    let mut tx = PsbtV2::deserialize(&hex::decode(&nonces.psbt_v2_hex).expect("hex"))
+        .expect("v2")
+        .into_bitcoin_psbt()
+        .expect("v0");
+    let parsed = Descriptor::from_str(&descriptor).expect("policy");
+    let policy = parsed.as_miniscript().expect("miniscript");
+    let peer = b
+        .create_musig_session(policy, bwk::bwk_sign::musig::MusigSessionId([8; 32]), 8)
+        .expect("peer session");
+    peer.publish_nonces(&mut tx, policy).expect("peer nonces");
+    let round2 = hex::encode(
+        PsbtV2::from_bitcoin_psbt(tx)
+            .expect("v2")
+            .serialize()
+            .expect("serialize round2"),
+    );
+    let needs_password = silent::hot_cached_nonces(&material, &round2);
+    assert!(
+        needs_password.is_ok && needs_password.needs_password,
+        "actual signature always asks for password"
+    );
+    let wrong = silent::hot_sign(&material, "wrong", &round2);
+    assert!(
+        !wrong.is_ok && wrong.wrong_password && !wrong.musig_session,
+        "wrong password does not invalidate allocation"
+    );
+    let signed = silent::hot_sign(&material, "password", &round2);
+    assert!(
+        signed.is_ok,
+        "password retry signs existing persisted allocation: {}",
+        signed.error
+    );
+    assert_eq!(
+        silent::musig_session_count(&fingerprint, &descriptor, silent::KeyRouteKind::Hot),
+        4,
+        "cached origin refills one session"
+    );
+    let reused = silent::hot_sign(&material, "password", &round2);
+    assert!(
+        !reused.is_ok && reused.musig_session,
+        "consumed attempt reports typed session loss"
+    );
+}

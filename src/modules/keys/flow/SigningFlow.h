@@ -117,6 +117,7 @@ signals:
     void cancelled(ReqId req_id);
 
 public slots:
+    void onRequestCancelled(ReqId req_id);
     void onNonceSnapshotReady();
     void onRowClicked();
     // A device came, went or changed state: the picker on display lists it as it is.
@@ -188,6 +189,7 @@ public:
     SigningRouteFlow(KeysModule *module, SigningFlow::Request request, FlowRow row, QString psbt);
     // Starts the route, once SigningFlow listens to the signals.
     virtual void start() = 0;
+    virtual void cancel();
 
 signals:
     // The window title and width of the view now shown.

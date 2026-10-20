@@ -19,7 +19,7 @@ use bwk_sp::{
         },
         error::Error as HotSignerError,
         hot_signer::HotSigner,
-        musig::MusigSessionStore,
+        musig::own_slots,
     },
     bwk_tx::bwk_psbt::{PsbtV2, TxModifiable},
     receiver::{bip352_base_derivation, scan_path, spend_path},
@@ -30,6 +30,7 @@ use zeroize::Zeroizing;
 use crate::keys::{
     crypto::{self, Password},
     error::Error,
+    musig_sessions,
     psbt::parse_v2,
     record::{KeyRecord, SecretEnvelope},
 };
@@ -38,11 +39,6 @@ pub const MNEMONIC_WORDS_SHORT: usize = 12;
 pub const MNEMONIC_WORDS_LONG: usize = 24;
 const ENTROPY_BYTES_SHORT: usize = 16;
 const ENTROPY_BYTES_LONG: usize = 32;
-
-/// One process-wide store: `sign_hot` rebuilds its signer per call, and round 2
-/// must find round 1's session.
-static HOT_MUSIG_SESSIONS: std::sync::LazyLock<MusigSessionStore> =
-    std::sync::LazyLock::new(MusigSessionStore::new);
 
 /// Account index the silent-payment spend key is derived at.
 const SP_ACCOUNT_INDEX: u32 = 0;
@@ -215,17 +211,24 @@ pub fn sign_hot(
         .into_bitcoin_psbt()
         .map_err(|_| Error::SpOutputsPending)?;
 
-    let mut signer = HotSigner::new_from_mnemonics(network, mnemonic.as_str())
+    let signer = HotSigner::new_from_mnemonics(network, mnemonic.as_str())
         .map_err(|e| Error::Signer(e.to_string()))?;
-    signer.set_musig_sessions(HOT_MUSIG_SESSIONS.clone());
     let mut miniscript_signed_any = false;
-    for descriptor in &descriptors {
+    for (descriptor, entry) in descriptors.iter().zip(&record.descriptors) {
         if descriptor.is_sp() {
             continue;
         }
         let Some(miniscript) = descriptor.as_miniscript() else {
             continue;
         };
+        if musig_sessions::signing_status(record.fingerprint, &entry.descriptor, &v0)
+            .map_err(Error::State)?
+            .is_some()
+        {
+            musig_sessions::sign_hot_session(&signer, &entry.descriptor, &mut v0)?;
+            miniscript_signed_any = true;
+            continue;
+        }
         match signer.inner_sign(&mut v0, miniscript) {
             Ok(()) => miniscript_signed_any = true,
             // A descriptor that matches no input in this PSBT is normal in
@@ -255,6 +258,55 @@ pub fn sign_hot(
     psbt.tx_modifiable = Some(TxModifiable::none());
 
     psbt.serialize()
+        .map_err(|e| Error::PsbtSerialize(e.to_string()))
+}
+
+pub fn create_sessions(
+    record: &KeyRecord,
+    network: Network,
+    password: Password,
+    policy: &str,
+    quantity: usize,
+) -> Result<(), Error> {
+    let mnemonic = crypto::open_mnemonic(record, network, password)?;
+    let signer = HotSigner::new_from_mnemonics(network, &mnemonic)
+        .map_err(|e| Error::Signer(e.to_string()))?;
+    musig_sessions::create_hot(&signer, policy, quantity).map_err(Error::State)
+}
+
+/// No mnemonic is opened here. None asks the caller to request the key password.
+pub fn publish_cached(record: &KeyRecord, bytes: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+    let mut psbt = parse_v2(bytes)?;
+    let mut real = match psbt.clone().into_bitcoin_psbt() {
+        Ok(real) => real,
+        Err(_) => return Ok(None),
+    };
+    let mut matched = false;
+    for entry in &record.descriptors {
+        let parsed = Descriptor::from_str(&entry.descriptor)
+            .map_err(|e| Error::DescriptorParse(e.to_string()))?;
+        let Some(policy) = parsed.as_miniscript() else {
+            continue;
+        };
+        if own_slots(&real, policy, record.fingerprint)
+            .map_err(|e| Error::Signer(e.to_string()))?
+            .is_empty()
+        {
+            continue;
+        }
+        if !musig_sessions::publish_hot(record.fingerprint, &entry.descriptor, &mut real)? {
+            return Ok(None);
+        }
+        matched = true;
+    }
+    if !matched {
+        return Ok(None);
+    }
+    for (input, updated) in psbt.inputs.iter_mut().zip(real.inputs) {
+        input.psbt = updated;
+    }
+    psbt.serialize()
+        .map(Some)
         .map_err(|e| Error::PsbtSerialize(e.to_string()))
 }
 

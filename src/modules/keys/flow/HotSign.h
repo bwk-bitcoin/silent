@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 #include <QString>
 
 #include <interfaces/types.h>
@@ -8,6 +9,10 @@
 
 namespace keys {
 class KeysModule;
+}
+
+namespace keys::modal {
+class Unseal;
 }
 
 namespace keys::flow {
@@ -29,9 +34,15 @@ signals:
     void finished();
 
 public slots:
+    void onRequestCancelled(ReqId req_id);
+    void onCachedReady(ReqId req_id, bool needs_password, bool is_ok, const QString &psbt_v2_hex,
+                       const QString &error, bool musig_session);
     void onPasswordEntered(const QString &password);
     void onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex, const QString &error,
                      bool wrong_password, bool musig_session);
+
+protected:
+    void askPassword();
 
 private:
     KeysModule *m_module = nullptr;
@@ -43,6 +54,8 @@ private:
     QString m_psbt;
     bool m_submitted = false;
     bool m_wrong_password = false;
+    bool m_live = true;
+    QPointer<modal::Unseal> m_prompt;
 };
 
 } // namespace keys::flow

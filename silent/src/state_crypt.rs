@@ -23,8 +23,15 @@ use std::sync::Mutex;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bip138::{Decrypted, EncryptedBackup};
-use bitcoin::bip32::{ChildNumber, DerivationPath, Xpub};
-use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+use bitcoin::{
+    bip32::{ChildNumber, DerivationPath, Xpub},
+    hashes::{sha256, Hash, HashEngine},
+    secp256k1::{PublicKey, Secp256k1, SecretKey},
+};
+use chacha20poly1305::{
+    aead::{AeadInPlace, KeyInit},
+    XChaCha20Poly1305, XNonce,
+};
 use zeroize::Zeroizing;
 
 use crate::config::datadir;
@@ -47,6 +54,9 @@ pub const APP_MAGIC: u32 = 0x7368_7574;
 
 /// Binds the sealed password key to its use.
 const KEY_AAD: &[u8] = b"silent-state-key-v1";
+const SECRET_DOMAIN: &[u8] = b"silent-state-secret-v1\0";
+const SECRET_NONCE_LEN: usize = 24;
+const SECRET_TAG_LEN: usize = 16;
 
 /// The unlock key held while the app runs, `None` while locked.
 static KEY: Mutex<Option<PublicKey>> = Mutex::new(None);
@@ -186,6 +196,41 @@ fn xpub_key(xpub: &str) -> Result<PublicKey, String> {
     Xpub::from_str(xpub.trim())
         .map(|xpub| xpub.public_key)
         .map_err(|e| format!("invalid xpub: {e}"))
+}
+
+fn secret_cipher() -> Result<XChaCha20Poly1305, String> {
+    let unlock = Zeroizing::new(key()?.serialize());
+    let mut engine = sha256::Hash::engine();
+    engine.input(SECRET_DOMAIN);
+    engine.input(unlock.as_ref());
+    let derived = Zeroizing::new(sha256::Hash::from_engine(engine).to_byte_array());
+    Ok(XChaCha20Poly1305::new((&*derived).into()))
+}
+
+/// Encrypt raw secret bytes before handing any serialized state to BIP138.
+pub fn seal_secret(mut bytes: Zeroizing<Vec<u8>>, aad: &[u8]) -> Result<Vec<u8>, String> {
+    let cipher = secret_cipher()?;
+    let mut nonce = [0; SECRET_NONCE_LEN];
+    getrandom::getrandom(&mut nonce).map_err(|error| error.to_string())?;
+    cipher
+        .encrypt_in_place(XNonce::from_slice(&nonce), aad, &mut *bytes)
+        .map_err(|_| "failed to encrypt state secret")?;
+    let mut sealed = nonce.to_vec();
+    sealed.extend_from_slice(&bytes);
+    Ok(sealed)
+}
+
+pub fn open_secret(sealed: &[u8], aad: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
+    let cipher = secret_cipher()?;
+    if sealed.len() < SECRET_NONCE_LEN + SECRET_TAG_LEN {
+        return Err("invalid state secret length".into());
+    }
+    let (nonce, ciphertext) = sealed.split_at(SECRET_NONCE_LEN);
+    let mut bytes = Zeroizing::new(ciphertext.to_vec());
+    cipher
+        .decrypt_in_place(XNonce::from_slice(nonce), aad, &mut *bytes)
+        .map_err(|_| "state secret authentication failed")?;
+    Ok(bytes)
 }
 
 fn seal_with(key: PublicKey, text: &str, path: Option<DerivationPath>) -> Result<Vec<u8>, String> {

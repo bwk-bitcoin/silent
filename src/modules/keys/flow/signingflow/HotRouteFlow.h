@@ -31,8 +31,11 @@ public:
     HotRouteFlow(KeysModule *module, SigningFlow::Request request, FlowRow row, QString psbt);
     // Opens the password prompt over the flow.
     void start() override;
+    void cancel() override;
 
 public slots:
+    void onCachedReady(ReqId req_id, bool needs_password, bool is_ok, const QString &psbt_v2_hex,
+                       const QString &error, bool musig_session);
     void onAskPassword();
     void onPasswordEntered(const QString &password);
     void onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex, const QString &error,
@@ -69,6 +72,7 @@ protected:
 
 private:
     ReqId m_hot_req = 0;
+    bool m_cancelled = false;
     catalog::ModalStatus *m_waiting_step = nullptr;
     QPointer<modal::Unseal> m_unseal;
     std::optional<Answer> m_answer;

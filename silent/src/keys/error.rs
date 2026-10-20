@@ -5,7 +5,7 @@ use bitcoin::{
     Txid,
 };
 
-use crate::keys::record::RouteKind;
+use crate::keys::{musig_sessions::SigningError, record::RouteKind};
 
 /// Errors from the `keys` module: the record model, and everything later built on it
 /// (storage, crypto, route execution).
@@ -197,6 +197,15 @@ pub enum Error {
     XpubConvert(#[from] bwk_qr_protocol::types::Error),
     #[error("MuSig2 session missing or mismatch")]
     MusigSession,
+}
+
+impl From<SigningError> for Error {
+    fn from(error: SigningError) -> Self {
+        match error {
+            SigningError::SessionLost(_) => Self::MusigSession,
+            SigningError::Invalid(message) => Self::Signer(message),
+        }
+    }
 }
 
 fn fmt_sp_key_unknown(fingerprint: &Option<Fingerprint>) -> String {

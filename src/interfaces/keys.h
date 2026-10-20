@@ -53,6 +53,10 @@ public:
     // Allocates a request id. Callers must call this before every request below,
     // store the id, then call the request: an answer may arrive during the call.
     virtual auto newRequest() -> ReqId = 0;
+    // Retires user interaction for this request. Already-running I/O may finish.
+    virtual void cancelRequest(ReqId req_id) {
+        emit requestCancelled(req_id);
+    }
     // Each request below names the network of the keys it needs (the account's), which
     // need not be the one the Keys tab shows.
     // Signs the PSBT with every key the descriptors need, in the order the module
@@ -126,6 +130,7 @@ public:
     }
 
 signals:
+    void requestCancelled(ReqId req_id);
     // NOLINTNEXTLINE(readability-identifier-naming)
     void signed_(ReqId req_id, QString psbt_v2_hex);
     // A refusal (verified=false) is the device answering that the address does

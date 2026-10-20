@@ -27,6 +27,12 @@ HotRouteFlow::HotRouteFlow(KeysModule *module, SigningFlow::Request request, Flo
 }
 
 void HotRouteFlow::start() {
+    if (request().context == Context::Sign) {
+        showWaiting();
+        m_hot_req = module()->nextReqId();
+        module()->publishHotCached(m_hot_req, row().fingerprint, psbt());
+        return;
+    }
     if (!hasPicker()) {
         // The key is named: the password prompt is the only window, over the one that
         // asked (ws-plaude/silent#45). It turns to a spinner itself once the password
@@ -39,11 +45,22 @@ void HotRouteFlow::start() {
     QTimer::singleShot(0, this, &HotRouteFlow::onAskPassword);
 }
 
+void HotRouteFlow::cancel() {
+    m_cancelled = true;
+    m_hot_req = 0;
+    if (!m_unseal.isNull()) {
+        m_unseal->reject();
+        return;
+    }
+    emit cancelled();
+}
+
 void HotRouteFlow::init() {
     initWaiting();
 }
 
 void HotRouteFlow::doConnect() {
+    connect(module(), &KeysModule::hotCachedReady, this, &HotRouteFlow::onCachedReady, qontrol::UNIQUE);
     connect(module(), &KeysModule::hotSigned, this, &HotRouteFlow::onHotSigned, qontrol::UNIQUE);
     connect(module(), &KeysModule::hotSpDescriptorFetched, this,
             &HotRouteFlow::onHotDescriptorFetched, qontrol::UNIQUE);
@@ -116,7 +133,24 @@ void HotRouteFlow::deliver(const Answer &answer) {
 
 // ===== Slots =====
 
+void HotRouteFlow::onCachedReady(ReqId req_id, bool needs_password, bool is_ok,
+                                const QString &psbt_v2_hex, const QString &error, bool musig_session) {
+    if (m_hot_req == 0 || req_id != m_hot_req) {
+        return;
+    }
+    m_hot_req = 0;
+    if (needs_password && is_ok) {
+        onAskPassword();
+        return;
+    }
+    deliver(Answer{.kind = AnswerKind::Signed, .is_ok = is_ok, .value = psbt_v2_hex,
+                   .error = error, .musig_session = musig_session});
+}
+
 void HotRouteFlow::onAskPassword() {
+    if (m_cancelled) {
+        return;
+    }
     QString prompt = copy().hotPrompt.arg(row().alias);
     auto *unseal = new modal::Unseal(copy().title, prompt, hotProceedButton(request().context));
     unseal->setBusy(copy().hotBusy, TR("flow-hot-busy-with").arg(row().alias));
@@ -127,6 +161,11 @@ void HotRouteFlow::onAskPassword() {
     unseal->exec();
     delete unseal;
     m_hot_req = 0;
+    if (m_cancelled) {
+        m_answer.reset();
+        emit cancelled();
+        return;
+    }
     if (m_answer.has_value()) {
         Answer held = std::move(m_answer.value());
         m_answer.reset();

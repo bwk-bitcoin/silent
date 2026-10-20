@@ -53,6 +53,7 @@ class KeysHandle final : public IKeys {
 
 public:
     KeysHandle(HostImpl *host, IModule *module, IKeys *target);
+    ~KeysHandle() override;
 
     [[nodiscard]] auto target() const -> IKeys * {
         return m_target;
@@ -60,6 +61,7 @@ public:
 
     [[nodiscard]] QList<KeyEntry> keys(Network network) const override;
     auto newRequest() -> ReqId override;
+    void cancelRequest(ReqId req_id) override;
     void sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
               const QStringList &descriptors, const QString &wallet_name,
               const QString &fingerprint) override;

@@ -25,6 +25,20 @@ KeysHandle::KeysHandle(HostImpl *host, IModule *module, IKeys *target)
     connect(target, &IKeys::cancelled, this, &KeysHandle::onCancelled, qontrol::UNIQUE);
 }
 
+KeysHandle::~KeysHandle() {
+    auto requests = m_requests;
+    for (auto req : requests) {
+        cancelRequest(req);
+    }
+}
+
+void KeysHandle::cancelRequest(ReqId req_id) {
+    if (!m_requests.remove(req_id) || m_target.isNull()) {
+        return;
+    }
+    m_target->cancelRequest(req_id);
+}
+
 auto KeysHandle::allowedTarget(std::optional<ReqId> req_id) const -> IKeys * {
     auto *self = const_cast<KeysHandle *>(this);
     if (m_target == nullptr) {

@@ -451,15 +451,17 @@ void KeyDetail::refreshAccounts(const KeyInfo &info) {
 }
 
 void KeyDetail::refreshNonces(const QList<KeyAccount> &accounts) {
-    bool ledger = false;
+    auto info = keyInfo(m_module, m_fingerprint);
+    m_nonce_hot = info.has_value() && info->has_hot_secret;
+    m_nonce_ledger = false;
     for (const auto &device : m_module->rust()->key_devices(m_fingerprint.toStdString())) {
         if (KeysModule::toQt(device.kind).startsWith(QStringLiteral("ledger"), Qt::CaseInsensitive)) {
-            ledger = true;
+            m_nonce_ledger = true;
             break;
         }
     }
     m_nonce_accounts.clear();
-    if (ledger) {
+    if (m_nonce_ledger || m_nonce_hot) {
         for (const auto &account : accounts) {
             if (account.plugin_id == MUSIG_PLUGIN_ID) {
                 m_nonce_accounts.insert(account.descriptor, account.name);
@@ -475,7 +477,7 @@ void KeyDetail::refreshNonces(const QList<KeyAccount> &accounts) {
     m_nonce_error = std::make_shared<QString>();
     auto error = m_nonce_error;
     auto *thread = QThread::create([error, fingerprint = m_fingerprint.toStdString()] {
-        auto result = ::ledger_nonce_refresh(fingerprint);
+        auto result = ::musig_session_refresh(fingerprint);
         *error = KeysModule::toQt(result.error);
     });
     connect(thread, &QThread::finished, this, &KeyDetail::onNonceSnapshotReady, qontrol::UNIQUE);
@@ -486,13 +488,27 @@ void KeyDetail::refreshNonces(const QList<KeyAccount> &accounts) {
 void KeyDetail::populateNonces() {
     m_nonces_table->clearRows();
     for (auto account = m_nonce_accounts.cbegin(); account != m_nonce_accounts.cend(); ++account) {
-        auto count = ::ledger_nonce_count(m_fingerprint.toStdString(), account.key().toStdString());
-        auto *fetch = new catalog::Button(TR("keys-set-nonces"), catalog::ButtonRole::Inline);
-        fetch->setProperty(K_DESCRIPTOR, account.key());
-        connect(fetch, &QPushButton::clicked, this, &KeyDetail::onFetchNoncesClicked, qontrol::UNIQUE);
-        m_nonces_table->addWidgetRow(
-            account.key(), {accountName(account.value()),
-                            new Label(TR("keys-nonces-available").arg(count), LabelRole::Body), fetch});
+        for (auto provider : {KeyRouteKind::Hot, KeyRouteKind::Usb}) {
+            if ((provider == KeyRouteKind::Hot && !m_nonce_hot) ||
+                (provider == KeyRouteKind::Usb && !m_nonce_ledger)) {
+                continue;
+            }
+            auto count = ::musig_session_count(m_fingerprint.toStdString(),
+                                               account.key().toStdString(), provider);
+            auto *fetch = new catalog::Button(TR("keys-set-nonces"), catalog::ButtonRole::Inline);
+            fetch->setProperty(K_DESCRIPTOR, account.key());
+            fetch->setProperty("hot", provider == KeyRouteKind::Hot);
+            connect(fetch, &QPushButton::clicked, this, &KeyDetail::onFetchNoncesClicked,
+                    qontrol::UNIQUE);
+            auto name = account.value();
+            if (m_nonce_hot && m_nonce_ledger) {
+                name += QStringLiteral(" (%1)").arg(catalog::routeLabel(provider));
+            }
+            m_nonces_table->addWidgetRow(
+                account.key() + QString::number(static_cast<int>(provider)),
+                {accountName(name),
+                 new Label(TR("keys-nonces-available").arg(count), LabelRole::Body), fetch});
+        }
     }
 }
 
@@ -738,7 +754,8 @@ void KeyDetail::onFetchXpubClicked() {
 
 void KeyDetail::onFetchNoncesClicked() {
     AppController::execModal(
-        new FetchNonces(m_module, m_fingerprint, sender()->property(K_DESCRIPTOR).toString()));
+        new FetchNonces(m_module, m_fingerprint, sender()->property(K_DESCRIPTOR).toString(),
+                        sender()->property("hot").toBool()));
 }
 
 void KeyDetail::onNonceSessionsChanged() {

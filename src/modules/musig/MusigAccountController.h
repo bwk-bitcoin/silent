@@ -142,6 +142,7 @@ protected:
     // PSBT, or that key already asked). Every key may be asked at once.
     [[nodiscard]] auto beginSignRequest(const QString &fingerprint) -> std::pair<IKeys *, ReqId>;
     void finalizeIfReady();
+    void retireSignRequests();
 
 private:
     QPointer<qontrol::Panel> m_current_panel;
@@ -161,6 +162,7 @@ private:
     // Sign requests in flight, each one key's, by request id. Answers are merged into
     // the PSBT as it is by then, so keys sign at once.
     QHash<ReqId, QString> m_sign_reqs;
+    QPointer<IKeys> m_signing_keys;
     QThread *m_restart_thread = nullptr;
     std::shared_ptr<SignResult> m_restart_result;
     QString m_restart_source;

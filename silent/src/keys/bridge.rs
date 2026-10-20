@@ -9,8 +9,10 @@
 use std::{collections::BTreeSet, str::FromStr};
 
 use base64::{prelude::BASE64_STANDARD, Engine};
-use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
-use bitcoin::Network as BtcNetwork;
+use bitcoin::{
+    bip32::{DerivationPath, Fingerprint, Xpub},
+    Network as BtcNetwork,
+};
 use bwk::{
     bwk_descriptor::{musig::parse_musig_descriptor, wallet::WalletDescriptorExt},
     bwk_keys::musig::MusigKey,
@@ -26,10 +28,10 @@ use crate::{
     hwi::{parse_hmac, wallet_name},
     keys::{
         crypto::{open_mnemonic, Password},
-        hot::{seal_mnemonic, sign_hot, sp_descriptor, xpub_at},
+        hot::{create_sessions, publish_cached, seal_mnemonic, sign_hot, sp_descriptor, xpub_at},
         ledger_nonces::{self, Fetch, SessionSource, Signing},
         manager::{descriptor_has_key, KeyManager, KeyManagerImpl, LiveDevice, SigningCandidate},
-        psbt, qr,
+        musig_sessions, psbt, qr,
         record::{KeyRecord, RouteKind, SecretEnvelope},
         store::KeyStore,
         Error, KEYS_DIR_NAME,
@@ -758,6 +760,112 @@ pub fn hot_sign(material: &HotMaterial, password: &str, psbt_v2_hex: &str) -> ff
     }
 }
 
+pub fn hot_create_sessions(
+    material: &HotMaterial,
+    password: &str,
+    policy: &str,
+    quantity: u32,
+) -> ffi::MusigSessionCreateResult {
+    let result = match &material.inner {
+        Ok((record, network)) => create_sessions(
+            record,
+            *network,
+            Password::new(password.to_owned()),
+            policy,
+            quantity as usize,
+        ),
+        Err(error) => {
+            return ffi::MusigSessionCreateResult {
+                is_ok: false,
+                error: error.clone(),
+                wrong_password: false,
+            }
+        }
+    };
+    match result {
+        Ok(()) => ffi::MusigSessionCreateResult {
+            is_ok: true,
+            error: String::new(),
+            wrong_password: false,
+        },
+        Err(error) => ffi::MusigSessionCreateResult {
+            is_ok: false,
+            wrong_password: matches!(error, Error::WrongPassword),
+            error: error.to_string(),
+        },
+    }
+}
+
+pub fn hot_cached_nonces(material: &HotMaterial, psbt_v2_hex: &str) -> ffi::HotCachedNonceResult {
+    let mut response = ffi::HotCachedNonceResult {
+        is_ok: false,
+        error: String::new(),
+        needs_password: false,
+        musig_session: false,
+        psbt_v2_hex: String::new(),
+    };
+    let result = (|| {
+        let (record, _) = material
+            .inner
+            .as_ref()
+            .map_err(|error| Error::State(error.clone()))?;
+        let bytes = hex::decode(psbt_v2_hex).map_err(|error| Error::State(error.to_string()))?;
+        publish_cached(record, &bytes)
+    })();
+    match result {
+        Ok(Some(bytes)) => {
+            response.is_ok = true;
+            response.psbt_v2_hex = hex::encode(bytes);
+        }
+        Ok(None) => {
+            response.is_ok = true;
+            response.needs_password = true;
+        }
+        Err(error) => {
+            response.musig_session = matches!(error, Error::MusigSession);
+            response.error = error.to_string();
+        }
+    }
+    response
+}
+
+pub fn musig_session_refresh(fingerprint: &str) -> ffi::KeyOpResult {
+    ledger_nonce_refresh(fingerprint)
+}
+
+pub fn musig_session_count(fingerprint: &str, policy: &str, provider: ffi::KeyRouteKind) -> u32 {
+    match parse_fingerprint(fingerprint)
+        .and_then(|fp| RouteKind::try_from(provider).map(|provider| (fp, provider)))
+    {
+        Ok((fp, provider)) => musig_sessions::count_for(fp, policy, provider) as u32,
+        Err(error) => {
+            log::error!("{error}");
+            0
+        }
+    }
+}
+
+pub fn musig_session_limit() -> u32 {
+    musig_sessions::MAX_SESSIONS as u32
+}
+
+pub fn musig_session_plan(
+    network: ffi::Network,
+    psbt_v2_hex: &str,
+    devices: Vec<ffi::LiveDevice>,
+) -> ffi::SigningPlan {
+    ledger_nonce_plan(network, psbt_v2_hex, devices)
+}
+
+pub fn musig_session_restart(
+    network: ffi::Network,
+    policy: &str,
+    original: &str,
+    prepared: &str,
+) -> ffi::SignResult {
+    ledger_nonce_restart(network, policy, original, prepared)
+}
+
 /// The BIP392 sp() descriptor of `material`'s hot key, origin included, for account
 /// creation. Blocks on Argon2id while opening the envelope: call from a QThread,
 /// never from the GUI thread.
@@ -1348,10 +1456,11 @@ pub fn ledger_nonce_restart(
             .keys()
             .iter()
             .filter(|record| {
-                record
-                    .devices
-                    .iter()
-                    .any(|device| ledger_nonces::is_ledger(&device.kind))
+                record.secret.is_some()
+                    || record
+                        .devices
+                        .iter()
+                        .any(|device| ledger_nonces::is_ledger(&device.kind))
             })
             .map(|record| record.fingerprint)
             .collect();

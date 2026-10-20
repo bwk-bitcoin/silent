@@ -4,9 +4,12 @@
 
 use std::fs;
 
-use silent::keys::crypto::Password;
-use silent::set_datadir;
-use silent::state_crypt::{self, UnlockKind};
+use silent::{
+    keys::crypto::Password,
+    set_datadir,
+    state_crypt::{self, UnlockKind},
+};
+use zeroize::Zeroizing;
 
 const XPUB: &str = "tpubDEGU7K8ab62XbG1bKoCnHDtUx44DxVKyAQVS96EN1EUVTQRW2KnFEvTtmnUJSonudSK8HcXTexf56Kir1JzoQAzFRHfvNLEcqV7KxUHZVYa";
 /// The derivation paths an envelope names in its clear part.
@@ -33,10 +36,46 @@ fn the_state_opens_with_its_unlock_key_only() {
     assert_eq!(state_crypt::unlock_kind(), None);
     assert!(!state_crypt::is_unlocked());
     assert!(state_crypt::write_state(&file, "{}").is_err(), "locked");
+    assert!(
+        state_crypt::seal_secret(Zeroizing::new(vec![7; 102]), b"root").is_err(),
+        "locked secrets cannot be sealed"
+    );
+    assert!(
+        state_crypt::open_secret(&[0; 142], b"root").is_err(),
+        "locked secrets cannot be opened"
+    );
 
     // A password key.
     state_crypt::create_with_password(Password::new("correct horse".into())).unwrap();
     assert_eq!(state_crypt::unlock_kind(), Some(UnlockKind::Password));
+    let secret = Zeroizing::new(vec![7; 102]);
+    let inner = state_crypt::seal_secret(secret.clone(), b"root").expect("seal inner secret");
+    let second = state_crypt::seal_secret(secret.clone(), b"root").expect("seal fresh nonce");
+    assert_ne!(inner, second, "each seal has fresh random nonces");
+    assert_eq!(
+        state_crypt::open_secret(&inner, b"root")
+            .expect("open inner secret")
+            .as_slice(),
+        secret.as_slice(),
+        "byte API roundtrip"
+    );
+    assert!(
+        state_crypt::open_secret(&inner, b"other root").is_err(),
+        "associated data binds secret context"
+    );
+    let mut corrupt = inner.clone();
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 1;
+    assert!(
+        state_crypt::open_secret(&corrupt, b"root").is_err(),
+        "corruption is refused"
+    );
+    for length in [0, 23, 24, 39] {
+        assert!(
+            state_crypt::open_secret(&vec![0; length], b"root").is_err(),
+            "truncated payload of {length} bytes is refused"
+        );
+    }
     state_crypt::write_state(&file, "{\"name\":\"a\"}").unwrap();
     let sealed = fs::read(&file).unwrap();
     assert!(state_crypt::is_sealed(&sealed));
@@ -49,10 +88,21 @@ fn the_state_opens_with_its_unlock_key_only() {
     state_crypt::lock();
     assert!(state_crypt::read_state(&file).is_err(), "locked again");
     assert!(
+        state_crypt::open_secret(&inner, b"root").is_err(),
+        "inner secret also requires unlocked state"
+    );
+    assert!(
         state_crypt::unlock_with_password(Password::new("wrong".into())).is_err(),
         "a wrong password does not unlock"
     );
     state_crypt::unlock_with_password(Password::new("correct horse".into())).unwrap();
+    assert_eq!(
+        state_crypt::open_secret(&inner, b"root")
+            .expect("reopen after unlock")
+            .as_slice(),
+        secret.as_slice(),
+        "unlocked state key restores inner secret"
+    );
     assert_eq!(
         state_crypt::read_state(&file).unwrap().as_deref(),
         Some("{\"name\":\"a\"}")
@@ -68,6 +118,10 @@ fn the_state_opens_with_its_unlock_key_only() {
     }
     let index = state_crypt::draw_index().unwrap();
     state_crypt::create_with_device(index, XPUB).unwrap();
+    assert!(
+        state_crypt::open_secret(&inner, b"root").is_err(),
+        "different state key cannot authenticate inner secret"
+    );
     assert_eq!(state_crypt::unlock_kind(), Some(UnlockKind::Device));
     // The path is readable without the key, the rest is not: nothing else in clear.
     assert_eq!(

@@ -1,0 +1,3264 @@
+//! Persisted MuSig sessions, shared by every account and network of a fingerprint.
+
+#[path = "musig_sessions_hot.rs"]
+mod hot_provider;
+#[cfg(test)]
+use crate::keys::ledger_nonces::{
+    expression_slots, owned_expressions, synthetic, FETCH_FEE_SATS, FUNDING_SATS,
+};
+pub use crate::keys::{
+    ledger_nonces::Fetch,
+    musig_sessions::hot_provider::{create_hot, publish_hot, sign_hot_session},
+};
+
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, File, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{LazyLock, Mutex},
+};
+
+use bitcoin::{
+    bip32::Fingerprint,
+    hashes::{sha256, Hash, HashEngine},
+    psbt::raw::ProprietaryKey,
+    secp256k1::PublicKey,
+    taproot::TapLeafHash,
+    Psbt,
+};
+use bwk::{
+    bwk_descriptor::{
+        descriptor::Descriptor,
+        wallet::{WalletDescriptor, WalletDescriptorExt},
+    },
+    bwk_sign::musig::{musig_status, own_slots, session_id, MusigRound, MusigSlot, MusigStatus},
+    bwk_tx::bwk_psbt::musig::{
+        musig_input_partial_sig, musig_input_participants_all, musig_input_pub_nonce,
+        musig_input_pub_nonces, set_musig_input_pub_nonce, MusigPubNonce,
+    },
+};
+use fs2::FileExt;
+use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
+
+use crate::{
+    config::datadir,
+    keys::{ledger_nonces::requested_slots, psbt, record::RouteKind},
+    state_crypt,
+};
+
+pub const MAX_INPUT: usize = 8;
+pub const MAX_SESSIONS: usize = 8;
+const CACHE_VERSION: u32 = 1;
+
+static SNAPSHOTS: LazyLock<Mutex<BTreeMap<Fingerprint, Cache>>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
+
+pub fn descriptor(policy: &str) -> Result<WalletDescriptor, String> {
+    Descriptor::from_str(policy)
+        .map_err(|e| e.to_string())?
+        .into_miniscript()
+        .map_err(|e| e.to_string())
+}
+
+pub fn count(fingerprint: Fingerprint, policy: &str) -> usize {
+    count_for(fingerprint, policy, RouteKind::Usb)
+}
+
+pub fn count_for(fingerprint: Fingerprint, policy: &str, provider: RouteKind) -> usize {
+    SNAPSHOTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&fingerprint)
+        .map(|state| {
+            state
+                .available
+                .iter()
+                .filter(|session| session.policy == policy && session.provider == provider)
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn publish_snapshot(fingerprint: Fingerprint, state: &Cache) {
+    let metadata = Cache {
+        version: state.version,
+        fingerprint,
+        fetch_order: state.fetch_order,
+        available: state
+            .available
+            .iter()
+            .map(|entry| Session {
+                provider: entry.provider,
+                id: entry.id,
+                order: entry.order,
+                policy: entry.policy.clone(),
+                nonces: entry.nonces.clone(),
+                fetched_for: entry.fetched_for,
+                secret: None,
+            })
+            .collect(),
+        allocated: state
+            .allocated
+            .iter()
+            .map(|entry| Allocation {
+                provider: entry.provider,
+                policy: entry.policy.clone(),
+                secret: None,
+                binding: entry.binding,
+                id: entry.id,
+                slots: entry.slots.clone(),
+                round2_nonces: entry.round2_nonces,
+                state: entry.state,
+                source: entry.source,
+            })
+            .collect(),
+        retired: state.retired.clone(),
+    };
+    SNAPSHOTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(fingerprint, metadata);
+}
+
+pub fn refresh(fingerprint: Fingerprint) -> Result<(), String> {
+    refresh_at(&datadir().join("musig-sessions"), fingerprint)
+}
+
+fn refresh_at(root: &Path, fingerprint: Fingerprint) -> Result<(), String> {
+    let store = LockedCache::open(root, fingerprint)?;
+    publish_snapshot(fingerprint, &store.state);
+    Ok(())
+}
+
+pub fn ensure_snapshot(fingerprint: Fingerprint) -> Result<(), String> {
+    if SNAPSHOTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains_key(&fingerprint)
+    {
+        return Ok(());
+    }
+    refresh(fingerprint)
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Nonce {
+    pub(crate) input: usize,
+    pub(crate) expression: usize,
+    pub(crate) participant: PublicKey,
+    pub(crate) bytes: Vec<u8>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Session {
+    #[serde(default = "ledger_provider")]
+    pub(crate) provider: RouteKind,
+    pub(crate) id: [u8; 32],
+    pub(crate) order: u64,
+    pub(crate) policy: String,
+    pub(crate) nonces: Vec<Nonce>,
+    pub(crate) fetched_for: Option<[u8; 32]>,
+    #[serde(default)]
+    pub(crate) secret: Option<SecretPayload>,
+}
+
+fn ledger_provider() -> RouteKind {
+    RouteKind::Usb
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct SecretPayload(Vec<u8>);
+
+impl SecretPayload {
+    fn seal(bytes: Zeroizing<Vec<u8>>, aad: &[u8]) -> Result<Self, String> {
+        state_crypt::seal_secret(bytes, aad).map(Self)
+    }
+
+    fn open(&self, aad: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
+        state_crypt::open_secret(&self.0, aad)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionSource {
+    #[default]
+    Cached,
+    FetchedForSigning,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Allocation {
+    #[serde(default = "ledger_provider")]
+    pub(crate) provider: RouteKind,
+    #[serde(default)]
+    policy: String,
+    #[serde(default)]
+    secret: Option<SecretPayload>,
+    pub(crate) binding: [u8; 32],
+    id: [u8; 32],
+    // The complete published slot set is fixed, even if a later PSBT asks for more leaves.
+    slots: Vec<PublishedNonce>,
+    round2_nonces: Option<[u8; 32]>,
+    state: AllocationState,
+    #[serde(default)]
+    source: SessionSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum AllocationState {
+    Active,
+    Consumed,
+    Invalid,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SigningError {
+    #[error("{0}")]
+    Invalid(String),
+    #[error("{0}")]
+    SessionLost(String),
+}
+
+impl From<String> for SigningError {
+    fn from(error: String) -> Self {
+        Self::Invalid(error)
+    }
+}
+
+impl From<&str> for SigningError {
+    fn from(error: &str) -> Self {
+        Self::Invalid(error.to_owned())
+    }
+}
+
+impl Allocation {
+    fn covers_slots(&self, slots: &[MusigSlot]) -> bool {
+        self.slots
+            .iter()
+            .map(PublishedNonce::slot)
+            .collect::<BTreeSet<_>>()
+            == slots.iter().copied().collect::<BTreeSet<_>>()
+    }
+
+    fn compatible_nonces(&self, real: &Psbt, require_all: bool) -> Result<bool, String> {
+        for published in &self.slots {
+            let Some(input) = real.inputs.get(published.input) else {
+                return Ok(false);
+            };
+            let existing = musig_input_pub_nonce(
+                input,
+                published.participant,
+                published.aggregate,
+                published.leaf_hash,
+            )
+            .map_err(|e| e.to_string())?;
+            match existing {
+                Some(nonce) if nonce.as_slice() != published.bytes.as_slice() => return Ok(false),
+                None if require_all => return Ok(false),
+                _ => {}
+            }
+        }
+        Ok(true)
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PublishedNonce {
+    input: usize,
+    participant: PublicKey,
+    aggregate: PublicKey,
+    leaf_hash: Option<TapLeafHash>,
+    bytes: Vec<u8>,
+}
+
+impl PublishedNonce {
+    fn slot(&self) -> MusigSlot {
+        MusigSlot {
+            input_index: self.input,
+            participant: self.participant,
+            aggregate: self.aggregate,
+            leaf_hash: self.leaf_hash,
+        }
+    }
+
+    fn field(&self) -> Result<MusigPubNonce, String> {
+        Ok(MusigPubNonce {
+            participant: self.participant,
+            aggregate: self.aggregate,
+            leaf_hash: self.leaf_hash,
+            nonce: self
+                .bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| "invalid cached public nonce length")?,
+        })
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Cache {
+    version: u32,
+    pub(crate) fingerprint: Fingerprint,
+    fetch_order: u64,
+    pub(crate) available: Vec<Session>,
+    pub(crate) allocated: Vec<Allocation>,
+    // A restart also fences old requests that have not reached allocation yet.
+    retired: Vec<RetiredAttempt>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(from = "RetiredAttemptInternal")]
+struct RetiredAttempt {
+    provider: RouteKind,
+    binding: [u8; 32],
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RetiredAttemptInternal {
+    Scoped {
+        provider: RouteKind,
+        binding: [u8; 32],
+    },
+    Ledger([u8; 32]),
+}
+
+impl From<RetiredAttemptInternal> for RetiredAttempt {
+    fn from(value: RetiredAttemptInternal) -> Self {
+        match value {
+            RetiredAttemptInternal::Scoped { provider, binding } => Self { provider, binding },
+            RetiredAttemptInternal::Ledger(binding) => Self {
+                provider: RouteKind::Usb,
+                binding,
+            },
+        }
+    }
+}
+
+impl Cache {
+    pub(crate) fn is_retired(&self, binding: [u8; 32], provider: RouteKind) -> bool {
+        self.retired
+            .iter()
+            .any(|entry| entry.binding == binding && entry.provider == provider)
+    }
+
+    pub(crate) fn replace(&mut self, session: Session) {
+        self.available.retain(|entry| {
+            entry.provider != session.provider
+                || entry.policy != session.policy
+                || entry.id != session.id
+        });
+        for allocation in &mut self.allocated {
+            // Old Ledger allocations lack policy. Retire a matching ID conservatively.
+            if allocation.provider == session.provider
+                && allocation.id == session.id
+                && (allocation.policy.is_empty() || allocation.policy == session.policy)
+            {
+                allocation.state = AllocationState::Invalid;
+                allocation.secret = None;
+            }
+        }
+        self.available.push(session);
+    }
+}
+
+pub(crate) struct LockedCache {
+    _lock: File,
+    path: PathBuf,
+    pub(crate) state: Cache,
+}
+
+fn cache_path(root: &Path, fingerprint: Fingerprint) -> Result<PathBuf, String> {
+    let stem = state_crypt::opaque_name("musig-sessions", &fingerprint.to_string())?;
+    Ok(root.join(format!("{stem}.{}", state_crypt::SEALED_EXTENSION)))
+}
+
+pub fn has_cache(fingerprint: Fingerprint) -> Result<bool, String> {
+    let current = cache_path(&datadir().join("musig-sessions"), fingerprint)?;
+    let old = legacy_path(&datadir().join("musig-sessions"), fingerprint)?;
+    Ok(current.try_exists().map_err(|e| e.to_string())?
+        || old.try_exists().map_err(|e| e.to_string())?)
+}
+
+fn legacy_path(root: &Path, fingerprint: Fingerprint) -> Result<PathBuf, String> {
+    let stem = state_crypt::opaque_name("ledger-nonces", &fingerprint.to_string())?;
+    Ok(root
+        .parent()
+        .ok_or("cache has no parent")?
+        .join("ledger-nonces")
+        .join(format!("{stem}.{}", state_crypt::SEALED_EXTENSION)))
+}
+
+impl LockedCache {
+    pub(crate) fn open(root: &Path, fingerprint: Fingerprint) -> Result<Self, String> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(root)
+                .map_err(|e| e.to_string())?;
+        }
+        #[cfg(not(unix))]
+        fs::create_dir_all(root).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        File::open(root.parent().ok_or("cache directory has no parent")?)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|e| e.to_string())?;
+        let path = cache_path(root, fingerprint)?;
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path.with_extension("lock"))
+            .map_err(|e| e.to_string())?;
+        lock.try_lock_exclusive()
+            .map_err(|e| format!("MuSig session cache is busy: {e}"))?;
+        let legacy = legacy_path(root, fingerprint)?;
+        let migrating = !path.try_exists().map_err(|e| e.to_string())?
+            && legacy.try_exists().map_err(|e| e.to_string())?;
+        let legacy_lock = if migrating {
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(legacy.with_extension("lock"))
+                .map_err(|e| e.to_string())?;
+            file.try_lock_exclusive()
+                .map_err(|e| format!("MuSig session cache is busy: {e}"))?;
+            Some(file)
+        } else {
+            None
+        };
+        let state: Cache = match state_crypt::read_state(if migrating { &legacy } else { &path })? {
+            Some(json) => serde_json::from_str(&Zeroizing::new(json)).map_err(|e| e.to_string())?,
+            None => Cache {
+                version: CACHE_VERSION,
+                fingerprint,
+                fetch_order: 0,
+                available: Vec::new(),
+                allocated: Vec::new(),
+                retired: Vec::new(),
+            },
+        };
+        if state.version != CACHE_VERSION || state.fingerprint != fingerprint {
+            return Err("unsupported or mismatched MuSig session cache".into());
+        }
+        let mut store = Self {
+            _lock: lock,
+            path,
+            state,
+        };
+        if migrating {
+            store.save(store.state.clone())?;
+            fs::remove_file(&legacy).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            File::open(legacy.parent().ok_or("legacy cache has no parent")?)
+                .and_then(|dir| dir.sync_all())
+                .map_err(|e| e.to_string())?;
+        }
+        drop(legacy_lock);
+        Ok(store)
+    }
+
+    pub(crate) fn save(&mut self, next: Cache) -> Result<(), String> {
+        let json = Zeroizing::new(serde_json::to_string(&next).map_err(|e| e.to_string())?);
+        let sealed = state_crypt::seal(&json)?;
+        let temp = self.path.with_extension("tmp");
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp).map_err(|e| e.to_string())?;
+        file.write_all(&sealed).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        fs::rename(&temp, &self.path).map_err(|e| e.to_string())?;
+        // The rename must survive power loss before a nonce can leave this process.
+        #[cfg(unix)]
+        File::open(self.path.parent().ok_or("cache has no parent")?)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|e| e.to_string())?;
+        self.state = next;
+        publish_snapshot(self.state.fingerprint, &self.state);
+        Ok(())
+    }
+
+    pub(crate) fn reserve_order(&mut self) -> Result<u64, String> {
+        let mut next = self.state.clone();
+        next.fetch_order = next
+            .fetch_order
+            .checked_add(1)
+            .ok_or("fetch order exhausted")?;
+        let order = next.fetch_order;
+        self.save(next)?;
+        Ok(order)
+    }
+
+    fn allocate(
+        &mut self,
+        binding: [u8; 32],
+        policy: &str,
+        slots: &[ExpressionSlot],
+        round1: bool,
+    ) -> Result<Option<Allocation>, SigningError> {
+        self.allocate_for(binding, policy, slots, round1, RouteKind::Usb)
+    }
+
+    fn allocate_for(
+        &mut self,
+        binding: [u8; 32],
+        policy: &str,
+        slots: &[ExpressionSlot],
+        round1: bool,
+        provider: RouteKind,
+    ) -> Result<Option<Allocation>, SigningError> {
+        if let Some(allocation) = self.active(binding, policy, provider)? {
+            return Ok(Some(allocation));
+        }
+        if !round1 {
+            return Err(SigningError::SessionLost(
+                "MuSig nonce allocation is missing; restart MuSig signing".into(),
+            ));
+        }
+        let Some(index) = self.available(policy, provider) else {
+            return Ok(None);
+        };
+        let mut next = self.state.clone();
+        let session = next.available.remove(index);
+        let published = session.published(slots)?;
+        self.allocate_session(next, session, binding, policy, published)
+            .map(Some)
+    }
+
+    fn active(
+        &self,
+        binding: [u8; 32],
+        policy: &str,
+        provider: RouteKind,
+    ) -> Result<Option<Allocation>, SigningError> {
+        if self.state.is_retired(binding, provider) {
+            return Err(SigningError::SessionLost(
+                "MuSig signing attempt was restarted".into(),
+            ));
+        }
+        if let Some(allocation) = self
+            .state
+            .allocated
+            .iter()
+            .find(|entry| entry.binding == binding && entry.provider == provider)
+        {
+            if allocation.state != AllocationState::Active
+                || (!allocation.policy.is_empty() && allocation.policy != policy)
+            {
+                return Err(SigningError::SessionLost(
+                    "MuSig signing attempt is no longer active".into(),
+                ));
+            }
+            return Ok(Some(allocation.clone()));
+        }
+        Ok(None)
+    }
+
+    fn available(&self, policy: &str, provider: RouteKind) -> Option<usize> {
+        self.state
+            .available
+            .iter()
+            .enumerate()
+            .filter(|(_, session)| session.policy == policy && session.provider == provider)
+            .min_by_key(|(_, session)| session.order)
+            .map(|(index, _)| index)
+    }
+
+    fn allocate_session(
+        &mut self,
+        mut next: Cache,
+        session: Session,
+        binding: [u8; 32],
+        policy: &str,
+        published: Vec<PublishedNonce>,
+    ) -> Result<Allocation, SigningError> {
+        let allocation = Allocation {
+            provider: session.provider,
+            policy: policy.to_owned(),
+            secret: session.secret.clone(),
+            binding,
+            id: session.id,
+            slots: published,
+            round2_nonces: None,
+            state: AllocationState::Active,
+            source: if session.fetched_for == Some(binding) {
+                SessionSource::FetchedForSigning
+            } else {
+                SessionSource::Cached
+            },
+        };
+        next.allocated.push(allocation.clone());
+        self.save(next)?;
+        Ok(allocation)
+    }
+
+    fn bind_round2(&mut self, allocation: &Allocation, real: &Psbt) -> Result<(), SigningError> {
+        let transcript = nonce_transcript(real)?;
+        match allocation.round2_nonces {
+            Some(previous) if previous != transcript => {
+                self.retire(allocation.binding, AllocationState::Invalid)?;
+                Err(SigningError::SessionLost(
+                    "MuSig nonces changed after Ledger round two started".into(),
+                ))
+            }
+            Some(_) => Ok(()),
+            None => self
+                .save_round2(allocation.binding, transcript)
+                .map_err(SigningError::from),
+        }
+    }
+
+    fn save_round2(&mut self, binding: [u8; 32], transcript: [u8; 32]) -> Result<(), String> {
+        let mut next = self.state.clone();
+        let saved = next
+            .allocated
+            .iter_mut()
+            .find(|entry| entry.binding == binding && entry.provider == RouteKind::Usb)
+            .ok_or("allocation disappeared")?;
+        saved.round2_nonces = Some(transcript);
+        self.save(next)
+    }
+
+    fn retire(&mut self, binding: [u8; 32], state: AllocationState) -> Result<(), String> {
+        self.retire_for(binding, state, RouteKind::Usb)
+    }
+
+    fn retire_for(
+        &mut self,
+        binding: [u8; 32],
+        state: AllocationState,
+        provider: RouteKind,
+    ) -> Result<(), String> {
+        let mut next = self.state.clone();
+        match next
+            .allocated
+            .iter_mut()
+            .find(|entry| entry.binding == binding && entry.provider == provider)
+        {
+            Some(allocation) if allocation.state == AllocationState::Active => {
+                allocation.state = state;
+                allocation.secret = None;
+            }
+            Some(_) => return Ok(()),
+            None => {
+                if !next.is_retired(binding, provider) {
+                    next.retired.push(RetiredAttempt { provider, binding });
+                }
+            }
+        }
+        self.save(next)
+    }
+
+    fn insert(&mut self, session: Session) -> Result<(), String> {
+        let mut next = self.state.clone();
+        next.replace(session);
+        self.save(next)
+    }
+}
+
+impl Session {
+    fn published(&self, slots: &[ExpressionSlot]) -> Result<Vec<PublishedNonce>, String> {
+        slots
+            .iter()
+            .map(|entry| {
+                let nonce = self
+                    .nonces
+                    .iter()
+                    .find(|nonce| {
+                        nonce.input == entry.slot.input_index
+                            && nonce.expression == entry.expression
+                            && nonce.participant == entry.slot.participant
+                    })
+                    .ok_or("cached session does not cover this input's MuSig participant")?;
+                Ok(PublishedNonce {
+                    input: entry.slot.input_index,
+                    participant: entry.slot.participant,
+                    aggregate: entry.slot.aggregate,
+                    leaf_hash: entry.slot.leaf_hash,
+                    bytes: nonce.bytes.clone(),
+                })
+            })
+            .collect()
+    }
+}
+
+pub(crate) struct ExpressionSlot {
+    pub(crate) expression: usize,
+    pub(crate) slot: MusigSlot,
+}
+
+pub(crate) fn session_key() -> ProprietaryKey {
+    ProprietaryKey {
+        prefix: b"MUSIG2_SESSION_ID".to_vec(),
+        subtype: 0,
+        key: Vec::new(),
+    }
+}
+
+fn attempt_key() -> ProprietaryKey {
+    ProprietaryKey {
+        prefix: b"SILENT_MUSIG_ATTEMPT".to_vec(),
+        subtype: 0,
+        key: Vec::new(),
+    }
+}
+
+pub fn start_attempt(psbt: &mut Psbt) -> Result<(), String> {
+    let mut attempt = [0; 32];
+    getrandom::getrandom(&mut attempt).map_err(|e| e.to_string())?;
+    psbt.proprietary.insert(attempt_key(), attempt.to_vec());
+    Ok(())
+}
+
+pub(crate) fn binding(
+    real: &Psbt,
+    policy: &WalletDescriptor,
+    fingerprint: Fingerprint,
+) -> Result<[u8; 32], String> {
+    let transaction = session_id(real, policy, fingerprint)
+        .map_err(|e| e.to_string())?
+        .0;
+    let Some(attempt) = real.proprietary.get(&attempt_key()) else {
+        return Ok(transaction);
+    };
+    if attempt.len() != 32 {
+        return Err("invalid MuSig signing attempt ID".into());
+    }
+    let mut engine = sha256::Hash::engine();
+    engine.input(&transaction);
+    engine.input(attempt);
+    Ok(sha256::Hash::from_engine(engine).to_byte_array())
+}
+
+pub enum Signing {
+    Nonces {
+        bytes: Vec<u8>,
+        source: SessionSource,
+    },
+    Missing,
+    Payload {
+        psbt: Psbt,
+        source: SessionSource,
+    },
+}
+
+pub fn prepare(
+    fingerprint: Fingerprint,
+    policy_text: &str,
+    bytes: &[u8],
+) -> Result<Signing, SigningError> {
+    prepare_at(
+        &datadir().join("musig-sessions"),
+        fingerprint,
+        policy_text,
+        bytes,
+    )
+}
+
+fn prepare_at(
+    root: &Path,
+    fingerprint: Fingerprint,
+    policy_text: &str,
+    bytes: &[u8],
+) -> Result<Signing, SigningError> {
+    let mut v2 = psbt::parse_v2(bytes).map_err(|e| e.to_string())?;
+    let real = v2.clone().into_bitcoin_psbt().map_err(|e| e.to_string())?;
+    let policy = descriptor(policy_text)?;
+    let slots = requested_slots(&real, &policy, fingerprint)?;
+    let binding = binding(&real, &policy, fingerprint)?;
+    let mut store = LockedCache::open(root, fingerprint)?;
+    let round1 = musig_status(&real, &policy)
+        .map_err(|e| e.to_string())?
+        .round
+        == MusigRound::Nonces;
+    let Some(allocation) = store.allocate(binding, policy_text, &slots, round1)? else {
+        return Ok(Signing::Missing);
+    };
+    let expected: Vec<_> = slots.iter().map(|entry| entry.slot).collect();
+    if !allocation.covers_slots(&expected) {
+        return Err(SigningError::SessionLost(
+            "MuSig slots changed after nonce allocation".into(),
+        ));
+    }
+    for published in &allocation.slots {
+        let field = published.field()?;
+        let existing = musig_input_pub_nonce(
+            &real.inputs[published.input],
+            published.participant,
+            published.aggregate,
+            published.leaf_hash,
+        )
+        .map_err(|e| e.to_string())?;
+        if existing.is_some_and(|nonce| nonce != field.nonce) || (!round1 && existing.is_none()) {
+            return Err(SigningError::SessionLost(
+                "transaction nonce does not match its Ledger allocation".into(),
+            ));
+        }
+        set_musig_input_pub_nonce(&mut v2.inputs[published.input].psbt, &field);
+    }
+    if round1 {
+        return Ok(Signing::Nonces {
+            bytes: v2.serialize().map_err(|e| e.to_string())?,
+            source: allocation.source,
+        });
+    }
+    store.bind_round2(&allocation, &real)?;
+    let mut private = v2.into_bitcoin_psbt().map_err(|e| e.to_string())?;
+    private
+        .proprietary
+        .insert(session_key(), allocation.id.to_vec());
+    Ok(Signing::Payload {
+        psbt: private,
+        source: allocation.source,
+    })
+}
+
+fn nonce_transcript(psbt: &Psbt) -> Result<[u8; 32], String> {
+    let mut engine = sha256::Hash::engine();
+    for (index, input) in psbt.inputs.iter().enumerate() {
+        engine.input(&(index as u64).to_le_bytes());
+        let fields = musig_input_pub_nonces(input).map_err(|e| e.to_string())?;
+        engine.input(&(fields.len() as u64).to_le_bytes());
+        for field in fields {
+            engine.input(&field.participant.serialize());
+            engine.input(&field.aggregate.serialize());
+            engine.input(&[u8::from(field.leaf_hash.is_some())]);
+            if let Some(leaf) = field.leaf_hash {
+                engine.input(leaf.as_byte_array());
+            }
+            engine.input(&field.nonce);
+        }
+    }
+    Ok(sha256::Hash::from_engine(engine).to_byte_array())
+}
+
+pub fn signing_status(
+    fingerprint: Fingerprint,
+    policy_text: &str,
+    real: &Psbt,
+) -> Result<Option<MusigStatus>, String> {
+    let parsed = Descriptor::from_str(policy_text).map_err(|e| e.to_string())?;
+    let Some(policy) = parsed.as_miniscript() else {
+        return Ok(None);
+    };
+    if !policy.has_musig()
+        || own_slots(real, policy, fingerprint)
+            .map_err(|e| e.to_string())?
+            .is_empty()
+    {
+        return Ok(None);
+    }
+    musig_status(real, policy)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+pub fn requested_by(real: &Psbt, fingerprint: Fingerprint) -> Result<bool, String> {
+    for input in &real.inputs {
+        for aggregate in musig_input_participants_all(input).map_err(|e| e.to_string())? {
+            for participant in aggregate.participants {
+                if input
+                    .tap_key_origins
+                    .get(&participant.x_only_public_key().0)
+                    .is_some_and(|(_, (fp, _))| *fp == fingerprint)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+pub fn check_round2(
+    real: &Psbt,
+    policy: &WalletDescriptor,
+    fingerprint: Fingerprint,
+) -> Result<(), String> {
+    for entry in requested_slots(real, policy, fingerprint)? {
+        let slot = entry.slot;
+        if musig_input_partial_sig(
+            &real.inputs[slot.input_index],
+            slot.participant,
+            slot.aggregate,
+            slot.leaf_hash,
+        )
+        .map_err(|e| e.to_string())?
+        .is_none()
+        {
+            return Err("Ledger returned incomplete MuSig partial signatures".into());
+        }
+    }
+    Ok(())
+}
+
+pub fn finish(fingerprint: Fingerprint, policy: &str, bytes: &[u8]) -> Result<(), SigningError> {
+    finish_at(
+        &datadir().join("musig-sessions"),
+        fingerprint,
+        policy,
+        bytes,
+        AllocationState::Consumed,
+    )
+}
+
+pub fn invalidate_signing(
+    fingerprint: Fingerprint,
+    policy: &str,
+    bytes: &[u8],
+) -> Result<(), SigningError> {
+    finish_at(
+        &datadir().join("musig-sessions"),
+        fingerprint,
+        policy,
+        bytes,
+        AllocationState::Invalid,
+    )
+}
+
+fn finish_at(
+    root: &Path,
+    fingerprint: Fingerprint,
+    policy_text: &str,
+    bytes: &[u8],
+    state: AllocationState,
+) -> Result<(), SigningError> {
+    let real = psbt::parse_v2(bytes)
+        .map_err(|e| e.to_string())?
+        .into_bitcoin_psbt()
+        .map_err(|e| e.to_string())?;
+    let policy = descriptor(policy_text)?;
+    let binding = binding(&real, &policy, fingerprint)?;
+    let mut store = LockedCache::open(root, fingerprint)?;
+    let Some(allocation) = store
+        .state
+        .allocated
+        .iter()
+        .find(|entry| entry.binding == binding && entry.provider == RouteKind::Usb)
+    else {
+        return Err(SigningError::SessionLost(
+            "Ledger nonce allocation is missing".into(),
+        ));
+    };
+    if !allocation.compatible_nonces(&real, true)? {
+        return Err(SigningError::SessionLost(
+            "request does not match the active Ledger nonce allocation".into(),
+        ));
+    }
+    if allocation.state == AllocationState::Invalid {
+        return Err(SigningError::SessionLost(
+            "Ledger signing attempt was invalidated".into(),
+        ));
+    }
+    if state == AllocationState::Consumed {
+        let transcript = nonce_transcript(&real)?;
+        if allocation.round2_nonces != Some(transcript) {
+            if allocation.state == AllocationState::Active && allocation.round2_nonces.is_some() {
+                store.retire(binding, AllocationState::Invalid)?;
+            }
+            return Err(SigningError::SessionLost(
+                "signed request does not match its Ledger round-two transcript".into(),
+            ));
+        }
+    }
+    store.retire(binding, state)?;
+    Ok(())
+}
+
+pub fn restart(
+    policy_text: &str,
+    original: &[u8],
+    prepared: &[u8],
+    fingerprints: &[Fingerprint],
+) -> Result<Vec<u8>, String> {
+    restart_at(
+        &datadir().join("musig-sessions"),
+        policy_text,
+        original,
+        prepared,
+        fingerprints,
+    )
+}
+
+fn restart_at(
+    root: &Path,
+    policy_text: &str,
+    original: &[u8],
+    prepared: &[u8],
+    fingerprints: &[Fingerprint],
+) -> Result<Vec<u8>, String> {
+    let real = psbt::parse_v2(original)
+        .map_err(|e| e.to_string())?
+        .into_bitcoin_psbt()
+        .map_err(|e| e.to_string())?;
+    let mut next = psbt::parse_v2(prepared).map_err(|e| e.to_string())?;
+    let target = next
+        .clone()
+        .into_bitcoin_psbt()
+        .map_err(|e| e.to_string())?;
+    let policy = descriptor(policy_text)?;
+    // A restart may clear nonce fields, but must still name exactly the same transaction.
+    if session_id(&real, &policy, Fingerprint::default()).map_err(|e| e.to_string())?
+        != session_id(&target, &policy, Fingerprint::default()).map_err(|e| e.to_string())?
+    {
+        return Err("restart PSBT names a different transaction".into());
+    }
+    let mut attempt = [0; 32];
+    getrandom::getrandom(&mut attempt).map_err(|e| e.to_string())?;
+    for fingerprint in fingerprints {
+        retire_restart_binding(root, &policy, &real, *fingerprint)?;
+    }
+    for input in &mut next.inputs {
+        bwk::bwk_tx::bwk_psbt::musig::remove_musig_input_pub_nonces(&mut input.psbt);
+        bwk::bwk_tx::bwk_psbt::musig::remove_musig_input_partial_sigs(&mut input.psbt);
+    }
+    next.proprietary.insert(attempt_key(), attempt.to_vec());
+    next.serialize().map_err(|e| e.to_string())
+}
+
+fn retire_restart_binding(
+    root: &Path,
+    policy: &WalletDescriptor,
+    real: &Psbt,
+    fingerprint: Fingerprint,
+) -> Result<(), String> {
+    if own_slots(real, policy, fingerprint)
+        .map_err(|e| e.to_string())?
+        .is_empty()
+    {
+        return Ok(());
+    }
+    let binding = binding(real, policy, fingerprint)?;
+    let mut store = LockedCache::open(root, fingerprint)?;
+    for provider in [RouteKind::Usb, RouteKind::Hot] {
+        if let Some(allocation) = store
+            .state
+            .allocated
+            .iter()
+            .find(|entry| entry.binding == binding && entry.provider == provider)
+        {
+            if !allocation.compatible_nonces(real, false)? {
+                continue;
+            }
+        }
+        store.retire_for(binding, AllocationState::Invalid, provider)?;
+    }
+    Ok(())
+}
+
+pub fn can_publish(
+    fingerprint: Fingerprint,
+    policy_text: &str,
+    real: &Psbt,
+) -> Result<bool, String> {
+    let snapshot = SNAPSHOTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&fingerprint)
+        .cloned();
+    let Some(snapshot) = snapshot else {
+        return Ok(false);
+    };
+    let policy = descriptor(policy_text)?;
+    if musig_status(real, &policy)
+        .map_err(|e| e.to_string())?
+        .round
+        != MusigRound::Nonces
+    {
+        return Ok(false);
+    }
+    let binding = binding(real, &policy, fingerprint)?;
+    if snapshot.is_retired(binding, RouteKind::Usb) {
+        return Ok(false);
+    }
+    let allocation = snapshot
+        .allocated
+        .iter()
+        .find(|entry| entry.binding == binding && entry.provider == RouteKind::Usb);
+    let session = snapshot
+        .available
+        .iter()
+        .filter(|session| session.policy == policy_text && session.provider == RouteKind::Usb)
+        .min_by_key(|session| session.order);
+    if allocation.is_none() && session.is_none() {
+        return Ok(false);
+    }
+    let slots = requested_slots(real, &policy, fingerprint)?;
+    if let Some(allocation) = allocation {
+        return Ok(allocation.state == AllocationState::Active
+            && allocation
+                .slots
+                .iter()
+                .map(PublishedNonce::slot)
+                .collect::<BTreeSet<_>>()
+                == slots
+                    .iter()
+                    .map(|entry| entry.slot)
+                    .collect::<BTreeSet<_>>()
+            && allocation.compatible_nonces(real, false)?);
+    }
+    if let Some(session) = session {
+        session.published(&slots)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeSet, fs, path::Path, str::FromStr};
+
+    use bitcoin::{
+        bip32::{DerivationPath, Fingerprint, Xpriv, Xpub},
+        secp256k1::{PublicKey, Secp256k1, SecretKey},
+        taproot::{LeafVersion, TapLeafHash},
+        Amount, Network, Psbt, TxOut,
+    };
+    use bwk::{
+        bwk_descriptor::{updater::update_input, wallet::WalletDescriptorExt},
+        bwk_sign::{
+            miniscript,
+            musig::{own_slots, MusigRound},
+        },
+        bwk_tx::bwk_psbt::{
+            musig::{
+                musig_input_pub_nonces, remove_musig_input_pub_nonces, set_musig_input_partial_sig,
+                set_musig_input_pub_nonce, MusigPartialSig, MusigPubNonce,
+            },
+            PsbtV2,
+        },
+    };
+    use temp_dir::TempDir;
+
+    use crate::{
+        keys::{
+            manager::{KeyManager, KeyManagerImpl, UnusableReason},
+            musig_sessions::{
+                binding, can_publish, check_round2, count, descriptor, expression_slots, finish_at,
+                owned_expressions, prepare_at, refresh_at, restart_at, session_key, signing_status,
+                start_attempt, synthetic, AllocationState, Fetch, LockedCache, SessionSource,
+                Signing, SigningError, FETCH_FEE_SATS, FUNDING_SATS, MAX_INPUT, SNAPSHOTS,
+            },
+            record::{DeviceRecord, KeyRecord, RouteKind},
+            store::KeyStore,
+            CAPABILITY_MUSIG,
+        },
+        state_crypt,
+    };
+
+    struct Policy {
+        text: String,
+        fingerprint: Fingerprint,
+    }
+
+    #[test]
+    fn migrates_the_existing_ledger_sealed_file_and_resumes_its_allocation() {
+        let tmp = TempDir::new().expect("temp directory");
+        let policy = policy(false, 0);
+        let staging = tmp.path().join("staging");
+        fetch_sessions(&staging, &policy, 2, 1);
+        let published = publish(&staging, &policy, real(&policy, 0, 0, 1));
+        let store = LockedCache::open(&staging, policy.fingerprint).expect("original state");
+        let id = store.state.allocated[0].id;
+        let mut json = serde_json::to_value(&store.state).expect("serialize actual old layout");
+        for session in json["available"].as_array_mut().expect("available") {
+            let entry = session.as_object_mut().expect("session object");
+            entry.remove("provider");
+            entry.remove("secret");
+        }
+        for allocation in json["allocated"].as_array_mut().expect("allocated") {
+            let entry = allocation.as_object_mut().expect("allocation object");
+            entry.remove("provider");
+            entry.remove("policy");
+            entry.remove("secret");
+        }
+        json["retired"] = serde_json::to_value(vec![[9u8; 32]]).expect("old restart fences");
+        drop(store);
+        let old_root = tmp.path().join("ledger-nonces");
+        fs::create_dir(&old_root).expect("old cache directory");
+        let stem = state_crypt::opaque_name("ledger-nonces", &policy.fingerprint.to_string())
+            .expect("old opaque name");
+        let old_path = old_root.join(format!("{stem}.{}", state_crypt::SEALED_EXTENSION));
+        fs::write(
+            &old_path,
+            state_crypt::seal(&json.to_string()).expect("encrypt old cache"),
+        )
+        .expect("existing sealed file");
+        let root = tmp.path().join("musig-sessions");
+        let migrated = LockedCache::open(&root, policy.fingerprint).expect("one-way migration");
+        assert_eq!(
+            migrated.state.available.len(),
+            1,
+            "available Ledger session preserved"
+        );
+        assert_eq!(
+            migrated.state.allocated[0].id, id,
+            "active allocation preserved without old policy field"
+        );
+        assert!(
+            migrated.state.is_retired([9; 32], RouteKind::Usb),
+            "old restart fence preserved"
+        );
+        assert!(
+            !migrated.state.is_retired([9; 32], RouteKind::Hot),
+            "legacy fence belongs only to Ledger"
+        );
+        assert!(
+            !old_path.exists(),
+            "old file removed only after new state is durable"
+        );
+        assert!(
+            state_crypt::is_sealed(&fs::read(&migrated.path).expect("new state")),
+            "new state remains encrypted"
+        );
+        drop(migrated);
+        let mut real = as_v0(&published);
+        complete_nonces(&policy, &mut real);
+        let bytes = v2(real);
+        assert!(
+            matches!(
+                prepare_at(&root, policy.fingerprint, &policy.text, &bytes)
+                    .expect("resume round two"),
+                Signing::Payload { .. }
+            ),
+            "migrated allocation can resume"
+        );
+        finish_at(
+            &root,
+            policy.fingerprint,
+            &policy.text,
+            &bytes,
+            AllocationState::Consumed,
+        )
+        .expect("consume original allocation");
+        let reopened = LockedCache::open(&root, policy.fingerprint).expect("reopen new state");
+        assert_eq!(reopened.state.allocated[0].state, AllocationState::Consumed);
+        assert_eq!(
+            reopened.state.available.len(),
+            1,
+            "inactive queue still retained"
+        );
+    }
+
+    fn key(seed: u8) -> (String, Fingerprint) {
+        let secp = Secp256k1::new();
+        let master = Xpriv::new_master(Network::Regtest, &[seed; 64]).expect("master key");
+        let fingerprint = master.fingerprint(&secp);
+        let path = DerivationPath::from_str("m/87'/1'/0'/2").expect("origin path");
+        let child = master.derive_priv(&secp, &path).expect("account key");
+        let xpub = Xpub::from_priv(&secp, &child);
+        (format!("[{fingerprint}/87'/1'/0'/2]{xpub}"), fingerprint)
+    }
+
+    fn policy(tree: bool, zone: u32) -> Policy {
+        let (a, fingerprint) = key(1);
+        let (b, _) = key(2);
+        let (c, _) = key(3);
+        let first = zone * 2;
+        let second = first + 1;
+        let text = if tree {
+            format!("tr(musig({a},{b})/<{first};{second}>/*,{{pk(musig({a},{b})/<512;513>/*),pk(musig({a},{c})/<1024;1025>/*)}})")
+        } else {
+            format!("tr(musig({a},{b})/<{first};{second}>/*)")
+        };
+        Policy { text, fingerprint }
+    }
+
+    fn simple_policy(first_seed: u8, second_seed: u8, zone: u32) -> Policy {
+        let (a, fingerprint) = key(first_seed);
+        let (b, _) = key(second_seed);
+        let first = zone * 2;
+        let second = first + 1;
+        Policy {
+            text: format!("tr(musig({a},{b})/<{first};{second}>/*)"),
+            fingerprint,
+        }
+    }
+
+    fn as_v0(bytes: &[u8]) -> Psbt {
+        PsbtV2::deserialize(bytes)
+            .expect("v2 PSBT")
+            .into_bitcoin_psbt()
+            .expect("v0 PSBT")
+    }
+
+    fn complete_nonces(policy: &Policy, real: &mut Psbt) {
+        let parsed = descriptor(&policy.text).expect("policy");
+        let fingerprints: BTreeSet<_> = parsed
+            .plain_keys()
+            .iter()
+            .map(|key| key.master_fingerprint())
+            .collect();
+        for fingerprint in fingerprints {
+            if fingerprint == policy.fingerprint {
+                continue;
+            }
+            for slot in own_slots(real, &parsed, fingerprint).expect("peer slots") {
+                set_musig_input_pub_nonce(
+                    &mut real.inputs[slot.input_index],
+                    &MusigPubNonce {
+                        participant: slot.participant,
+                        aggregate: slot.aggregate,
+                        leaf_hash: slot.leaf_hash,
+                        nonce: nonce(30, slot.input_index, 0),
+                    },
+                );
+            }
+        }
+    }
+
+    fn ledger_manager(root: &Path, policies: &[&Policy]) -> KeyManager {
+        let mut manager = KeyManager::new(
+            KeyStore::new(root.join("keys"), Network::Regtest),
+            Network::Regtest,
+        )
+        .expect("manager");
+        let fingerprint = policies[0].fingerprint;
+        let mut record = KeyRecord::new(fingerprint, Network::Regtest, "Ledger".into());
+        record.routes.push(RouteKind::Usb).expect("USB route");
+        record.devices.push(DeviceRecord {
+            kind: "ledger".into(),
+            model: String::new(),
+            serial: String::new(),
+            module: "hwi".into(),
+            version: String::new(),
+            capabilities: CAPABILITY_MUSIG,
+        });
+        manager.add_key(record).expect("Ledger key");
+        for policy in policies {
+            manager
+                .set_descriptor_registered(fingerprint, "account".into(), policy.text.clone())
+                .expect("registered policy");
+        }
+        manager
+    }
+
+    fn nonce(tag: u8, input: usize, expression: usize) -> [u8; 66] {
+        let secret = SecretKey::from_slice(&[tag + input as u8 + expression as u8 + 1; 32])
+            .expect("nonce secret");
+        let point = PublicKey::from_secret_key(&Secp256k1::new(), &secret).serialize();
+        let mut bytes = [0; 66];
+        bytes[..33].copy_from_slice(&point);
+        bytes[33..].copy_from_slice(&point);
+        bytes
+    }
+
+    fn answer(fetch: &Fetch, tag: u8) -> Psbt {
+        let mut signed = fetch.payload();
+        let definite = fetch.policy.single_paths().expect("paths")[0]
+            .derive_at(0)
+            .expect("derive");
+        for input in 0..MAX_INPUT {
+            for entry in expression_slots(
+                &definite,
+                input,
+                &fetch.owned,
+                fetch.store.state.fingerprint,
+            )
+            .expect("expression slots")
+            {
+                set_musig_input_pub_nonce(
+                    &mut signed.inputs[input],
+                    &MusigPubNonce {
+                        participant: entry.slot.participant,
+                        aggregate: entry.slot.aggregate,
+                        leaf_hash: entry.slot.leaf_hash,
+                        nonce: nonce(tag, input, entry.expression),
+                    },
+                );
+            }
+        }
+        signed
+    }
+
+    fn real(policy: &Policy, branch: usize, index: u32, inputs: usize) -> Psbt {
+        let parsed = descriptor(&policy.text).expect("policy");
+        let definite = parsed.single_paths().expect("paths")[branch]
+            .derive_at(index)
+            .expect("derive");
+        let mut psbt = synthetic(&parsed, policy.fingerprint).expect("synthetic transaction");
+        psbt.unsigned_tx.input.truncate(inputs);
+        psbt.inputs.truncate(inputs);
+        psbt.unsigned_tx.output[0].value =
+            Amount::from_sat(FUNDING_SATS * inputs as u64 - FETCH_FEE_SATS);
+        for input in 0..inputs {
+            psbt.inputs[input] = bitcoin::psbt::Input::default();
+            psbt.inputs[input].witness_utxo = Some(TxOut {
+                value: Amount::from_sat(FUNDING_SATS),
+                script_pubkey: definite.script_pubkey(),
+            });
+            update_input(&mut psbt, input, &definite).expect("public descriptor updater");
+        }
+        psbt
+    }
+
+    fn v2(psbt: Psbt) -> Vec<u8> {
+        PsbtV2::from_bitcoin_psbt(psbt)
+            .expect("v2 conversion")
+            .serialize()
+            .expect("v2 bytes")
+    }
+
+    fn publish(root: &Path, policy: &Policy, psbt: Psbt) -> Vec<u8> {
+        match prepare_at(root, policy.fingerprint, &policy.text, &v2(psbt)).expect("allocate") {
+            Signing::Nonces { bytes, .. } => bytes,
+            _ => panic!("expected cached nonce publication"),
+        }
+    }
+
+    fn fetch_sessions(root: &Path, policy: &Policy, quantity: usize, tag: u8) -> Vec<[u8; 32]> {
+        let mut fetch =
+            Fetch::begin_at(root, policy.fingerprint, &policy.text, quantity).expect("fetch batch");
+        let mut ids = Vec::new();
+        for command in 0..quantity {
+            ids.push(fetch.pending.id);
+            assert_eq!(
+                fetch
+                    .accept(&answer(&fetch, tag + command as u8))
+                    .expect("successful nonce command"),
+                command + 1 == quantity,
+                "batch commits exactly after command {quantity}"
+            );
+        }
+        ids
+    }
+
+    fn publish_from(
+        root: &Path,
+        policy: &Policy,
+        bytes: &[u8],
+        expected: SessionSource,
+    ) -> Vec<u8> {
+        match prepare_at(root, policy.fingerprint, &policy.text, bytes).expect("publish nonce step")
+        {
+            Signing::Nonces { bytes, source } => {
+                assert_eq!(
+                    source, expected,
+                    "nonce-step allocation has the expected origin"
+                );
+                bytes
+            }
+            _ => panic!("expected round-one nonce publication"),
+        }
+    }
+
+    fn prepare_round_two(
+        root: &Path,
+        policy: &Policy,
+        published: &[u8],
+        expected: SessionSource,
+    ) -> Vec<u8> {
+        let mut complete = as_v0(published);
+        complete_nonces(policy, &mut complete);
+        let bytes = v2(complete);
+        match prepare_at(root, policy.fingerprint, &policy.text, &bytes).expect("prepare round two")
+        {
+            Signing::Payload { source, .. } => assert_eq!(
+                source, expected,
+                "round two restores durable allocation provenance"
+            ),
+            _ => panic!("expected round-two device payload"),
+        }
+        bytes
+    }
+
+    #[test]
+    fn version_one_without_provenance_preserves_allocations_and_policy_queues() {
+        fn without_provenance(mut state: serde_json::Value) -> serde_json::Value {
+            for allocation in state["allocated"].as_array_mut().expect("allocation array") {
+                allocation
+                    .as_object_mut()
+                    .expect("allocation object")
+                    .remove("source");
+            }
+            for session in state["available"]
+                .as_array_mut()
+                .expect("available sessions")
+            {
+                session
+                    .as_object_mut()
+                    .expect("session object")
+                    .remove("fetched_for");
+            }
+            state
+        }
+
+        let tmp = TempDir::new().expect("temporary cache");
+        let a = policy(false, 0);
+        let b = policy(false, 1);
+        fetch_sessions(tmp.path(), &a, 4, 10);
+        let consumed_request = v2(real(&a, 0, 5, 1));
+        let consumed = publish_from(tmp.path(), &a, &consumed_request, SessionSource::Cached);
+        let complete = prepare_round_two(tmp.path(), &a, &consumed, SessionSource::Cached);
+        finish_at(
+            tmp.path(),
+            a.fingerprint,
+            &a.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("consumed allocation");
+        let active_request = v2(real(&a, 1, 17, 1));
+        let active = publish_from(tmp.path(), &a, &active_request, SessionSource::Cached);
+        fetch_sessions(tmp.path(), &b, 2, 20);
+
+        let store = LockedCache::open(tmp.path(), a.fingerprint).expect("cache fixture");
+        let legacy = without_provenance(serde_json::to_value(&store.state).expect("cache JSON"));
+        assert_eq!(
+            legacy["version"], 1,
+            "fixture uses the actual version-one shape"
+        );
+        let sealed = state_crypt::seal(&serde_json::to_string(&legacy).expect("version-one JSON"))
+            .expect("seal fixture");
+        let path = store.path.clone();
+        fs::write(&path, &sealed).expect("write supplied version-one shape");
+        drop(store);
+
+        let reopened = LockedCache::open(tmp.path(), a.fingerprint)
+            .expect("read cache with consumed allocation lacking source");
+        assert_eq!(
+            reopened.state.allocated[0].state,
+            AllocationState::Consumed,
+            "consumption remains terminal"
+        );
+        assert_eq!(
+            reopened.state.allocated[1].state,
+            AllocationState::Active,
+            "active attempt remains usable"
+        );
+        assert!(
+            reopened
+                .state
+                .allocated
+                .iter()
+                .all(|allocation| allocation.source == SessionSource::Cached),
+            "old allocations retain the original always-replenish semantics"
+        );
+        assert!(
+            reopened
+                .state
+                .available
+                .iter()
+                .all(|session| session.fetched_for.is_none()),
+            "missing optional fetched-for markers already read as ordinary cached entries"
+        );
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.order)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5, 6],
+            "both policy queues preserve their original FIFO orders"
+        );
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.policy.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                a.text.as_str(),
+                a.text.as_str(),
+                b.text.as_str(),
+                b.text.as_str()
+            ],
+            "other policy sessions are retained"
+        );
+        let roundtrip = serde_json::to_string(&reopened.state).expect("roundtrip current fields");
+        let decoded: crate::keys::musig_sessions::Cache =
+            serde_json::from_str(&roundtrip).expect("read roundtripped cache");
+        assert_eq!(
+            without_provenance(serde_json::to_value(decoded).expect("roundtrip JSON")),
+            legacy,
+            "reading and serializing preserves every preexisting state field"
+        );
+        drop(reopened);
+        assert_eq!(
+            fs::read(&path).expect("unchanged version-one file"),
+            sealed,
+            "reading adds no migration or disk rewrite"
+        );
+        assert!(
+            matches!(
+                prepare_at(tmp.path(), a.fingerprint, &a.text, &consumed_request),
+                Err(SigningError::SessionLost(_))
+            ),
+            "defaulting provenance never revives a consumed allocation"
+        );
+        assert_eq!(
+            publish_from(tmp.path(), &a, &active_request, SessionSource::Cached),
+            active,
+            "old active retries remain idempotent and cached"
+        );
+        prepare_round_two(tmp.path(), &a, &active, SessionSource::Cached);
+    }
+
+    #[test]
+    fn cached_four_sessions_end_with_four_after_successful_signing_and_replacement() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let ids = fetch_sessions(tmp.path(), &policy, 4, 10);
+        let prepared = v2(real(&policy, 1, 17, 1));
+        let published = publish_from(tmp.path(), &policy, &prepared, SessionSource::Cached);
+        let reopened =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("restart after nonce step");
+        assert_eq!(
+            reopened.state.allocated[0].id, ids[0],
+            "oldest cached session is selected"
+        );
+        assert_eq!(
+            reopened.state.allocated[0].source,
+            SessionSource::Cached,
+            "origin reaches disk before publication"
+        );
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.id)
+                .collect::<Vec<_>>(),
+            ids[1..],
+            "three unused sessions are retained"
+        );
+        assert_eq!(
+            reopened.state.fetch_order, 4,
+            "nonce publication does not fetch another session"
+        );
+        drop(reopened);
+        assert_eq!(
+            publish_from(tmp.path(), &policy, &prepared, SessionSource::Cached),
+            published,
+            "active retry keeps the same source and nonces"
+        );
+        let complete = prepare_round_two(tmp.path(), &policy, &published, SessionSource::Cached);
+        finish_at(
+            tmp.path(),
+            policy.fingerprint,
+            &policy.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("successful signing");
+        let replacement = fetch_sessions(tmp.path(), &policy, 1, 20);
+        let reopened =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("completed replacement");
+        let mut expected = ids[1..].to_vec();
+        expected.extend(replacement);
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.id)
+                .collect::<Vec<_>>(),
+            expected,
+            "replacement appends without replacing the three remaining sessions"
+        );
+        assert_eq!(
+            reopened.state.available.len(),
+            4,
+            "manual four, cached sign one, replace one leaves four"
+        );
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.order)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4, 5],
+            "FIFO order survives replacement"
+        );
+        assert_eq!(
+            reopened.state.allocated[0].state,
+            AllocationState::Consumed,
+            "successful cached signing is consumed"
+        );
+    }
+
+    #[test]
+    fn empty_cache_fetches_for_signing_and_durably_skips_replacement() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let prepared = v2(real(&policy, 1, 17, 1));
+        assert!(
+            matches!(
+                prepare_at(tmp.path(), policy.fingerprint, &policy.text, &prepared)
+                    .expect("empty nonce step"),
+                Signing::Missing
+            ),
+            "empty account needs one signing fetch"
+        );
+        let mut fetch =
+            Fetch::for_signing_at(tmp.path(), policy.fingerprint, &policy.text, &prepared)
+                .expect("on-demand fetch")
+                .expect("one command needed");
+        let id = fetch.pending.id;
+        assert_eq!(
+            fetch.remaining, 1,
+            "on-demand fetching requests exactly one session"
+        );
+        assert!(fetch
+            .accept(&answer(&fetch, 7))
+            .expect("signing fetch completed"));
+        drop(fetch);
+        let published = publish_from(
+            tmp.path(),
+            &policy,
+            &prepared,
+            SessionSource::FetchedForSigning,
+        );
+        let reopened =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("restart application");
+        assert_eq!(
+            reopened.state.allocated[0].id, id,
+            "allocation uses the fetched session"
+        );
+        assert_eq!(
+            reopened.state.allocated[0].source,
+            SessionSource::FetchedForSigning,
+            "source is durable across app restart"
+        );
+        assert!(
+            reopened.state.available.is_empty(),
+            "the sole fetched session is allocated"
+        );
+        let sealed = fs::read(&reopened.path).expect("allocation before retry");
+        let path = reopened.path.clone();
+        drop(reopened);
+        assert!(
+            Fetch::for_signing_at(tmp.path(), policy.fingerprint, &policy.text, &prepared)
+                .expect("active retry needs no device request")
+                .is_none(),
+            "active allocation prevents another fetch"
+        );
+        assert_eq!(
+            fs::read(path).expect("unchanged retry state"),
+            sealed,
+            "skipping an active retry does not advance order or write state"
+        );
+        assert_eq!(
+            publish_from(
+                tmp.path(),
+                &policy,
+                &prepared,
+                SessionSource::FetchedForSigning
+            ),
+            published,
+            "active retry preserves fetched origin"
+        );
+        let complete = prepare_round_two(
+            tmp.path(),
+            &policy,
+            &published,
+            SessionSource::FetchedForSigning,
+        );
+        finish_at(
+            tmp.path(),
+            policy.fingerprint,
+            &policy.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("consume fresh-fetched session");
+        let reopened =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("signed without replacement");
+        assert!(
+            reopened.state.available.is_empty(),
+            "empty start ends empty when no cached session was selected"
+        );
+        assert_eq!(
+            reopened.state.fetch_order, 1,
+            "only the original signing fetch advanced order"
+        );
+        assert_eq!(
+            reopened.state.allocated[0].state,
+            AllocationState::Consumed,
+            "fresh-fetched signing still consumes the allocation"
+        );
+    }
+
+    #[test]
+    fn signing_fetch_rechecks_existing_policy_cache_without_mutating_it() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let ids = fetch_sessions(tmp.path(), &policy, 4, 10);
+        let store =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("cache before signing fetch");
+        let path = store.path.clone();
+        let sealed = fs::read(&path).expect("existing cache");
+        let prepared = v2(real(&policy, 0, 5, 1));
+        assert!(Fetch::for_signing_at(tmp.path(), policy.fingerprint, &policy.text, &prepared).is_err(),
+            "on-demand cache checks must acquire the fingerprint lock even when sessions are already available");
+        drop(store);
+        assert!(
+            Fetch::for_signing_at(tmp.path(), policy.fingerprint, &policy.text, &prepared)
+                .expect("cache appeared before on-demand fetch")
+                .is_none(),
+            "availability is rechecked under the device lock"
+        );
+        assert_eq!(
+            fs::read(path).expect("cache after skip"),
+            sealed,
+            "skip does not reserve an order or overwrite sessions"
+        );
+        let reopened = LockedCache::open(tmp.path(), policy.fingerprint).expect("unchanged cache");
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.id)
+                .collect::<Vec<_>>(),
+            ids,
+            "cached session identities remain unchanged"
+        );
+        assert_eq!(
+            reopened.state.fetch_order, 4,
+            "skip does not advance fetch order"
+        );
+        drop(reopened);
+        publish_from(tmp.path(), &policy, &prepared, SessionSource::Cached);
+    }
+
+    #[test]
+    fn on_demand_source_is_not_changed_by_later_manual_fetches_or_other_policies() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let a = policy(false, 0);
+        let b = policy(false, 1);
+        let prepared = v2(real(&a, 1, 17, 1));
+        let mut fetch = Fetch::for_signing_at(tmp.path(), a.fingerprint, &a.text, &prepared)
+            .expect("on-demand fetch")
+            .expect("empty account");
+        let fetched = fetch.pending.id;
+        assert!(fetch.accept(&answer(&fetch, 1)).expect("command"));
+        drop(fetch);
+        let b_ids = fetch_sessions(tmp.path(), &b, 2, 20);
+        let a_ids = fetch_sessions(tmp.path(), &a, 1, 30);
+        let published = publish_from(tmp.path(), &a, &prepared, SessionSource::FetchedForSigning);
+        let reopened =
+            LockedCache::open(tmp.path(), a.fingerprint).expect("allocation after manual appends");
+        assert_eq!(
+            reopened.state.allocated[0].id, fetched,
+            "FIFO selects the earlier signing fetch rather than later manual sessions"
+        );
+        assert_eq!(
+            reopened.state.available.len(),
+            3,
+            "both policies retain their other sessions"
+        );
+        drop(reopened);
+        let later = fetch_sessions(tmp.path(), &b, 1, 40);
+        assert_eq!(
+            publish_from(tmp.path(), &a, &prepared, SessionSource::FetchedForSigning),
+            published,
+            "a changed cache count after allocation cannot change an active retry's source"
+        );
+        let complete =
+            prepare_round_two(tmp.path(), &a, &published, SessionSource::FetchedForSigning);
+        finish_at(
+            tmp.path(),
+            a.fingerprint,
+            &a.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("successful round two");
+        let reopened = LockedCache::open(tmp.path(), a.fingerprint)
+            .expect("no replacement for fetched origin");
+        let mut expected = b_ids;
+        expected.extend(a_ids);
+        expected.extend(later);
+        assert_eq!(reopened.state.available.iter().map(|session| session.id).collect::<Vec<_>>(), expected,
+            "positive cache counts during round two do not change provenance or clear other sessions");
+        assert_eq!(
+            reopened.state.fetch_order, 5,
+            "no post-signing fetch is required for fetched provenance"
+        );
+    }
+
+    #[test]
+    fn an_on_demand_entry_taken_by_another_transaction_is_cached_for_that_transaction() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let original = real(&policy, 0, 5, 1);
+        let prepared = v2(original.clone());
+        let mut fetch =
+            Fetch::for_signing_at(tmp.path(), policy.fingerprint, &policy.text, &prepared)
+                .expect("signing fetch")
+                .expect("one session");
+        assert!(fetch.accept(&answer(&fetch, 1)).expect("command"));
+        drop(fetch);
+        let mut other = original;
+        other.unsigned_tx.output[0].value =
+            Amount::from_sat(other.unsigned_tx.output[0].value.to_sat() - 1);
+        let published = publish_from(tmp.path(), &policy, &v2(other), SessionSource::Cached);
+        let complete = prepare_round_two(tmp.path(), &policy, &published, SessionSource::Cached);
+        finish_at(
+            tmp.path(),
+            policy.fingerprint,
+            &policy.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("other transaction succeeds");
+        fetch_sessions(tmp.path(), &policy, 1, 2);
+        let reopened = LockedCache::open(tmp.path(), policy.fingerprint)
+            .expect("replacement for cached selection");
+        assert_eq!(
+            reopened.state.available.len(),
+            1,
+            "ordinary available entry selected by another transaction gets a replacement"
+        );
+        assert_eq!(
+            reopened.state.allocated[0].source,
+            SessionSource::Cached,
+            "the intended binding does not reserve a session for its original caller"
+        );
+    }
+
+    #[test]
+    fn other_policy_sessions_neither_suppress_signing_fetches_nor_get_cleared_by_replacement() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let a = policy(false, 0);
+        let b = policy(false, 1);
+        let b_ids = fetch_sessions(tmp.path(), &b, 2, 20);
+        let prepared = v2(real(&a, 0, 5, 1));
+        let mut fetch = Fetch::for_signing_at(tmp.path(), a.fingerprint, &a.text, &prepared)
+            .expect("fetch for empty account")
+            .expect("other policy does not supply this account");
+        assert_eq!(
+            fetch.store.state.available.len(),
+            2,
+            "other policy sessions remain while on-demand request is in flight"
+        );
+        assert!(fetch.accept(&answer(&fetch, 3)).expect("command"));
+        drop(fetch);
+        let fetched = publish_from(tmp.path(), &a, &prepared, SessionSource::FetchedForSigning);
+        let complete =
+            prepare_round_two(tmp.path(), &a, &fetched, SessionSource::FetchedForSigning);
+        finish_at(
+            tmp.path(),
+            a.fingerprint,
+            &a.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("first signing");
+        let mut next = as_v0(&prepared);
+        start_attempt(&mut next).expect("another attempt");
+        fetch_sessions(tmp.path(), &a, 1, 4);
+        let cached = publish_from(tmp.path(), &a, &v2(next), SessionSource::Cached);
+        let complete = prepare_round_two(tmp.path(), &a, &cached, SessionSource::Cached);
+        finish_at(
+            tmp.path(),
+            a.fingerprint,
+            &a.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("cached signing");
+        let replacement = fetch_sessions(tmp.path(), &a, 1, 5);
+        let reopened = LockedCache::open(tmp.path(), a.fingerprint).expect("append replacement");
+        let mut expected = b_ids;
+        expected.extend(replacement);
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.id)
+                .collect::<Vec<_>>(),
+            expected,
+            "cached signing appends a replacement even while another policy has unused sessions"
+        );
+        assert_eq!(
+            reopened.state.fetch_order, 5,
+            "every needed fetch advances the device-global order once"
+        );
+    }
+
+    #[test]
+    fn manual_quantity_limit_is_not_a_total_cache_limit() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let a = policy(false, 0);
+        let b = policy(false, 1);
+        let a_ids = fetch_sessions(tmp.path(), &a, 8, 10);
+        let b_ids = fetch_sessions(tmp.path(), &b, 8, 20);
+        let reopened = LockedCache::open(tmp.path(), a.fingerprint).expect("both policy queues");
+        let mut expected = a_ids;
+        expected.extend(b_ids);
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.id)
+                .collect::<Vec<_>>(),
+            expected,
+            "two valid batches append sixteen sessions without eviction"
+        );
+        assert_eq!(
+            reopened.state.available.len(),
+            16,
+            "eight is a per-fetch input bound, not an eviction rule"
+        );
+        assert_eq!(
+            reopened.state.fetch_order, 16,
+            "all appended sessions retain monotonic fetch order"
+        );
+    }
+
+    #[test]
+    fn consumed_attempt_requires_restart_and_uses_a_fresh_session() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 2).expect("two sessions");
+        let first = fetch.pending.id;
+        assert!(!fetch.accept(&answer(&fetch, 1)).expect("first command"));
+        let second = fetch.pending.id;
+        assert!(fetch.accept(&answer(&fetch, 2)).expect("second command"));
+        drop(fetch);
+        let mut transaction = real(&policy, 1, 17, 1);
+        start_attempt(&mut transaction).expect("initial account signing attempt");
+        let prepared = v2(transaction.clone());
+        let published = publish(tmp.path(), &policy, transaction);
+        let mut complete = as_v0(&published);
+        complete_nonces(&policy, &mut complete);
+        let complete = v2(complete);
+        assert!(matches!(
+            prepare_at(tmp.path(), policy.fingerprint, &policy.text, &complete).expect("round two"),
+            Signing::Payload { .. }
+        ));
+        finish_at(
+            tmp.path(),
+            policy.fingerprint,
+            &policy.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("durably consume success");
+        let reopened =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("restart application");
+        assert_eq!(
+            reopened.state.allocated[0].state,
+            AllocationState::Consumed,
+            "successful round two is terminal on disk"
+        );
+        assert_eq!(
+            reopened.state.available.len(),
+            1,
+            "only unused sessions remain available"
+        );
+        drop(reopened);
+        assert!(
+            matches!(
+                prepare_at(tmp.path(), policy.fingerprint, &policy.text, &prepared),
+                Err(SigningError::SessionLost(_))
+            ),
+            "nonce-free retry must not resurrect the consumed session"
+        );
+        let restarted = restart_at(
+            tmp.path(),
+            &policy.text,
+            &complete,
+            &prepared,
+            &[policy.fingerprint],
+        )
+        .expect("explicit restart");
+        let parsed = descriptor(&policy.text).expect("policy");
+        assert_ne!(
+            binding(&as_v0(&prepared), &parsed, policy.fingerprint).expect("old binding"),
+            binding(&as_v0(&restarted), &parsed, policy.fingerprint).expect("fresh binding"),
+            "restart changes the attempt, not the transaction"
+        );
+        let next = publish(tmp.path(), &policy, as_v0(&restarted));
+        assert_ne!(next, published, "new attempt publishes fresh nonce bytes");
+        let reopened =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("reopen new attempt");
+        assert_eq!(
+            reopened.state.allocated[0].id, first,
+            "old allocation remains terminal"
+        );
+        assert_eq!(
+            reopened.state.allocated[1].id, second,
+            "FIFO unused session serves the new attempt"
+        );
+        assert!(
+            reopened.state.available.is_empty(),
+            "consumed sessions never return to availability"
+        );
+    }
+
+    #[test]
+    fn session_loss_retires_only_the_matching_transaction_and_own_nonce() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 2).expect("sessions");
+        assert!(!fetch.accept(&answer(&fetch, 1)).expect("first command"));
+        assert!(fetch.accept(&answer(&fetch, 2)).expect("second command"));
+        drop(fetch);
+        let first = real(&policy, 0, 5, 1);
+        let mut second = first.clone();
+        second.unsigned_tx.output[0].value =
+            Amount::from_sat(second.unsigned_tx.output[0].value.to_sat() - 1);
+        let first = publish(tmp.path(), &policy, first);
+        let second = publish(tmp.path(), &policy, second);
+        let mut wrong = as_v0(&first);
+        let mut field = musig_input_pub_nonces(&wrong.inputs[0]).expect("own nonce")[0];
+        field.nonce = nonce(50, 0, 0);
+        set_musig_input_pub_nonce(&mut wrong.inputs[0], &field);
+        let wrong = v2(wrong);
+        assert!(
+            matches!(
+                finish_at(
+                    tmp.path(),
+                    policy.fingerprint,
+                    &policy.text,
+                    &wrong,
+                    AllocationState::Invalid
+                ),
+                Err(SigningError::SessionLost(_))
+            ),
+            "mismatched own nonce is a stale request"
+        );
+        restart_at(
+            tmp.path(),
+            &policy.text,
+            &wrong,
+            &first,
+            &[policy.fingerprint],
+        )
+        .expect("restart stale request without retiring another nonce");
+        let reopened =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("unchanged allocations");
+        assert!(
+            reopened
+                .state
+                .allocated
+                .iter()
+                .all(|allocation| allocation.state == AllocationState::Active),
+            "stale nonce cannot invalidate either active transaction"
+        );
+        drop(reopened);
+        finish_at(
+            tmp.path(),
+            policy.fingerprint,
+            &policy.text,
+            &first,
+            AllocationState::Invalid,
+        )
+        .expect("retire lost device session");
+        let reopened = LockedCache::open(tmp.path(), policy.fingerprint).expect("durable loss");
+        assert_eq!(
+            reopened.state.allocated[0].state,
+            AllocationState::Invalid,
+            "matching device session is retired"
+        );
+        assert_eq!(
+            reopened.state.allocated[1].state,
+            AllocationState::Active,
+            "other transaction remains active"
+        );
+        drop(reopened);
+        assert_eq!(
+            publish(tmp.path(), &policy, as_v0(&second)),
+            second,
+            "other transaction keeps its idempotent round-one answer"
+        );
+    }
+
+    #[test]
+    fn explicit_restart_retires_all_ledger_fingerprints_before_new_round_one() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let a = policy(false, 0);
+        let (_, b_fingerprint) = key(2);
+        let b = Policy {
+            text: a.text.clone(),
+            fingerprint: b_fingerprint,
+        };
+        for policy in [&a, &b] {
+            let mut fetch = Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 2)
+                .expect("device sessions");
+            assert!(!fetch.accept(&answer(&fetch, 1)).expect("first command"));
+            assert!(fetch.accept(&answer(&fetch, 2)).expect("second command"));
+        }
+        let prepared = v2(real(&a, 1, 17, 1));
+        let first = publish(tmp.path(), &a, as_v0(&prepared));
+        let original = publish(tmp.path(), &b, as_v0(&first));
+        let restarted = restart_at(
+            tmp.path(),
+            &a.text,
+            &original,
+            &prepared,
+            &[a.fingerprint, b.fingerprint],
+        )
+        .expect("retire both devices");
+        assert!(
+            musig_input_pub_nonces(&as_v0(&restarted).inputs[0])
+                .expect("nonce-free restart")
+                .is_empty(),
+            "restart drops every published nonce"
+        );
+        for policy in [&a, &b] {
+            let reopened =
+                LockedCache::open(tmp.path(), policy.fingerprint).expect("retirement on disk");
+            assert_eq!(
+                reopened.state.allocated[0].state,
+                AllocationState::Invalid,
+                "every device's old binding is invalid"
+            );
+            assert_eq!(
+                reopened.state.available.len(),
+                1,
+                "unused device session remains available"
+            );
+            drop(reopened);
+            assert!(
+                matches!(
+                    prepare_at(tmp.path(), policy.fingerprint, &policy.text, &prepared),
+                    Err(SigningError::SessionLost(_))
+                ),
+                "late old round-one request cannot revive a retired attempt"
+            );
+        }
+        let next = publish(tmp.path(), &a, as_v0(&restarted));
+        let next = publish(tmp.path(), &b, as_v0(&next));
+        assert_eq!(
+            musig_input_pub_nonces(&as_v0(&next).inputs[0])
+                .expect("fresh round")
+                .len(),
+            2,
+            "both devices can publish a fresh round after retirement"
+        );
+    }
+
+    #[test]
+    fn restart_fences_an_old_request_that_has_not_allocated_yet() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 1).expect("session");
+        assert!(fetch.accept(&answer(&fetch, 1)).expect("command"));
+        drop(fetch);
+        let prepared = v2(real(&policy, 0, 7, 1));
+        let restarted = restart_at(
+            tmp.path(),
+            &policy.text,
+            &prepared,
+            &prepared,
+            &[policy.fingerprint],
+        )
+        .expect("restart before old worker allocation");
+        assert!(
+            matches!(
+                prepare_at(tmp.path(), policy.fingerprint, &policy.text, &prepared),
+                Err(SigningError::SessionLost(_))
+            ),
+            "late old worker is fenced durably even without an old allocation"
+        );
+        let reopened =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("tombstone persists");
+        assert_eq!(
+            reopened.state.retired.len(),
+            2,
+            "retired unpublished attempt is remembered for hot and Ledger routes"
+        );
+        assert_eq!(
+            reopened.state.available.len(),
+            1,
+            "late request consumes no session"
+        );
+        drop(reopened);
+        publish(tmp.path(), &policy, as_v0(&restarted));
+    }
+
+    #[test]
+    fn failed_restart_returns_no_new_attempt_and_retry_finishes_all_retirements() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let a = policy(false, 0);
+        let (_, b_fingerprint) = key(2);
+        let b = Policy {
+            text: a.text.clone(),
+            fingerprint: b_fingerprint,
+        };
+        for policy in [&a, &b] {
+            let mut fetch =
+                Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 1).expect("session");
+            assert!(fetch.accept(&answer(&fetch, 1)).expect("command"));
+        }
+        let prepared = v2(real(&a, 0, 5, 1));
+        let first = publish(tmp.path(), &a, as_v0(&prepared));
+        let original = publish(tmp.path(), &b, as_v0(&first));
+        let blocked = LockedCache::open(tmp.path(), b.fingerprint)
+            .expect("second device store")
+            .path
+            .with_extension("tmp");
+        fs::create_dir(&blocked).expect("force retirement write failure");
+        assert!(
+            restart_at(
+                tmp.path(),
+                &a.text,
+                &original,
+                &prepared,
+                &[a.fingerprint, b.fingerprint]
+            )
+            .is_err(),
+            "no new attempt PSBT is returned before every device retirement reaches disk"
+        );
+        let first = LockedCache::open(tmp.path(), a.fingerprint).expect("first device");
+        assert_eq!(
+            first.state.allocated[0].state,
+            AllocationState::Invalid,
+            "successful retirement remains durable"
+        );
+        drop(first);
+        let second = LockedCache::open(tmp.path(), b.fingerprint).expect("second device");
+        assert_eq!(
+            second.state.allocated[0].state,
+            AllocationState::Active,
+            "failed write leaves the old allocation intact"
+        );
+        drop(second);
+        fs::remove_dir(&blocked).expect("restore storage");
+        let restarted = restart_at(
+            tmp.path(),
+            &a.text,
+            &original,
+            &prepared,
+            &[a.fingerprint, b.fingerprint],
+        )
+        .expect("retry completes retirement");
+        assert_ne!(
+            restarted, prepared,
+            "successful retry returns a fresh attempt ID"
+        );
+        let second =
+            LockedCache::open(tmp.path(), b.fingerprint).expect("second retirement persisted");
+        assert_eq!(
+            second.state.allocated[0].state,
+            AllocationState::Invalid,
+            "retry retires the remaining device"
+        );
+    }
+
+    #[test]
+    fn offline_plan_resumes_a_persisted_active_allocation_with_zero_available_sessions() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = simple_policy(60, 61, 0);
+        let manager = ledger_manager(tmp.path(), &[&policy]);
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 1).expect("session");
+        assert!(fetch.accept(&answer(&fetch, 1)).expect("command"));
+        drop(fetch);
+        let transaction = real(&policy, 1, 17, 1);
+        let prepared = v2(transaction.clone());
+        let published = publish(tmp.path(), &policy, transaction);
+        SNAPSHOTS
+            .lock()
+            .expect("snapshots")
+            .remove(&policy.fingerprint);
+        refresh_at(tmp.path(), policy.fingerprint)
+            .expect("application restart loads durable allocation");
+        assert_eq!(
+            count(policy.fingerprint, &policy.text),
+            0,
+            "display count remains available-only after allocating the last session"
+        );
+        let plan = manager
+            .signing_plan(&prepared)
+            .expect("transaction-aware offline plan");
+        let candidate = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.fingerprint == policy.fingerprint)
+            .expect("Ledger candidate");
+        assert!(candidate.unusable.is_none(), "active transaction allocation enables offline round-one retry with no available sessions");
+        assert_eq!(
+            candidate.route,
+            Some(RouteKind::Usb),
+            "cache-backed USB route"
+        );
+        assert!(
+            can_publish(policy.fingerprint, &policy.text, &as_v0(&prepared))
+                .expect("cached capability"),
+            "active binding covers this transaction"
+        );
+        assert_eq!(
+            publish(tmp.path(), &policy, as_v0(&prepared)),
+            published,
+            "offline retry returns the same public nonces"
+        );
+        let mut other = as_v0(&prepared);
+        other.unsigned_tx.output[0].value =
+            Amount::from_sat(other.unsigned_tx.output[0].value.to_sat() - 1);
+        let plan = manager
+            .signing_plan(&v2(other))
+            .expect("other transaction plan");
+        assert_eq!(
+            plan.candidates
+                .iter()
+                .find(|candidate| candidate.fingerprint == policy.fingerprint)
+                .expect("Ledger")
+                .unusable,
+            Some(UnusableReason::DeviceNotConnected),
+            "active allocation cannot enable an unrelated transaction"
+        );
+        let mut partial = as_v0(&published);
+        complete_nonces(&policy, &mut partial);
+        let plan = manager.signing_plan(&v2(partial)).expect("round-two plan");
+        assert_eq!(
+            plan.candidates
+                .iter()
+                .find(|candidate| candidate.fingerprint == policy.fingerprint)
+                .expect("Ledger")
+                .unusable,
+            Some(UnusableReason::DeviceNotConnected),
+            "active cache allocation never enables offline round two"
+        );
+    }
+
+    #[test]
+    fn ledger_cache_coverage_does_not_disable_an_existing_qr_route() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let (a, fingerprint) = key(68);
+        let (b, _) = key(69);
+        let policy = Policy {
+            text: format!("tr(musig({a}/<0;1>/*,{b}/<0;1>/*))"),
+            fingerprint,
+        };
+        let mut manager = ledger_manager(tmp.path(), &[&policy]);
+        manager
+            .add_route(fingerprint, RouteKind::Qr)
+            .expect("usable QR route");
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), fingerprint, &policy.text, 1).expect("Ledger session");
+        assert!(fetch.accept(&answer(&fetch, 1)).expect("Ledger command"));
+        drop(fetch);
+        let plan = manager
+            .signing_plan(&v2(real(&policy, 1, 17, 1)))
+            .expect("non-cached route still works");
+        let candidate = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.fingerprint == fingerprint)
+            .expect("registered key");
+        assert_eq!(
+            candidate.route,
+            Some(RouteKind::Qr),
+            "keep the existing usable route"
+        );
+        assert!(
+            candidate.unusable.is_none(),
+            "Ledger's cache limits must not reject another route's policy"
+        );
+        assert!(
+            !candidate.musig_done,
+            "the requested nonce contribution is still missing"
+        );
+    }
+
+    #[test]
+    fn completion_and_offline_eligibility_cover_every_requested_policy() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let a = simple_policy(64, 65, 0);
+        let b = simple_policy(64, 65, 1);
+        let manager = ledger_manager(tmp.path(), &[&a, &b]);
+        let mut transaction = real(&a, 0, 5, 1);
+        let second = real(&b, 1, 17, 1);
+        transaction
+            .unsigned_tx
+            .input
+            .push(second.unsigned_tx.input[0].clone());
+        transaction.inputs.push(second.inputs[0].clone());
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), a.fingerprint, &a.text, 1).expect("first policy session");
+        assert!(fetch
+            .accept(&answer(&fetch, 1))
+            .expect("first policy command"));
+        drop(fetch);
+        let first = publish(tmp.path(), &a, transaction);
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), b.fingerprint, &b.text, 1).expect("second policy session");
+        assert!(fetch
+            .accept(&answer(&fetch, 2))
+            .expect("second policy command"));
+        drop(fetch);
+        let plan = manager
+            .signing_plan(&first)
+            .expect("mixed-policy nonce plan");
+        let own = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.fingerprint == a.fingerprint)
+            .expect("Ledger");
+        assert!(
+            !own.musig_done,
+            "first policy's nonce does not complete the second policy"
+        );
+        assert!(
+            own.unusable.is_none(),
+            "second policy's cached session can complete round one offline"
+        );
+        let both = publish(tmp.path(), &b, as_v0(&first));
+        let mut complete = as_v0(&both);
+        complete_nonces(&a, &mut complete);
+        complete_nonces(&b, &mut complete);
+        let parsed_a = descriptor(&a.text).expect("first policy");
+        let slot = own_slots(&complete, &parsed_a, a.fingerprint).expect("first slot")[0];
+        set_musig_input_partial_sig(
+            &mut complete.inputs[slot.input_index],
+            &MusigPartialSig {
+                participant: slot.participant,
+                aggregate: slot.aggregate,
+                leaf_hash: slot.leaf_hash,
+                signature: [7; 32],
+            },
+        );
+        let plan = manager
+            .signing_plan(&v2(complete.clone()))
+            .expect("mixed-policy partial plan");
+        let own = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.fingerprint == a.fingerprint)
+            .expect("Ledger");
+        assert!(
+            !own.musig_done,
+            "first policy's partial signature cannot complete the entire transaction"
+        );
+        assert_eq!(
+            own.unusable,
+            Some(UnusableReason::DeviceNotConnected),
+            "round-two completion still needs the device"
+        );
+        let parsed_b = descriptor(&b.text).expect("second policy");
+        let slot = own_slots(&complete, &parsed_b, b.fingerprint).expect("second slot")[0];
+        set_musig_input_partial_sig(
+            &mut complete.inputs[slot.input_index],
+            &MusigPartialSig {
+                participant: slot.participant,
+                aggregate: slot.aggregate,
+                leaf_hash: slot.leaf_hash,
+                signature: [7; 32],
+            },
+        );
+        let plan = manager
+            .signing_plan(&v2(complete))
+            .expect("all own partial signatures");
+        assert!(
+            plan.candidates
+                .iter()
+                .find(|candidate| candidate.fingerprint == a.fingerprint)
+                .expect("Ledger")
+                .musig_done,
+            "every requested policy must contribute before the signer is done"
+        );
+    }
+
+    #[test]
+    fn session_loss_is_typed_separately_from_bad_input_and_storage_failure() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        assert!(
+            matches!(
+                prepare_at(
+                    tmp.path(),
+                    policy.fingerprint,
+                    &policy.text,
+                    b"invalid PSBT"
+                ),
+                Err(SigningError::Invalid(_))
+            ),
+            "bad input is not session loss"
+        );
+        let parsed = descriptor(&policy.text).expect("policy");
+        let mut complete = real(&policy, 0, 5, 1);
+        for seed in [1, 2] {
+            let (_, fingerprint) = key(seed);
+            for slot in own_slots(&complete, &parsed, fingerprint).expect("slots") {
+                set_musig_input_pub_nonce(
+                    &mut complete.inputs[slot.input_index],
+                    &MusigPubNonce {
+                        participant: slot.participant,
+                        aggregate: slot.aggregate,
+                        leaf_hash: slot.leaf_hash,
+                        nonce: nonce(seed, 0, 0),
+                    },
+                );
+            }
+        }
+        assert!(
+            matches!(
+                prepare_at(tmp.path(), policy.fingerprint, &policy.text, &v2(complete)),
+                Err(SigningError::SessionLost(_))
+            ),
+            "round two without allocation requests restart"
+        );
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 1).expect("session");
+        assert!(fetch.accept(&answer(&fetch, 1)).expect("command"));
+        let blocked = fetch.store.path.with_extension("tmp");
+        drop(fetch);
+        fs::create_dir(&blocked).expect("block allocation write");
+        assert!(
+            matches!(
+                prepare_at(
+                    tmp.path(),
+                    policy.fingerprint,
+                    &policy.text,
+                    &v2(real(&policy, 0, 5, 1))
+                ),
+                Err(SigningError::Invalid(_))
+            ),
+            "storage failure stays an ordinary error instead of restarting rounds"
+        );
+    }
+
+    #[test]
+    fn allocation_is_durable_fifo_and_retries_never_allocate_again() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 2).expect("fetch");
+        let first = fetch.pending.id;
+        assert!(
+            !fetch
+                .accept(&answer(&fetch, 1))
+                .expect("first successful command"),
+            "batch needs two commands"
+        );
+        let second = fetch.pending.id;
+        assert_ne!(first, second, "each caller session must have its own ID");
+        assert!(
+            fetch
+                .accept(&answer(&fetch, 2))
+                .expect("second successful command"),
+            "batch complete"
+        );
+        drop(fetch);
+        let mut reordered =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("reorder persisted queue");
+        let mut next = reordered.state.clone();
+        next.available.reverse();
+        reordered
+            .save(next)
+            .expect("persist reversed storage order");
+        drop(reordered);
+        let transaction = real(&policy, 1, 17, 2);
+        let published = publish(tmp.path(), &policy, transaction.clone());
+        let reopened = LockedCache::open(tmp.path(), policy.fingerprint).expect("restart");
+        assert_eq!(
+            reopened.state.available.len(),
+            1,
+            "one FIFO session remains"
+        );
+        assert_eq!(
+            reopened.state.allocated.len(),
+            1,
+            "allocation survives restart before publication"
+        );
+        assert_eq!(
+            reopened.state.allocated[0].id, first,
+            "oldest session allocated first"
+        );
+        assert_eq!(
+            reopened.state.available[0].id, second,
+            "second remains available"
+        );
+        assert!(
+            state_crypt::is_sealed(&fs::read(&reopened.path).expect("sealed file")),
+            "cache is encrypted"
+        );
+        drop(reopened);
+        assert_eq!(
+            publish(tmp.path(), &policy, transaction.clone()),
+            published,
+            "retry returns the same allocated nonces"
+        );
+        let mut changed = transaction;
+        changed.unsigned_tx.output[0].value = Amount::from_sat(198_000);
+        publish(tmp.path(), &policy, changed);
+        let reopened = LockedCache::open(tmp.path(), policy.fingerprint).expect("restart again");
+        assert_eq!(
+            reopened.state.allocated.len(),
+            2,
+            "different transaction gets another session"
+        );
+        assert!(
+            reopened.state.available.is_empty(),
+            "allocated sessions never return to availability"
+        );
+    }
+
+    #[test]
+    fn a_fetch_for_another_account_appends_without_removing_sessions_or_allocations() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let a = policy(false, 0);
+        let b = policy(false, 1);
+        let mut fetch = Fetch::begin_at(tmp.path(), a.fingerprint, &a.text, 2).expect("fetch a");
+        assert!(!fetch.accept(&answer(&fetch, 1)).expect("first command"));
+        assert!(fetch.accept(&answer(&fetch, 2)).expect("second command"));
+        drop(fetch);
+        publish(tmp.path(), &a, real(&a, 0, 5, 1));
+        let mut replacement =
+            Fetch::begin_at(tmp.path(), b.fingerprint, &b.text, 1).expect("fetch b");
+        assert_eq!(
+            replacement.store.state.available.len(),
+            1,
+            "previous account availability remains during device I/O"
+        );
+        assert_eq!(
+            replacement.store.state.allocated.len(),
+            1,
+            "pending transaction binding remains"
+        );
+        assert_eq!(
+            replacement.pending.order, 3,
+            "fetch counter survives reopen and account change"
+        );
+        assert!(replacement
+            .accept(&answer(&replacement, 3))
+            .expect("replacement completed"));
+        drop(replacement);
+        let reopened =
+            LockedCache::open(tmp.path(), a.fingerprint).expect("shared fingerprint store");
+        assert_eq!(
+            reopened.state.available.len(),
+            2,
+            "fetch appends to the previous account's session"
+        );
+        assert_eq!(
+            reopened.state.available[0].policy, a.text,
+            "previous account's queue is retained"
+        );
+        assert_eq!(
+            reopened.state.available[1].policy, b.text,
+            "new account gets its own queue"
+        );
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.order)
+                .collect::<Vec<_>>(),
+            vec![2, 3],
+            "append retains original fetch order across policies"
+        );
+        assert_eq!(
+            reopened.state.allocated.len(),
+            1,
+            "allocated metadata retained"
+        );
+    }
+
+    #[test]
+    fn incomplete_failed_or_cancelled_fetch_never_commits_a_partial_batch() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let other = policy(true, 1);
+        let policy = policy(true, 0);
+        let mut previous = Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 2)
+            .expect("previous batch");
+        assert!(!previous
+            .accept(&answer(&previous, 7))
+            .expect("previous first command"));
+        assert!(previous
+            .accept(&answer(&previous, 8))
+            .expect("previous second command"));
+        let retained = previous.pending.id;
+        drop(previous);
+        publish(tmp.path(), &policy, real(&policy, 1, 5, 1));
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), other.fingerprint, &other.text, 2).expect("fetch");
+        assert!(!fetch.accept(&answer(&fetch, 1)).expect("first command"));
+        let mut incomplete = answer(&fetch, 2);
+        incomplete.inputs[7].unknown.clear();
+        assert!(
+            fetch.accept(&incomplete).is_err(),
+            "missing coverage must fail the command"
+        );
+        drop(fetch);
+        let reopened = LockedCache::open(tmp.path(), policy.fingerprint).expect("restart");
+        assert_eq!(
+            reopened.state.available.len(),
+            1,
+            "failed batch does not replace the previous account's cache"
+        );
+        assert_eq!(
+            reopened.state.available[0].id, retained,
+            "previous session survives failed fetch"
+        );
+        assert_eq!(
+            reopened.state.available[0].policy, policy.text,
+            "failed fetch does not change the other policy queue"
+        );
+        assert_eq!(
+            reopened.state.fetch_order, 4,
+            "failed command order cannot be reused"
+        );
+        assert_eq!(
+            reopened.state.allocated.len(),
+            1,
+            "failed replacement preserves the pending transaction binding"
+        );
+        drop(reopened);
+        let fetch = Fetch::begin_at(tmp.path(), other.fingerprint, &other.text, 1)
+            .expect("cancelled fetch");
+        assert!(
+            LockedCache::open(tmp.path(), policy.fingerprint).is_err(),
+            "device operation holds its fingerprint lock"
+        );
+        drop(fetch);
+        let reopened = LockedCache::open(tmp.path(), policy.fingerprint)
+            .expect("lock released after cancellation");
+        assert_eq!(
+            reopened.state.available.len(),
+            1,
+            "cancelled fetch preserves existing availability"
+        );
+        assert_eq!(
+            reopened.state.available[0].id, retained,
+            "cancellation leaves the other account's session intact"
+        );
+        assert_eq!(reopened.state.fetch_order, 5, "cancelled order is durable");
+    }
+
+    #[test]
+    fn allocation_write_failure_does_not_publish_nonces() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 1).expect("fetch");
+        assert!(fetch.accept(&answer(&fetch, 1)).expect("fetch completed"));
+        let temp = fetch.store.path.with_extension("tmp");
+        drop(fetch);
+        fs::create_dir(&temp).expect("force atomic write failure");
+        assert!(
+            prepare_at(
+                tmp.path(),
+                policy.fingerprint,
+                &policy.text,
+                &v2(real(&policy, 0, 7, 1))
+            )
+            .is_err(),
+            "failed persistence must return an error rather than public nonces"
+        );
+        let reopened = LockedCache::open(tmp.path(), policy.fingerprint).expect("restart");
+        assert_eq!(
+            reopened.state.available.len(),
+            1,
+            "failed allocation leaves durable queue unchanged"
+        );
+        assert!(
+            reopened.state.allocated.is_empty(),
+            "no allocation reached disk"
+        );
+    }
+
+    #[test]
+    fn remaps_input_expression_participant_aggregate_and_leaf_on_disjoint_branches() {
+        for branch in [0, 1] {
+            let tmp = TempDir::new().expect("temporary cache");
+            let policy = policy(true, 0);
+            let mut fetch =
+                Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 1).expect("fetch");
+            let synthetic_fields =
+                musig_input_pub_nonces(&answer(&fetch, 9).inputs[0]).expect("synthetic fields");
+            assert!(fetch.accept(&answer(&fetch, 9)).expect("fetch completed"));
+            drop(fetch);
+            let transaction = real(&policy, branch, 17, MAX_INPUT);
+            let parsed = descriptor(&policy.text).expect("policy");
+            let definite = parsed.single_paths().expect("paths")[branch]
+                .derive_at(17)
+                .expect("derive");
+            let miniscript::Descriptor::Tr(tr) = &definite else {
+                panic!("taproot fixture")
+            };
+            let leaves: Vec<_> = tr
+                .iter_scripts()
+                .map(|(_, ms)| TapLeafHash::from_script(&ms.encode(), LeafVersion::TapScript))
+                .collect();
+            let requested =
+                own_slots(&transaction, &parsed, policy.fingerprint).expect("upstream real slots");
+            assert_eq!(
+                requested.len(),
+                24,
+                "three expressions at all eight input positions"
+            );
+            let published = publish(tmp.path(), &policy, transaction.clone());
+            let signed = PsbtV2::deserialize(&published)
+                .expect("published v2")
+                .into_bitcoin_psbt()
+                .expect("v0");
+            assert!(
+                !signed.proprietary.contains_key(&session_key()),
+                "caller ID stays private"
+            );
+            for input in 0..MAX_INPUT {
+                let fields = musig_input_pub_nonces(&signed.inputs[input]).expect("real fields");
+                assert_eq!(
+                    fields.len(),
+                    3,
+                    "internal expression and both distinct repeated-participant leaves"
+                );
+                for slot in requested.iter().filter(|slot| slot.input_index == input) {
+                    let field = fields
+                        .iter()
+                        .find(|field| {
+                            field.aggregate == slot.aggregate
+                                && field.leaf_hash == slot.leaf_hash
+                                && field.participant == slot.participant
+                        })
+                        .expect("real slot has its nonce");
+                    let expression = match slot.leaf_hash {
+                        None => 0,
+                        Some(leaf) if leaf == leaves[0] => 1,
+                        Some(leaf) if leaf == leaves[1] => 2,
+                        Some(_) => panic!("unexpected fixture leaf"),
+                    };
+                    assert_eq!(
+                        field.nonce,
+                        nonce(9, input, expression),
+                        "nonce follows input and expression, not map iteration order"
+                    );
+                    assert!(
+                        !synthetic_fields
+                            .iter()
+                            .any(|synthetic| synthetic.aggregate == field.aggregate
+                                && synthetic.leaf_hash == field.leaf_hash),
+                        "synthetic aggregate/leaf must not be copied unchanged"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn round_two_restores_private_id_and_refuses_changed_nonce_transcript() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 1).expect("fetch");
+        let id = fetch.pending.id;
+        assert!(fetch.accept(&answer(&fetch, 1)).expect("fetch completed"));
+        drop(fetch);
+        let published = publish(tmp.path(), &policy, real(&policy, 1, 17, 1));
+        let mut complete = PsbtV2::deserialize(&published)
+            .expect("v2")
+            .into_bitcoin_psbt()
+            .expect("v0");
+        let parsed = descriptor(&policy.text).expect("policy");
+        let (_, foreign) = key(2);
+        let slot = own_slots(&complete, &parsed, foreign).expect("foreign slot")[0];
+        let mut field = MusigPubNonce {
+            participant: slot.participant,
+            aggregate: slot.aggregate,
+            leaf_hash: slot.leaf_hash,
+            nonce: nonce(5, 0, 0),
+        };
+        set_musig_input_pub_nonce(&mut complete.inputs[0], &field);
+        match prepare_at(
+            tmp.path(),
+            policy.fingerprint,
+            &policy.text,
+            &v2(complete.clone()),
+        )
+        .expect("round two")
+        {
+            Signing::Payload { psbt: private, .. } => assert_eq!(
+                private.proprietary[&session_key()],
+                id.to_vec(),
+                "restore signer-local ID only on private payload"
+            ),
+            _ => panic!("expected device round-two payload"),
+        }
+        let reopened = LockedCache::open(tmp.path(), policy.fingerprint).expect("restart");
+        assert!(
+            reopened.state.allocated[0].round2_nonces.is_some(),
+            "transcript bound before device payload leaves"
+        );
+        drop(reopened);
+        field.nonce = nonce(6, 0, 0);
+        set_musig_input_pub_nonce(&mut complete.inputs[0], &field);
+        let changed = v2(complete);
+        assert!(
+            matches!(
+                prepare_at(tmp.path(), policy.fingerprint, &policy.text, &changed),
+                Err(SigningError::SessionLost(_))
+            ),
+            "changed peer nonces request a session restart, not a permanent ordinary error"
+        );
+        let reopened =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("retired transcript on disk");
+        assert_eq!(
+            reopened.state.allocated[0].state,
+            AllocationState::Invalid,
+            "only the matching active allocation is retired"
+        );
+        drop(reopened);
+        let prepared = v2(real(&policy, 1, 17, 1));
+        let restarted = restart_at(
+            tmp.path(),
+            &policy.text,
+            &changed,
+            &prepared,
+            &[policy.fingerprint],
+        )
+        .expect("restart changed transcript");
+        assert!(matches!(prepare_at(tmp.path(), policy.fingerprint, &policy.text, &restarted).expect("new attempt can fetch"), Signing::Missing),
+            "fresh attempt reaches on-demand fetch instead of returning the retired transcript error");
+    }
+
+    #[test]
+    fn indexes_include_plain_foreign_and_each_aggregate_occurrence() {
+        let (a, fingerprint) = key(1);
+        let (b, _) = key(2);
+        let (c, _) = key(3);
+        let text = format!("tr({b}/<0;1>/*,{{pk(musig({b},{c})/<0;1>/*),{{pk({c}/<0;1>/*),pk(musig({a},{b})/<512;513>/*)}}}})");
+        assert_eq!(
+            owned_expressions(&descriptor(&text).expect("policy"), fingerprint).expect("owned"),
+            vec![3],
+            "foreign internal, foreign aggregate, and plain leaf each occupy an index"
+        );
+        let duplicate_owner = format!("tr(musig({a},{a})/<0;1>/*)");
+        assert!(
+            owned_expressions(&descriptor(&duplicate_owner).expect("parse"), fingerprint).is_err(),
+            "firmware cannot sign two owned participants in the same aggregate"
+        );
+    }
+
+    #[test]
+    fn unsupported_coverage_refuses_without_consuming_available_session() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let (a, fingerprint) = key(1);
+        let (b, _) = key(2);
+        let policy = Policy {
+            text: format!("tr(musig({a}/<0;1>/*,{b}/<0;1>/*))"),
+            fingerprint,
+        };
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), fingerprint, &policy.text, 1).expect("fetch index zero");
+        assert!(fetch.accept(&answer(&fetch, 1)).expect("fetch completed"));
+        drop(fetch);
+        assert!(prepare_at(tmp.path(), fingerprint, &policy.text, &v2(real(&policy, 1, 17, 1))).is_err(),
+            "derive-then-aggregate changes the participant; do not inject another participant's nonce");
+        let reopened = LockedCache::open(tmp.path(), fingerprint).expect("cache");
+        assert_eq!(
+            reopened.state.available.len(),
+            1,
+            "coverage failure leaves availability unchanged"
+        );
+        assert!(reopened.state.allocated.is_empty(), "no invalid allocation");
+        drop(reopened);
+        for quantity in [0, 9] {
+            assert!(
+                Fetch::begin_at(tmp.path(), fingerprint, &policy.text, quantity).is_err(),
+                "invalid fetch quantity {quantity}"
+            );
+        }
+        let parsed = descriptor(&policy.text).expect("policy");
+        let indexes: BTreeSet<_> = owned_expressions(&parsed, fingerprint)
+            .expect("indexes")
+            .into_iter()
+            .collect();
+        assert_eq!(
+            indexes,
+            BTreeSet::from([0]),
+            "whole aggregate is one expression"
+        );
+    }
+
+    #[test]
+    fn eight_command_batch_is_committed_only_after_the_eighth_success() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let mut fetch = Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 8)
+            .expect("maximum batch");
+        assert!(!fetch.accept(&answer(&fetch, 1)).expect("command one"));
+        assert!(!fetch.accept(&answer(&fetch, 2)).expect("command two"));
+        assert!(!fetch.accept(&answer(&fetch, 3)).expect("command three"));
+        assert!(!fetch.accept(&answer(&fetch, 4)).expect("command four"));
+        assert!(!fetch.accept(&answer(&fetch, 5)).expect("command five"));
+        assert!(!fetch.accept(&answer(&fetch, 6)).expect("command six"));
+        assert!(!fetch.accept(&answer(&fetch, 7)).expect("command seven"));
+        assert!(
+            fetch.store.state.available.is_empty(),
+            "seven successes are not a complete batch"
+        );
+        assert!(fetch.accept(&answer(&fetch, 8)).expect("command eight"));
+        assert_eq!(
+            fetch.store.state.available.len(),
+            8,
+            "full batch available together"
+        );
+        assert_eq!(
+            fetch.store.state.fetch_order, 8,
+            "every command has a durable order"
+        );
+        assert!(
+            fetch.accept(&answer(&fetch, 8)).is_err(),
+            "completed fetch cannot be reused"
+        );
+        drop(fetch);
+        let mut oversized = real(&policy, 0, 9, MAX_INPUT);
+        oversized.inputs.push(oversized.inputs[0].clone());
+        oversized
+            .unsigned_tx
+            .input
+            .push(oversized.unsigned_tx.input[0].clone());
+        let error = match prepare_at(tmp.path(), policy.fingerprint, &policy.text, &v2(oversized)) {
+            Err(error) => error,
+            Ok(_) => panic!("nine inputs must fail"),
+        };
+        assert_eq!(
+            error.to_string(),
+            "Ledger nonce cache supports at most 8 inputs",
+            "explicit input coverage failure"
+        );
+        let reopened = LockedCache::open(tmp.path(), policy.fingerprint).expect("reopen");
+        assert_eq!(
+            reopened.state.available.len(),
+            8,
+            "unsupported request consumes nothing"
+        );
+    }
+
+    #[test]
+    fn round_two_requires_every_owned_partial_signature_before_replacement() {
+        let policy = policy(true, 0);
+        let parsed = descriptor(&policy.text).expect("policy");
+        let mut real = real(&policy, 1, 17, 1);
+        assert!(
+            check_round2(&real, &parsed, policy.fingerprint).is_err(),
+            "nonce-only answer is not round-two success"
+        );
+        let slots = own_slots(&real, &parsed, policy.fingerprint).expect("owned slots");
+        assert_eq!(slots.len(), 3, "one internal and two leaf expressions");
+        for slot in &slots[..2] {
+            set_musig_input_partial_sig(
+                &mut real.inputs[0],
+                &MusigPartialSig {
+                    participant: slot.participant,
+                    aggregate: slot.aggregate,
+                    leaf_hash: slot.leaf_hash,
+                    signature: [7; 32],
+                },
+            );
+        }
+        assert!(
+            check_round2(&real, &parsed, policy.fingerprint).is_err(),
+            "one missing leaf signature prevents replacement"
+        );
+        let slot = slots[2];
+        set_musig_input_partial_sig(
+            &mut real.inputs[0],
+            &MusigPartialSig {
+                participant: slot.participant,
+                aggregate: slot.aggregate,
+                leaf_hash: slot.leaf_hash,
+                signature: [7; 32],
+            },
+        );
+        assert!(
+            check_round2(&real, &parsed, policy.fingerprint).is_ok(),
+            "all device contributions received"
+        );
+    }
+
+    #[test]
+    fn repeated_aggregate_occurrences_do_not_advance_an_incomplete_nonce_round() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(true, 0);
+        let parsed = descriptor(&policy.text).expect("policy");
+        let mut fetch =
+            Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 1).expect("fetch");
+        assert!(fetch.accept(&answer(&fetch, 1)).expect("fetch completed"));
+        drop(fetch);
+        let published = publish(tmp.path(), &policy, real(&policy, 1, 17, 1));
+        let mut real = PsbtV2::deserialize(&published)
+            .expect("v2")
+            .into_bitcoin_psbt()
+            .expect("v0");
+        for seed in [2, 3] {
+            let (_, fingerprint) = key(seed);
+            for slot in own_slots(&real, &parsed, fingerprint).expect("peer slots") {
+                set_musig_input_pub_nonce(
+                    &mut real.inputs[0],
+                    &MusigPubNonce {
+                        participant: slot.participant,
+                        aggregate: slot.aggregate,
+                        leaf_hash: slot.leaf_hash,
+                        nonce: nonce(seed + 5, 0, 0),
+                    },
+                );
+            }
+        }
+        let owned = own_slots(&real, &parsed, policy.fingerprint).expect("owned slots");
+        let omitted = owned[2];
+        let fields = musig_input_pub_nonces(&real.inputs[0]).expect("complete fields");
+        remove_musig_input_pub_nonces(&mut real.inputs[0]);
+        for field in fields {
+            if field.participant != omitted.participant
+                || field.aggregate != omitted.aggregate
+                || field.leaf_hash != omitted.leaf_hash
+            {
+                set_musig_input_pub_nonce(&mut real.inputs[0], &field);
+            }
+        }
+        let status = signing_status(policy.fingerprint, &policy.text, &real)
+            .expect("descriptor-aware status")
+            .expect("owned policy");
+        assert_eq!(
+            status.round,
+            MusigRound::Nonces,
+            "two nonce fields cannot cover three expression occurrences"
+        );
+        let own = status
+            .cosigners
+            .iter()
+            .find(|signer| signer.fingerprint == policy.fingerprint)
+            .expect("signer status");
+        assert_eq!(
+            (own.nonces, own.expected),
+            (2, 3),
+            "picker must leave this Ledger eligible for round one"
+        );
+        match prepare_at(tmp.path(), policy.fingerprint, &policy.text, &v2(real))
+            .expect("retry missing nonce")
+        {
+            Signing::Nonces { bytes, .. } => {
+                let restored = PsbtV2::deserialize(&bytes).expect("restored PSBT");
+                assert_eq!(
+                    musig_input_pub_nonces(&restored.inputs[0].psbt)
+                        .expect("fields")
+                        .len(),
+                    6,
+                    "all three owned and three peer nonces remain in round-one answer"
+                );
+            }
+            _ => panic!("must publish cached nonces without a round-two device payload"),
+        }
+    }
+}
