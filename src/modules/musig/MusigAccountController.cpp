@@ -277,7 +277,8 @@ auto MusigAccountController::spendLeaves(const QStringList &outpoints) -> MusigS
 }
 
 void MusigAccountController::finalizeIfReady() {
-    if (!m_account.has_value() || m_psbt_v2_hex.isEmpty() || m_finalizing || !m_tx_hex.isEmpty()) {
+    if (!m_account.has_value() || m_psbt_v2_hex.isEmpty() || m_finalizing || !m_tx_hex.isEmpty() ||
+        m_restart_pending || m_resetting) {
         return;
     }
     m_finalizing = true;
@@ -303,32 +304,29 @@ void MusigAccountController::finalizeIfReady() {
                    });
 }
 
-// Retire the old attempt before publishing the reset PSBT.
+// Serialize the durable archive, retirement and new attempt behind progress writes.
 void MusigAccountController::restartRounds() {
-    if (m_restart_thread != nullptr || m_psbt_v2_hex.isEmpty() || m_finalizing ||
-        !m_tx_hex.isEmpty()) {
+    if (m_resetting || m_psbt_v2_hex.isEmpty() || m_finalizing || !m_sign_reqs.isEmpty() ||
+        !m_tx_hex.isEmpty() || !m_account.has_value() || m_saved_record_id.isEmpty() ||
+        m_stopping || m_stop_requested) {
         return;
     }
-    m_restart_pending = true;
-    retireSignRequests();
+    m_resetting = true;
     m_restart_generation = ++m_signing_generation;
     m_restart_source = m_psbt_v2_hex;
-    m_restart_result = std::make_shared<SignResult>();
+    m_restart_result = std::make_shared<SavedPsbtReset>();
     auto result = m_restart_result;
-    m_restart_thread = QThread::create([result, network = network(),
-                                        policy = toQString(getDescriptor()).toStdString(),
-                                        original = m_restart_source.toStdString(),
-                                        prepared = m_prepared_psbt_v2_hex.toStdString()] {
-        *result = ::musig_session_restart(network, policy, original, prepared);
-    });
-    connect(m_restart_thread, &QThread::finished, this, &MusigAccountController::onRestartFinished,
-            qontrol::UNIQUE);
-    startWorker(m_restart_thread);
+    auto *account = &*m_account.value();
+    enqueueStorage(
+        [account, result, id = m_saved_record_id.toStdString()] {
+            *result = account->reset_saved_psbt(id);
+        },
+        [this] { onRestartFinished(); });
     emit roundChanged(roundStatus());
 }
 
 auto MusigAccountController::isRestarting() const -> bool {
-    return m_restart_thread != nullptr;
+    return m_resetting;
 }
 
 auto MusigAccountController::restartPending() const -> bool {
@@ -537,8 +535,7 @@ void MusigAccountController::prepareTransaction(TransactionTemplate tx, MusigSpe
                 emit prepareFailed(mapBackendErrorSummary(toQString(psbt->get_psbt_error())));
                 return;
             }
-            m_prepared_psbt_v2_hex = toQString(psbt->bytes_v2_hex());
-            m_psbt_v2_hex = m_prepared_psbt_v2_hex;
+            m_psbt_v2_hex = toQString(psbt->bytes_v2_hex());
             m_saved_record_id = toQString(psbt->saved_record_id());
             m_spend_signers = signers;
             setSaveWarning(toQString(psbt->save_error()));
@@ -552,7 +549,7 @@ auto MusigAccountController::beginSignRequest(const QString &fingerprint)
     if (m_restart_pending) {
         return {nullptr, 0};
     }
-    if (m_restart_thread != nullptr) {
+    if (m_resetting) {
         return {nullptr, 0};
     }
     if (m_psbt_v2_hex.isEmpty() || !m_account.has_value() ||
@@ -614,7 +611,6 @@ void MusigAccountController::clearSigning() {
     ++m_signing_generation;
     m_restart_pending = false;
     m_spend_signers.clear();
-    m_prepared_psbt_v2_hex.clear();
     m_psbt_v2_hex.clear();
     m_tx_hex.clear();
     m_saved_record_id.clear();
@@ -628,8 +624,8 @@ void MusigAccountController::cancelSigning() {
 }
 
 void MusigAccountController::broadcast() {
-    if (m_restart_pending || m_restart_thread != nullptr || m_tx_hex.isEmpty() ||
-        !m_account.has_value() || m_broadcast_pending) {
+    if (m_restart_pending || m_resetting || m_tx_hex.isEmpty() || !m_account.has_value() ||
+        m_broadcast_pending) {
         return;
     }
     // stop() waits on this thread before it drops the account and before stopped()
@@ -700,7 +696,7 @@ void MusigAccountController::onKeysError(std::optional<ReqId> req_id, const QStr
 }
 
 void MusigAccountController::onRestartFinished() {
-    m_restart_thread = nullptr;
+    m_resetting = false;
     if (m_stopping) {
         return;
     }
@@ -711,14 +707,18 @@ void MusigAccountController::onRestartFinished() {
         return;
     }
     if (!m_restart_result->is_ok) {
+        m_restart_pending = m_restart_pending || m_restart_result->reset_pending;
+        setSaveWarning(toQString(m_restart_result->save_error));
         emit signingFailed(toQString(m_restart_result->error), plugin::SignError::Other);
+        emit roundChanged(roundStatus());
         return;
     }
     m_restart_pending = false;
     m_psbt_v2_hex = toQString(m_restart_result->psbt_v2_hex);
-    m_prepared_psbt_v2_hex = m_psbt_v2_hex;
     m_tx_hex.clear();
-    persistActivePsbt();
+    setSaveWarning(toQString(m_restart_result->save_error));
+    emit savedPsbtsChanged();
+    emit signingReset();
     emit roundChanged(roundStatus());
 }
 
@@ -867,9 +867,9 @@ void MusigAccountController::restoreSavedPsbt(const QString &id) {
             }
             auto &entry = result->entry;
             m_saved_record_id = toQString(entry.record.id);
-            m_prepared_psbt_v2_hex = toQString(entry.record.original_psbt_v2_hex);
             m_psbt_v2_hex = toQString(entry.record.current_psbt_v2_hex);
             m_tx_hex = toQString(entry.record.finalized_tx_hex);
+            m_restart_pending = entry.record.reset_pending;
             for (const auto &fingerprint : entry.record.spend.fingerprints) {
                 m_spend_signers.append(toQString(fingerprint));
             }

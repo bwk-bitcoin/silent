@@ -279,12 +279,36 @@ mod ffi {
     }
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    pub struct SavedPsbtAttempt {
+        pub attempt_id: u64,
+        pub baseline_psbt_v2_hex: String,
+        pub current_psbt_v2_hex: String,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct SavedPsbtReset {
+        pub is_ok: bool,
+        pub error: String,
+        pub save_error: String,
+        pub psbt_v2_hex: String,
+        pub reset_pending: bool,
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
     pub struct SavedPsbtRecord {
         pub id: String,
         pub tx_template: TransactionTemplate,
         pub spend: MusigSpendLeaf,
         pub original_psbt_v2_hex: String,
         pub current_psbt_v2_hex: String,
+        #[serde(default)]
+        pub attempt_id: u64,
+        #[serde(default)]
+        pub baseline_psbt_v2_hex: String,
+        #[serde(default)]
+        pub archived_attempts: Vec<SavedPsbtAttempt>,
+        #[serde(default)]
+        pub reset_pending: bool,
         pub finalized_tx_hex: String,
         pub broadcast: bool,
         pub label: String,
@@ -2048,6 +2072,7 @@ mod ffi {
         fn restore_saved_psbt(self: &MusigAccount, id: &str) -> SavedPsbtRestore;
         fn update_saved_psbt(self: &MusigAccount, id: &str, psbt_v2_hex: &str)
             -> SavedPsbtMutation;
+        fn reset_saved_psbt(self: &MusigAccount, id: &str) -> SavedPsbtReset;
         fn label_saved_psbt(self: &MusigAccount, id: &str, label: String) -> SavedPsbtMutation;
         fn delete_saved_psbt(self: &MusigAccount, id: &str) -> SavedPsbtMutation;
         fn retry_saved_psbts(self: &MusigAccount) -> SavedPsbtMutation;
@@ -2586,9 +2611,9 @@ pub use ffi::{
     Notification, NotificationFlag, Output, PolicyCompileResult, PolicyKey, PolicyKeyType,
     PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey, PolicyReviewPath, PolicySemantic,
     PolicySpec, PsbtFileResult, PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult,
-    QrResponseKind, RegtestDefaults, SavedPsbtEntry, SavedPsbtInput, SavedPsbtList,
-    SavedPsbtMutation, SavedPsbtRecord, SavedPsbtRestore, SignResult, SigningCandidate,
-    SigningPlan, TransactionSimulation, TransactionTemplate,
+    QrResponseKind, RegtestDefaults, SavedPsbtAttempt, SavedPsbtEntry, SavedPsbtInput,
+    SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore,
+    SignResult, SigningCandidate, SigningPlan, TransactionSimulation, TransactionTemplate,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{

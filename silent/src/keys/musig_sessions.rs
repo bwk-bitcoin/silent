@@ -718,6 +718,20 @@ fn attempt_key() -> ProprietaryKey {
     }
 }
 
+pub(crate) fn attempt_id(
+    fields: &BTreeMap<ProprietaryKey, Vec<u8>>,
+) -> Result<Option<[u8; 32]>, String> {
+    fields
+        .get(&attempt_key())
+        .map(|bytes| {
+            bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| "invalid MuSig signing attempt ID".to_string())
+        })
+        .transpose()
+}
+
 pub fn start_attempt(psbt: &mut Psbt) -> Result<(), String> {
     let mut attempt = [0; 32];
     getrandom::getrandom(&mut attempt).map_err(|e| e.to_string())?;
@@ -733,15 +747,12 @@ pub(crate) fn binding(
     let transaction = session_id(real, policy, fingerprint)
         .map_err(|e| e.to_string())?
         .0;
-    let Some(attempt) = real.proprietary.get(&attempt_key()) else {
+    let Some(attempt) = attempt_id(&real.proprietary)? else {
         return Ok(transaction);
     };
-    if attempt.len() != 32 {
-        return Err("invalid MuSig signing attempt ID".into());
-    }
     let mut engine = sha256::Hash::engine();
     engine.input(&transaction);
-    engine.input(attempt);
+    engine.input(&attempt);
     Ok(sha256::Hash::from_engine(engine).to_byte_array())
 }
 

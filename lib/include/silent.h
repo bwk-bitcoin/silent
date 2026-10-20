@@ -987,6 +987,8 @@ struct TransactionTemplate;
 struct TransactionSimulation;
 struct TxResult;
 struct MusigFinalizeResult;
+struct SavedPsbtAttempt;
+struct SavedPsbtReset;
 struct SavedPsbtRecord;
 struct SavedPsbtInput;
 struct SavedPsbtEntry;
@@ -1388,6 +1390,30 @@ struct MusigFinalizeResult final {
 };
 #endif // CXXBRIDGE1_STRUCT_MusigFinalizeResult
 
+#ifndef CXXBRIDGE1_STRUCT_SavedPsbtAttempt
+#define CXXBRIDGE1_STRUCT_SavedPsbtAttempt
+struct SavedPsbtAttempt final {
+  ::std::uint64_t attempt_id CXX_DEFAULT_VALUE(0);
+  ::rust::String baseline_psbt_v2_hex;
+  ::rust::String current_psbt_v2_hex;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SavedPsbtAttempt
+
+#ifndef CXXBRIDGE1_STRUCT_SavedPsbtReset
+#define CXXBRIDGE1_STRUCT_SavedPsbtReset
+struct SavedPsbtReset final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::String save_error;
+  ::rust::String psbt_v2_hex;
+  bool reset_pending CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SavedPsbtReset
+
 #ifndef CXXBRIDGE1_STRUCT_MusigSpendLeaf
 #define CXXBRIDGE1_STRUCT_MusigSpendLeaf
 // One way to spend a musig account's coins: the key path or one tap leaf
@@ -1420,6 +1446,10 @@ struct SavedPsbtRecord final {
   ::MusigSpendLeaf spend;
   ::rust::String original_psbt_v2_hex;
   ::rust::String current_psbt_v2_hex;
+  ::std::uint64_t attempt_id CXX_DEFAULT_VALUE(0);
+  ::rust::String baseline_psbt_v2_hex;
+  ::rust::Vec<::SavedPsbtAttempt> archived_attempts;
+  bool reset_pending CXX_DEFAULT_VALUE(false);
   ::rust::String finalized_tx_hex;
   bool broadcast CXX_DEFAULT_VALUE(false);
   ::rust::String label;
@@ -3139,6 +3169,7 @@ struct MusigAccount final : public ::rust::Opaque {
 
   ::SavedPsbtRestore restore_saved_psbt(::rust::Str id) const noexcept;
   ::SavedPsbtMutation update_saved_psbt(::rust::Str id, ::rust::Str psbt_v2_hex) const noexcept;
+  ::SavedPsbtReset reset_saved_psbt(::rust::Str id) const noexcept;
   ::SavedPsbtMutation label_saved_psbt(::rust::Str id, ::rust::String label) const noexcept;
   ::SavedPsbtMutation delete_saved_psbt(::rust::Str id) const noexcept;
   ::SavedPsbtMutation retry_saved_psbts() const noexcept;

@@ -26,7 +26,7 @@ use bwk_sp::{
     },
 };
 
-use crate::keys::error::Error;
+use crate::keys::{error::Error, musig_sessions::attempt_id};
 
 const FINGERPRINT_LEN: usize = 4;
 const MUSIG_INPUT_TYPES: [u8; 2] = [PSBT_IN_MUSIG2_PUB_NONCE, PSBT_IN_MUSIG2_PARTIAL_SIG];
@@ -552,6 +552,8 @@ pub fn merge_signatures(original: &mut PsbtV2, signed: &Psbt) -> Result<usize, E
         ));
     }
 
+    check_musig_merge(original, signed)?;
+
     let mut touched = 0;
     for (input, signed_input) in original.inputs.iter_mut().zip(&signed.inputs) {
         if copy_signatures(&mut input.psbt, signed_input) {
@@ -572,6 +574,13 @@ pub fn merge_signatures(original: &mut PsbtV2, signed: &Psbt) -> Result<usize, E
 pub fn merge_sp_signed(original: &mut PsbtV2, signed: &PsbtV2) -> Result<usize, Error> {
     bip375::verify_signed(signed).map_err(|e| Error::SpSignedInvalid(e.to_string()))?;
     check_same_transaction(original, signed)?;
+    check_musig_merge(
+        original,
+        &signed
+            .clone()
+            .into_bitcoin_psbt()
+            .map_err(|e| Error::PsbtParse(e.to_string()))?,
+    )?;
 
     for (output, signed_output) in original.outputs.iter_mut().zip(&signed.outputs) {
         if output.script_pubkey.is_none() {
@@ -653,6 +662,60 @@ fn check_same_transaction(original: &PsbtV2, signed: &PsbtV2) -> Result<(), Erro
 }
 
 type UnknownMap = std::collections::BTreeMap<bitcoin::psbt::raw::Key, Vec<u8>>;
+
+fn check_musig_merge(original: &PsbtV2, signed: &Psbt) -> Result<(), Error> {
+    let expected = attempt_id(&original.proprietary).map_err(Error::PsbtParse)?;
+    let received = attempt_id(&signed.proprietary).map_err(Error::PsbtParse)?;
+    if received.is_some() && received != expected {
+        return Err(Error::MusigAttemptMismatch);
+    }
+    let proven = expected.is_some() && expected == received;
+    for (input, answer) in original.inputs.iter().zip(&signed.inputs) {
+        if musig_input_participants_all(&input.psbt)
+            .map_err(musig_field_error)?
+            .is_empty()
+        {
+            continue;
+        }
+        let current = unknown_of(&input.psbt.unknown, &MUSIG_INPUT_TYPES);
+        let incoming = unknown_of(&answer.unknown, &MUSIG_INPUT_TYPES);
+        for (key, value) in &incoming {
+            if input
+                .psbt
+                .unknown
+                .get(key)
+                .is_some_and(|existing| existing != value)
+            {
+                return Err(Error::MusigTranscriptMismatch);
+            }
+        }
+        let adds_fields = incoming.iter().any(|entry| !current.contains(entry));
+        if !proven && adds_fields {
+            check_unmarked_musig_answer(original, signed)?;
+        }
+    }
+    Ok(())
+}
+
+fn check_unmarked_musig_answer(original: &PsbtV2, signed: &Psbt) -> Result<(), Error> {
+    // Round-two devices may strip proprietary fields, but must echo every public nonce.
+    if !musig_nonces_complete(original)? {
+        return Err(Error::MusigAttemptUnproven);
+    }
+    for (input, answer) in original.inputs.iter().zip(&signed.inputs) {
+        if musig_input_participants_all(&input.psbt)
+            .map_err(musig_field_error)?
+            .is_empty()
+        {
+            continue;
+        }
+        let nonces = unknown_of(&input.psbt.unknown, &[PSBT_IN_MUSIG2_PUB_NONCE]);
+        if nonces.is_empty() || nonces != unknown_of(&answer.unknown, &[PSBT_IN_MUSIG2_PUB_NONCE]) {
+            return Err(Error::MusigAttemptUnproven);
+        }
+    }
+    Ok(())
+}
 
 /// The entries of `map` with one of `types`, in key order.
 fn unknown_of(map: &UnknownMap, types: &[u8]) -> Vec<(bitcoin::psbt::raw::Key, Vec<u8>)> {

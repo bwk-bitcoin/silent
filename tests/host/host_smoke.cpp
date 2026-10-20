@@ -157,6 +157,7 @@ auto launcherLists(const PluginRegistry &registry, const IModule *module, const 
 namespace smoke {
 void pluginAbiSmoke();
 void spSigningSmoke(const QString &name);
+void musigResetSmoke();
 } // namespace smoke
 
 auto main(int argc, char *argv[]) -> int {
@@ -185,6 +186,12 @@ auto main(int argc, char *argv[]) -> int {
     // Initialise the host singleton before the registry connects to its events.
     Host::get();
     AppController::init();
+    if (arguments.contains(QStringLiteral("--musig-reset"))) {
+        Theme::init();
+        smoke::musigResetSmoke();
+        std::fprintf(stdout, "MuSig reset smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
 #ifdef SILENT_ABI2_FIXTURE_PATH
     smoke::pluginAbiSmoke();
 #endif

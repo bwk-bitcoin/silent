@@ -298,6 +298,19 @@ auto btnTryAgain() -> Button * {
     return make({.role = ButtonRole::Primary, .label = TR("btn-try-again"), .width = BtnWidth::M});
 }
 
+auto btnResetSigning() -> Button * {
+    return make({.role = ButtonRole::Destructive, .label = TR("psbt-reset"), .width = BtnWidth::M});
+}
+
+auto btnConfirmResetSigning() -> Button * {
+    return make(
+        {.role = ButtonRole::Destructive, .label = TR("psbt-reset-confirm"), .width = BtnWidth::L});
+}
+
+auto btnCancel() -> Button * {
+    return make({.role = ButtonRole::Default, .label = TR("common-cancel"), .width = BtnWidth::M});
+}
+
 auto btnAddAKey() -> Button * {
     return make({.role = ButtonRole::Default, .label = TR("btn-add-a-key"), .width = BtnWidth::M});
 }

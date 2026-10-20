@@ -95,6 +95,7 @@ signals:
     void sessionLoading();
     void prepareFailed(QString message);
     void roundChanged(MusigRoundStatus status);
+    void signingReset();
     void signingFailed(QString message, plugin::SignError kind);
     // The key `fingerprint` answered its request; roundChanged() follows.
     void signerAnswered(QString fingerprint);
@@ -180,7 +181,6 @@ private:
     QList<QThread *> m_workers;
     bool m_electrum_running = false;
     account::ElectrumReconnect *m_reconnect = new account::ElectrumReconnect(this);
-    QString m_prepared_psbt_v2_hex;
     QString m_psbt_v2_hex;
     QString m_tx_hex;
     QString m_saved_record_id;
@@ -203,8 +203,8 @@ private:
     // the PSBT as it is by then, so keys sign at once.
     QHash<ReqId, QString> m_sign_reqs;
     QPointer<IKeys> m_signing_keys;
-    QThread *m_restart_thread = nullptr;
-    std::shared_ptr<SignResult> m_restart_result;
+    bool m_resetting = false;
+    std::shared_ptr<SavedPsbtReset> m_restart_result;
     QString m_restart_source;
     bool m_restart_pending = false;
     std::uint64_t m_signing_generation = 0;

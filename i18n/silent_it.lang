@@ -919,14 +919,19 @@ psbt-empty
 => "No saved PSBTs. Transactions are saved when prepared for signing."
 => "No saved PSBTs. Transactions are saved when prepared for signing.";;
 psbt-finalized => "Finalized, ready to broadcast" => "Finalized, ready to broadcast"
-psbt-restart-signing => "Restart signing" => "Restart signing"
+psbt-reset => "Reset" => "Reimposta"
+psbt-reset-confirm => "Yes, reset" => "Sì, reimposta"
+psbt-reset-message
+=> "This starts a new signing session for the same transaction and resets active nonces and partial signatures. All participants must use the new attempt. The current PSBT and its baseline will be archived first, but consumed or retired nonce secrets cannot be restored. Reset signing?"
+=> "Questa operazione avvia una nuova sessione di firma per la stessa transazione e reimposta i nonce e le firme parziali attivi. Tutti i partecipanti devono usare il nuovo tentativo. Il PSBT attuale e la sua versione iniziale saranno prima archiviati, ma i segreti dei nonce consumati o ritirati non possono essere ripristinati. Reimpostare la firma?";;
+psbt-reset-title => "Reset signing?" => "Reimpostare la firma?"
 psbt-retry-save => "Retry saving" => "Retry saving"
 psbt-save-warning
 => "The latest transaction progress is not persisted. You can continue signing or broadcasting. %1"
 => "The latest transaction progress is not persisted. You can continue signing or broadcasting. %1";;
 psbt-session-restart-needed
-=> "A signer cannot safely resume its saved nonce session. Choose Restart signing to retire the old session and discard all nonces and partial signatures for this same transaction. Consumed or retired nonces cannot be reused."
-=> "A signer cannot safely resume its saved nonce session. Choose Restart signing to retire the old session and discard all nonces and partial signatures for this same transaction. Consumed or retired nonces cannot be reused.";;
+=> "A signer cannot safely resume its saved nonce session. Choose Reset to archive the current attempt and retire its nonce session before starting again for the same transaction. Consumed or retired nonces cannot be reused."
+=> "Un firmatario non può riprendere in sicurezza la sessione di nonce salvata. Scegli Reimposta per archiviare il tentativo attuale e ritirare la sua sessione di nonce prima di ricominciare per la stessa transazione. I nonce consumati o ritirati non possono essere riutilizzati.";;
 psbt-show-confirmed => "Show confirmed transactions" => "Show confirmed transactions"
 psbt-signing => "Signing in progress" => "Signing in progress"
 psbt-status => "Status" => "Status"

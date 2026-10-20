@@ -26,6 +26,32 @@ class Column;
 
 namespace musig {
 
+class ConfirmSigningReset final : public catalog::Modal {
+    Q_OBJECT
+
+public:
+    ConfirmSigningReset();
+
+signals:
+    void confirmed();
+
+public slots:
+    void onConfirmClicked();
+
+protected:
+    void init();
+    void doConnect();
+    void view();
+    void changeEvent(QEvent *event) override;
+    void retranslateUi();
+
+private:
+    catalog::Label *m_message_label = nullptr;
+    catalog::Button *m_confirm_btn = nullptr;
+    catalog::Button *m_cancel_btn = nullptr;
+    catalog::ModalActions *m_actions = nullptr;
+};
+
 // Sign on a Multikey Send: the MuSig2 rounds of the prepared transaction. Nonces, then
 // Partial Signatures, which ends on Broadcast. Each round lists every key of the
 // wallet: the spend path's signers first, those that can sign ahead of those that
@@ -55,6 +81,8 @@ public slots:
     void onPlanReady();
     void onDevicesChanged();
     void onRetryClicked();
+    void onResetConfirmed();
+    void onSigningReset();
     void onSaveWarningChanged(const QString &message);
 
 protected:

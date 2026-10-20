@@ -25,9 +25,11 @@ use bwk_sp::bwk_tx::bwk_psbt::{
 };
 use silent::{
     keys::{
+        musig_sessions::start_attempt,
         psbt::{
-            add_internal_participants, merge_signatures_bytes, musig_done_fingerprints,
-            musig_nonces_complete, required_fingerprints, strip_musig_round1,
+            add_internal_participants, merge_signatures, merge_signatures_bytes,
+            musig_done_fingerprints, musig_nonces_complete, required_fingerprints,
+            strip_musig_round1,
         },
         qr::{QrResponse, QrSession},
         Error,
@@ -129,7 +131,13 @@ fn musig_psbt() -> PsbtV2 {
     add_origin(&mut input, key_a(), fingerprint_a());
     add_origin(&mut input, key_b(), fingerprint_b());
     add_origin(&mut input, aggregate(), synthetic_fingerprint());
-    one_input_psbt(input)
+    fresh_attempt(&one_input_psbt(input))
+}
+
+fn fresh_attempt(psbt: &PsbtV2) -> PsbtV2 {
+    let mut real = psbt.clone().into_bitcoin_psbt().expect("v0 test PSBT");
+    start_attempt(&mut real).expect("new signing attempt");
+    PsbtV2::from_bitcoin_psbt(real).expect("v2 test PSBT")
 }
 
 fn add_nonce(psbt: &mut PsbtV2, participant: PublicKey, byte: u8) {
@@ -325,16 +333,217 @@ fn merge_keeps_a_nonce_only_answer() {
         "expected NothingSigned for an answer adding nothing, got {nothing:?}"
     );
 
-    let mut replacing = musig_psbt();
+    let mut replacing = original.clone();
     add_nonce(&mut replacing, key_b(), 9);
     add_nonce(&mut replacing, key_a(), 1);
-    let merged =
-        merge_signatures_bytes(&original_bytes, &v0_bytes(&replacing)).expect("A's nonce merges");
-    let merged = PsbtV2::deserialize(&merged).expect("merged psbt parses as v2");
+    let result = merge_signatures_bytes(&original_bytes, &v0_bytes(&replacing));
+    assert!(
+        matches!(result, Err(Error::MusigTranscriptMismatch)),
+        "a conflicting nonce must reject the entire answer: {result:?}"
+    );
+}
+
+#[test]
+fn old_attempt_answers_are_rejected_before_any_field_is_copied() {
+    let active = musig_psbt();
+    let mut old = fresh_attempt(&active);
+    add_nonce(&mut old, key_a(), 1);
+    add_nonce(&mut old, key_b(), 2);
+    add_partial_sig(&mut old, key_a(), 3);
+    for stripped in [false, true] {
+        let mut answer = old.clone().into_bitcoin_psbt().expect("old signed file");
+        if stripped {
+            answer.proprietary.clear();
+        }
+        let mut current = active.clone();
+        let result = merge_signatures(&mut current, &answer);
+        if stripped {
+            assert!(
+                matches!(result, Err(Error::MusigAttemptUnproven)),
+                "unmarked old nonces have no attempt proof: {result:?}"
+            );
+        } else {
+            assert!(
+                matches!(result, Err(Error::MusigAttemptMismatch)),
+                "same TXID is not the same attempt: {result:?}"
+            );
+        }
+        assert_eq!(
+            v2_bytes(&current),
+            v2_bytes(&active),
+            "rejected old files leave exact active bytes unchanged"
+        );
+    }
+}
+
+#[test]
+fn marker_stripped_round_two_answers_require_the_exact_complete_nonce_transcript() {
+    let mut current = musig_psbt();
+    add_nonce(&mut current, key_a(), 1);
+    add_nonce(&mut current, key_b(), 2);
+    let mut answer = current.clone();
+    add_partial_sig(&mut answer, key_a(), 3);
+    answer.proprietary.clear();
+    let merged = merge_signatures_bytes(&v2_bytes(&current), &v0_bytes(&answer))
+        .expect("marker-stripping signer can return a partial over the current nonce transcript");
+    let merged = PsbtV2::deserialize(&merged).expect("merged PSBT");
+    assert_eq!(
+        partial_sig_count(&merged.inputs[0].psbt),
+        1,
+        "the new partial is retained"
+    );
+    assert_eq!(
+        merged.proprietary, current.proprietary,
+        "the current marker is retained, not replaced"
+    );
+
+    let mut missing_nonce = answer.clone();
+    bwk_sp::bwk_tx::bwk_psbt::musig::remove_musig_input_pub_nonces(
+        &mut missing_nonce.inputs[0].psbt,
+    );
+    let result = merge_signatures_bytes(&v2_bytes(&current), &v0_bytes(&missing_nonce));
+    assert!(
+        matches!(result, Err(Error::MusigAttemptUnproven)),
+        "partial without its nonce transcript is unbound: {result:?}"
+    );
+
+    let mut changed_nonce = answer.clone();
+    add_nonce(&mut changed_nonce, key_a(), 9);
+    let result = merge_signatures_bytes(&v2_bytes(&current), &v0_bytes(&changed_nonce));
+    assert!(
+        matches!(result, Err(Error::MusigTranscriptMismatch)),
+        "a different nonce transcript is rejected: {result:?}"
+    );
+
+    let mut incomplete = musig_psbt();
+    add_nonce(&mut incomplete, key_a(), 1);
+    let mut unbound = incomplete.clone();
+    unbound.proprietary.clear();
+    add_partial_sig(&mut unbound, key_a(), 3);
+    let result = merge_signatures_bytes(&v2_bytes(&incomplete), &v0_bytes(&unbound));
+    assert!(
+        matches!(result, Err(Error::MusigAttemptUnproven)),
+        "partial before all current nonces are known is unbound: {result:?}"
+    );
+
+    let mut legacy = current.clone();
+    legacy.proprietary.clear();
+    assert!(
+        merge_signatures_bytes(&v2_bytes(&legacy), &v0_bytes(&answer)).is_ok(),
+        "legacy unmarked round two can use the same complete nonce proof"
+    );
+}
+
+#[test]
+fn same_attempt_parallel_nonce_answers_merge_without_requiring_later_peer_nonces() {
+    let prepared = musig_psbt();
+    let mut current = prepared.clone();
+    add_nonce(&mut current, key_b(), 2);
+    let mut answer = prepared.clone();
+    add_nonce(&mut answer, key_a(), 1);
+    let merged = merge_signatures_bytes(&v2_bytes(&current), &v0_bytes(&answer))
+        .expect("concurrent requests retain the same attempt marker");
+    let merged = PsbtV2::deserialize(&merged).expect("merged PSBT");
     assert_eq!(
         nonces_of(&merged.inputs[0].psbt),
-        expected,
-        "expected B's original nonce kept over the answer's"
+        BTreeSet::from([(key_a(), 1), (key_b(), 2)]),
+        "both same-attempt nonces are retained"
+    );
+    answer.proprietary.clear();
+    let result = merge_signatures_bytes(&v2_bytes(&current), &v0_bytes(&answer));
+    assert!(
+        matches!(result, Err(Error::MusigAttemptUnproven)),
+        "a stripped marker cannot bind new round-one nonces: {result:?}"
+    );
+}
+
+#[test]
+fn marker_stripped_partial_must_preserve_nonce_transcripts_on_every_musig_input() {
+    let mut current = musig_psbt();
+    add_nonce(&mut current, key_a(), 1);
+    add_nonce(&mut current, key_b(), 2);
+    current.inputs.push(current.inputs[0].clone());
+    current.inputs[1].previous_output.vout = 1;
+    let mut answer = current.clone();
+    answer.proprietary.clear();
+    add_partial_sig(&mut answer, key_a(), 3);
+    bwk_sp::bwk_tx::bwk_psbt::musig::remove_musig_input_pub_nonces(&mut answer.inputs[1].psbt);
+    let before = v2_bytes(&current);
+    let result = merge_signatures(
+        &mut current,
+        &answer
+            .into_bitcoin_psbt()
+            .expect("marker-stripped multi-input answer"),
+    );
+    assert!(
+        matches!(result, Err(Error::MusigAttemptUnproven)),
+        "a partial on one input still requires the complete nonce transcript: {result:?}"
+    );
+    assert_eq!(
+        v2_bytes(&current),
+        before,
+        "nonce-transcript failure leaves all inputs unchanged"
+    );
+}
+
+#[test]
+fn existing_partial_cannot_be_replaced_under_a_matching_attempt_marker() {
+    let mut current = musig_psbt();
+    add_nonce(&mut current, key_a(), 1);
+    add_nonce(&mut current, key_b(), 2);
+    add_partial_sig(&mut current, key_a(), 3);
+    let mut answer = current.clone();
+    add_partial_sig(&mut answer, key_b(), 4);
+    add_partial_sig(&mut answer, key_a(), 9);
+    let before = v2_bytes(&current);
+    let result = merge_signatures(
+        &mut current,
+        &answer
+            .into_bitcoin_psbt()
+            .expect("conflicting partial answer"),
+    );
+    assert!(
+        matches!(result, Err(Error::MusigTranscriptMismatch)),
+        "a conflicting partial rejects the entire answer: {result:?}"
+    );
+    assert_eq!(
+        v2_bytes(&current),
+        before,
+        "no partial is copied before all inputs pass validation"
+    );
+}
+
+#[test]
+fn later_input_conflicts_do_not_partially_mutate_an_earlier_input() {
+    let mut current = musig_psbt();
+    current.inputs.push(current.inputs[0].clone());
+    current.inputs[1].previous_output.vout = 1;
+    let mut answer = current.clone();
+    add_nonce(&mut answer, key_a(), 1);
+    add_nonce(&mut current, key_b(), 2);
+    let mut conflicting = current.inputs[0].clone();
+    set_musig_input_pub_nonce(
+        &mut conflicting.psbt,
+        &MusigPubNonce {
+            participant: key_b(),
+            aggregate: aggregate(),
+            leaf_hash: None,
+            nonce: [9; NONCE_LEN],
+        },
+    );
+    current.inputs[1].psbt = current.inputs[0].psbt.clone();
+    answer.inputs[1].psbt = conflicting.psbt;
+    let before = v2_bytes(&current);
+    let answer = answer.into_bitcoin_psbt().expect("multi-input answer");
+    let result = merge_signatures(&mut current, &answer);
+    assert!(
+        matches!(result, Err(Error::MusigTranscriptMismatch)),
+        "later conflict rejects the complete answer: {result:?}"
+    );
+    assert_eq!(
+        v2_bytes(&current),
+        before,
+        "preflight prevents earlier-input mutations"
     );
 }
 

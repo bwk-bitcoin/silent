@@ -139,6 +139,12 @@ pub enum Error {
     SignedPsbtMismatch { expected: Txid, got: Txid },
     #[error("signed psbt is not the original transaction: its {0} differ")]
     SignedPsbtDiffers(&'static str),
+    #[error("signed PSBT belongs to a different MuSig signing attempt")]
+    MusigAttemptMismatch,
+    #[error("signer omitted the MuSig attempt ID; only partial signatures over the complete unchanged public-nonce transcript can be imported")]
+    MusigAttemptUnproven,
+    #[error("signed PSBT changes existing MuSig nonces or partial signatures")]
+    MusigTranscriptMismatch,
     #[error("signed psbt fails the silent payment checks: {0}")]
     SpSignedInvalid(String),
     #[error("no input was signed with this key")]

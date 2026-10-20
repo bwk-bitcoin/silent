@@ -591,6 +591,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/SpSigningProbe.h
         tests/host/price_feed_smoke.cpp
         tests/host/sp_signing_smoke.cpp
+        tests/host/musig_reset_smoke.cpp
         ${SILENT_APP_SOURCES}
     )
 

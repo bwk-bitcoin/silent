@@ -55,4 +55,8 @@ void ModalActions::addAction(QPushButton *action) {
     m_row->push(action);
 }
 
+void ModalActions::addLeadingAction(QPushButton *action) {
+    m_row->insert(0, action);
+}
+
 } // namespace catalog

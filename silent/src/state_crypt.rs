@@ -15,10 +15,15 @@
 //! password from a device. Every other state file goes through `read_state` and
 //! `write_state`, which refuse to run locked and refuse a file found in clear.
 
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use std::sync::Mutex;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Mutex,
+};
+
+#[cfg(any(unix, windows))]
+use std::io::Write;
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -300,6 +305,126 @@ pub fn write_state(path: &Path, text: &str) -> Result<(), String> {
     let temp = path.with_extension("tmp");
     fs::write(&temp, &bytes).map_err(|e| format!("{}: {e}", temp.display()))?;
     fs::rename(&temp, path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Syncs the replacement before rename; errors after replacement may leave it installed.
+pub(crate) fn write_state_durable(path: &Path, text: &str) -> Result<(), String> {
+    let bytes = seal(text)?;
+    write_sealed_durable(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(any(unix, windows))]
+fn write_sealed_durable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("state path has no parent"))?;
+    let parent = fs::canonicalize(parent)?;
+    #[cfg(unix)]
+    let directory = fs::File::open(&parent)?;
+    // An account directory may have just been created; persist its ancestor links too.
+    #[cfg(unix)]
+    for ancestor in parent.ancestors().skip(1) {
+        fs::File::open(ancestor)?.sync_all()?;
+    }
+    #[cfg(windows)]
+    if !parent.is_dir() {
+        return Err(std::io::Error::other("state directory does not exist"));
+    }
+    let path = parent.join(
+        path.file_name()
+            .ok_or_else(|| std::io::Error::other("state path has no file name"))?,
+    );
+    let temp = path.with_extension("tmp");
+    let mut file = fs::File::create(&temp)?;
+    file.write_all(bytes)?;
+    #[cfg(test)]
+    durable_write_checkpoint(DurableWriteStage::TempWritten)?;
+    file.sync_all()?;
+    drop(file);
+    #[cfg(test)]
+    durable_write_checkpoint(DurableWriteStage::TempSynced)?;
+    #[cfg(unix)]
+    fs::rename(&temp, &path)?;
+    #[cfg(windows)]
+    replace_write_through(&temp, &path)?;
+    #[cfg(test)]
+    durable_write_checkpoint(DurableWriteStage::Renamed)?;
+    #[cfg(unix)]
+    directory.sync_all()?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_write_through(temp: &Path, path: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        #[link_name = "MoveFileExW"]
+        fn move_file_ex(existing: *const u16, replacement: *const u16, flags: u32) -> i32;
+    }
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+    let mut source: Vec<_> = temp.as_os_str().encode_wide().collect();
+    let mut destination: Vec<_> = path.as_os_str().encode_wide().collect();
+    if source.contains(&0) || destination.contains(&0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "state path contains a NUL",
+        ));
+    }
+    source.push(0);
+    destination.push(0);
+    // Both paths are live, NUL-terminated buffers; WRITE_THROUGH waits for the move to reach disk.
+    let moved = unsafe {
+        move_file_ex(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn write_sealed_durable(_path: &Path, _bytes: &[u8]) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "durable state replacement is unavailable on this platform",
+    ))
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DurableWriteStage {
+    TempWritten,
+    TempSynced,
+    Renamed,
+}
+
+#[cfg(test)]
+thread_local! {
+    static DURABLE_WRITE_FAILURE: std::cell::Cell<Option<DurableWriteStage>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn fail_durable_write_at(stage: DurableWriteStage) {
+    DURABLE_WRITE_FAILURE.with(|failure| failure.set(Some(stage)));
+}
+
+#[cfg(test)]
+fn durable_write_checkpoint(stage: DurableWriteStage) -> std::io::Result<()> {
+    DURABLE_WRITE_FAILURE.with(|failure| {
+        if failure.get() == Some(stage) {
+            failure.set(None);
+            Err(std::io::Error::other(format!("interrupted at {stage:?}")))
+        } else {
+            Ok(())
+        }
+    })
 }
 
 fn write_clear(path: &Path, bytes: &[u8]) -> Result<(), String> {

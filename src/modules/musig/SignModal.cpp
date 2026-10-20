@@ -1,5 +1,6 @@
 #include "SignModal.h"
 
+#include "AppController.h"
 #include "catalog/Button.h"
 #include "catalog/ClearRows.h"
 #include "catalog/SelectRow.h"
@@ -70,6 +71,53 @@ void greyRow(catalog::SelectRow *row, const QString &why) {
 
 } // namespace
 
+ConfirmSigningReset::ConfirmSigningReset() {
+    init();
+    doConnect();
+    view();
+}
+
+void ConfirmSigningReset::init() {
+    m_message_label = new catalog::Label;
+    m_message_label->setWordWrap(true);
+    m_confirm_btn = catalog::btnConfirmResetSigning();
+    m_cancel_btn = catalog::btnCancel();
+    m_actions = new catalog::ModalActions;
+    m_actions->addAction(m_cancel_btn);
+    m_actions->addAction(m_confirm_btn);
+}
+
+void ConfirmSigningReset::doConnect() {
+    connect(m_confirm_btn, &QPushButton::clicked, this, &ConfirmSigningReset::onConfirmClicked,
+            qontrol::UNIQUE);
+    connect(m_cancel_btn, &QPushButton::clicked, this, &QDialog::reject, qontrol::UNIQUE);
+}
+
+void ConfirmSigningReset::view() {
+    setBody(m_message_label);
+    setFooter(m_actions);
+    retranslateUi();
+}
+
+void ConfirmSigningReset::changeEvent(QEvent *event) {
+    if (event->type() == QEvent::LanguageChange) {
+        retranslateUi();
+    }
+    catalog::Modal::changeEvent(event);
+}
+
+void ConfirmSigningReset::retranslateUi() {
+    setWindowTitle(TR("psbt-reset-title"));
+    m_message_label->setText(TR("psbt-reset-message"));
+    m_cancel_btn->setText(TR("common-cancel"));
+    m_confirm_btn->setText(TR("psbt-reset-confirm"));
+}
+
+void ConfirmSigningReset::onConfirmClicked() {
+    emit confirmed();
+    accept();
+}
+
 SignModal::SignModal(MusigAccountController *controller) : m_controller(controller) {
     // Reopened past its nonces, the session goes on with the partial signatures.
     auto round = m_controller->roundStatus().round;
@@ -93,16 +141,18 @@ void SignModal::init() {
     m_rows->spacing(resolve(Spacing::XS));
     m_continue_btn = catalog::btnContinue();
     m_broadcast_btn = catalog::btnBroadcast();
-    m_retry_btn = catalog::btnTryAgain();
+    m_retry_btn = catalog::btnResetSigning();
     m_retry_btn->setVisible(false);
     m_actions = new catalog::ModalActions;
     m_actions->setBack(catalog::ModalActions::Back::None);
     m_actions->addAction(m_continue_btn);
     m_actions->addAction(m_broadcast_btn);
-    m_actions->addAction(m_retry_btn);
+    m_actions->addLeadingAction(m_retry_btn);
 }
 
 void SignModal::doConnect() {
+    connect(m_controller, &MusigAccountController::signingReset, this, &SignModal::onSigningReset,
+            qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::saveWarningChanged, this,
             &SignModal::onSaveWarningChanged, qontrol::UNIQUE);
     connect(m_controller, &QObject::destroyed, this, &QDialog::reject, qontrol::UNIQUE);
@@ -155,7 +205,7 @@ void SignModal::retranslateUi() {
     setWindowTitle(TR("musig-sign-title"));
     m_continue_btn->setText(TR("btn-continue"));
     m_broadcast_btn->setText(TR("common-broadcast"));
-    m_retry_btn->setText(TR("psbt-restart-signing"));
+    m_retry_btn->setText(TR("psbt-reset"));
     m_notice->setTitle(failureTitle());
     refresh();
 }
@@ -212,7 +262,7 @@ void SignModal::render(const MusigRoundStatus &status) {
     m_retry_btn->setVisible(m_controller->finalizedTx().isEmpty());
     m_retry_btn->setEnabled(!m_controller->isRestarting() && m_controller->signingKeys().isEmpty());
     if (m_controller->restartPending() && !m_controller->isRestarting() &&
-        m_failure != Failure::SessionLost) {
+        m_failure == Failure::None) {
         showFailure(Failure::SessionLost, TR("psbt-session-restart-needed"));
     }
     if (!status.is_ok) {
@@ -320,7 +370,7 @@ void SignModal::render(const MusigRoundStatus &status) {
         auto *row = keyRow(entry, fingerprint, pill);
         // Each key answers one request at a time; the others stay clickable meanwhile.
         row->setClickable(!in && usable && !signing && m_plan->is_ok &&
-                          !m_controller->restartPending());
+                          !m_controller->restartPending() && !m_controller->isRestarting());
         if (!usable) {
             greyRow(row, why);
         }
@@ -383,7 +433,8 @@ void SignModal::render(const MusigRoundStatus &status) {
         reason = TR("musig-sign-reason").arg(left);
     }
     m_actions->setReason(reason);
-    bool idle = busy.isEmpty() && m_plan->is_ok && !m_controller->restartPending();
+    bool idle = busy.isEmpty() && m_plan->is_ok && !m_controller->restartPending() &&
+                !m_controller->isRestarting();
     m_continue_btn->setVisible(!partial);
     m_continue_btn->setEnabled(idle && left == 0);
     m_broadcast_btn->setVisible(partial);
@@ -443,10 +494,22 @@ void SignModal::onDevicesChanged() {
 }
 
 void SignModal::onRetryClicked() {
+    auto *confirmation = new ConfirmSigningReset;
+    connect(confirmation, &ConfirmSigningReset::confirmed, this, &SignModal::onResetConfirmed,
+            qontrol::UNIQUE);
+    connect(m_controller, &QObject::destroyed, confirmation, &QDialog::reject, qontrol::UNIQUE);
+    AppController::execModal(confirmation);
+}
+
+void SignModal::onResetConfirmed() {
+    m_controller->restartRounds();
+}
+
+void SignModal::onSigningReset() {
     m_notice->setVisible(false);
+    m_failure = Failure::None;
     m_partial = false;
     m_signed.clear();
-    m_controller->restartRounds();
     refresh();
 }
 

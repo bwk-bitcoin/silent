@@ -31,9 +31,10 @@ use crate::{
         AddressVerifyInfo, CoinState, MusigCosignerStatus, MusigDescriptorResult,
         MusigElectrumUrlResult, MusigFinalizeResult, MusigReceiveAddress, MusigRound,
         MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, PsbtValidation, RustCoin,
-        RustTx, SavedPsbtEntry, SavedPsbtList, SavedPsbtMutation, SavedPsbtRestore,
+        RustTx, SavedPsbtEntry, SavedPsbtList, SavedPsbtMutation, SavedPsbtReset, SavedPsbtRestore,
         TransactionSimulation, TransactionTemplate, TxResult,
     },
+    keys::bridge::musig_session_restart,
     saved_psbt::{apply_chain_state, frozen_entry, mutation_error, SavedPsbtStore},
 };
 
@@ -854,6 +855,43 @@ impl MusigAccount {
         self.saved_store()
             .and_then(|mut store| store.update(id, psbt_v2_hex))
             .unwrap_or_else(mutation_error)
+    }
+
+    pub fn reset_saved_psbt(&self, id: &str) -> SavedPsbtReset {
+        let mut store = match self.saved_store() {
+            Ok(store) => store,
+            Err(error) => {
+                return SavedPsbtReset {
+                    error,
+                    ..Default::default()
+                }
+            }
+        };
+        let result = store.reset(id, |current, baseline| {
+            let reset =
+                musig_session_restart(self.network(), &self.descriptor(), current, baseline);
+            if reset.is_ok {
+                Ok(reset.psbt_v2_hex)
+            } else {
+                Err(reset.error)
+            }
+        });
+        let reset_pending = store.get(id).is_ok_and(|record| record.reset_pending);
+        match result {
+            Ok(psbt_v2_hex) => SavedPsbtReset {
+                is_ok: true,
+                psbt_v2_hex,
+                save_error: store.error(),
+                reset_pending,
+                error: String::new(),
+            },
+            Err(error) => SavedPsbtReset {
+                error,
+                reset_pending,
+                save_error: store.error(),
+                ..Default::default()
+            },
+        }
     }
 
     pub fn label_saved_psbt(&self, id: &str, label: String) -> SavedPsbtMutation {

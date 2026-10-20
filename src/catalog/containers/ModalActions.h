@@ -28,6 +28,7 @@ public:
     void setReason(const QString &reason);
     // Appended after the previous ones: add the primary action last.
     void addAction(QPushButton *action);
+    void addLeadingAction(QPushButton *action);
 
 signals:
     void backClicked();

@@ -23,7 +23,7 @@ use bwk_sp::{
 };
 use bwk_utils::test as bwk_test;
 use silent::{
-    compile_policy, musig_session_restart, new_config, new_musig_account, MusigAccount, MusigRound,
+    compile_policy, merge_signed_psbt, new_config, new_musig_account, MusigAccount, MusigRound,
     Network, Output, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicySemantic,
     PolicySpec, SavedPsbtRestore, TransactionTemplate, MUSIG_PLUGIN_ID,
 };
@@ -520,12 +520,9 @@ fn musig_lost_session_restarts_round_one() {
         "B round 2 without its session should fail on the session, got {lost:?}"
     );
 
-    let restarted = musig_session_restart(
-        Network::Regtest,
-        &spend.descriptor.to_string(),
-        &psbt,
-        &spend.prepared,
-    );
+    let progress = sign_round(&spend.a, &spend.descriptor, &psbt).expect("A partial signature");
+    let progress = persist_and_reload(&mut spend, &progress);
+    let restarted = spend.account().reset_saved_psbt(&spend.saved_record_id);
     assert!(
         restarted.is_ok,
         "explicit signing restart: {}",
@@ -537,7 +534,86 @@ fn musig_lost_session_restarts_round_one() {
     );
     let prepared = persist_and_reload(&mut spend, &restarted.psbt_v2_hex);
     assert_round(spend.account(), &prepared, MusigRound::Nonces);
-    let signed = both_rounds(&mut spend, &prepared);
+    let mut stripped = PsbtV2::deserialize(&hex::decode(&progress).expect("old signed hex"))
+        .expect("old signed PSBT");
+    stripped.proprietary.clear();
+    let stripped = hex::encode(stripped.serialize().expect("marker-stripped signed file"));
+    for old_file in [&progress, &stripped] {
+        let rejected = merge_signed_psbt(&prepared, old_file);
+        assert!(
+            !rejected.is_ok,
+            "an old signed file loaded through a current signing request must fail: {}",
+            rejected.error
+        );
+        assert!(
+            rejected.psbt_v2_hex.is_empty(),
+            "rejected old files publish no mixed attempt"
+        );
+        let restored = spend.account().restore_saved_psbt(&spend.saved_record_id);
+        assert!(
+            restored.is_ok,
+            "restore unchanged active attempt: {}",
+            restored.error
+        );
+        assert_eq!(
+            restored.entry.record.current_psbt_v2_hex, prepared,
+            "file rejection leaves exact active bytes unchanged"
+        );
+        let update = spend
+            .account()
+            .update_saved_psbt(&spend.saved_record_id, old_file);
+        assert!(
+            !update.is_ok,
+            "storage also rejects a current PSBT with the old or missing attempt marker"
+        );
+    }
+    let nonces = sign_round(&spend.a, &spend.descriptor, &prepared).expect("A new nonce");
+    let nonces = sign_round(&spend.b, &spend.descriptor, &nonces).expect("B new nonce");
+    let nonces = persist_and_reload(&mut spend, &nonces);
+    let reset_again = spend.account().reset_saved_psbt(&spend.saved_record_id);
+    assert!(reset_again.is_ok, "second reset: {}", reset_again.error);
+    let active = persist_and_reload(&mut spend, &reset_again.psbt_v2_hex);
+    let restored = spend.account().restore_saved_psbt(&spend.saved_record_id);
+    assert!(restored.is_ok, "restore attempts: {}", restored.error);
+    let record = restored.entry.record;
+    assert_eq!(
+        record.archived_attempts.len(),
+        2,
+        "two resets survive restart"
+    );
+    assert_eq!(
+        record.original_psbt_v2_hex, spend.prepared,
+        "original baseline survives"
+    );
+    assert_eq!(
+        record.attempt_id, 2,
+        "same TXID retains distinct attempt identities"
+    );
+    let first = &record.archived_attempts[0];
+    assert_eq!(first.attempt_id, 0, "first archived identity");
+    assert_eq!(
+        first.current_psbt_v2_hex, progress,
+        "exact accumulated nonces and partial signature survive reset"
+    );
+    assert_eq!(
+        first.baseline_psbt_v2_hex, spend.prepared,
+        "first baseline retained"
+    );
+    let second = &record.archived_attempts[1];
+    assert_eq!(second.attempt_id, 1, "second archived identity");
+    assert_eq!(
+        second.current_psbt_v2_hex, nonces,
+        "second nonce exchange survives reset"
+    );
+    assert_eq!(
+        second.baseline_psbt_v2_hex, prepared,
+        "second baseline retained"
+    );
+    assert_ne!(
+        active, prepared,
+        "second reset creates another cryptographic attempt"
+    );
+    let signed = both_rounds(&mut spend, &active);
     finish(&mut spend, bitcoind, &signed);
 
     cleanup_test_account(&spend.account_name);
