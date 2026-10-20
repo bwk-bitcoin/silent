@@ -2,7 +2,8 @@
 # Format: id => "Text"
 # Use \n for line breaks
 
-keys-nonces => "Nonces"
+keys-nonces => "Musig sessions cache"
+keys-set-nonces => "Set"
 keys-fetch-nonces => "Fetch nonces"
 keys-nonces-quantity => "Sessions to fetch"
 keys-nonces-available => "%1 available"

@@ -485,17 +485,10 @@ void KeyDetail::refreshNonces(const QList<KeyAccount> &accounts) {
 
 void KeyDetail::populateNonces() {
     m_nonces_table->clearRows();
-    auto device = readyDevice(m_fingerprint);
-    bool connected = device.has_value() &&
-                     device->signer->brand().startsWith(QStringLiteral("ledger"), Qt::CaseInsensitive);
     for (auto account = m_nonce_accounts.cbegin(); account != m_nonce_accounts.cend(); ++account) {
         auto count = ::ledger_nonce_count(m_fingerprint.toStdString(), account.key().toStdString());
-        auto *fetch = new catalog::Button(TR("keys-fetch-nonces"), catalog::ButtonRole::Inline);
+        auto *fetch = new catalog::Button(TR("keys-set-nonces"), catalog::ButtonRole::Inline);
         fetch->setProperty(K_DESCRIPTOR, account.key());
-        fetch->setEnabled(connected);
-        if (!connected) {
-            fetch->setToolTip(TR("keys-nonces-connect"));
-        }
         connect(fetch, &QPushButton::clicked, this, &KeyDetail::onFetchNoncesClicked, qontrol::UNIQUE);
         m_nonces_table->addWidgetRow(
             account.key(), {accountName(account.value()),
