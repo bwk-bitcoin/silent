@@ -1,6 +1,7 @@
 #include "SigningSection.h"
 
 #include "AppController.h"
+#include "account/views/Send.h"
 #include "catalog/Button.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/ScrollArea.h"
@@ -82,6 +83,9 @@ void SigningSection::init() {
 
     m_reason_label = new Label(LabelRole::Caption);
     m_reason_label->setVisible(false);
+    m_save_warning_label = new Label(LabelRole::Caption);
+    m_save_warning_label->setWordWrap(true);
+    onSaveWarningChanged(m_controller->saveWarning());
 
     m_cancel_btn = catalog::btnCancelSigned();
     m_cancel_btn->setVisible(false);
@@ -92,6 +96,12 @@ void SigningSection::init() {
 }
 
 void SigningSection::doConnect() {
+    connect(m_controller, &MusigAccountController::savedPsbtRestored, this,
+            &SigningSection::onSavedPsbtRestored, qontrol::UNIQUE);
+    connect(m_controller, &MusigAccountController::sessionCleared, this,
+            &SigningSection::onSessionCleared, qontrol::UNIQUE);
+    connect(m_controller, &MusigAccountController::saveWarningChanged, this,
+            &SigningSection::onSaveWarningChanged, qontrol::UNIQUE);
     connect(m_leaf_combo, &QComboBox::currentIndexChanged, this, &SigningSection::onSpendLeafChosen,
             qontrol::UNIQUE);
     connect(m_sign_btn, &QPushButton::clicked, this, &SigningSection::onSignClicked,
@@ -101,6 +111,8 @@ void SigningSection::doConnect() {
 
     connect(m_controller, &MusigAccountController::prepared, this, &SigningSection::onPrepared,
             qontrol::UNIQUE);
+    connect(m_controller, &MusigAccountController::sessionLoading, this,
+            &SigningSection::onSessionLoading, qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::prepareFailed, this,
             &SigningSection::onPrepareFailed, qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::broadcastDone, this,
@@ -111,7 +123,7 @@ void SigningSection::doConnect() {
 
 void SigningSection::view() {
     // The step's own widget, under the fee row: why Sign cannot start yet.
-    auto *col = (new qontrol::Column)->push(m_reason_label);
+    auto *col = (new qontrol::Column)->push(m_reason_label)->push(m_save_warning_label);
     col->layout()->setContentsMargins(0, 0, 0, 0);
     setLayout(col->layout());
 }
@@ -207,7 +219,7 @@ void SigningSection::updateSignState() {
     // While a session runs, Sign opens its modal again and Cancel drops it.
     m_cancel_btn->setVisible(m_session);
     if (m_session) {
-        m_sign_btn->setEnabled(true);
+        m_sign_btn->setEnabled(!m_loading);
         m_reason_label->setVisible(false);
         return;
     }
@@ -244,6 +256,7 @@ void SigningSection::openSignModal() {
 
 void SigningSection::closeSession() {
     m_session = false;
+    m_loading = false;
     m_leaf_combo->setEnabled(true);
     emit lockedChanged(false);
     updateSignState();
@@ -324,6 +337,7 @@ void SigningSection::onSignClicked() {
 
 void SigningSection::onPrepared([[maybe_unused]] const QString &psbt_v2_hex,
                                 [[maybe_unused]] const QString &txid) {
+    m_loading = false;
     m_session = true;
     m_leaf_combo->setEnabled(false);
     updateSignState();
@@ -331,9 +345,17 @@ void SigningSection::onPrepared([[maybe_unused]] const QString &psbt_v2_hex,
     openSignModal();
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void SigningSection::onPrepareFailed(const QString &message) {
+    closeSession();
     AppController::execModal(new catalog::MessageModal(TR("send-prepare-failed"), message));
+}
+
+void SigningSection::onSessionLoading() {
+    m_loading = true;
+    m_session = true;
+    m_leaf_combo->setEnabled(false);
+    emit lockedChanged(true);
+    updateSignState();
 }
 
 void SigningSection::onBroadcastDone(const TxResult &result) {
@@ -343,7 +365,42 @@ void SigningSection::onBroadcastDone(const TxResult &result) {
 
 void SigningSection::onCancelClicked() {
     m_controller->cancelSigning();
-    closeSession();
+}
+
+void SigningSection::onSessionCleared() {
+    if (m_session) {
+        closeSession();
+    }
+}
+
+void SigningSection::onSavedPsbtRestored(const SavedPsbtEntry &entry) {
+    m_session = true;
+    m_loading = false;
+    m_tx = entry.frozen_template;
+    m_leaves.is_ok = true;
+    m_leaves.leaves.clear();
+    m_leaves.leaves.push_back(entry.record.spend);
+    m_leaf_index = 0;
+    {
+        // The saved path is authoritative; do not trigger fee estimation on restore.
+        QSignalBlocker blocker(m_leaf_combo);
+        m_leaf_combo->clear();
+        m_leaf_combo->addItem(leafText(entry.record.spend, keyEntries()));
+        m_leaf_combo->setCurrentIndex(0);
+    }
+    m_leaf_combo->setEnabled(false);
+    auto *send =
+        qobject_cast<account::view::Send *>(m_controller->screen("send").value_or(nullptr));
+    if (send != nullptr) {
+        send->restoreSavedPsbt(entry);
+    }
+    emit lockedChanged(true);
+    updateSignState();
+}
+
+void SigningSection::onSaveWarningChanged(const QString &message) {
+    m_save_warning_label->setText(TR("psbt-save-warning").arg(message));
+    m_save_warning_label->setVisible(!message.isEmpty());
 }
 
 } // namespace musig

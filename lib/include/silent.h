@@ -985,6 +985,13 @@ struct Output;
 struct TransactionTemplate;
 struct TransactionSimulation;
 struct TxResult;
+struct MusigFinalizeResult;
+struct SavedPsbtRecord;
+struct SavedPsbtInput;
+struct SavedPsbtEntry;
+struct SavedPsbtList;
+struct SavedPsbtRestore;
+struct SavedPsbtMutation;
 struct SpDescriptorResult;
 struct QrPayload;
 struct BbqrScanResult;
@@ -1351,6 +1358,127 @@ struct TxResult final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_TxResult
+
+#ifndef CXXBRIDGE1_STRUCT_MusigFinalizeResult
+#define CXXBRIDGE1_STRUCT_MusigFinalizeResult
+struct MusigFinalizeResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::String psbt_v2_hex;
+  ::rust::String tx_hex;
+  // Compatibility with callers that used TxResult::value.
+  ::rust::String value;
+  ::rust::String save_error;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_MusigFinalizeResult
+
+#ifndef CXXBRIDGE1_STRUCT_MusigSpendLeaf
+#define CXXBRIDGE1_STRUCT_MusigSpendLeaf
+// One way to spend a musig account's coins: the key path or one tap leaf
+// (bwk `SpendLeaf`). Picked before round 1 (decision 15).
+struct MusigSpendLeaf final {
+  // The key path (internal key); leaf_hash is empty.
+  bool key_path CXX_DEFAULT_VALUE(false);
+  // Hex tap leaf hash.
+  ::rust::String leaf_hash;
+  // Master fingerprints of the keys that sign it.
+  ::rust::Vec<::rust::String> fingerprints;
+  // `older()` blocks, 0 for none.
+  ::std::uint32_t relative CXX_DEFAULT_VALUE(0);
+  // `after()` height, 0 for none.
+  ::std::uint32_t absolute CXX_DEFAULT_VALUE(0);
+  // Every given coin's timelock on it is met at the current tip.
+  bool spendable CXX_DEFAULT_VALUE(false);
+  // Witness weight of one input spent this way.
+  ::std::uint64_t satisfaction_wu CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_MusigSpendLeaf
+
+#ifndef CXXBRIDGE1_STRUCT_SavedPsbtRecord
+#define CXXBRIDGE1_STRUCT_SavedPsbtRecord
+struct SavedPsbtRecord final {
+  ::rust::String id;
+  ::TransactionTemplate tx_template;
+  ::MusigSpendLeaf spend;
+  ::rust::String original_psbt_v2_hex;
+  ::rust::String current_psbt_v2_hex;
+  ::rust::String finalized_tx_hex;
+  bool broadcast CXX_DEFAULT_VALUE(false);
+  ::rust::String label;
+  ::std::uint64_t created_at CXX_DEFAULT_VALUE(0);
+  ::std::uint64_t updated_at CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SavedPsbtRecord
+
+#ifndef CXXBRIDGE1_STRUCT_SavedPsbtInput
+#define CXXBRIDGE1_STRUCT_SavedPsbtInput
+struct SavedPsbtInput final {
+  ::rust::String outpoint;
+  ::std::uint64_t value CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SavedPsbtInput
+
+#ifndef CXXBRIDGE1_STRUCT_SavedPsbtEntry
+#define CXXBRIDGE1_STRUCT_SavedPsbtEntry
+struct SavedPsbtEntry final {
+  ::SavedPsbtRecord record;
+  ::rust::String txid;
+  ::TransactionTemplate frozen_template;
+  ::rust::Vec<::SavedPsbtInput> inputs;
+  ::std::uint64_t input_total CXX_DEFAULT_VALUE(0);
+  ::std::uint64_t output_total CXX_DEFAULT_VALUE(0);
+  ::std::uint32_t confirmed_height CXX_DEFAULT_VALUE(0);
+  bool in_history CXX_DEFAULT_VALUE(false);
+  ::rust::Vec<::rust::String> conflicting_txids;
+  ::rust::String warning;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SavedPsbtEntry
+
+#ifndef CXXBRIDGE1_STRUCT_SavedPsbtList
+#define CXXBRIDGE1_STRUCT_SavedPsbtList
+struct SavedPsbtList final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::String save_error;
+  ::rust::Vec<::SavedPsbtEntry> entries;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SavedPsbtList
+
+#ifndef CXXBRIDGE1_STRUCT_SavedPsbtRestore
+#define CXXBRIDGE1_STRUCT_SavedPsbtRestore
+struct SavedPsbtRestore final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::String save_error;
+  ::SavedPsbtEntry entry;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SavedPsbtRestore
+
+#ifndef CXXBRIDGE1_STRUCT_SavedPsbtMutation
+#define CXXBRIDGE1_STRUCT_SavedPsbtMutation
+struct SavedPsbtMutation final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::String save_error;
+  ::rust::String record_id;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SavedPsbtMutation
 
 #ifndef CXXBRIDGE1_STRUCT_SpDescriptorResult
 #define CXXBRIDGE1_STRUCT_SpDescriptorResult
@@ -2110,30 +2238,6 @@ struct MusigRoundStatus final {
 };
 #endif // CXXBRIDGE1_STRUCT_MusigRoundStatus
 
-#ifndef CXXBRIDGE1_STRUCT_MusigSpendLeaf
-#define CXXBRIDGE1_STRUCT_MusigSpendLeaf
-// One way to spend a musig account's coins: the key path or one tap leaf
-// (bwk `SpendLeaf`). Picked before round 1 (decision 15).
-struct MusigSpendLeaf final {
-  // The key path (internal key); leaf_hash is empty.
-  bool key_path CXX_DEFAULT_VALUE(false);
-  // Hex tap leaf hash.
-  ::rust::String leaf_hash;
-  // Master fingerprints of the keys that sign it.
-  ::rust::Vec<::rust::String> fingerprints;
-  // `older()` blocks, 0 for none.
-  ::std::uint32_t relative CXX_DEFAULT_VALUE(0);
-  // `after()` height, 0 for none.
-  ::std::uint32_t absolute CXX_DEFAULT_VALUE(0);
-  // Every given coin's timelock on it is met at the current tip.
-  bool spendable CXX_DEFAULT_VALUE(false);
-  // Witness weight of one input spent this way.
-  ::std::uint64_t satisfaction_wu CXX_DEFAULT_VALUE(0);
-
-  using IsRelocatable = ::std::true_type;
-};
-#endif // CXXBRIDGE1_STRUCT_MusigSpendLeaf
-
 #ifndef CXXBRIDGE1_STRUCT_MusigSpendLeaves
 #define CXXBRIDGE1_STRUCT_MusigSpendLeaves
 struct MusigSpendLeaves final {
@@ -2554,6 +2658,8 @@ struct PsbtResult final : public ::rust::Opaque {
   // Get the serialized PSBT v2 as hex (only valid if is_ok()).
   ::rust::String bytes_v2_hex() const noexcept;
 
+  ::rust::String saved_record_id() const noexcept;
+  ::rust::String save_error() const noexcept;
   ~PsbtResult() = delete;
 
 private:
@@ -3011,8 +3117,18 @@ struct MusigAccount final : public ::rust::Opaque {
   // Per cosigner nonce / partial sig counts of the PSBT.
   ::MusigRoundStatus round_status(::rust::Str psbt_v2_hex) const noexcept;
 
-  // Aggregates partial sigs, finalizes; TxResult value is the tx hex.
-  ::TxResult finalize_psbt(::rust::Str psbt_v2_hex) const noexcept;
+  // Aggregates partial sigs and returns the finalized PSBT and transaction.
+  ::MusigFinalizeResult finalize_psbt(::rust::Str psbt_v2_hex) const noexcept;
+
+  // Disk I/O: call all saved PSBT mutations on the account's worker thread.
+  ::SavedPsbtList saved_psbts(bool include_confirmed) const noexcept;
+
+  ::SavedPsbtRestore restore_saved_psbt(::rust::Str id) const noexcept;
+  ::SavedPsbtMutation update_saved_psbt(::rust::Str id, ::rust::Str psbt_v2_hex) const noexcept;
+  ::SavedPsbtMutation label_saved_psbt(::rust::Str id, ::rust::String label) const noexcept;
+  ::SavedPsbtMutation delete_saved_psbt(::rust::Str id) const noexcept;
+  ::SavedPsbtMutation retry_saved_psbts() const noexcept;
+  ::rust::String saved_psbt_error() const noexcept;
 
   // TxResult value is the txid.
   ::TxResult broadcast_transaction(::rust::String signed_tx_hex) const noexcept;

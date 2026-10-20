@@ -395,6 +395,7 @@ keys-duplicate-body => "Key %1 is already registered as “%2”." => "NONE"
 keys-duplicate-reason => "This key is already registered." => "NONE"
 keys-duplicate-title => "Fingerprint already registered" => "NONE"
 keys-fetch-failed-title => "Could not fetch the xpub" => "NONE"
+keys-fetch-nonces => "Fetch nonces" => "Fetch nonces"
 keys-fetch-reason-account => "Enter an account index (0–99)." => "NONE"
 keys-fetch-reason-cached => "This xpub is already cached." => "NONE"
 keys-fetch-reason-format => "Write the path like m/84'/%1'/0'." => "NONE"
@@ -442,6 +443,16 @@ keys-module-not-ready => "The keys module is not ready." => "NONE"
 keys-network => "Network:" => "NONE"
 keys-no-raw-requests => "This signer takes no raw requests." => "NONE"
 keys-no-usable-route => "This key has no usable signing route." => "NONE"
+keys-nonces => "Musig sessions cache" => "Musig sessions cache"
+keys-nonces-available => "%1 available" => "%1 available"
+keys-nonces-connect
+=> "Connect Ledger to fetch nonce sessions."
+=> "Connect Ledger to fetch nonce sessions.";;
+keys-nonces-fetching => "Fetching nonce sessions" => "Fetching nonce sessions"
+keys-nonces-quantity => "Sessions to fetch" => "Sessions to fetch"
+keys-nonces-wait
+=> "Keep Ledger connected until fetching finishes."
+=> "Keep Ledger connected until fetching finishes.";;
 keys-password-choose => "Choose a password." => "NONE"
 keys-password-confirm-field => "Confirm:" => "NONE"
 keys-password-field => "Password:" => "NONE"
@@ -535,6 +546,7 @@ keys-sealing-sub
 => "Encrypting the mnemonic with the password. This takes a few seconds."
 => "NONE";;
 keys-sealing-title => "Sealing the key…" => "NONE"
+keys-set-nonces => "Set" => "Set"
 keys-sp-descriptor-no-origin
 => "That descriptor carries no key origin and cannot be used."
 => "NONE";;
@@ -668,6 +680,7 @@ musig-locktime-relative => "Relative" => "NONE"
 musig-locktime-renewable => "Absolute renewable" => "NONE"
 musig-menu-coins => "Coins" => "NONE"
 musig-menu-history => "History" => "NONE"
+musig-menu-psbt => "PSBT" => "PSBT"
 musig-menu-receive => "Receive" => "NONE"
 musig-menu-send => "Send" => "NONE"
 musig-menu-settings => "Settings" => "NONE"
@@ -889,6 +902,29 @@ plugin-access-state-sub
 => "Its own data, kept encrypted with Silent's. A new version of the plugin asks again."
 => "NONE";;
 plugin-access-unasked => "Not asked yet: %1." => "NONE"
+psbt-broadcast => "Broadcast, unconfirmed" => "Broadcast, unconfirmed"
+psbt-confirmed => "Confirmed at height %1" => "Confirmed at height %1"
+psbt-conflict => "Conflicting transaction: %1" => "Conflicting transaction: %1"
+psbt-delete-message
+=> "This transaction is not confirmed. Delete its saved signing progress? This does not cancel a broadcast transaction."
+=> "This transaction is not confirmed. Delete its saved signing progress? This does not cancel a broadcast transaction.";;
+psbt-delete-title => "Delete saved PSBT?" => "Delete saved PSBT?"
+psbt-empty
+=> "No saved PSBTs. Transactions are saved when prepared for signing."
+=> "No saved PSBTs. Transactions are saved when prepared for signing.";;
+psbt-finalized => "Finalized, ready to broadcast" => "Finalized, ready to broadcast"
+psbt-restart-signing => "Restart signing" => "Restart signing"
+psbt-retry-save => "Retry saving" => "Retry saving"
+psbt-save-warning
+=> "The latest transaction progress is not persisted. You can continue signing or broadcasting. %1"
+=> "The latest transaction progress is not persisted. You can continue signing or broadcasting. %1";;
+psbt-session-restart-needed
+=> "A signer cannot safely resume its saved nonce session. Choose Restart signing to retire the old session and discard all nonces and partial signatures for this same transaction. Consumed or retired nonces cannot be reused."
+=> "A signer cannot safely resume its saved nonce session. Choose Restart signing to retire the old session and discard all nonces and partial signatures for this same transaction. Consumed or retired nonces cannot be reused.";;
+psbt-show-confirmed => "Show confirmed transactions" => "Show confirmed transactions"
+psbt-signing => "Signing in progress" => "Signing in progress"
+psbt-status => "Status" => "Status"
+psbt-transaction => "Transaction" => "Transaction"
 receive-awaiting-segwit
 => "Segwit Addresses Awaiting Payment"
 => "Adresses Segwit en attente de paiement";;

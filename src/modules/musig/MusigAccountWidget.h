@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QPointer>
 #include <QString>
 #include <QWidget>
@@ -7,6 +8,7 @@
 
 class MusigAccountController;
 class MusigStatusBar;
+class QAbstractButton;
 
 // Tab content: menu and panel container.
 class MusigAccountWidget : public QWidget {
@@ -27,4 +29,5 @@ private:
     QWidget *m_screen_container = nullptr;
     QPointer<qontrol::Panel> m_current_panel;
     MusigStatusBar *m_status_bar = nullptr;
+    QHash<QString, QAbstractButton *> m_menu_buttons;
 };

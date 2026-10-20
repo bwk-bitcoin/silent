@@ -68,6 +68,7 @@ auto btnGetSilentPayment() -> Button *;
 auto btnGetTaproot() -> Button *;
 auto btnGetSegwit() -> Button *;
 auto btnOpen() -> Button *;
+auto btnOpenSavedPsbt(const QString &txid) -> Button *;
 auto btnOpenKeysTab() -> Button *;
 auto btnRevealMnemonic() -> Button *;
 auto btnScanAgain() -> Button *;

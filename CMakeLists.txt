@@ -212,6 +212,8 @@ set(SILENT_APP_SOURCES
     src/modules/musig/SettingsExtras.cpp
     src/modules/musig/SigningSection.h
     src/modules/musig/SigningSection.cpp
+    src/modules/musig/SavedPsbts.h
+    src/modules/musig/SavedPsbts.cpp
     src/modules/musig/SignModal.h
     src/modules/musig/SignModal.cpp
     src/modules/musig/RegisterDescriptor.h

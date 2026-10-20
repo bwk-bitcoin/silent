@@ -12,6 +12,8 @@
 #include <QStringList>
 #include <Qontrol>
 #include <cstdint>
+#include <deque>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <silent.h>
@@ -22,8 +24,7 @@ class QThread;
 
 // Owns the Rust account and the PSBT in flight. Drives MuSig2 as one
 // keys()->sign() per round: Nonces, then PartialSigs, then finalize at Ready. On
-// SignError::MusigSession it retires Ledger allocations on a worker, then drops
-// every nonce and partial sig and starts a fresh attempt over the prepared PSBT.
+// SignError::MusigSession requires an explicit restart before signing can continue.
 class MusigAccountController : public AccountBackend {
     Q_OBJECT
 
@@ -75,6 +76,13 @@ public:
     [[nodiscard]] auto spendSigners() const -> QStringList;
     // MusigAccount::spend_leaves for the selected coins.
     auto spendLeaves(const QStringList &outpoints) -> MusigSpendLeaves;
+    [[nodiscard]] auto saveWarning() const -> QString;
+    [[nodiscard]] auto activeRecordId() const -> QString;
+    void listSavedPsbts(bool include_confirmed);
+    void restoreSavedPsbt(const QString &id);
+    void deleteSavedPsbt(const QString &id);
+    void labelSavedPsbt(const QString &id, const QString &label);
+    void retrySavedPsbts();
 
 signals:
     void electrumConnected(QString address);
@@ -84,6 +92,7 @@ signals:
     void notificationReceived(Notification notif);
     // A prepared PSBT entered round 1.
     void prepared(QString psbt_v2_hex, QString txid);
+    void sessionLoading();
     void prepareFailed(QString message);
     void roundChanged(MusigRoundStatus status);
     void signingFailed(QString message, plugin::SignError kind);
@@ -95,6 +104,14 @@ signals:
     // finalize_psbt failed at Ready.
     void finalizeFailed(QString message);
     void broadcastDone(TxResult result);
+    void savedPsbtsListed(SavedPsbtList result);
+    void savedPsbtRestored(SavedPsbtEntry entry);
+    void savedPsbtsChanged();
+    void saveWarningChanged(QString message);
+    void savedPsbtFailed(QString message);
+    void savedPsbtWarningChanged(QString message);
+    void savedPsbtDeleteConfirmationNeeded(QString id);
+    void sessionCleared();
     // Background teardown done, the owner may delete the widget.
     void stopped();
 
@@ -126,9 +143,12 @@ public slots:
     void onKeysError(std::optional<ReqId> req_id, const QString &message, plugin::SignError kind);
     void onKeysCancelled(ReqId req_id);
     void onBroadcastResult(const TxResult &result);
-    void onBroadcastThreadFinished();
     void onWorkerFinished();
     void onRestartFinished();
+    void onStorageFinished();
+    void onSavedPsbtDeleteConfirmed(const QString &id);
+    void onSavedPsbtDeleteCancelled(const QString &id);
+    void psbtClicked();
     void historyClicked();
     void coinsClicked();
     void sendClicked();
@@ -143,6 +163,13 @@ protected:
     [[nodiscard]] auto beginSignRequest(const QString &fingerprint) -> std::pair<IKeys *, ReqId>;
     void finalizeIfReady();
     void retireSignRequests();
+    void clearSigning();
+    void enqueueStorage(std::function<void()> work, std::function<void()> done);
+    void startStorage();
+    void persistActivePsbt();
+    void setSaveWarning(const QString &message);
+    void refreshActiveWarning();
+    void completeSavedPsbtDeletion(const QString &id, const SavedPsbtMutation &result);
 
 private:
     QPointer<qontrol::Panel> m_current_panel;
@@ -150,13 +177,26 @@ private:
     MusigAccountWidget *m_widget = nullptr;
     std::optional<rust::Box<MusigAccount>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;
-    QThread *m_broadcast_thread = nullptr;
     QList<QThread *> m_workers;
     bool m_electrum_running = false;
     account::ElectrumReconnect *m_reconnect = new account::ElectrumReconnect(this);
     QString m_prepared_psbt_v2_hex;
     QString m_psbt_v2_hex;
     QString m_tx_hex;
+    QString m_saved_record_id;
+    QString m_save_warning;
+    enum class DeletionState { Checking, AwaitingConfirmation, Deleting };
+    QHash<QString, DeletionState> m_deletions;
+
+    struct StorageWork {
+        std::function<void()> work;
+        std::function<void()> done;
+    };
+
+    std::deque<StorageWork> m_storage_queue;
+    QThread *m_storage_thread = nullptr;
+    bool m_finalizing = false;
+    bool m_broadcast_pending = false;
     // The signers of the spend path of the prepared transaction.
     QStringList m_spend_signers;
     // Sign requests in flight, each one key's, by request id. Answers are merged into
@@ -166,10 +206,10 @@ private:
     QThread *m_restart_thread = nullptr;
     std::shared_ptr<SignResult> m_restart_result;
     QString m_restart_source;
-    QString m_restart_message;
     bool m_restart_pending = false;
     std::uint64_t m_signing_generation = 0;
     std::uint64_t m_restart_generation = 0;
     bool m_init = false;
     bool m_stopping = false;
+    bool m_stop_requested = false;
 };

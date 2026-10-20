@@ -276,6 +276,55 @@ void OutputW::setMaxAmount(uint64_t sats) {
     m_amount_input->setText(toBitcoin(sats, false));
 }
 
+void OutputW::setLabel(const QString &label) {
+    m_label_input->setText(label);
+}
+
+void OutputW::setFrozenAmount(std::optional<uint64_t> amount) {
+    m_frozen_amount = amount;
+    if (amount.has_value()) {
+        setMaxAmount(amount.value());
+    }
+}
+
+void Send::restoreSavedPsbt(const SavedPsbtEntry &entry) {
+    // Lock before setting fields: textChanged must never simulate a restored PSBT.
+    m_locked = true;
+    m_restored = true;
+    for (auto *output : m_outputs) {
+        delete output->widget();
+        delete output;
+    }
+    m_outputs.clear();
+    for (const auto &payment : entry.frozen_template.outputs) {
+        auto *output = new OutputW(this, m_output_id++);
+        output->setAddress(QString::fromStdString(std::string(payment.address)));
+        output->setLabel(QString::fromStdString(std::string(payment.label)));
+        output->setFrozenAmount(payment.amount);
+        output->syncUsdFromBtc();
+        output->setDeletable(false);
+        output->enableMax(false);
+        m_outputs.insert(m_output_id - 1, output);
+    }
+    m_selected_coins.clear();
+    for (const auto &input : entry.inputs) {
+        RustCoin coin{};
+        coin.outpoint = input.outpoint;
+        coin.value = input.value;
+        m_selected_coins.append(coin);
+    }
+    m_auto_selected_outpoints.clear();
+    m_auto_coin_selection->setChecked(false);
+    m_estimated_fee = entry.frozen_template.fee;
+    m_fee_toggle->setChecked(false);
+    m_fee_value_input->setText(QString::number(m_estimated_fee));
+    m_fee_estimate_label->setText(toBitcoin(m_estimated_fee));
+    m_fee_estimate_label->setVisible(true);
+    m_warning_label->setText(QString::fromStdString(std::string(entry.warning)));
+    m_warning_label->setVisible(!entry.warning.empty());
+    view();
+}
+
 auto OutputW::isMax() -> bool {
     return m_max->isChecked();
 }
@@ -412,7 +461,7 @@ void Send::doConnect() {
     connect(m_clear_outputs_btn, &QPushButton::clicked, this, &Send::onClearOutputs,
             qontrol::UNIQUE);
     connect(m_clear_inputs_btn, &QPushButton::clicked, this, &Send::onClearInputs, qontrol::UNIQUE);
-    connect(m_auto_coin_selection, &Checkbox::toggled, this, &Send::onAutoSelectionToggled,
+    connect(m_auto_coin_selection, &Checkbox::clicked, this, &Send::onAutoSelectionToggled,
             qontrol::UNIQUE);
     connect(m_backend, &AccountBackend::updateCoins, this, &Send::onCoinsUpdated, qontrol::UNIQUE);
     connect(m_signing, &SendSigning::lockedChanged, this, &Send::onSigningLocked, qontrol::UNIQUE);
@@ -801,7 +850,6 @@ void Send::applyLocked() {
 
 auto Send::inputsView() -> QWidget * {
     qDebug() << "Send::inputsView()";
-    auto availableCoins = m_backend->getCoins();
 
     // Unparent persistent rows
     m_inputs_amounts_row->setParent(nullptr);
@@ -809,12 +857,6 @@ auto Send::inputsView() -> QWidget * {
 
     m_coin_table = new catalog::Table;
     m_coin_table->setHeaderVisible(true);
-    // Show at most a 6-row window; the body scrolls beyond that.
-    constexpr int c_max_visible_coins = 6;
-    const int c_coin_count = static_cast<int>(availableCoins.size());
-    const int c_visible_rows =
-        c_coin_count < c_max_visible_coins ? c_coin_count : c_max_visible_coins;
-    m_coin_table->setBodyHeight(c_visible_rows * metric::TABLE_ROW_HEIGHT);
 
     // The table's rows sit inset by its scroll area's gutters: inset the amounts row
     // the same, so the total selected value stays aligned with the value column.
@@ -832,13 +874,7 @@ auto Send::inputsView() -> QWidget * {
                              .headerAlignment = Qt::AlignRight,
                              .role = DisplayRole::Amount});
 
-    for (const auto &coin : availableCoins) {
-        QString outpoint = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
-        QString typeStr = QString::fromUtf8(coin.account_type.data(), coin.account_type.size());
-        QString label = QString::fromUtf8(coin.label.data(), coin.label.size());
-        m_coin_table->addRow(outpoint,
-                             {typeStr, shortenOutpoint(outpoint), label, toBitcoin(coin.value)});
-    }
+    updateCoinRows();
     connect(m_coin_table, &catalog::Table::rowSelectionChanged, this, &Send::onCoinSelectionChanged,
             qontrol::UNIQUE);
     updateCoinCheckboxes();
@@ -869,6 +905,28 @@ auto Send::inputsView() -> QWidget * {
     // separator far below the table. The outputs frame carries the trailing stretch.
 
     return col;
+}
+
+void Send::updateCoinRows() {
+    rust::Vec<RustCoin> availableCoins;
+    if (m_restored) {
+        for (const auto &coin : m_selected_coins) {
+            availableCoins.push_back(coin);
+        }
+    } else {
+        availableCoins = m_backend->getCoins();
+    }
+    constexpr int c_max_visible_coins = 6;
+    auto visibleRows = std::min(static_cast<int>(availableCoins.size()), c_max_visible_coins);
+    m_coin_table->setBodyHeight(visibleRows * metric::TABLE_ROW_HEIGHT);
+    m_coin_table->clearRows();
+    for (const auto &coin : availableCoins) {
+        auto outpoint = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
+        auto typeStr = QString::fromUtf8(coin.account_type.data(), coin.account_type.size());
+        auto label = QString::fromUtf8(coin.label.data(), coin.label.size());
+        m_coin_table->addRow(outpoint,
+                             {typeStr, shortenOutpoint(outpoint), label, toBitcoin(coin.value)});
+    }
 }
 
 void Send::onAddOutput() {
@@ -1036,6 +1094,9 @@ void Send::onAutoSelectionToggled() {
 }
 
 void Send::onCoinsUpdated(CoinState state) {
+    if (m_locked) {
+        return;
+    }
     qDebug() << "Send::onCoinsUpdated() confirmed:" << state.confirmed_count
              << "unconfirmed:" << state.unconfirmed_count;
     // Only rebuild if coins actually changed
@@ -1170,6 +1231,9 @@ void OutputW::setAddress(const QString &address) {
 }
 
 auto OutputW::amount() -> std::optional<uint64_t> {
+    if (m_frozen_amount.has_value()) {
+        return m_frozen_amount;
+    }
     auto amountStr = m_amount_input->text();
     bool ok = false;
     auto amountBtc = amountStr.toDouble(&ok);
@@ -1411,7 +1475,23 @@ auto Send::spentOutpoints() const -> QStringList {
 }
 
 void Send::onSigningLocked(bool locked) {
+    auto wasRestored = m_restored;
     m_locked = locked;
+    if (!locked) {
+        m_restored = false;
+        for (auto *output : m_outputs) {
+            output->setFrozenAmount(std::nullopt);
+            if (wasRestored) {
+                output->enableMax(true);
+                output->setDeletable(m_outputs.size() > 1);
+            }
+        }
+        if (wasRestored) {
+            updateCoinRows();
+            updateCoinCheckboxes();
+            applyInputsMode();
+        }
+    }
     applyLocked();
     if (!locked) {
         onProcess();
@@ -1421,6 +1501,13 @@ void Send::onSigningLocked(bool locked) {
 void Send::onSigningSent() {
     onClearOutputs();
     onClearInputs();
+}
+
+void Send::onSavedWarningChanged(const QString &message) {
+    if (m_restored) {
+        m_warning_label->setText(message);
+        m_warning_label->setVisible(!message.isEmpty());
+    }
 }
 
 void Send::onOutputDeleteClicked() {

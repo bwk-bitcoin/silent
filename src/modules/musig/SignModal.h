@@ -55,6 +55,7 @@ public slots:
     void onPlanReady();
     void onDevicesChanged();
     void onRetryClicked();
+    void onSaveWarningChanged(const QString &message);
 
 protected:
     // What the notice reports, so a language change can retitle it.
@@ -79,6 +80,7 @@ private:
     MusigAccountController *m_controller = nullptr;
     catalog::WizardSteps *m_steps = nullptr;
     catalog::Notice *m_notice = nullptr;
+    catalog::Label *m_save_warning_label = nullptr;
     catalog::Label *m_lead = nullptr;
     qontrol::Column *m_rows = nullptr;
     catalog::Button *m_continue_btn = nullptr;

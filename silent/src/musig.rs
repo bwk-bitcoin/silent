@@ -1,8 +1,10 @@
-//! MusigAccount: CXX surface over bwk::Account (musig feature). No logic here.
+//! MusigAccount: CXX surface over bwk::Account and saved transaction progress.
 
-use std::collections::BTreeSet;
-use std::str::FromStr;
-use std::sync::mpsc;
+use std::{
+    collections::BTreeSet,
+    str::FromStr,
+    sync::{mpsc, Mutex, MutexGuard},
+};
 
 use bitcoin::consensus::encode::{deserialize_hex, serialize_hex};
 use bitcoin::taproot::TapLeafHash;
@@ -19,16 +21,20 @@ use bwk::bwk_tx::{
 };
 use bwk_sp::receiver::RecipientAddress;
 
-use crate::account::{
-    broadcast_via_electrum, convert_notification, parse_outpoint, psbt_validation, rust_txs,
-    NotificationReceiver, Poll, PsbtResult, TemplateError,
-};
-use crate::config::{parse_electrum_url, Config};
-use crate::ffi::{
-    AddressVerifyInfo, CoinState, MusigCosignerStatus, MusigDescriptorResult,
-    MusigElectrumUrlResult, MusigReceiveAddress, MusigRound, MusigRoundStatus, MusigSpendLeaf,
-    MusigSpendLeaves, Network, PsbtValidation, RustCoin, RustTx, TransactionSimulation,
-    TransactionTemplate, TxResult,
+use crate::{
+    account::{
+        broadcast_via_electrum, convert_notification, parse_outpoint, psbt_validation, rust_txs,
+        NotificationReceiver, Poll, PsbtResult, TemplateError,
+    },
+    config::{parse_electrum_url, Config},
+    ffi::{
+        AddressVerifyInfo, CoinState, MusigCosignerStatus, MusigDescriptorResult,
+        MusigElectrumUrlResult, MusigFinalizeResult, MusigReceiveAddress, MusigRound,
+        MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, PsbtValidation, RustCoin,
+        RustTx, SavedPsbtEntry, SavedPsbtList, SavedPsbtMutation, SavedPsbtRestore,
+        TransactionSimulation, TransactionTemplate, TxResult,
+    },
+    saved_psbt::{apply_chain_state, frozen_entry, mutation_error, SavedPsbtStore},
 };
 
 /// A MuSig2 policy account, wrapping bwk::Account.
@@ -42,6 +48,7 @@ struct MusigAccountInner {
     account: BwkAccount,
     receiver: Option<mpsc::Receiver<BwkNotification>>,
     config: Config,
+    saved_psbts: Mutex<SavedPsbtStore>,
 }
 
 pub const MUSIG_PLUGIN_ID: &str = "musig";
@@ -150,10 +157,14 @@ impl MusigAccount {
         let musig_config = config.to_musig_config()?;
         let mut account = BwkAccount::try_new(musig_config).map_err(|e| e.to_string())?;
         let receiver = account.receiver();
+        let saved_psbts = Mutex::new(SavedPsbtStore::load(
+            config.account_dir().join("saved_psbts.json"),
+        ));
         Ok(MusigAccountInner {
             account,
             receiver,
             config,
+            saved_psbts,
         })
     }
 
@@ -604,7 +615,20 @@ impl MusigAccount {
             Err(e) => return failed(format!("{e:?}")),
         };
         let txid = psbt.unsigned_tx.compute_txid().to_string();
-        Box::new(PsbtResult::prepared(psbt.serialize(), bytes_v2, txid))
+        let mut result = PsbtResult::prepared(psbt.serialize(), bytes_v2.clone(), txid);
+        match self
+            .saved_store()
+            .and_then(|mut store| store.create(tx_template, spend, hex::encode(bytes_v2)))
+        {
+            Ok(saved) => {
+                result.saved_record_id = saved.record_id;
+                result.save_error = saved.save_error;
+            }
+            Err(error) => {
+                result.save_error = format!("Prepared transaction is not persisted: {error}")
+            }
+        }
+        Box::new(result)
     }
 
     /// Per cosigner nonce and partial signature counts of the PSBT.
@@ -647,22 +671,42 @@ impl MusigAccount {
         }
     }
 
-    /// Aggregate the partial signatures and finalize; the value is the tx hex.
-    pub fn finalize_psbt(&self, psbt_v2_hex: &str) -> TxResult {
+    /// Aggregate the partial signatures and keep the finalized PSBT alongside the tx.
+    pub fn finalize_psbt(&self, psbt_v2_hex: &str) -> MusigFinalizeResult {
+        let failed = |error| MusigFinalizeResult {
+            error,
+            ..MusigFinalizeResult::default()
+        };
         let Some(inner) = &self.inner else {
-            return tx_error(NOT_INITIALIZED.to_string());
+            return failed(NOT_INITIALIZED.to_string());
         };
         let mut psbt = match decode_psbt(psbt_v2_hex) {
             Ok(psbt) => psbt,
-            Err(e) => return tx_error(e),
+            Err(e) => return failed(e),
         };
-        match inner.account.finalize(&mut psbt) {
-            Ok(tx) => TxResult {
-                is_ok: true,
-                error: String::new(),
-                value: serialize_hex(&tx),
+        let tx = match inner.account.finalize(&mut psbt) {
+            Ok(tx) => tx,
+            Err(e) => return failed(format!("Failed to finalize PSBT: {e}")),
+        };
+        let finalized = match PsbtV2::from_bitcoin_psbt(psbt).and_then(|v2| v2.serialize()) {
+            Ok(bytes) => hex::encode(bytes),
+            Err(e) => return failed(format!("Failed to serialize finalized PSBT: {e:?}")),
+        };
+        let tx_hex = serialize_hex(&tx);
+        let save_error = match self.saved_store() {
+            Ok(mut store) => match store.finalized(psbt_v2_hex, &finalized, &tx_hex) {
+                Ok(()) => store.error(),
+                Err(error) => format!("Finalized transaction is not persisted: {error}"),
             },
-            Err(e) => tx_error(format!("Failed to finalize PSBT: {e}")),
+            Err(error) => error,
+        };
+        MusigFinalizeResult {
+            is_ok: true,
+            error: String::new(),
+            psbt_v2_hex: finalized,
+            value: tx_hex.clone(),
+            tx_hex,
+            save_error,
         }
     }
 
@@ -684,6 +728,14 @@ impl MusigAccount {
         }
         // Reflect the spend locally so the spent coins drop from spendable at once.
         inner.account.scanner().record_unconfirmed_spend(&tx);
+        match self.saved_store() {
+            Ok(mut store) => {
+                if let Err(error) = store.broadcast(&tx) {
+                    log::error!("broadcast saved PSBT: {error}");
+                }
+            }
+            Err(error) => log::error!("broadcast saved PSBT: {error}"),
+        }
         TxResult {
             is_ok: true,
             error: String::new(),
@@ -707,6 +759,129 @@ impl MusigAccount {
                 reused_output_count: 0,
                 spent_input_count: 0,
             },
+        }
+    }
+
+    fn saved_store(&self) -> Result<MutexGuard<'_, SavedPsbtStore>, String> {
+        self.inner
+            .as_ref()
+            .ok_or_else(|| NOT_INITIALIZED.to_string())?
+            .saved_psbts
+            .lock()
+            .map_err(|e| format!("Saved PSBT state lock failed: {e}"))
+    }
+
+    fn saved_entry(&self, record: &crate::ffi::SavedPsbtRecord) -> Result<SavedPsbtEntry, String> {
+        let inner = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| NOT_INITIALIZED.to_string())?;
+        let mut entry = frozen_entry(record)?;
+        apply_chain_state(&mut entry, &inner.account.scanner().tx_history());
+        let coins = inner.account.scanner().coins();
+        if !entry.in_history
+            && entry.warning.is_empty()
+            && entry.inputs.iter().any(|input| {
+                coins.iter().any(|(outpoint, coin)| {
+                    outpoint.to_string() == input.outpoint
+                        && matches!(coin.status(), CoinStatus::Spent | CoinStatus::BeingSpend)
+                })
+            })
+        {
+            entry.warning =
+                "Inputs are marked spent. Signing and broadcast can still be attempted".into();
+        }
+        Ok(entry)
+    }
+
+    pub fn saved_psbts(&self, include_confirmed: bool) -> SavedPsbtList {
+        let store = match self.saved_store() {
+            Ok(store) => store,
+            Err(error) => {
+                return SavedPsbtList {
+                    error,
+                    ..SavedPsbtList::default()
+                }
+            }
+        };
+        let mut entries = Vec::new();
+        for record in store.records() {
+            match self.saved_entry(record) {
+                Ok(entry) if include_confirmed || entry.confirmed_height == 0 => {
+                    entries.push(entry)
+                }
+                Ok(_) => (),
+                Err(error) => {
+                    return SavedPsbtList {
+                        error,
+                        save_error: store.error(),
+                        entries,
+                        is_ok: false,
+                    }
+                }
+            }
+        }
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.record.created_at));
+        SavedPsbtList {
+            is_ok: store.load_error().is_empty(),
+            error: store.load_error(),
+            save_error: store.error(),
+            entries,
+        }
+    }
+
+    pub fn restore_saved_psbt(&self, id: &str) -> SavedPsbtRestore {
+        let result = self.saved_store().and_then(|store| {
+            self.saved_entry(store.get(id)?)
+                .map(|entry| SavedPsbtRestore {
+                    is_ok: true,
+                    error: String::new(),
+                    save_error: store.error(),
+                    entry,
+                })
+        });
+        match result {
+            Ok(restored) => restored,
+            Err(error) => SavedPsbtRestore {
+                error,
+                ..SavedPsbtRestore::default()
+            },
+        }
+    }
+
+    pub fn update_saved_psbt(&self, id: &str, psbt_v2_hex: &str) -> SavedPsbtMutation {
+        self.saved_store()
+            .and_then(|mut store| store.update(id, psbt_v2_hex))
+            .unwrap_or_else(mutation_error)
+    }
+
+    pub fn label_saved_psbt(&self, id: &str, label: String) -> SavedPsbtMutation {
+        self.saved_store()
+            .and_then(|mut store| store.label(id, label))
+            .unwrap_or_else(mutation_error)
+    }
+
+    pub fn delete_saved_psbt(&self, id: &str) -> SavedPsbtMutation {
+        self.saved_store()
+            .and_then(|mut store| store.delete(id))
+            .unwrap_or_else(mutation_error)
+    }
+
+    pub fn retry_saved_psbts(&self) -> SavedPsbtMutation {
+        match self.saved_store() {
+            Ok(mut store) => SavedPsbtMutation {
+                is_ok: true,
+                save_error: store.persist(),
+                ..SavedPsbtMutation::default()
+            },
+            Err(error) => mutation_error(error),
+        }
+    }
+
+    pub fn saved_psbt_error(&self) -> String {
+        match self.saved_store() {
+            Ok(store) => store.error(),
+            Err(error) => error,
         }
     }
 }
@@ -757,7 +932,7 @@ fn spend_leaf(leaf: SpendLeaf) -> MusigSpendLeaf {
 }
 
 /// A hex PSBT v2 as the v0 PSBT bwk's account calls take.
-fn decode_psbt(psbt_v2_hex: &str) -> Result<bitcoin::Psbt, String> {
+pub(crate) fn decode_psbt(psbt_v2_hex: &str) -> Result<bitcoin::Psbt, String> {
     let bytes = hex::decode(psbt_v2_hex.trim()).map_err(|e| format!("Invalid PSBT hex: {e}"))?;
     let psbt = crate::keys::psbt::parse_v2(&bytes).map_err(|e| format!("Invalid PSBT: {e}"))?;
     psbt.into_bitcoin_psbt()

@@ -61,6 +61,12 @@ void MusigAccountWidget::loadPanel(qontrol::Panel *panel) {
     }
 
     m_current_panel = panel;
+    for (auto it = m_menu_buttons.begin(); it != m_menu_buttons.end(); ++it) {
+        if (m_controller->screen(it.key()).value_or(nullptr) == panel->screen()) {
+            it.value()->setChecked(true);
+            break;
+        }
+    }
     auto *widget = panel->widget();
     if (widget != nullptr) {
         m_screen_container->layout()->addWidget(widget);
@@ -83,6 +89,7 @@ void MusigAccountWidget::initUI() {
     auto *coinsBtn = menuButton(TR("musig-menu-coins"), icon::coins());
     auto *sendBtn = menuButton(TR("musig-menu-send"), icon::send());
     auto *recvBtn = menuButton(TR("musig-menu-receive"), icon::receive());
+    auto *psbtBtn = menuButton(TR("musig-menu-psbt"), icon::history());
     auto *settingsBtn = menuButton(TR("musig-menu-settings"), icon::settings());
 
     auto *btnGroup = new QButtonGroup(this);
@@ -91,7 +98,10 @@ void MusigAccountWidget::initUI() {
     btnGroup->addButton(coinsBtn);
     btnGroup->addButton(sendBtn);
     btnGroup->addButton(recvBtn);
+    btnGroup->addButton(psbtBtn);
     btnGroup->addButton(settingsBtn);
+    m_menu_buttons = {{"history", historyBtn}, {"coins", coinsBtn}, {"send", sendBtn},
+                      {"receive", recvBtn},    {"psbt", psbtBtn},   {"settings", settingsBtn}};
 
     m_menu->push(historyBtn)
         ->pushSpacer(resolve(Spacing::S))
@@ -100,6 +110,8 @@ void MusigAccountWidget::initUI() {
         ->push(sendBtn)
         ->pushSpacer(resolve(Spacing::S))
         ->push(recvBtn)
+        ->pushSpacer(resolve(Spacing::S))
+        ->push(psbtBtn)
         ->pushSpacer()
         ->push(settingsBtn);
 
@@ -113,6 +125,8 @@ void MusigAccountWidget::initUI() {
             qontrol::UNIQUE);
     connect(settingsBtn, &QPushButton::clicked, m_controller,
             &MusigAccountController::settingsClicked, qontrol::UNIQUE);
+    connect(psbtBtn, &QPushButton::clicked, m_controller, &MusigAccountController::psbtClicked,
+            qontrol::UNIQUE);
 
     auto *container = new qontrol::Column;
     container->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);

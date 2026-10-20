@@ -102,6 +102,8 @@ public:
     void updateAmountValidation();
     void setMaxMode(bool max);
     void setMaxAmount(uint64_t sats);
+    void setLabel(const QString &label);
+    void setFrozenAmount(std::optional<uint64_t> amount);
 
 private:
     catalog::Input *m_address_input = nullptr;
@@ -115,6 +117,7 @@ private:
     catalog::Checkbox *m_max = nullptr;
     catalog::Label *m_max_label = nullptr;
     QWidget *m_widget = nullptr;
+    std::optional<uint64_t> m_frozen_amount;
 };
 
 // Payments, coins and fee, the transaction they form, then the account's signing
@@ -123,6 +126,7 @@ class Send : public qontrol::Screen {
     Q_OBJECT
 public:
     explicit Send(AccountBackend *backend);
+    void restoreSavedPsbt(const SavedPsbtEntry &entry);
 
 public slots:
     void onOutputSetMax(int id);
@@ -147,6 +151,7 @@ public slots:
     void onSigningLocked(bool locked);
     // The signing step broadcast the transaction.
     void onSigningSent();
+    void onSavedWarningChanged(const QString &message);
 
 protected:
     void init() override;
@@ -167,6 +172,7 @@ protected:
     void applyLocked();
     auto output() -> QWidget *;
     void updateCoinCheckboxes();
+    void updateCoinRows();
     void applyInputsMode();
     void updateInputsTitle();
 
@@ -175,6 +181,7 @@ private:
     AccountBackend *m_backend = nullptr;
     account::SendSigning *m_signing = nullptr;
     bool m_locked = false;
+    bool m_restored = false;
     bool m_stacked = true;
     int m_output_id = 0;
     QHash<int, OutputW *> m_outputs;

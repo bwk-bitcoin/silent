@@ -2,6 +2,23 @@
 # Format: id => "Text"
 # Use \n for line breaks
 
+musig-menu-psbt => "PSBT"
+psbt-transaction => "Transaction"
+psbt-status => "Status"
+psbt-show-confirmed => "Show confirmed transactions"
+psbt-empty => "No saved PSBTs. Transactions are saved when prepared for signing."
+psbt-confirmed => "Confirmed at height %1"
+psbt-broadcast => "Broadcast, unconfirmed"
+psbt-finalized => "Finalized, ready to broadcast"
+psbt-signing => "Signing in progress"
+psbt-conflict => "Conflicting transaction: %1"
+psbt-delete-title => "Delete saved PSBT?"
+psbt-delete-message => "This transaction is not confirmed. Delete its saved signing progress? This does not cancel a broadcast transaction."
+psbt-save-warning => "The latest transaction progress is not persisted. You can continue signing or broadcasting. %1"
+psbt-retry-save => "Retry saving"
+psbt-restart-signing => "Restart signing"
+psbt-session-restart-needed => "A signer cannot safely resume its saved nonce session. Choose Restart signing to retire the old session and discard all nonces and partial signatures for this same transaction. Consumed or retired nonces cannot be reused."
+
 keys-nonces => "Musig sessions cache"
 keys-set-nonces => "Set"
 keys-fetch-nonces => "Fetch nonces"

@@ -84,6 +84,9 @@ void SignModal::init() {
         new catalog::WizardSteps({TR("musig-sign-step-nonces"), TR("musig-sign-step-partial")});
     m_notice = new catalog::Notice;
     m_notice->setVisible(false);
+    m_save_warning_label = new catalog::Label(catalog::LabelRole::Caption);
+    m_save_warning_label->setWordWrap(true);
+    onSaveWarningChanged(m_controller->saveWarning());
     m_lead = new catalog::Label(catalog::LabelRole::Body);
     m_lead->setWordWrap(true);
     m_rows = new qontrol::Column;
@@ -100,11 +103,13 @@ void SignModal::init() {
 }
 
 void SignModal::doConnect() {
+    connect(m_controller, &MusigAccountController::saveWarningChanged, this,
+            &SignModal::onSaveWarningChanged, qontrol::UNIQUE);
     connect(m_controller, &QObject::destroyed, this, &QDialog::reject, qontrol::UNIQUE);
     connect(Host::get()->events(), &HostEvents::instanceRegistered, this,
             &SignModal::onDevicesChanged, qontrol::UNIQUE);
-    connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
-            &SignModal::onDevicesChanged, qontrol::UNIQUE);
+    connect(Host::get()->events(), &HostEvents::instanceRemoved, this, &SignModal::onDevicesChanged,
+            qontrol::UNIQUE);
     connect(m_continue_btn, &QPushButton::clicked, this, &SignModal::onContinueClicked,
             qontrol::UNIQUE);
     connect(m_broadcast_btn, &QPushButton::clicked, this, &SignModal::onBroadcastClicked,
@@ -131,6 +136,7 @@ void SignModal::view() {
     setWideBody((new qontrol::Column)
                     ->spacing(resolve(Spacing::S))
                     ->push(m_notice)
+                    ->push(m_save_warning_label)
                     ->push(m_lead)
                     ->push(m_rows)
                     ->pushSpacer());
@@ -149,6 +155,7 @@ void SignModal::retranslateUi() {
     setWindowTitle(TR("musig-sign-title"));
     m_continue_btn->setText(TR("btn-continue"));
     m_broadcast_btn->setText(TR("common-broadcast"));
+    m_retry_btn->setText(TR("psbt-restart-signing"));
     m_notice->setTitle(failureTitle());
     refresh();
 }
@@ -159,6 +166,9 @@ void SignModal::refresh() {
 }
 
 void SignModal::requestPlan() {
+    if (!m_controller->finalizedTx().isEmpty()) {
+        return;
+    }
     m_plan_ready = false;
     if (m_plan_loading) {
         m_plan_dirty = true;
@@ -175,11 +185,11 @@ void SignModal::requestPlan() {
             devices.push_back(keys::KeysModule::toLiveDevice(entry));
         }
     }
-    auto *thread = QThread::create([plan, network = m_controller->network(),
-                                    psbt = m_plan_psbt.toStdString(),
-                                    devices = std::move(devices)]() mutable {
-        *plan = ::musig_session_plan(network, psbt, std::move(devices));
-    });
+    auto *thread =
+        QThread::create([plan, network = m_controller->network(), psbt = m_plan_psbt.toStdString(),
+                         devices = std::move(devices)]() mutable {
+            *plan = ::musig_session_plan(network, psbt, std::move(devices));
+        });
     connect(thread, &QThread::finished, this, &SignModal::onPlanReady, qontrol::UNIQUE);
     connect(thread, &QThread::finished, thread, &QObject::deleteLater, qontrol::UNIQUE);
     thread->start();
@@ -189,8 +199,22 @@ void SignModal::render(const MusigRoundStatus &status) {
     // clear() also resets the layout spacing.
     catalog::clearRows(m_rows);
     m_rows->spacing(resolve(Spacing::XS));
-    m_retry_btn->setVisible(m_controller->restartPending());
-    m_retry_btn->setEnabled(!m_controller->isRestarting());
+    if (!m_controller->finalizedTx().isEmpty()) {
+        m_steps->hide();
+        m_retry_btn->hide();
+        m_continue_btn->hide();
+        m_lead->setText(TR("psbt-finalized"));
+        m_broadcast_btn->show();
+        m_broadcast_btn->setEnabled(true);
+        m_actions->setReason(QString());
+        return;
+    }
+    m_retry_btn->setVisible(m_controller->finalizedTx().isEmpty());
+    m_retry_btn->setEnabled(!m_controller->isRestarting() && m_controller->signingKeys().isEmpty());
+    if (m_controller->restartPending() && !m_controller->isRestarting() &&
+        m_failure != Failure::SessionLost) {
+        showFailure(Failure::SessionLost, TR("psbt-session-restart-needed"));
+    }
     if (!status.is_ok) {
         showFailure(Failure::Sign, toQString(status.error));
         m_continue_btn->setVisible(false);
@@ -224,8 +248,8 @@ void SignModal::render(const MusigRoundStatus &status) {
         for (const auto &candidate : m_plan->candidates) {
             auto fingerprint = toQString(candidate.fingerprint).toLower();
             auto entry = entries.value(fingerprint);
-            bool cachedRoundOne = !entry.can_sign && candidate.can_sign &&
-                                  candidate.route == KeyRouteKind::Usb;
+            bool cachedRoundOne =
+                !entry.can_sign && candidate.can_sign && candidate.route == KeyRouteKind::Usb;
             entry.can_musig = entry.can_musig || cachedRoundOne;
             entry.can_sign = candidate.can_sign;
             if (candidate.route != KeyRouteKind::Unknown) {
@@ -420,6 +444,8 @@ void SignModal::onDevicesChanged() {
 
 void SignModal::onRetryClicked() {
     m_notice->setVisible(false);
+    m_partial = false;
+    m_signed.clear();
     m_controller->restartRounds();
     refresh();
 }
@@ -483,9 +509,8 @@ void SignModal::onTransactionReady([[maybe_unused]] const QString &tx_hex) {
 
 void SignModal::onSigningFailed(const QString &message, plugin::SignError kind) {
     if (kind == plugin::SignError::MusigSession) {
-        // The controller dropped every nonce: the session starts over at round 1.
-        m_partial = false;
-        showFailure(Failure::SessionLost, TR("musig-send-session-lost"));
+        showFailure(Failure::SessionLost,
+                    TR("psbt-session-restart-needed") + QStringLiteral("\n") + message);
     } else {
         showFailure(Failure::Sign, message);
     }
@@ -505,6 +530,11 @@ void SignModal::onBroadcastDone(const TxResult &result) {
     }
     showFailure(Failure::Sign, TR("confirm-send-failed").arg(toQString(result.error)));
     refresh();
+}
+
+void SignModal::onSaveWarningChanged(const QString &message) {
+    m_save_warning_label->setText(TR("psbt-save-warning").arg(message));
+    m_save_warning_label->setVisible(!message.isEmpty());
 }
 
 } // namespace musig

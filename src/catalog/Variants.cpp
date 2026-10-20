@@ -374,6 +374,13 @@ auto btnOpen() -> Button * {
     return make({.role = ButtonRole::Default, .label = TR("btn-open"), .width = BtnWidth::M});
 }
 
+auto btnOpenSavedPsbt(const QString &txid) -> Button * {
+    return make({.role = ButtonRole::Default,
+                 .label = txid.left(6) + QStringLiteral("...") + txid.right(6),
+                 .tooltip = txid,
+                 .width = BtnWidth::Auto});
+}
+
 auto btnOpenKeysTab() -> Button * {
     return make(
         {.role = ButtonRole::Default, .label = TR("btn-open-keys-tab"), .width = BtnWidth::L});

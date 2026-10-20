@@ -15,6 +15,7 @@ pub mod keys;
 pub mod musig;
 pub mod plugin_bundle;
 pub mod policy;
+pub mod saved_psbt;
 pub mod state_crypt;
 pub mod sync_estimator;
 
@@ -200,7 +201,7 @@ mod ffi {
     }
 
     /// Transaction output specification.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
     pub struct Output {
         /// Recipient address (SP address, legacy address, or hex data for OP_RETURN)
         pub address: String,
@@ -213,7 +214,7 @@ mod ffi {
     }
 
     /// Template for creating a transaction.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
     pub struct TransactionTemplate {
         /// List of output specifications
         pub outputs: Vec<Output>,
@@ -255,6 +256,75 @@ mod ffi {
         pub error: String,
         /// Result value: signed tx hex or txid (empty on error).
         pub value: String,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct MusigFinalizeResult {
+        pub is_ok: bool,
+        pub error: String,
+        pub psbt_v2_hex: String,
+        pub tx_hex: String,
+        /// Compatibility with callers that used TxResult::value.
+        pub value: String,
+        pub save_error: String,
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    pub struct SavedPsbtRecord {
+        pub id: String,
+        pub tx_template: TransactionTemplate,
+        pub spend: MusigSpendLeaf,
+        pub original_psbt_v2_hex: String,
+        pub current_psbt_v2_hex: String,
+        pub finalized_tx_hex: String,
+        pub broadcast: bool,
+        pub label: String,
+        pub created_at: u64,
+        pub updated_at: u64,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct SavedPsbtInput {
+        pub outpoint: String,
+        pub value: u64,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct SavedPsbtEntry {
+        pub record: SavedPsbtRecord,
+        pub txid: String,
+        pub frozen_template: TransactionTemplate,
+        pub inputs: Vec<SavedPsbtInput>,
+        pub input_total: u64,
+        pub output_total: u64,
+        pub confirmed_height: u32,
+        pub in_history: bool,
+        pub conflicting_txids: Vec<String>,
+        pub warning: String,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct SavedPsbtList {
+        pub is_ok: bool,
+        pub error: String,
+        pub save_error: String,
+        pub entries: Vec<SavedPsbtEntry>,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct SavedPsbtRestore {
+        pub is_ok: bool,
+        pub error: String,
+        pub save_error: String,
+        pub entry: SavedPsbtEntry,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct SavedPsbtMutation {
+        pub is_ok: bool,
+        pub error: String,
+        pub save_error: String,
+        pub record_id: String,
     }
 
     /// Result of decoding an SP descriptor QR response.
@@ -822,7 +892,7 @@ mod ffi {
 
     /// One way to spend a musig account's coins: the key path or one tap leaf
     /// (bwk `SpendLeaf`). Picked before round 1 (decision 15).
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
     pub struct MusigSpendLeaf {
         /// The key path (internal key); leaf_hash is empty.
         pub key_path: bool,
@@ -1876,6 +1946,8 @@ mod ffi {
 
         /// Get the serialized PSBT v2 as hex (only valid if is_ok()).
         fn bytes_v2_hex(self: &PsbtResult) -> String;
+        fn saved_record_id(self: &PsbtResult) -> String;
+        fn save_error(self: &PsbtResult) -> String;
     }
 
     // ===== SyncEstimator Methods =====
@@ -1955,8 +2027,17 @@ mod ffi {
         ) -> Box<PsbtResult>;
         /// Per cosigner nonce / partial sig counts of the PSBT.
         fn round_status(self: &MusigAccount, psbt_v2_hex: &str) -> MusigRoundStatus;
-        /// Aggregates partial sigs, finalizes; TxResult value is the tx hex.
-        fn finalize_psbt(self: &MusigAccount, psbt_v2_hex: &str) -> TxResult;
+        /// Aggregates partial sigs and returns the finalized PSBT and transaction.
+        fn finalize_psbt(self: &MusigAccount, psbt_v2_hex: &str) -> MusigFinalizeResult;
+        /// Disk I/O: call all saved PSBT mutations on the account's worker thread.
+        fn saved_psbts(self: &MusigAccount, include_confirmed: bool) -> SavedPsbtList;
+        fn restore_saved_psbt(self: &MusigAccount, id: &str) -> SavedPsbtRestore;
+        fn update_saved_psbt(self: &MusigAccount, id: &str, psbt_v2_hex: &str)
+            -> SavedPsbtMutation;
+        fn label_saved_psbt(self: &MusigAccount, id: &str, label: String) -> SavedPsbtMutation;
+        fn delete_saved_psbt(self: &MusigAccount, id: &str) -> SavedPsbtMutation;
+        fn retry_saved_psbts(self: &MusigAccount) -> SavedPsbtMutation;
+        fn saved_psbt_error(self: &MusigAccount) -> String;
         /// TxResult value is the txid.
         fn broadcast_transaction(self: &MusigAccount, signed_tx_hex: String) -> TxResult;
         /// Blocking: call from a background thread.
@@ -2486,12 +2567,13 @@ pub use config::{
 pub use ffi::{
     BackendInfo, CameraFrameResult, CameraListResult, FingerprintsResult, KeyDescriptor, KeyDevice,
     KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice,
-    LogLevel, MnemonicResult, MusigRound, Network, Notification, NotificationFlag, Output,
-    PolicyCompileResult, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicyReview,
-    PolicyReviewKey, PolicyReviewPath, PolicySemantic, PolicySpec, PsbtFileResult,
-    PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult, QrResponseKind,
-    RegtestDefaults, SignResult, SigningCandidate, SigningPlan, TransactionSimulation,
-    TransactionTemplate,
+    LogLevel, MnemonicResult, MusigFinalizeResult, MusigRound, MusigSpendLeaf, Network,
+    Notification, NotificationFlag, Output, PolicyCompileResult, PolicyKey, PolicyKeyType,
+    PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey, PolicyReviewPath, PolicySemantic,
+    PolicySpec, PsbtFileResult, PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult,
+    QrResponseKind, RegtestDefaults, SavedPsbtEntry, SavedPsbtInput, SavedPsbtList,
+    SavedPsbtMutation, SavedPsbtRecord, SavedPsbtRestore, SignResult, SigningCandidate,
+    SigningPlan, TransactionSimulation, TransactionTemplate,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{

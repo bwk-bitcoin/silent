@@ -599,7 +599,7 @@ impl Account {
 
     /// Prepare a transaction for signing.
     pub fn prepare_transaction(&self, tx_template: TransactionTemplate) -> Box<PsbtResult> {
-        let err_psbt = |e: String| Box::new(PsbtResult { inner: Err(e) });
+        let err_psbt = |e: String| Box::new(PsbtResult::failed(e));
 
         let Some(inner) = &self.inner else {
             return err_psbt("Account not initialized".to_string());
@@ -624,16 +624,13 @@ impl Account {
                     }
                 };
                 match psbt.to_bitcoin_psbt_with_empty_sp_outputs() {
-                    Ok(psbt_v0) => Box::new(PsbtResult {
-                        inner: Ok(PreparedPsbt {
-                            bytes: psbt_v0.serialize(),
-                            bytes_v2,
-                            txid: psbt
-                                .unsigned_tx()
-                                .map(|tx| tx.compute_txid().to_string())
-                                .unwrap_or_default(),
-                        }),
-                    }),
+                    Ok(psbt_v0) => Box::new(PsbtResult::prepared(
+                        psbt_v0.serialize(),
+                        bytes_v2,
+                        psbt.unsigned_tx()
+                            .map(|tx| tx.compute_txid().to_string())
+                            .unwrap_or_default(),
+                    )),
                     Err(e) => {
                         let error = format!("{e:?}");
                         log_failed_prepare(inner, &tx_template, &error);
@@ -1547,6 +1544,8 @@ impl Poll {
 /// PsbtResult wrapper for CXX.
 pub struct PsbtResult {
     inner: Result<PreparedPsbt, String>,
+    pub(crate) saved_record_id: String,
+    pub(crate) save_error: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1566,11 +1565,25 @@ impl PsbtResult {
                 bytes_v2,
                 txid,
             }),
+            saved_record_id: String::new(),
+            save_error: String::new(),
         }
     }
 
     pub(crate) fn failed(error: String) -> Self {
-        PsbtResult { inner: Err(error) }
+        PsbtResult {
+            inner: Err(error),
+            saved_record_id: String::new(),
+            save_error: String::new(),
+        }
+    }
+
+    pub fn saved_record_id(&self) -> String {
+        self.saved_record_id.clone()
+    }
+
+    pub fn save_error(&self) -> String {
+        self.save_error.clone()
     }
 
     /// The v2 serialization, or the error the PSBT failed to prepare with.

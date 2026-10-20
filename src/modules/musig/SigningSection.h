@@ -47,9 +47,13 @@ public slots:
     void onSpendLeafChosen(int index);
     void onSignClicked();
     void onPrepared(const QString &psbt_v2_hex, const QString &txid);
+    void onSessionLoading();
     void onPrepareFailed(const QString &message);
     void onBroadcastDone(const TxResult &result);
     void onCancelClicked();
+    void onSavedPsbtRestored(const SavedPsbtEntry &entry);
+    void onSessionCleared();
+    void onSaveWarningChanged(const QString &message);
 
 protected:
     void init();
@@ -77,6 +81,7 @@ private:
     bool m_estimates = false;
     // A prepared transaction is held: its MuSig2 session runs.
     bool m_session = false;
+    bool m_loading = false;
     // The Sign modal broadcast the transaction.
     bool m_sent = false;
 
@@ -87,6 +92,7 @@ private:
     int m_leaf_index = -1;
 
     catalog::Label *m_reason_label = nullptr;
+    catalog::Label *m_save_warning_label = nullptr;
     QWidget *m_actions = nullptr;
     catalog::Button *m_cancel_btn = nullptr;
     catalog::Button *m_sign_btn = nullptr;

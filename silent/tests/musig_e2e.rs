@@ -23,9 +23,9 @@ use bwk_sp::{
 };
 use bwk_utils::test as bwk_test;
 use silent::{
-    compile_policy, new_config, new_musig_account, MusigAccount, MusigRound, Network, Output,
-    PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicySemantic, PolicySpec,
-    TransactionTemplate, MUSIG_PLUGIN_ID,
+    compile_policy, musig_session_restart, new_config, new_musig_account, MusigAccount, MusigRound,
+    Network, Output, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicySemantic,
+    PolicySpec, SavedPsbtRestore, TransactionTemplate, MUSIG_PLUGIN_ID,
 };
 
 use common::{cleanup_test_account, setup_blindbitd_with_electrum, test_account_name};
@@ -178,12 +178,44 @@ fn assert_round(account: &MusigAccount, psbt_v2_hex: &str, expected: MusigRound)
 
 /// A funded account and its prepared PSBT, restricted to the leaf of A and B.
 struct Spend {
-    account: Box<MusigAccount>,
+    account: Option<Box<MusigAccount>>,
     account_name: String,
     descriptor: Descriptor,
     prepared: String,
+    saved_record_id: String,
     a: HotSigner,
     b: HotSigner,
+}
+
+impl Spend {
+    fn account(&self) -> &MusigAccount {
+        self.account.as_ref().expect("open test account")
+    }
+
+    fn account_mut(&mut self) -> &mut MusigAccount {
+        self.account.as_mut().expect("open test account")
+    }
+
+    fn reload(&mut self) -> SavedPsbtRestore {
+        let mut previous = self.account.take().expect("account before restart");
+        previous.stop_electrum();
+        drop(previous);
+        let mut account = new_musig_account(self.account_name.clone());
+        assert!(account.is_ok(), "reopen account: {}", account.get_error());
+        let restored = account.restore_saved_psbt(&self.saved_record_id);
+        assert!(restored.is_ok, "restore saved PSBT: {}", restored.error);
+        assert!(
+            restored.save_error.is_empty(),
+            "persisted progress: {}",
+            restored.save_error
+        );
+        assert!(
+            account.start_electrum(),
+            "restart isolated regtest listener"
+        );
+        self.account = Some(account);
+        restored
+    }
 }
 
 fn fund_and_prepare(bitcoind: &mut bwk_test::corepc_node::Client, electrum_url: &str) -> Spend {
@@ -253,35 +285,120 @@ fn fund_and_prepare(bitcoind: &mut bwk_test::corepc_node::Client, electrum_url: 
         psbt.get_psbt_error()
     );
     let prepared = psbt.bytes_v2_hex();
+    assert!(
+        psbt.save_error().is_empty(),
+        "persist prepared PSBT: {}",
+        psbt.save_error()
+    );
+    let saved_record_id = psbt.saved_record_id();
+    assert!(
+        !saved_record_id.is_empty(),
+        "preparation creates a saved record"
+    );
     assert_round(&account, &prepared, MusigRound::Nonces);
-    Spend {
-        account,
+    let mut spend = Spend {
+        account: Some(account),
         account_name,
         descriptor,
         prepared,
+        saved_record_id,
         a,
         b,
-    }
+    };
+    let restored = spend.reload();
+    assert_eq!(
+        restored.entry.record.current_psbt_v2_hex, spend.prepared,
+        "prepared PSBT survives account restart"
+    );
+    spend
 }
 
 /// Both rounds by A then B from `psbt`, checking the round after each.
-fn both_rounds(spend: &Spend, psbt: &str) -> String {
+fn both_rounds(spend: &mut Spend, psbt: &str) -> String {
     let psbt = sign_round(&spend.a, &spend.descriptor, psbt).expect("A round 1");
-    assert_round(&spend.account, &psbt, MusigRound::Nonces);
+    assert_round(spend.account(), &psbt, MusigRound::Nonces);
+    let psbt = persist_and_reload(spend, &psbt);
     let psbt = sign_round(&spend.b, &spend.descriptor, &psbt).expect("B round 1");
-    assert_round(&spend.account, &psbt, MusigRound::PartialSigs);
+    assert_round(spend.account(), &psbt, MusigRound::PartialSigs);
+    let psbt = persist_and_reload(spend, &psbt);
     let psbt = sign_round(&spend.a, &spend.descriptor, &psbt).expect("A round 2");
-    assert_round(&spend.account, &psbt, MusigRound::PartialSigs);
+    assert_round(spend.account(), &psbt, MusigRound::PartialSigs);
+    let psbt = persist_and_reload(spend, &psbt);
+    assert_eq!(
+        spend
+            .account()
+            .round_status(&psbt)
+            .cosigners
+            .iter()
+            .map(|signer| signer.partial_sigs)
+            .sum::<u32>(),
+        1,
+        "reloaded PSBT contains A's actual partial signature before B signs"
+    );
     let psbt = sign_round(&spend.b, &spend.descriptor, &psbt).expect("B round 2");
-    assert_round(&spend.account, &psbt, MusigRound::Ready);
-    psbt
+    assert_round(spend.account(), &psbt, MusigRound::Ready);
+    persist_and_reload(spend, &psbt)
+}
+
+fn persist_and_reload(spend: &mut Spend, psbt: &str) -> String {
+    let saved = spend
+        .account()
+        .update_saved_psbt(&spend.saved_record_id, psbt);
+    assert!(
+        saved.is_ok && saved.save_error.is_empty(),
+        "persist signing stage: {} {}",
+        saved.error,
+        saved.save_error
+    );
+    let expected = spend.account().round_status(psbt).round;
+    let restored = spend.reload();
+    assert!(restored.is_ok, "restore signing stage: {}", restored.error);
+    assert_eq!(
+        restored.entry.record.current_psbt_v2_hex, psbt,
+        "every signing stage preserves exact PSBT bytes"
+    );
+    assert_eq!(
+        restored.entry.record.original_psbt_v2_hex, spend.prepared,
+        "signing progress never replaces original prepared PSBT"
+    );
+    assert_eq!(
+        restored.entry.frozen_template.outputs[0].amount, SEND_SATS,
+        "restored recipient stays frozen"
+    );
+    assert_round(
+        spend.account(),
+        &restored.entry.record.current_psbt_v2_hex,
+        expected,
+    );
+    restored.entry.record.current_psbt_v2_hex
 }
 
 /// Finalizes, broadcasts through electrs, mines and checks the spend confirmed.
 fn finish(spend: &mut Spend, bitcoind: &mut bwk_test::corepc_node::Client, psbt: &str) {
-    let tx = spend.account.finalize_psbt(psbt);
+    let tx = spend.account().finalize_psbt(psbt);
     assert!(tx.is_ok, "finalize_psbt: {}", tx.error);
-    let sent = spend.account.broadcast_transaction(tx.value.clone());
+    assert!(
+        tx.save_error.is_empty(),
+        "persist finalization: {}",
+        tx.save_error
+    );
+    let restored = spend.reload();
+    assert!(
+        restored.is_ok,
+        "restore finalized transaction: {}",
+        restored.error
+    );
+    assert_eq!(
+        restored.entry.record.current_psbt_v2_hex, tx.psbt_v2_hex,
+        "finalized PSBT survives restart"
+    );
+    assert_eq!(
+        restored.entry.record.finalized_tx_hex, tx.tx_hex,
+        "ready-to-broadcast transaction survives restart"
+    );
+    let sent = spend
+        .account()
+        .broadcast_transaction(restored.entry.record.finalized_tx_hex);
     assert!(sent.is_ok, "broadcast_transaction: {}", sent.error);
     let txid = bitcoin::Txid::from_str(&sent.value).expect("txid");
     bwk_test::generate_blocks(bitcoind, 1);
@@ -292,9 +409,43 @@ fn finish(spend: &mut Spend, bitcoind: &mut bwk_test::corepc_node::Client, psbt:
         .unwrap_or(0);
     assert!(confirmations >= 1, "spend {txid} should be confirmed");
     eprintln!("spend {txid} confirmed ({confirmations} confirmation)");
-    wait_coins(&mut spend.account, "the coin spent", |coins| {
+    wait_coins(spend.account_mut(), "the coin spent", |coins| {
         coins.iter().any(|c| c.spent)
     });
+    let start = Instant::now();
+    loop {
+        let restored = spend.account().restore_saved_psbt(&spend.saved_record_id);
+        assert!(
+            restored.is_ok,
+            "confirmed record is retained: {}",
+            restored.error
+        );
+        if restored.entry.confirmed_height > 0 {
+            break;
+        }
+        assert!(
+            start.elapsed() < TIMEOUT,
+            "timed out waiting for saved transaction confirmation"
+        );
+        thread::sleep(Duration::from_millis(300));
+    }
+    let visible = spend.account().saved_psbts(false);
+    assert!(visible.is_ok, "default saved list: {}", visible.error);
+    assert!(
+        !visible
+            .entries
+            .iter()
+            .any(|entry| entry.record.id == spend.saved_record_id),
+        "confirmed records are hidden by default"
+    );
+    let all = spend.account().saved_psbts(true);
+    assert!(all.is_ok, "full saved list: {}", all.error);
+    assert!(
+        all.entries
+            .iter()
+            .any(|entry| entry.record.id == spend.saved_record_id && entry.record.broadcast),
+        "confirmed broadcast records remain available with toggle enabled"
+    );
 }
 
 // ===== Tests =====
@@ -308,7 +459,7 @@ fn musig_2_of_3_spends_through_a_2_subset_leaf() {
 
     let mut spend = fund_and_prepare(bitcoind, &electrum_url);
     let prepared = spend.prepared.clone();
-    let signed = both_rounds(&spend, &prepared);
+    let signed = both_rounds(&mut spend, &prepared);
     finish(&mut spend, bitcoind, &signed);
 
     cleanup_test_account(&spend.account_name);
@@ -325,7 +476,9 @@ fn musig_lost_session_restarts_round_one() {
     let mut spend = fund_and_prepare(bitcoind, &electrum_url);
     let psbt = sign_round(&spend.a, &spend.descriptor, &spend.prepared).expect("A round 1");
     let psbt = sign_round(&spend.b, &spend.descriptor, &psbt).expect("B round 1");
-    assert_round(&spend.account, &psbt, MusigRound::PartialSigs);
+    assert_round(spend.account(), &psbt, MusigRound::PartialSigs);
+
+    let psbt = persist_and_reload(&mut spend, &psbt);
 
     // B restarts: a fresh signer holds no session for round 1's nonces.
     spend.b = signer(MNEMONIC_B);
@@ -335,9 +488,24 @@ fn musig_lost_session_restarts_round_one() {
         "B round 2 without its session should fail on the session, got {lost:?}"
     );
 
-    // As the account controller does: back to the prepared PSBT, round 1 again.
-    let prepared = spend.prepared.clone();
-    let signed = both_rounds(&spend, &prepared);
+    let restarted = musig_session_restart(
+        Network::Regtest,
+        &spend.descriptor.to_string(),
+        &psbt,
+        &spend.prepared,
+    );
+    assert!(
+        restarted.is_ok,
+        "explicit signing restart: {}",
+        restarted.error
+    );
+    assert_ne!(
+        restarted.psbt_v2_hex, spend.prepared,
+        "restart creates a fresh signing attempt for the same transaction"
+    );
+    let prepared = persist_and_reload(&mut spend, &restarted.psbt_v2_hex);
+    assert_round(spend.account(), &prepared, MusigRound::Nonces);
+    let signed = both_rounds(&mut spend, &prepared);
     finish(&mut spend, bitcoind, &signed);
 
     cleanup_test_account(&spend.account_name);

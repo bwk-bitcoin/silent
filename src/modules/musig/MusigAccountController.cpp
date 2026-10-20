@@ -12,6 +12,7 @@
 #include "interfaces/keys.h"
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigModule.h"
+#include "modules/musig/SavedPsbts.h"
 #include "modules/musig/SettingsExtras.h"
 #include "modules/musig/SigningSection.h"
 #include "views/utils.h"
@@ -84,7 +85,11 @@ void MusigAccountController::loadPanels() {
     m_panels.insert("history", new qontrol::Panel(new account::view::History(this), "history"));
     m_panels.insert("coins", new qontrol::Panel(new account::view::Coins(this), "coins"));
     m_panels.insert("receive", new qontrol::Panel(new account::view::Receive(this), "receive"));
-    m_panels.insert("send", new qontrol::Panel(new account::view::Send(this), "send"));
+    auto *send = new account::view::Send(this);
+    m_panels.insert("send", new qontrol::Panel(send, "send"));
+    connect(this, &MusigAccountController::savedPsbtWarningChanged, send,
+            &account::view::Send::onSavedWarningChanged, qontrol::UNIQUE);
+    m_panels.insert("psbt", new qontrol::Panel(new musig::SavedPsbts(this), "psbt"));
     m_panels.insert("settings", new qontrol::Panel(new account::view::Settings(this), "settings"));
 }
 
@@ -272,23 +277,36 @@ auto MusigAccountController::spendLeaves(const QStringList &outpoints) -> MusigS
 }
 
 void MusigAccountController::finalizeIfReady() {
-    if (!m_account.has_value() || m_psbt_v2_hex.isEmpty()) {
+    if (!m_account.has_value() || m_psbt_v2_hex.isEmpty() || m_finalizing || !m_tx_hex.isEmpty()) {
         return;
     }
-    // Pure computation, as sp prepares on the GUI thread.
-    std::string psbt = m_psbt_v2_hex.toStdString();
-    auto result = m_account.value()->finalize_psbt(rust::Str(psbt));
-    if (!result.is_ok) {
-        emit finalizeFailed(toQString(result.error));
-        return;
-    }
-    m_tx_hex = toQString(result.value);
-    emit transactionReady(m_tx_hex);
+    m_finalizing = true;
+    auto generation = m_signing_generation;
+    auto result = std::make_shared<MusigFinalizeResult>();
+    auto *account = &*m_account.value();
+    enqueueStorage([account, result,
+                    psbt = m_psbt_v2_hex.toStdString()] { *result = account->finalize_psbt(psbt); },
+                   [this, result, generation] {
+                       if (generation != m_signing_generation) {
+                           return;
+                       }
+                       m_finalizing = false;
+                       if (!result->is_ok) {
+                           emit finalizeFailed(toQString(result->error));
+                           return;
+                       }
+                       m_psbt_v2_hex = toQString(result->psbt_v2_hex);
+                       m_tx_hex = toQString(result->tx_hex);
+                       setSaveWarning(toQString(result->save_error));
+                       emit savedPsbtsChanged();
+                       emit transactionReady(m_tx_hex);
+                   });
 }
 
 // Retire the old attempt before publishing the reset PSBT.
 void MusigAccountController::restartRounds() {
-    if (m_restart_thread != nullptr || m_psbt_v2_hex.isEmpty()) {
+    if (m_restart_thread != nullptr || m_psbt_v2_hex.isEmpty() || m_finalizing ||
+        !m_tx_hex.isEmpty()) {
         return;
     }
     m_restart_pending = true;
@@ -303,8 +321,8 @@ void MusigAccountController::restartRounds() {
                                         prepared = m_prepared_psbt_v2_hex.toStdString()] {
         *result = ::musig_session_restart(network, policy, original, prepared);
     });
-    connect(m_restart_thread, &QThread::finished, this,
-            &MusigAccountController::onRestartFinished, qontrol::UNIQUE);
+    connect(m_restart_thread, &QThread::finished, this, &MusigAccountController::onRestartFinished,
+            qontrol::UNIQUE);
     startWorker(m_restart_thread);
     emit roundChanged(roundStatus());
 }
@@ -330,6 +348,7 @@ void MusigAccountController::pollCoins() {
     if (m_account.has_value()) {
         emit updateCoins(m_account.value()->spendable_coins());
         emit updateBalance(m_account.value()->balance());
+        emit savedPsbtsChanged();
     }
 }
 
@@ -341,6 +360,7 @@ void MusigAccountController::handleNotification(Notification notif) {
     case NotificationFlag::PaymentUpdated:
     case NotificationFlag::AddressTipChanged:
         pollCoins();
+        refreshActiveWarning();
         break;
     case NotificationFlag::ElectrumConnected:
         m_electrum_running = true;
@@ -433,6 +453,12 @@ void MusigAccountController::stop() {
     if (m_stopping) {
         return;
     }
+    // Flush queued progress before the account is dropped.
+    if (!m_storage_queue.empty()) {
+        m_stop_requested = true;
+        cancelSigning();
+        return;
+    }
     m_stopping = true;
     cancelSigning();
     m_reconnect->stopped();
@@ -451,30 +477,23 @@ void MusigAccountController::stop() {
     QThread *notif = m_notif_thread;
     m_notif_thread = nullptr;
     // A running broadcast or worker uses the account or a view: they end first.
-    QThread *broadcast = m_broadcast_thread;
-    m_broadcast_thread = nullptr;
     auto workers = std::move(m_workers);
     m_workers.clear();
 
-    auto *teardown =
-        QThread::create([acc = std::move(account), notif, broadcast, workers]() mutable {
-            if (broadcast != nullptr) {
-                broadcast->wait();
-                broadcast->deleteLater();
-            }
-            for (auto *worker : workers) {
-                worker->wait();
-                worker->deleteLater();
-            }
-            if (acc.has_value()) {
-                acc.value()->stop_electrum();
-                acc.reset(); // drop the account, disconnecting the channel
-            }
-            if (notif != nullptr) {
-                notif->wait();
-                notif->deleteLater();
-            }
-        });
+    auto *teardown = QThread::create([acc = std::move(account), notif, workers]() mutable {
+        for (auto *worker : workers) {
+            worker->wait();
+            worker->deleteLater();
+        }
+        if (acc.has_value()) {
+            acc.value()->stop_electrum();
+            acc.reset(); // drop the account, disconnecting the channel
+        }
+        if (notif != nullptr) {
+            notif->wait();
+            notif->deleteLater();
+        }
+    });
     connect(teardown, &QThread::finished, this, &MusigAccountController::stopped, qontrol::UNIQUE);
     connect(teardown, &QThread::finished, teardown, &QThread::deleteLater);
     teardown->start();
@@ -499,26 +518,38 @@ void MusigAccountController::prepareTransaction(TransactionTemplate tx, MusigSpe
     for (const auto &fingerprint : spend.fingerprints) {
         signers.append(toQString(fingerprint));
     }
-    auto psbt = m_account.value()->prepare_transaction(std::move(tx), std::move(spend));
-    if (!psbt->is_ok()) {
-        emit prepareFailed(mapBackendErrorSummary(toQString(psbt->get_psbt_error())));
-        return;
-    }
-    m_prepared_psbt_v2_hex = toQString(psbt->bytes_v2_hex());
-    ++m_signing_generation;
-    m_restart_pending = false;
-    retireSignRequests();
-    m_psbt_v2_hex = m_prepared_psbt_v2_hex;
-    m_spend_signers = signers;
-    m_tx_hex.clear();
-    emit prepared(m_psbt_v2_hex, toQString(psbt->get_txid_preview()));
-    emit roundChanged(roundStatus());
+    cancelSigning();
+    emit sessionLoading();
+    auto generation = m_signing_generation;
+    auto result = std::make_shared<std::optional<rust::Box<PsbtResult>>>();
+    auto *account = &*m_account.value();
+    enqueueStorage(
+        [account, result, tx = std::move(tx), spend = std::move(spend)] {
+            result->emplace(account->prepare_transaction(tx, spend));
+        },
+        [this, result, signers, generation] {
+            emit savedPsbtsChanged();
+            if (generation != m_signing_generation) {
+                return;
+            }
+            auto &psbt = result->value();
+            if (!psbt->is_ok()) {
+                emit prepareFailed(mapBackendErrorSummary(toQString(psbt->get_psbt_error())));
+                return;
+            }
+            m_prepared_psbt_v2_hex = toQString(psbt->bytes_v2_hex());
+            m_psbt_v2_hex = m_prepared_psbt_v2_hex;
+            m_saved_record_id = toQString(psbt->saved_record_id());
+            m_spend_signers = signers;
+            setSaveWarning(toQString(psbt->save_error()));
+            emit prepared(m_psbt_v2_hex, toQString(psbt->get_txid_preview()));
+            emit roundChanged(roundStatus());
+        });
 }
 
 auto MusigAccountController::beginSignRequest(const QString &fingerprint)
     -> std::pair<IKeys *, ReqId> {
     if (m_restart_pending) {
-        restartRounds();
         return {nullptr, 0};
     }
     if (m_restart_thread != nullptr) {
@@ -579,31 +610,48 @@ void MusigAccountController::retireSignRequests() {
     }
 }
 
-void MusigAccountController::cancelSigning() {
+void MusigAccountController::clearSigning() {
     ++m_signing_generation;
     m_restart_pending = false;
     m_spend_signers.clear();
     m_prepared_psbt_v2_hex.clear();
     m_psbt_v2_hex.clear();
     m_tx_hex.clear();
+    m_saved_record_id.clear();
+    m_finalizing = false;
     retireSignRequests();
+}
+
+void MusigAccountController::cancelSigning() {
+    clearSigning();
+    emit sessionCleared();
 }
 
 void MusigAccountController::broadcast() {
     if (m_restart_pending || m_restart_thread != nullptr || m_tx_hex.isEmpty() ||
-        !m_account.has_value() || m_broadcast_thread != nullptr) {
+        !m_account.has_value() || m_broadcast_pending) {
         return;
     }
     // stop() waits on this thread before it drops the account and before stopped()
     // lets the owner delete this controller, so both outlive the worker.
-    const MusigAccount *account = &*m_account.value();
-    m_broadcast_thread = QThread::create([this, account, tx = m_tx_hex.toStdString()]() {
-        auto result = account->broadcast_transaction(rust::String(tx));
-        emit broadcastDone(result);
-    });
-    connect(m_broadcast_thread, &QThread::finished, this,
-            &MusigAccountController::onBroadcastThreadFinished, qontrol::UNIQUE);
-    m_broadcast_thread->start();
+    auto *account = &*m_account.value();
+    auto generation = m_signing_generation;
+    auto result = std::make_shared<TxResult>();
+    auto warning = std::make_shared<QString>();
+    m_broadcast_pending = true;
+    enqueueStorage(
+        [account, result, warning, tx = m_tx_hex.toStdString()] {
+            *result = account->broadcast_transaction(rust::String(tx));
+            *warning = toQString(account->saved_psbt_error());
+        },
+        [this, result, warning, generation] {
+            m_broadcast_pending = false;
+            setSaveWarning(*warning);
+            emit savedPsbtsChanged();
+            if (generation == m_signing_generation) {
+                emit broadcastDone(*result);
+            }
+        });
 }
 
 void MusigAccountController::onKeysSigned(ReqId req_id, const QString &psbt_v2_hex) {
@@ -620,6 +668,7 @@ void MusigAccountController::onKeysSigned(ReqId req_id, const QString &psbt_v2_h
         return;
     }
     m_psbt_v2_hex = toQString(merged.psbt_v2_hex);
+    persistActivePsbt();
     emit signerAnswered(fingerprint);
     auto status = roundStatus();
     if (!status.is_ok) {
@@ -640,10 +689,11 @@ void MusigAccountController::onKeysError(std::optional<ReqId> req_id, const QStr
     }
     m_sign_reqs.remove(req_id.value());
     if (kind == plugin::SignError::MusigSession) {
-        // Every nonce is dropped: the answers still to come are for the old ones.
+        // Pending answers belong to a session that cannot safely resume.
         retireSignRequests();
-        m_restart_message = message;
-        restartRounds();
+        m_restart_pending = true;
+        emit signingFailed(message, kind);
+        emit roundChanged(roundStatus());
         return;
     }
     emit signingFailed(message, kind);
@@ -668,8 +718,8 @@ void MusigAccountController::onRestartFinished() {
     m_psbt_v2_hex = toQString(m_restart_result->psbt_v2_hex);
     m_prepared_psbt_v2_hex = m_psbt_v2_hex;
     m_tx_hex.clear();
+    persistActivePsbt();
     emit roundChanged(roundStatus());
-    emit signingFailed(m_restart_message, plugin::SignError::MusigSession);
 }
 
 // The PSBT keeps the round it was at.
@@ -700,14 +750,6 @@ void MusigAccountController::onWorkerFinished() {
     }
 }
 
-// Once stop() took the thread, its teardown deletes it.
-void MusigAccountController::onBroadcastThreadFinished() {
-    if (m_broadcast_thread != nullptr) {
-        m_broadcast_thread->deleteLater();
-        m_broadcast_thread = nullptr;
-    }
-}
-
 void MusigAccountController::historyClicked() {
     loadPanel("history");
 }
@@ -726,4 +768,237 @@ void MusigAccountController::receiveClicked() {
 
 void MusigAccountController::settingsClicked() {
     loadPanel("settings");
+}
+
+auto MusigAccountController::saveWarning() const -> QString {
+    return m_save_warning;
+}
+
+auto MusigAccountController::activeRecordId() const -> QString {
+    return m_saved_record_id;
+}
+
+void MusigAccountController::setSaveWarning(const QString &message) {
+    m_save_warning = message;
+    emit saveWarningChanged(message);
+}
+
+void MusigAccountController::enqueueStorage(std::function<void()> work,
+                                            std::function<void()> done) {
+    if (m_stopping || m_stop_requested || !m_account.has_value()) {
+        return;
+    }
+    m_storage_queue.push_back({std::move(work), std::move(done)});
+    startStorage();
+}
+
+void MusigAccountController::startStorage() {
+    if (m_storage_thread != nullptr || m_storage_queue.empty() || m_stopping) {
+        return;
+    }
+    m_storage_thread = QThread::create(m_storage_queue.front().work);
+    connect(m_storage_thread, &QThread::finished, this, &MusigAccountController::onStorageFinished,
+            qontrol::UNIQUE);
+    startWorker(m_storage_thread);
+}
+
+void MusigAccountController::onStorageFinished() {
+    m_storage_thread = nullptr;
+    if (m_stopping) {
+        return;
+    }
+    auto done = std::move(m_storage_queue.front().done);
+    m_storage_queue.pop_front();
+    done();
+    startStorage();
+    if (m_stop_requested && m_storage_queue.empty()) {
+        stop();
+    }
+}
+
+void MusigAccountController::persistActivePsbt() {
+    if (!m_account.has_value() || m_saved_record_id.isEmpty()) {
+        return;
+    }
+    auto *account = &*m_account.value();
+    auto result = std::make_shared<SavedPsbtMutation>();
+    enqueueStorage(
+        [account, result, id = m_saved_record_id.toStdString(),
+         psbt = m_psbt_v2_hex.toStdString()] { *result = account->update_saved_psbt(id, psbt); },
+        [this, result] {
+            setSaveWarning(toQString(result->is_ok ? result->save_error : result->error));
+            emit savedPsbtsChanged();
+        });
+}
+
+void MusigAccountController::listSavedPsbts(bool include_confirmed) {
+    if (!m_account.has_value()) {
+        return;
+    }
+    auto *account = &*m_account.value();
+    auto result = std::make_shared<SavedPsbtList>();
+    enqueueStorage(
+        [account, result, include_confirmed] { *result = account->saved_psbts(include_confirmed); },
+        [this, result] {
+            setSaveWarning(toQString(result->save_error));
+            emit savedPsbtsListed(*result);
+        });
+}
+
+void MusigAccountController::restoreSavedPsbt(const QString &id) {
+    if (!m_account.has_value()) {
+        return;
+    }
+    clearSigning();
+    emit sessionLoading();
+    auto generation = m_signing_generation;
+    auto *account = &*m_account.value();
+    auto result = std::make_shared<SavedPsbtRestore>();
+    enqueueStorage(
+        [account, result, id = id.toStdString()] { *result = account->restore_saved_psbt(id); },
+        [this, result, generation] {
+            if (generation != m_signing_generation) {
+                return;
+            }
+            if (!result->is_ok) {
+                emit sessionCleared();
+                emit savedPsbtFailed(toQString(result->error));
+                return;
+            }
+            auto &entry = result->entry;
+            m_saved_record_id = toQString(entry.record.id);
+            m_prepared_psbt_v2_hex = toQString(entry.record.original_psbt_v2_hex);
+            m_psbt_v2_hex = toQString(entry.record.current_psbt_v2_hex);
+            m_tx_hex = toQString(entry.record.finalized_tx_hex);
+            for (const auto &fingerprint : entry.record.spend.fingerprints) {
+                m_spend_signers.append(toQString(fingerprint));
+            }
+            setSaveWarning(toQString(result->save_error));
+            emit savedPsbtRestored(entry);
+            loadPanel("send");
+            auto status = roundStatus();
+            emit roundChanged(status);
+            if (m_tx_hex.isEmpty() && status.is_ok && status.round == MusigRound::Ready) {
+                finalizeIfReady();
+            }
+        });
+}
+
+void MusigAccountController::deleteSavedPsbt(const QString &id) {
+    if (!m_account.has_value() || m_deletions.contains(id)) {
+        return;
+    }
+    m_deletions.insert(id, DeletionState::Checking);
+    auto *account = &*m_account.value();
+    auto fresh = std::make_shared<SavedPsbtRestore>();
+    auto deleted = std::make_shared<SavedPsbtMutation>();
+    enqueueStorage(
+        [account, fresh, deleted, id = id.toStdString()] {
+            *fresh = account->restore_saved_psbt(id);
+            // No GUI round trip between the chain-state check and prompt-free deletion.
+            if (fresh->is_ok && fresh->entry.confirmed_height != 0) {
+                *deleted = account->delete_saved_psbt(id);
+            }
+        },
+        [this, fresh, deleted, id] {
+            if (!fresh->is_ok) {
+                m_deletions.remove(id);
+                emit savedPsbtFailed(toQString(fresh->error));
+                return;
+            }
+            if (fresh->entry.confirmed_height == 0) {
+                m_deletions[id] = DeletionState::AwaitingConfirmation;
+                emit savedPsbtDeleteConfirmationNeeded(id);
+                return;
+            }
+            completeSavedPsbtDeletion(id, *deleted);
+        });
+}
+
+void MusigAccountController::onSavedPsbtDeleteConfirmed(const QString &id) {
+    auto pending = m_deletions.constFind(id);
+    if (!m_account.has_value() || pending == m_deletions.cend() ||
+        pending.value() != DeletionState::AwaitingConfirmation) {
+        return;
+    }
+    m_deletions[id] = DeletionState::Deleting;
+    auto *account = &*m_account.value();
+    auto result = std::make_shared<SavedPsbtMutation>();
+    enqueueStorage(
+        [account, result, id = id.toStdString()] { *result = account->delete_saved_psbt(id); },
+        [this, result, id] { completeSavedPsbtDeletion(id, *result); });
+}
+
+void MusigAccountController::onSavedPsbtDeleteCancelled(const QString &id) {
+    auto pending = m_deletions.constFind(id);
+    if (pending != m_deletions.cend() && pending.value() == DeletionState::AwaitingConfirmation) {
+        m_deletions.remove(id);
+    }
+}
+
+void MusigAccountController::completeSavedPsbtDeletion(const QString &id,
+                                                       const SavedPsbtMutation &result) {
+    m_deletions.remove(id);
+    if (!result.is_ok) {
+        emit savedPsbtFailed(toQString(result.error));
+    } else if (id == m_saved_record_id || m_saved_record_id.isEmpty()) {
+        cancelSigning();
+    }
+    setSaveWarning(toQString(result.save_error));
+    emit savedPsbtsChanged();
+}
+
+void MusigAccountController::labelSavedPsbt(const QString &id, const QString &label) {
+    if (!m_account.has_value()) {
+        return;
+    }
+    auto *account = &*m_account.value();
+    auto result = std::make_shared<SavedPsbtMutation>();
+    enqueueStorage(
+        [account, result, id = id.toStdString(), label = label.toStdString()] {
+            *result = account->label_saved_psbt(id, rust::String(label));
+        },
+        [this, result] {
+            if (!result->is_ok) {
+                emit savedPsbtFailed(toQString(result->error));
+            }
+            setSaveWarning(toQString(result->save_error));
+            emit savedPsbtsChanged();
+        });
+}
+
+void MusigAccountController::retrySavedPsbts() {
+    if (!m_account.has_value()) {
+        return;
+    }
+    auto *account = &*m_account.value();
+    auto result = std::make_shared<SavedPsbtMutation>();
+    enqueueStorage([account, result] { *result = account->retry_saved_psbts(); },
+                   [this, result] {
+                       setSaveWarning(
+                           toQString(result->is_ok ? result->save_error : result->error));
+                       emit savedPsbtsChanged();
+                   });
+}
+
+void MusigAccountController::psbtClicked() {
+    loadPanel("psbt");
+}
+
+void MusigAccountController::refreshActiveWarning() {
+    if (!m_account.has_value() || m_saved_record_id.isEmpty()) {
+        return;
+    }
+    auto *account = &*m_account.value();
+    auto generation = m_signing_generation;
+    auto result = std::make_shared<SavedPsbtRestore>();
+    enqueueStorage(
+        [account, result, id = m_saved_record_id.toStdString()] {
+            *result = account->restore_saved_psbt(id);
+        },
+        [this, result, generation] {
+            if (generation == m_signing_generation && result->is_ok) {
+                emit savedPsbtWarningChanged(toQString(result->entry.warning));
+            }
+        });
 }
