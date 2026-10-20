@@ -27,8 +27,8 @@ constexpr int CANVAS_H = 250;      // rendered height (taller than the design's 
 constexpr double PAD_Y = 14.0;     // vertical padding (padY)
 
 // Virtual X anchors (TxFlow.jsx).
-constexpr double X_IN_STUB = 4.0;               // xInStub
-constexpr double X_FLOW_L = 24.0;               // xFlowL
+constexpr double X_IN_STUB = 4.0;             // xInStub
+constexpr double X_FLOW_L = 24.0;             // xFlowL
 constexpr double X_TRUNK_L = CANVAS_W * 0.44; // xTrunkL
 constexpr double X_TRUNK_R = CANVAS_W * 0.56; // xTrunkR
 constexpr double X_FLOW_R = CANVAS_W - 24.0;  // xFlowR
@@ -49,9 +49,9 @@ constexpr int LABEL_SPACING = 106;  // letter spacing percentage
 constexpr int LABEL_MAX_CHARS = 10; // recipient label truncation
 
 constexpr double RIBBON_HOVER_ALPHA = 0.98;
-constexpr double RIBBON_IN_BASE = 0.34;     // input ribbon base alpha
-constexpr double RIBBON_IN_STEP = 0.07;     // input ribbon per-index alpha step
-constexpr int RIBBON_ALPHA_CYCLE = 3;       // input ribbon alpha repeats every N bands
+constexpr double RIBBON_IN_BASE = 0.34; // input ribbon base alpha
+constexpr double RIBBON_IN_STEP = 0.07; // input ribbon per-index alpha step
+constexpr int RIBBON_ALPHA_CYCLE = 3;   // input ribbon alpha repeats every N bands
 constexpr double TRUNK_ALPHA = 0.95;
 constexpr double RIBBON_OUT_ALPHA = 0.62;
 
@@ -66,7 +66,7 @@ constexpr int CARD_BLUR = 24;
 constexpr int CARD_SHADOW_DY = 8;
 constexpr int CARD_SHADOW_ALPHA = 89;
 constexpr int CARD_TITLE_PX = 12;
-constexpr int CARD_USD_PX = 13;
+constexpr int CARD_FIAT_PX = 13;
 constexpr int CARD_ADDR_PX = 11;
 constexpr int ADDR_FULL = 30; // addr length above which to shorten
 constexpr int ADDR_HEAD = 8;  // leading chars kept
@@ -84,26 +84,26 @@ constexpr double EMPTY_STUB_H = 13.0;      // input stub height
 constexpr double EMPTY_STUB_TOP_Y = -20.0; // top input stub y offset
 constexpr double EMPTY_STUB_BOT_Y = 7.0;   // bottom input stub y offset
 
-constexpr double EMPTY_TRUNK_X = -7.0; // trunk x offset from center
+constexpr double EMPTY_TRUNK_X = -7.0;  // trunk x offset from center
 constexpr double EMPTY_TRUNK_Y = -12.0; // trunk top y offset
 constexpr double EMPTY_TRUNK_W = 14.0;  // trunk width
 constexpr double EMPTY_TRUNK_H = 24.0;  // trunk height
 
-constexpr double EMPTY_OUT_X = 46.0;   // right stub x offset from center
-constexpr double EMPTY_OUT_Y = -10.0;  // right stub top y offset
-constexpr double EMPTY_OUT_H = 20.0;   // right stub height
+constexpr double EMPTY_OUT_X = 46.0;  // right stub x offset from center
+constexpr double EMPTY_OUT_Y = -10.0; // right stub top y offset
+constexpr double EMPTY_OUT_H = 20.0;  // right stub height
 
 constexpr double EMPTY_DASH_WIDTH = 1.5; // dashed connector pen width
 constexpr double EMPTY_DASH_ON = 3.0;    // dash pattern: on length
 constexpr double EMPTY_DASH_OFF = 3.0;   // dash pattern: off length
 
-constexpr double EMPTY_CONN_IN_X = -49.0;     // input connector start x offset
-constexpr double EMPTY_CONN_TOP_Y0 = -8.0;    // top connector start y offset
-constexpr double EMPTY_CONN_TOP_Y1 = -4.0;    // top connector end y offset
-constexpr double EMPTY_CONN_BOT_Y0 = 14.0;    // bottom connector start y offset
-constexpr double EMPTY_CONN_BOT_Y1 = 8.0;     // bottom connector end y offset
-constexpr double EMPTY_CONN_OUT_X0 = 7.0;     // output connector start x offset
-constexpr double EMPTY_CONN_OUT_X1 = 46.0;    // output connector end x offset
+constexpr double EMPTY_CONN_IN_X = -49.0;  // input connector start x offset
+constexpr double EMPTY_CONN_TOP_Y0 = -8.0; // top connector start y offset
+constexpr double EMPTY_CONN_TOP_Y1 = -4.0; // top connector end y offset
+constexpr double EMPTY_CONN_BOT_Y0 = 14.0; // bottom connector start y offset
+constexpr double EMPTY_CONN_BOT_Y1 = 8.0;  // bottom connector end y offset
+constexpr double EMPTY_CONN_OUT_X0 = 7.0;  // output connector start x offset
+constexpr double EMPTY_CONN_OUT_X1 = 46.0; // output connector end x offset
 
 constexpr double EMPTY_TEXT_TOP = 24.0; // body text top offset below center
 
@@ -221,10 +221,10 @@ public:
         titleFont.setWeight(font::DEMIBOLD);
         m_title->setFont(titleFont);
 
-        m_usd = new Label(LabelRole::Mono);
-        QFont usdFont = m_usd->font();
-        usdFont.setPixelSize(CARD_USD_PX);
-        m_usd->setFont(usdFont);
+        m_fiat = new Label(LabelRole::Mono);
+        QFont fiatFont = m_fiat->font();
+        fiatFont.setPixelSize(CARD_FIAT_PX);
+        m_fiat->setFont(fiatFont);
 
         m_addr = new Label(LabelRole::Mono);
         QFont addrFont = m_addr->font();
@@ -236,7 +236,7 @@ public:
             ->margins(CARD_PAD_H, CARD_PAD_V, CARD_PAD_H, CARD_PAD_V)
             ->spacing(CARD_SPACING)
             ->push(m_title)
-            ->push(m_usd)
+            ->push(m_fiat)
             ->push(m_addr)
             ->into(this);
 
@@ -247,10 +247,10 @@ public:
         setGraphicsEffect(shadow);
     }
 
-    void setData(const QString &title, const QString &usd, const QString &addr) {
+    void setData(const QString &title, const QString &fiat, const QString &addr) {
         m_title->setText(title);
-        m_usd->setText(usd);
-        m_usd->setVisible(!usd.isEmpty());
+        m_fiat->setText(fiat);
+        m_fiat->setVisible(!fiat.isEmpty());
         m_addr->setText(txMidAddr(addr));
         m_addr->setVisible(!addr.isEmpty());
         adjustSize();
@@ -270,7 +270,7 @@ protected:
 
 private:
     Label *m_title = nullptr;
-    Label *m_usd = nullptr;
+    Label *m_fiat = nullptr;
     Label *m_addr = nullptr;
 };
 
@@ -344,13 +344,12 @@ void TxFlow::recomputeGeometry() {
     for (int i = 0; i < m_inputs.size(); ++i) {
         m_input_ribbons.append(ribbonPath(X_FLOW_L, inNode[i].top, inNode[i].bot, X_TRUNK_L,
                                           inTrunk[i].top, inTrunk[i].bot));
-        m_input_caps.append(QRectF(X_IN_STUB, inNode[i].top,
-                                   X_FLOW_L - X_IN_STUB - CAP_INSET,
+        m_input_caps.append(QRectF(X_IN_STUB, inNode[i].top, X_FLOW_L - X_IN_STUB - CAP_INSET,
                                    inNode[i].bot - inNode[i].top));
     }
     for (int j = 0; j < m_outputs.size(); ++j) {
-        m_output_ribbons.append(ribbonPath(X_TRUNK_R, outTrunk[j].top, outTrunk[j].bot,
-                                           X_FLOW_R, outNode[j].top, outNode[j].bot));
+        m_output_ribbons.append(ribbonPath(X_TRUNK_R, outTrunk[j].top, outTrunk[j].bot, X_FLOW_R,
+                                           outNode[j].top, outNode[j].bot));
         m_output_caps.append(QRectF(X_FLOW_R + CAP_INSET, outNode[j].top,
                                     X_OUT_STUB - X_FLOW_R - CAP_INSET,
                                     outNode[j].bot - outNode[j].top));
@@ -386,8 +385,8 @@ void TxFlow::paintEvent(QPaintEvent *event) {
             CAP_RADIUS, CAP_RADIUS);
         painter.setBrush(muted);
         painter.drawRoundedRect(
-            QRectF(cx + EMPTY_OUT_X, cy + EMPTY_OUT_Y, EMPTY_STUB_W, EMPTY_OUT_H),
-            CAP_RADIUS, CAP_RADIUS);
+            QRectF(cx + EMPTY_OUT_X, cy + EMPTY_OUT_Y, EMPTY_STUB_W, EMPTY_OUT_H), CAP_RADIUS,
+            CAP_RADIUS);
         QColor dash = p.textMuted;
         dash.setAlphaF(EMPTY_DASH_ALPHA);
         QPen dashPen(dash, EMPTY_DASH_WIDTH);
@@ -399,8 +398,7 @@ void TxFlow::paintEvent(QPaintEvent *event) {
                          QPointF(cx + EMPTY_TRUNK_X, cy + EMPTY_CONN_TOP_Y1));
         painter.drawLine(QPointF(cx + EMPTY_CONN_IN_X, cy + EMPTY_CONN_BOT_Y0),
                          QPointF(cx + EMPTY_TRUNK_X, cy + EMPTY_CONN_BOT_Y1));
-        painter.drawLine(QPointF(cx + EMPTY_CONN_OUT_X0, cy),
-                         QPointF(cx + EMPTY_CONN_OUT_X1, cy));
+        painter.drawLine(QPointF(cx + EMPTY_CONN_OUT_X0, cy), QPointF(cx + EMPTY_CONN_OUT_X1, cy));
         painter.setPen(p.textMuted);
         painter.drawText(QRectF(0, cy + EMPTY_TEXT_TOP, width(), CANVAS_H / 2.0 - EMPTY_TEXT_TOP),
                          Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, TR("txflow-empty"));
@@ -535,10 +533,10 @@ void TxFlow::mouseMoveEvent(QMouseEvent *event) {
     m_hover_is_input = hit.is_input;
     if (hit.is_input) {
         const auto &item = m_inputs[hit.index];
-        m_card->setData(item.title, item.usd, item.addr);
+        m_card->setData(item.title, item.fiat, item.addr);
     } else {
         const auto &item = m_outputs[hit.index];
-        m_card->setData(item.title, item.usd, item.addr);
+        m_card->setData(item.title, item.fiat, item.addr);
     }
     update();
 

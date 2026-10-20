@@ -94,10 +94,10 @@ public:
     void setAddress(const QString &address);
     auto amount() -> std::optional<uint64_t>;
     auto label() -> QString;
-    void syncUsdFromBtc();
-    void syncBtcFromUsd();
+    void syncFiatFromBtc();
+    void syncBtcFromFiat();
     auto amountInput() -> QWidget *;
-    auto usdInput() -> QWidget *;
+    auto fiatInput() -> QWidget *;
     void updateAddressValidation();
     void updateAmountValidation();
     void setMaxMode(bool max);
@@ -109,7 +109,9 @@ private:
     catalog::Input *m_address_input = nullptr;
     catalog::Input *m_label_input = nullptr;
     catalog::Input *m_amount_input = nullptr;
-    catalog::Input *m_amount_usd_input = nullptr;
+    catalog::Input *m_amount_fiat_input = nullptr;
+    catalog::Label *m_fiat_code = nullptr;
+    QWidget *m_fiat_group = nullptr;
     catalog::ValidationMark *m_address_indicator = nullptr;
     catalog::ValidationMark *m_amount_indicator = nullptr;
     catalog::Button *m_delete_btn = nullptr;
@@ -146,6 +148,8 @@ public slots:
     void onUpdateFeeValidation();
     void onUpdateSelectedCoinsFromSimulation();
     void onProcess();
+    void onFiatEdited();
+    void onSelectedPriceChanged();
     void onCoinsUpdated(CoinState state);
     // The signing step took or let go of a transaction.
     void onSigningLocked(bool locked);

@@ -64,6 +64,9 @@ public slots:
     void onFlowViewChanged(const QString &title, ModalWidth width);
     void onFlowBack();
     void onFlowConfirmed();
+    void onPriceSourcesChanged();
+    void onPriceSourceActivated(int index);
+    void onPriceCurrencyActivated(int index);
 
 protected:
     void init();
@@ -74,6 +77,8 @@ protected:
     // Main view
     void initMain();
     void connectMain();
+    void initPrices();
+    void connectPrices();
     auto viewMain() -> catalog::ScrollArea *;
     auto buildGeneral() -> QWidget *;
     auto buildPlugins() -> QWidget *;
@@ -117,6 +122,11 @@ private:
     catalog::ComboBox *m_language_picker = nullptr;
     catalog::FieldNote *m_theme_note = nullptr;
     catalog::FieldNote *m_language_note = nullptr;
+    catalog::Section *m_prices = nullptr;
+    catalog::Separator *m_prices_separator = nullptr;
+    catalog::FieldGroup *m_price_fields = nullptr;
+    catalog::ComboBox *m_price_source_picker = nullptr;
+    catalog::ComboBox *m_price_currency_picker = nullptr;
 
     catalog::Section *m_plugins = nullptr;
     // The only way a plugin comes in: dropped on the window, sealed into the state.

@@ -44,6 +44,7 @@
 #include <QUrl>
 #include <QVariant>
 #include <Qontrol>
+#include <algorithm>
 #include <common.h>
 
 namespace modal {
@@ -163,6 +164,8 @@ void AppSettings::initMain() {
     m_language_note = new catalog::FieldNote(QString(), catalog::FieldNote::Tone::Success);
     m_language_note->setVisible(false);
 
+    initPrices();
+
     m_plugin_drop = new catalog::Card(catalog::Card::Role::Inset);
     m_plugin_drop->setPad(catalog::Card::Pad::M);
     auto *dropIcon = new QLabel;
@@ -193,6 +196,7 @@ void AppSettings::initMain() {
 }
 
 void AppSettings::connectMain() {
+    connectPrices();
     connect(m_theme_picker, qOverload<int>(&QComboBox::currentIndexChanged), this,
             &AppSettings::onThemeSelectionChanged, qontrol::UNIQUE);
     connect(m_language_picker, qOverload<int>(&QComboBox::currentIndexChanged), this,
@@ -213,6 +217,8 @@ auto AppSettings::viewMain() -> catalog::ScrollArea * {
     auto *column = (new qontrol::Column)
                        ->spacing(resolve(Spacing::S))
                        ->push(buildGeneral())
+                       ->push(m_prices_separator)
+                       ->push(m_prices)
                        ->push(new catalog::Separator)
                        ->push(buildPlugins())
                        ->push(m_extensions_separator)
@@ -238,6 +244,33 @@ auto AppSettings::buildGeneral() -> QWidget * {
                               ->push(withNote(m_language_field, m_language_note), 0, Qt::AlignTop)
                               ->pushSpacer());
     return m_general;
+}
+
+void AppSettings::initPrices() {
+    m_price_source_picker = new catalog::ComboBox;
+    m_price_currency_picker = new catalog::ComboBox;
+    m_price_source_picker->setMinimumWidth(metric::SETTINGS_PICKER_WIDTH);
+    m_price_source_picker->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_price_source_picker->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    m_price_currency_picker->setFixedWidth(metric::SETTINGS_PICKER_WIDTH);
+    m_price_fields = new catalog::FieldGroup;
+    m_price_fields->addField(TR("settings-price-source"), m_price_source_picker);
+    m_price_fields->addField(TR("settings-price-currency"), m_price_currency_picker);
+    m_prices = foldable(TR("settings-prices"));
+    m_prices->setContent(m_price_fields);
+    m_prices_separator = new catalog::Separator;
+    onPriceSourcesChanged();
+}
+
+void AppSettings::connectPrices() {
+    connect(m_price_source_picker, qOverload<int>(&QComboBox::activated), this,
+            &AppSettings::onPriceSourceActivated, qontrol::UNIQUE);
+    connect(m_price_currency_picker, qOverload<int>(&QComboBox::activated), this,
+            &AppSettings::onPriceCurrencyActivated, qontrol::UNIQUE);
+    connect(m_host_events, &HostEvents::priceSourcesChanged, this,
+            &AppSettings::onPriceSourcesChanged, qontrol::UNIQUE);
+    connect(m_host_events, &HostEvents::selectedPriceChanged, this,
+            &AppSettings::onPriceSourcesChanged, qontrol::UNIQUE);
 }
 
 auto AppSettings::buildPlugins() -> QWidget * {
@@ -496,6 +529,10 @@ void AppSettings::hideEvent(QHideEvent *event) {
 }
 
 void AppSettings::retranslateUi() {
+    m_prices->header()->setLabel(TR("settings-prices"));
+    m_price_fields->setFieldLabel(m_price_source_picker, TR("settings-price-source"));
+    m_price_fields->setFieldLabel(m_price_currency_picker, TR("settings-price-currency"));
+    onPriceSourcesChanged();
     // The language is picked on the main view: a flow is always opened in it.
     if (m_flow == nullptr) {
         m_title->setText(TR("settings-title"));
@@ -817,6 +854,50 @@ void AppSettings::onFlowConfirmed() {
         switchToLightTheme();
     }
     onPluginsChanged();
+}
+
+void AppSettings::onPriceSourcesChanged() {
+    auto sources = m_host->priceSources();
+    auto selected = m_host->selectedPrice();
+    m_prices->setVisible(!sources.empty());
+    m_prices_separator->setVisible(!sources.empty());
+    m_price_source_picker->clear();
+    m_price_source_picker->addItem(TR("settings-price-none"), QString());
+    QStringList currencies;
+    for (const auto &source : sources) {
+        m_price_source_picker->addItem(source.name, source.id);
+        if (source.id == selected.source) {
+            currencies = source.currencies;
+        }
+    }
+    if (!selected.source.isEmpty() && m_price_source_picker->findData(selected.source) < 0) {
+        m_price_source_picker->addItem(TR("settings-price-unavailable").arg(selected.source),
+                                       selected.source);
+    }
+    m_price_source_picker->setCurrentIndex(m_price_source_picker->findData(selected.source));
+    m_price_currency_picker->clear();
+    m_price_currency_picker->addItem(TR("settings-price-none"), QString());
+    for (const auto &currency : currencies) {
+        m_price_currency_picker->addItem(currency, currency);
+    }
+    if (!selected.currency.isEmpty() && !currencies.contains(selected.currency)) {
+        m_price_currency_picker->addItem(TR("settings-price-unavailable").arg(selected.currency),
+                                         selected.currency);
+    }
+    m_price_currency_picker->setCurrentIndex(m_price_currency_picker->findData(selected.currency));
+    m_price_currency_picker->setEnabled(!currencies.empty());
+    // Repopulating the combo can shrink its layout before Qt updates the content hint.
+    m_price_source_picker->setMinimumWidth(
+        std::max(metric::SETTINGS_PICKER_WIDTH, m_price_source_picker->sizeHint().width()));
+}
+
+void AppSettings::onPriceSourceActivated([[maybe_unused]] int index) {
+    m_host->selectPrice(m_price_source_picker->currentData().toString(), QString());
+}
+
+void AppSettings::onPriceCurrencyActivated([[maybe_unused]] int index) {
+    m_host->selectPrice(m_price_source_picker->currentData().toString(),
+                        m_price_currency_picker->currentData().toString());
 }
 
 // ===== AppSettingsFlow =====

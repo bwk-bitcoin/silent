@@ -274,6 +274,12 @@ public:
     // Every device a module can see is listed, usable or not; check state().
     QList<plugin::SignerEntry> signers() const;
 
+    // Cached global price selection, GUI thread only. rate is nullopt when unavailable.
+    // PriceSource has id, name and currencies; SelectedPrice has source, currency, rate.
+    auto priceSources() const -> QList<PriceSource>;
+    auto selectedPrice() const -> SelectedPrice;
+    void selectPrice(const QString &source, const QString &currency);
+
     // the keys module, as the calling module sees it: a handle that stamps the caller
     // on every IKeys call and checks its access. Null until the keys module registered.
     IKeys *keys(IModule *caller);
@@ -333,6 +339,8 @@ signals:
     void settingSectionsChanged();   // a section was added or removed
     void signerPollingChanged(bool enabled);  // the global flag, only when it flips
     void launcherRefreshRequested();  // refreshLauncher() was called
+    void priceSourcesChanged();      // available sources or offered currencies changed
+    void selectedPriceChanged();     // selection, rate or availability changed
 };
 ```
 
@@ -517,8 +525,11 @@ class IFeed : public QObject {
 public:
     virtual bool  implemented() const = 0;
     virtual ReqId raw(const QByteArray &request) = 0;   // custom, on demand
+    virtual auto currencies() -> ReqId;                // default 0: no price capability
+    virtual auto requestRates(const QStringList &currencies) -> ReqId; // default 0
 signals:
     void feeRate(ReqId, double satvb);
+    void currencies(ReqId, QStringList currencies);
     void conversionRate(ReqId, QString currency, double value);
     void raw(ReqId, QByteArray response);
     void error(std::optional<ReqId>, QString message);
@@ -642,16 +653,79 @@ pushes a consumer subscribes to):
 - `raw(ReqId, QByteArray data)`: feed-defined raw bytes for anything not covered by
   the typed signals.
 
-A consumer walks `Host::get()->instances(this)`, gates on `feed()->implemented()`, and
-connects the signals it cares about:
+Prices go through the host's internal coordinator, not direct consumer subscriptions.
+On instance registration, including startup and late plugin loading, it connects to
+the feed before calling `currencies()`. Reply with the offered currency codes through
+`currencies(req_id, codes)`. This operation only discovers currencies, not rates.
+The coordinator separately calls `requestRates(codes)` for the initial quotes. Reply
+with `conversionRate(req_id, currency, value)`, in fiat units per BTC. Both synchronous
+and asynchronous replies work. Subsequent quotes are pushed by the feed; the host
+does not poll or expire them. Non-positive or non-finite quotes withdraw that
+currency's rate. An empty currency list withdraws the price capability. Null,
+unimplemented and default inert price interfaces are ignored.
+
+For example, a provider backed by its own non-blocking transport can implement:
 
 ```cpp
-for (auto *inst : Host::get()->instances(this)) {
-    auto *f = inst->feed();
-    if (!f->implemented()) continue;
-    connect(f, &IFeed::conversionRate, this, &MyWidget::onPrice, qontrol::UNIQUE);
+auto Prices::currencies() -> ReqId {
+    auto reqId = nextRequest();
+    emit IFeed::currencies(reqId, m_offered_currencies);
+    return reqId;
+}
+
+auto Prices::requestRates(const QStringList &currencies) -> ReqId {
+    auto reqId = nextRequest();
+    m_transport->requestPrices(reqId, currencies);
+    return reqId;
+}
+
+void Prices::onQuote(ReqId req_id, const QString &currency, double value) {
+    emit conversionRate(req_id, currency, value);
 }
 ```
+
+Caches are separate per source, even for the same currency and colliding request
+ids. Source IDs are compact JSON arrays of plugin ID, module ID and registered
+instance ID. These IDs must remain stable across plugin reloads. Library paths,
+hashes, versions and pointers are not identities. Removing an instance disconnects
+its feed and clears its cache before stopping it. A reload starts with fresh quotes.
+Cached currency codes and the retained selection own their string storage, so plugin
+literals do not leave references into an unloaded library.
+Price signals first enter a per-registration host receiver through direct named
+slots. It copies the list and every string while the emitter is still running;
+only owned payloads and that registration's ID cross the queued connection to the
+coordinator. Stale registrations are rejected before their payloads are inspected,
+including when the same feed QObject is registered again. Removal disconnects the
+receiver and retains it until `IInstance::stop()` returns. Stop must join all feed
+emitters before returning, so no plugin code is running when its library unloads.
+
+Global Settings offers explicit source and currency choices only while a provider
+advertises currencies. Neither is selected automatically. The encrypted global app
+state retains the selection even if the provider disappears or stops offering that
+currency. There is no fallback to another source or a fixed price.
+
+Consumers use cached `Host::selectedPrice()` and listen for
+`HostEvents::selectedPriceChanged()`:
+
+```cpp
+connect(Host::get()->events(), &HostEvents::selectedPriceChanged,
+        this, &MyWidget::onPriceChanged, qontrol::UNIQUE);
+onPriceChanged();
+
+void MyWidget::onPriceChanged() {
+    auto price = Host::get()->selectedPrice();
+    m_fiat->setVisible(price.rate.has_value());
+    if (price.rate.has_value()) {
+        m_fiat->setText(QStringLiteral("%1 %2")
+                           .arg(QString::number(m_btc * price.rate.value(), 'f', 2),
+                                price.currency));
+    }
+}
+```
+
+Price changes are display-only. In Send, only an explicit fiat input edit converts
+fiat to BTC. Refreshing a rate never changes a BTC payment, MAX, a fee, or a locked
+or restored PSBT. Unavailable prices hide fiat displays and fiat entry.
 
 Mainline Silent ships **no feeds**. Fee rate and conversion rate arrive as plugins;
 UI that consumes them must degrade gracefully when none is present.
@@ -789,6 +863,12 @@ through one or more `ISigner` instances.
 > place.
 
 ## ABI & Linking Rules (Plugin Authors Must Read)
+
+The current plugin IID is `dev.silent.IPlugin/2.0` and the feed IID is
+`dev.silent.IFeed/2.0`. The price request methods and cached Host API change the
+virtual interfaces. Rebuild plugins against this checkout and use
+`SILENT_IPlugin_IID` in plugin metadata. Old 1.0 plugins are refused rather than
+called through incompatible vtables.
 
 Silent statically links Qt, and the host binary acts as the **single Qt provider**:
 plugins link **no Qt of their own** and resolve Qt symbols against the host at load

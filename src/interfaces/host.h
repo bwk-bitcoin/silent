@@ -4,6 +4,7 @@
 #include <QList>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QtGlobal>
 #include <optional>
 
@@ -13,6 +14,18 @@ class QWidget;
 class IInstance;
 class IKeys;
 class IModule;
+
+struct PriceSource {
+    QString id;
+    QString name;
+    QStringList currencies;
+};
+
+struct SelectedPrice {
+    QString source;
+    QString currency;
+    std::optional<double> rate;
+};
 
 class HostI18n {
 public:
@@ -34,6 +47,8 @@ signals:
     // The global "signers must poll" flag, emitted only when it flips.
     void signerPollingChanged(bool enabled);
     void launcherRefreshRequested();
+    void priceSourcesChanged();
+    void selectedPriceChanged();
 };
 
 class Host {
@@ -41,6 +56,7 @@ public:
     using TabId = quint64;
     using SectionId = quint64;
     using WizardId = quint64;
+
     struct SettingSectionView {
         SectionId id = 0;
         QWidget *content = nullptr;
@@ -104,8 +120,8 @@ public:
     // widget alive, leaving its deletion to the caller.
     virtual void closeTab(TabId tab, bool delete_content = true) = 0;
 
-    virtual SectionId addSettingSection(
-        QWidget *content, IInstance *owner, const QString &title = QString()) = 0;
+    virtual SectionId addSettingSection(QWidget *content, IInstance *owner,
+                                        const QString &title = QString()) = 0;
     virtual void delSettingSection(SectionId section) = 0;
     [[nodiscard]] virtual QList<SettingSectionView> settingSections() const = 0;
 
@@ -114,4 +130,9 @@ public:
 
     virtual HostI18n *i18n() = 0;
     virtual HostEvents *events() = 0;
+
+    // GUI-thread cached reads, never plugin requests. Missing selections are retained.
+    [[nodiscard]] virtual auto priceSources() const -> QList<PriceSource> = 0;
+    [[nodiscard]] virtual auto selectedPrice() const -> SelectedPrice = 0;
+    virtual void selectPrice(const QString &source, const QString &currency) = 0;
 };

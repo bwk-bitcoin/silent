@@ -22,10 +22,12 @@
 #include <QThread>
 
 #include <Qontrol>
+#include <algorithm>
 #include <common.h>
 #include <optional>
 #include <silent.h>
 
+#include <AppController.h>
 #include <host/Host.h>
 #include <host/PluginRegistry.h>
 #include <i18n/I18nManager.h>
@@ -39,17 +41,18 @@
 #include <modules/musig/creator/MusigCreatorModule.h>
 
 #include "MockPlugin.h"
+#include "PriceProbe.h"
 
 namespace {
 
-bool g_ok = true;
+bool gOk = true;
 
 // Shared by two devices holding the same seed, exposed by different modules.
 const QString K_FINGERPRINT = QStringLiteral("a4f9c821");
 
 void check(bool cond, const char *msg) {
     if (!cond) {
-        g_ok = false;
+        gOk = false;
         std::fprintf(stderr, "FAIL: %s\n", msg);
     }
 }
@@ -144,12 +147,8 @@ private:
 
 auto launcherLists(const PluginRegistry &registry, const IModule *module, const QString &id)
     -> bool {
-    for (const auto &entry : registry.launcherInstancesForModule(module)) {
-        if (entry.first == id) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(registry.launcherInstancesForModule(module),
+                               [&id](const auto &entry) { return entry.first == id; });
 }
 
 } // namespace
@@ -168,6 +167,8 @@ auto main(int argc, char *argv[]) -> int {
 
     // Initialise the host singleton before the registry connects to its events.
     Host::get();
+    AppController::init();
+    check(smoke::priceFeedSmoke(), "price feed lifecycle and Send invariants");
 
     smoke::MockPlugin plugin;
     auto *module = plugin.module();
@@ -582,7 +583,7 @@ auto main(int argc, char *argv[]) -> int {
     creatorModule.startInstance(QStringLiteral("nope"));
     check(creatorSpy.errors() == 1, "starting an unknown id from the musig creator should error");
 
-    if (g_ok) {
+    if (gOk) {
         std::fprintf(stdout, "host smoke: OK\n");
         return 0;
     }

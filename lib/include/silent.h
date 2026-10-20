@@ -3242,6 +3242,12 @@ void app_set_plugin_enabled(::rust::String id, bool enabled) noexcept;
 // Set the active app theme name.
 void app_set_active_theme(::rust::String name) noexcept;
 
+::rust::String app_price_source() noexcept;
+
+::rust::String app_price_currency() noexcept;
+
+void app_set_price_selection(::rust::String source, ::rust::String currency) noexcept;
+
 // Get the app language (a locale such as "fr"), empty until one is picked.
 ::rust::String app_language() noexcept;
 

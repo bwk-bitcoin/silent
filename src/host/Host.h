@@ -12,6 +12,7 @@
 
 class IKeys;
 class MainWindow;
+class PriceFeedCoordinator;
 
 class HostImpl final : public QObject, public Host {
     Q_OBJECT
@@ -24,6 +25,11 @@ public:
     void retireInstance(IInstance *self) override;
     [[nodiscard]] QList<IInstance *> instances(IModule *caller) override;
     [[nodiscard]] QList<plugin::SignerEntry> signers() const override;
+    [[nodiscard]] auto priceSources() const -> QList<PriceSource> override;
+    [[nodiscard]] auto selectedPrice() const -> SelectedPrice override;
+    void selectPrice(const QString &source, const QString &currency) override;
+    // The registry supplies the stable plugin id once it attributes a live instance.
+    void registerPriceSource(const QString &instance_id, const QString &plugin_id);
     void setKeys(IKeys *keys, IModule *owner) override;
     [[nodiscard]] IKeys *keys(IModule *caller) override;
     auto requestAccess(IModule *caller, plugin::Access wanted) -> plugin::Access override;
@@ -138,5 +144,7 @@ private:
     WizardId m_next_wizard_id = 0;
     bool m_main_window_hooked = false;
     HostEvents m_events;
+    PriceFeedCoordinator *m_prices = nullptr;
+    QHash<QString, QString> m_price_source_ids;
     HostI18n *m_i18n = nullptr;
 };

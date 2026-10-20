@@ -17,6 +17,7 @@
 #include "catalog/inputs/Toggle.h"
 #include "catalog/panels/send/TxFlow.h"
 #include "i18n/Tr.h"
+#include "interfaces/host.h"
 #include "theme/Palette.h"
 #include "theme/Theme.h"
 #include "views/modals/ScanAddress.h"
@@ -26,6 +27,7 @@
 #include <QDebug>
 #include <QDoubleValidator>
 #include <QIntValidator>
+#include <QLocale>
 #include <QPainter>
 #include <QResizeEvent>
 #include <QSignalBlocker>
@@ -43,12 +45,6 @@
 namespace account::view {
 
 namespace {
-
-const double USD_RATE = 67000.0;
-
-// Selected fiat currency 3-letter code. Currency selection and the live
-// conversion rate are not yet wired, so this is a fixed default for now.
-const char *const FIAT_CODE = "USD";
 
 const int LEGEND_SWATCH = 8;        // legend color swatch size (design 8x8)
 const int LEGEND_SWATCH_RADIUS = 2; // legend swatch corner radius
@@ -84,18 +80,14 @@ private:
     catalog::TxFlow::OutputKind m_kind;
 };
 
-auto usdAmount(uint64_t sats) -> QString {
-    double btc = static_cast<double>(sats) / SATS;
-    return QString("~ $%1").arg(QString::number(btc * USD_RATE, 'f', 2));
-}
-
-auto btcFromUsd(const QString &usd_text) -> QString {
-    bool ok = false;
-    double usd = usd_text.toDouble(&ok);
-    if (!ok || usd <= 0.0) {
-        return QString();
+auto fiatAmount(uint64_t sats) -> QString {
+    auto price = Host::get()->selectedPrice();
+    if (!price.rate.has_value()) {
+        return {};
     }
-    return QString::number(usd / USD_RATE, 'f', 8);
+    double btc = static_cast<double>(sats) / SATS;
+    return QStringLiteral("~ %1 %2").arg(QString::number(btc * price.rate.value(), 'f', 2),
+                                         price.currency);
 }
 
 } // namespace
@@ -162,9 +154,16 @@ OutputW::OutputW(Send *screen, int id) {
     m_amount_input = new Input(InputRole::Mono);
     m_amount_input->setWidth(Size::S);
     m_amount_input->setPlaceholderText(TR("send-placeholder-amount"));
-    m_amount_usd_input = new Input(InputRole::Mono);
-    m_amount_usd_input->setWidth(Size::S);
-    m_amount_usd_input->setPlaceholderText(TR("send-summary-usd-placeholder"));
+    m_amount_fiat_input = new Input(InputRole::Mono);
+    m_amount_fiat_input->setWidth(Size::S);
+    m_amount_fiat_input->setPlaceholderText(QStringLiteral("0.00"));
+    auto *fiatValidator = new QDoubleValidator(m_amount_fiat_input);
+    fiatValidator->setBottom(0);
+    fiatValidator->setDecimals(2);
+    fiatValidator->setNotation(QDoubleValidator::StandardNotation);
+    fiatValidator->setLocale(QLocale::c());
+    m_amount_fiat_input->setValidator(fiatValidator);
+    m_amount_fiat_input->setProperty("outputId", id);
 
     m_amount_indicator = new catalog::ValidationMark;
 
@@ -181,13 +180,13 @@ OutputW::OutputW(Send *screen, int id) {
                      qontrol::UNIQUE);
     QObject::connect(m_amount_input, &QLineEdit::textChanged, screen, &Send::onProcess,
                      qontrol::UNIQUE);
-    QObject::connect(m_amount_usd_input, &QLineEdit::textChanged, screen, &Send::onProcess,
+    QObject::connect(m_amount_fiat_input, &QLineEdit::textEdited, screen, &Send::onFiatEdited,
                      qontrol::UNIQUE);
     // The label feeds the recipient's on-ribbon text in the flow diagram.
     QObject::connect(m_label_input, &QLineEdit::textChanged, screen, &Send::onProcess,
                      qontrol::UNIQUE);
 
-    // Each value is glued to its unit (input+BTC, fiat+USD, checkbox+MAX) with a
+    // Each value is glued to its unit (input+BTC, fiat+currency, checkbox+MAX) with a
     // tiny gap; the groups are separated by a normal gap.
     auto *btcGroup = (new qontrol::Row)
                          ->spacing(resolve(Spacing::XS))
@@ -195,10 +194,11 @@ OutputW::OutputW(Send *screen, int id) {
                          ->push(new Label("BTC", LabelRole::Subheading))
                          ->push(m_amount_indicator);
 
-    auto *usdGroup = (new qontrol::Row)
-                         ->spacing(resolve(Spacing::XS))
-                         ->push(m_amount_usd_input)
-                         ->push(new Label(FIAT_CODE, LabelRole::Subheading));
+    m_fiat_code = new Label(QString(), LabelRole::Subheading);
+    m_fiat_group = (new qontrol::Row)
+                       ->spacing(resolve(Spacing::XS))
+                       ->push(m_amount_fiat_input)
+                       ->push(m_fiat_code);
 
     auto *maxGroup =
         (new qontrol::Row)->spacing(resolve(Spacing::XS))->push(m_max)->push(m_max_label);
@@ -206,7 +206,7 @@ OutputW::OutputW(Send *screen, int id) {
     auto *amountRow = (new qontrol::Row)
                           ->spacing(resolve(Spacing::S))
                           ->push(btcGroup)
-                          ->push(usdGroup)
+                          ->push(m_fiat_group)
                           ->push(maxGroup)
                           ->pushSpacer();
 
@@ -243,6 +243,7 @@ OutputW::OutputW(Send *screen, int id) {
     QObject::connect(m_max, &QCheckBox::stateChanged, screen, &Send::onOutputMaxToggled,
                      qontrol::UNIQUE);
 #endif
+    syncFiatFromBtc();
 }
 
 auto OutputW::widget() -> QWidget * {
@@ -261,6 +262,7 @@ void OutputW::enableMax(bool max) {
 
 void OutputW::setMaxMode(bool max) {
     m_amount_input->setEnabled(!max);
+    m_amount_fiat_input->setEnabled(!max);
     if (max) {
         m_amount_input->setText(TR("send-max"));
         setValidationIndicator(m_amount_indicator, "", false);
@@ -301,7 +303,7 @@ void Send::restoreSavedPsbt(const SavedPsbtEntry &entry) {
         output->setAddress(QString::fromStdString(std::string(payment.address)));
         output->setLabel(QString::fromStdString(std::string(payment.label)));
         output->setFrozenAmount(payment.amount);
-        output->syncUsdFromBtc();
+        output->syncFiatFromBtc();
         output->setDeletable(false);
         output->enableMax(false);
         m_outputs.insert(m_output_id - 1, output);
@@ -456,6 +458,8 @@ void Send::init() {
 }
 
 void Send::doConnect() {
+    connect(Host::get()->events(), &HostEvents::selectedPriceChanged, this,
+            &Send::onSelectedPriceChanged, qontrol::UNIQUE);
     qDebug() << "Send::doConnect()";
     connect(m_add_output_btn, &QPushButton::clicked, this, &Send::onAddOutput, qontrol::UNIQUE);
     connect(m_clear_outputs_btn, &QPushButton::clicked, this, &Send::onClearOutputs,
@@ -634,7 +638,7 @@ void Send::updateTransactionFlow() {
         catalog::TxFlow::InputItem item;
         item.weight = static_cast<double>(coin.value) / SATS;
         item.title = TR("txflow-input-n").arg(inputs.size() + 1);
-        item.usd = usdAmount(coin.value);
+        item.fiat = fiatAmount(coin.value);
         item.addr = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
         inputs.append(item);
     }
@@ -654,7 +658,7 @@ void Send::updateTransactionFlow() {
         item.title = output->label().isEmpty() ? TR("txflow-output-n").arg(outputs.size() + 1)
                                                : output->label();
         item.label = output->label();
-        item.usd = usdAmount(value);
+        item.fiat = fiatAmount(value);
         item.addr = output->address();
         outputs.append(item);
     }
@@ -669,7 +673,7 @@ void Send::updateTransactionFlow() {
         item.kind = catalog::TxFlow::OutputKind::Change;
         item.weight = static_cast<double>(change) / SATS;
         item.title = TR("txflow-change-title");
-        item.usd = usdAmount(change);
+        item.fiat = fiatAmount(change);
         item.addr = TR("txflow-change-addr");
         outputs.append(item);
     }
@@ -678,7 +682,7 @@ void Send::updateTransactionFlow() {
         item.kind = catalog::TxFlow::OutputKind::Fee;
         item.weight = static_cast<double>(m_estimated_fee) / SATS;
         item.title = TR("txflow-fee-title");
-        item.usd = usdAmount(m_estimated_fee);
+        item.fiat = fiatAmount(m_estimated_fee);
         item.addr = TR("txflow-fee-addr");
         outputs.append(item);
     }
@@ -692,18 +696,22 @@ void Send::updateTransactionFlow() {
     m_legend_fee->setVisible(m_estimated_fee > 0 && selectedTotal > 0);
 
     m_sending_btc->setText(sendingTotal > 0 ? toBitcoin(sendingTotal) : QString("--"));
-    m_sending_fiat->setText(sendingTotal > 0 ? usdAmount(sendingTotal) : QString());
+    m_sending_fiat->setText(sendingTotal > 0 ? fiatAmount(sendingTotal) : QString());
     m_fee_btc->setText(m_estimated_fee > 0 ? toBitcoin(m_estimated_fee) : QString("--"));
-    m_fee_fiat->setText(m_estimated_fee > 0 ? usdAmount(m_estimated_fee) : QString());
+    m_fee_fiat->setText(m_estimated_fee > 0 ? fiatAmount(m_estimated_fee) : QString());
     m_total_btc->setText(total > 0 ? toBitcoin(total) : QString("--"));
-    m_total_fiat->setText(total > 0 ? usdAmount(total) : QString());
+    m_total_fiat->setText(total > 0 ? fiatAmount(total) : QString());
     m_change_btc->setText(toBitcoin(change));
-    m_change_fiat->setText(usdAmount(change));
+    m_change_fiat->setText(fiatAmount(change));
+    bool hasPrice = Host::get()->selectedPrice().rate.has_value();
+    m_sending_fiat->setVisible(hasPrice);
+    m_fee_fiat->setVisible(hasPrice);
+    m_total_fiat->setVisible(hasPrice);
     // Design hides the change row when there is no change.
     bool hasChange = change > 0;
     m_change_label->setVisible(hasChange);
     m_change_btc->setVisible(hasChange);
-    m_change_fiat->setVisible(hasChange);
+    m_change_fiat->setVisible(hasChange && hasPrice);
 }
 
 auto Send::transactionView() -> QWidget * {
@@ -1243,19 +1251,28 @@ auto OutputW::amount() -> std::optional<uint64_t> {
     return static_cast<uint64_t>(amountBtc * SATS);
 }
 
-void OutputW::syncUsdFromBtc() {
+void OutputW::syncFiatFromBtc() {
+    auto price = Host::get()->selectedPrice();
+    m_fiat_group->setVisible(price.rate.has_value());
+    m_fiat_code->setText(price.currency);
     bool ok = false;
     double btc = m_amount_input->text().toDouble(&ok);
-    QSignalBlocker blocker(m_amount_usd_input);
-    if (!ok || btc <= 0.0) {
-        m_amount_usd_input->setText(QString());
+    if (!ok || btc <= 0.0 || !price.rate.has_value()) {
+        m_amount_fiat_input->clear();
         return;
     }
-    m_amount_usd_input->setText(QString::number(btc * USD_RATE, 'f', 2));
+    m_amount_fiat_input->setText(QString::number(btc * price.rate.value(), 'f', 2));
 }
 
-void OutputW::syncBtcFromUsd() {
-    auto btcText = btcFromUsd(m_amount_usd_input->text());
+void OutputW::syncBtcFromFiat() {
+    auto price = Host::get()->selectedPrice();
+    if (!price.rate.has_value() || isMax() || m_frozen_amount.has_value()) {
+        return;
+    }
+    bool ok = false;
+    auto fiat = m_amount_fiat_input->text().toDouble(&ok);
+    auto btcText = ok && fiat > 0 ? QString::number(fiat / price.rate.value(), 'f', 8) : QString();
+    // Update BTC once; onFiatEdited runs the transaction processing after conversion.
     QSignalBlocker blocker(m_amount_input);
     m_amount_input->setText(btcText);
 }
@@ -1264,8 +1281,8 @@ auto OutputW::amountInput() -> QWidget * {
     return m_amount_input;
 }
 
-auto OutputW::usdInput() -> QWidget * {
-    return m_amount_usd_input;
+auto OutputW::fiatInput() -> QWidget * {
+    return m_amount_fiat_input;
 }
 
 auto OutputW::label() -> QString {
@@ -1373,12 +1390,9 @@ void Send::onProcess() {
     if (m_locked) {
         return;
     }
-    auto *focused = QApplication::focusWidget();
     for (auto *out : m_outputs) {
-        if (focused == out->usdInput()) {
-            out->syncBtcFromUsd();
-        } else {
-            out->syncUsdFromBtc();
+        if (sender() != out->fiatInput()) {
+            out->syncFiatFromBtc();
         }
     }
     onUpdateOutputValidations();
@@ -1460,6 +1474,25 @@ void Send::onProcess() {
     }
 
     // Reflect the updated inputs/outputs/fee in the graphical flow as the user types.
+    updateTransactionFlow();
+}
+
+void Send::onFiatEdited() {
+    if (m_locked || sender() == nullptr) {
+        return;
+    }
+    auto *output = m_outputs.value(sender()->property("outputId").toInt(), nullptr);
+    if (output == nullptr || output->isMax()) {
+        return;
+    }
+    output->syncBtcFromFiat();
+    onProcess();
+}
+
+void Send::onSelectedPriceChanged() {
+    for (auto *output : m_outputs) {
+        output->syncFiatFromBtc();
+    }
     updateTransactionFlow();
 }
 

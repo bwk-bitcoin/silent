@@ -985,6 +985,7 @@ void PluginRegistry::onHostInstanceRegistered(const QString &id) {
         return;
     }
     m_instance_owner_by_id.insert(instanceId, ownerPluginId);
+    hostImpl->registerPriceSource(instanceId, ownerPluginId);
 }
 
 void PluginRegistry::relistModules() {

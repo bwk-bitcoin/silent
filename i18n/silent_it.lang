@@ -1061,6 +1061,11 @@ settings-plugin-not-silent => "This library is not a Silent plugin." => "NONE"
 settings-plugin-updated
 => "%1 updated: it loads the new version once turned off and on again."
 => "NONE";;
+settings-price-currency => "Currency" => "Currency"
+settings-price-none => "None" => "None"
+settings-price-source => "Source" => "Source"
+settings-price-unavailable => "%1 (unavailable)" => "%1 (unavailable)"
+settings-prices => "Price feed" => "Price feed"
 settings-section-belongs
 => "These settings belong to %1. Changes apply when you leave this page."
 => "NONE";;

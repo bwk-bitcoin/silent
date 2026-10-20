@@ -1,14 +1,14 @@
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::PathBuf;
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::datadir;
 #[cfg(test)]
 use crate::config::set_datadir;
-use crate::ffi::{BackendServer, Network, PluginAccess, PluginGrant, QrDisplayLevels};
-use crate::state_crypt;
+use crate::{
+    config::datadir,
+    ffi::{BackendServer, Network, PluginAccess, PluginGrant, QrDisplayLevels},
+    state_crypt,
+};
 
 const DEFAULT_THEME: &str = "light";
 /// The QR display steppers' middle level, as the C++ side's `qr::DEFAULT_LEVEL`.
@@ -23,6 +23,10 @@ pub struct AppState {
     /// The locale picked in Global Settings, empty until one is.
     #[serde(default)]
     pub language: String,
+    #[serde(default)]
+    pub price_source: String,
+    #[serde(default)]
+    pub price_currency: String,
     /// The QR display tuning picked last, as the steppers' levels, for every account.
     #[serde(default = "default_qr_level")]
     pub qr_density: u8,
@@ -98,6 +102,8 @@ impl Default for AppState {
             enabled_plugins: Vec::new(),
             active_theme: default_active_theme(),
             language: String::new(),
+            price_source: String::new(),
+            price_currency: String::new(),
             qr_density: DEFAULT_QR_LEVEL,
             qr_contrast: DEFAULT_QR_LEVEL,
             qr_speed: DEFAULT_QR_LEVEL,
@@ -203,6 +209,21 @@ pub fn app_set_active_theme(name: String) {
 
 pub fn app_language() -> String {
     AppState::load().language
+}
+
+pub fn app_price_source() -> String {
+    AppState::load().price_source
+}
+
+pub fn app_price_currency() -> String {
+    AppState::load().price_currency
+}
+
+pub fn app_set_price_selection(source: String, currency: String) {
+    let mut state = AppState::load();
+    state.price_source = source;
+    state.price_currency = currency;
+    state.save();
 }
 
 pub fn app_set_language(locale: String) {

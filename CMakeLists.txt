@@ -55,6 +55,8 @@ set(SILENT_APP_SOURCES
     src/host/CallerHandles.cpp
     src/host/Host.h
     src/host/Host.cpp
+    src/host/PriceFeedCoordinator.cpp
+    src/host/PriceFeedCoordinator.h
     src/host/PluginAccess.h
     src/host/PluginAccess.cpp
     src/host/PluginLibrary.h
@@ -563,13 +565,30 @@ set_target_properties(${BIN} PROPERTIES
 if(SILENT_BUILD_HOST_SMOKE)
     set(SMOKE host_smoke)
 
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        qt_add_library(price_feed_fixture MODULE tests/host/PriceFeedPlugin.cpp)
+        # Like real plugins, use Qt headers but resolve Qt symbols from the host.
+        target_link_libraries(price_feed_fixture PRIVATE silent_interfaces)
+        target_include_directories(price_feed_fixture PRIVATE
+            $<TARGET_PROPERTY:Qt6::Core,INTERFACE_INCLUDE_DIRECTORIES>)
+        target_compile_definitions(price_feed_fixture PRIVATE
+            $<TARGET_PROPERTY:Qt6::Core,INTERFACE_COMPILE_DEFINITIONS>)
+    endif()
+
     qt_add_executable(${SMOKE}
         tests/host/host_smoke.cpp
         tests/host/MockPlugin.h
+        tests/host/PriceProbe.h
+        tests/host/price_feed_smoke.cpp
         ${SILENT_APP_SOURCES}
     )
 
     add_dependencies(${SMOKE} RunBeforeBuild qontrol)
+    if(TARGET price_feed_fixture)
+        add_dependencies(${SMOKE} price_feed_fixture)
+        target_compile_definitions(${SMOKE} PRIVATE
+            SILENT_PRICE_FEED_FIXTURE="$<TARGET_FILE:price_feed_fixture>")
+    endif()
 
     # The catalogs, so TR() returns real text.
     qt_add_resources(${SMOKE} smoke_i18n_lang

@@ -4,8 +4,8 @@
 //! `app_active_theme` / `app_set_active_theme` getter/setter against an isolated data dir.
 
 use silent::{
-    app_active_theme, app_enabled_plugins, app_set_active_theme, app_set_plugin_enabled,
-    set_datadir,
+    app_active_theme, app_enabled_plugins, app_price_currency, app_price_source,
+    app_set_active_theme, app_set_plugin_enabled, app_set_price_selection, set_datadir,
 };
 use temp_dir::TempDir;
 
@@ -14,6 +14,16 @@ fn app_state_plugin_and_theme_roundtrip() {
     let tmp = TempDir::new().expect("create temp dir");
     set_datadir(tmp.path().to_path_buf());
     silent::state_crypt::unlock_for_tests();
+    assert_eq!(app_price_source(), "", "fresh state must not select a feed");
+    assert_eq!(
+        app_price_currency(),
+        "",
+        "fresh state must not select a currency"
+    );
+    let source = r#"["prices.plugin","prices.module","ticker"]"#;
+    app_set_price_selection(source.to_string(), "EUR".to_string());
+    assert_eq!(app_price_source(), source, "source identity must roundtrip");
+    assert_eq!(app_price_currency(), "EUR", "currency must roundtrip");
 
     // Fresh datadir: no plugins enabled, default theme.
     assert!(
@@ -62,5 +72,22 @@ fn app_state_plugin_and_theme_roundtrip() {
         app_active_theme(),
         "light",
         "setting an empty theme should normalize to the default"
+    );
+    assert_eq!(
+        app_price_source(),
+        source,
+        "other settings must retain the feed"
+    );
+    assert_eq!(
+        app_price_currency(),
+        "EUR",
+        "other settings must retain the currency"
+    );
+    app_set_price_selection(String::new(), String::new());
+    assert_eq!(app_price_source(), "", "cleared feed must stay unselected");
+    assert_eq!(
+        app_price_currency(),
+        "",
+        "cleared currency must stay unselected"
     );
 }

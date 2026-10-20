@@ -19,7 +19,7 @@ public:
     struct InputItem {
         double weight = 0.0;
         QString title;
-        QString usd;
+        QString fiat;
         QString addr;
     };
 
@@ -28,7 +28,7 @@ public:
         double weight = 0.0;
         QString title;
         QString label;
-        QString usd;
+        QString fiat;
         QString addr;
     };
 
@@ -49,6 +49,7 @@ protected:
         int index = -1;
         bool is_input = false;
     };
+
     // Map the cursor to virtual canvas space and find the band under it.
     [[nodiscard]] auto hitTest(const QPointF &pos) const -> HoverHit;
     // Float the hover card over the top-level window near the cursor, clamped to

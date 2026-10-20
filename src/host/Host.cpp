@@ -5,9 +5,11 @@
 #include "catalog/containers/Modal.h"
 #include "host/PluginAccess.h"
 #include "host/PluginRegistry.h"
+#include "host/PriceFeedCoordinator.h"
 #include "i18n/I18nManager.h"
 #include "interfaces/instance.h"
 #include "interfaces/keys.h"
+#include "interfaces/module.h"
 #include "interfaces/signer.h"
 #include "views/modals/PluginAccessPrompt.h"
 
@@ -16,6 +18,8 @@
 #include <QApplication>
 #include <QDebug>
 #include <QDialog>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QList>
 #include <QThread>
 #include <Qontrol>
@@ -52,6 +56,13 @@ public:
 } // namespace
 
 HostImpl::HostImpl() : QObject(nullptr), m_i18n(new HostI18nImpl()) {
+    m_prices = new PriceFeedCoordinator(this);
+    m_prices->select(QString::fromStdString(std::string(::app_price_source())),
+                     QString::fromStdString(std::string(::app_price_currency())));
+    connect(m_prices, &PriceFeedCoordinator::sourcesChanged, &m_events,
+            &HostEvents::priceSourcesChanged, qontrol::UNIQUE);
+    connect(m_prices, &PriceFeedCoordinator::selectedChanged, &m_events,
+            &HostEvents::selectedPriceChanged, qontrol::UNIQUE);
     // IInstance is not a QObject, so Qt cannot register the pointer itself.
     qRegisterMetaType<IInstance *>();
     connect(this, &HostImpl::registerInstanceRequested, this,
@@ -521,7 +532,9 @@ void HostImpl::removeInstance(const QString &id) {
         return;
     }
     auto *instance = m_instances.value(id);
+    auto priceConnection = m_prices->removeSource(m_price_source_ids.take(id));
     instance->stop();
+    priceConnection.reset();
     closeOwnedUi(instance);
     dropInstanceHandles(instance);
     m_instances.remove(id);
@@ -633,4 +646,38 @@ Host *Host::get() {
         gHostSingleton = new HostImpl();
     }
     return gHostSingleton;
+}
+
+auto HostImpl::priceSources() const -> QList<PriceSource> {
+    assertGuiThread();
+    return m_prices->sources();
+}
+
+void HostImpl::registerPriceSource(const QString &instance_id, const QString &plugin_id) {
+    assertGuiThread();
+    auto *instance = m_instances.value(instance_id, nullptr);
+    auto *owner = m_instance_owner.value(instance_id, nullptr);
+    if (instance == nullptr || owner == nullptr || plugin_id.isEmpty()) {
+        return;
+    }
+    auto sourceId = QString::fromUtf8(
+        QJsonDocument(QJsonArray{plugin_id, owner->meta().value(QStringLiteral("id")), instance_id})
+            .toJson(QJsonDocument::Compact));
+    m_price_source_ids.insert(instance_id, sourceId);
+    m_prices->addSource(
+        sourceId,
+        QStringLiteral("%1 (%2)").arg(owner->meta().value(QStringLiteral("name")), instance_id),
+        instance->feed());
+}
+
+auto HostImpl::selectedPrice() const -> SelectedPrice {
+    assertGuiThread();
+    return m_prices->selected();
+}
+
+void HostImpl::selectPrice(const QString &source, const QString &currency) {
+    assertGuiThread();
+    ::app_set_price_selection(rust::String(source.toStdString()),
+                              rust::String(currency.toStdString()));
+    m_prices->select(source, currency);
 }

@@ -1195,6 +1195,9 @@ mod ffi {
 
         /// Set the active app theme name.
         fn app_set_active_theme(name: String);
+        fn app_price_source() -> String;
+        fn app_price_currency() -> String;
+        fn app_set_price_selection(source: String, currency: String);
 
         /// Get the app language (a locale such as "fr"), empty until one is picked.
         fn app_language() -> String;
@@ -2554,9 +2557,10 @@ fn failed_psbt_file(error: String) -> ffi::PsbtFileResult {
 pub use account::{new_account, Account, NotificationReceiver, Poll, PsbtResult};
 pub use app_state::{
     app_active_theme, app_enabled_plugins, app_language, app_last_endpoint, app_plugin_access,
-    app_qr_camera_contrast_level, app_qr_display_levels, app_set_active_theme, app_set_language,
-    app_set_last_endpoint, app_set_plugin_access, app_set_plugin_enabled,
-    app_set_qr_camera_contrast_level, app_set_qr_display_levels,
+    app_price_currency, app_price_source, app_qr_camera_contrast_level, app_qr_display_levels,
+    app_set_active_theme, app_set_language, app_set_last_endpoint, app_set_plugin_access,
+    app_set_plugin_enabled, app_set_price_selection, app_set_qr_camera_contrast_level,
+    app_set_qr_display_levels,
 };
 pub use bbqr::{bbqr_frames, bbqr_scanner_new, bbqr_text_scanner_new, BbqrFrames, BbqrScanner};
 pub use camera::{camera_list, camera_open, CameraHandle};
