@@ -40,8 +40,9 @@
 
 ## Silent integration
 
-1. Use local bwk dependencies from the `musig_sessions_cache` branch during
-   implementation. Keep the branch based on the currently pinned revision.
+1. Pin bwk dependencies to published commit
+   `1af01b30cc813cf9f231d1b2c26d17981372fab3` on `signing_rework`, keeping
+   Cargo and Nix source revisions consistent.
 2. Separate generic storage and allocation from the Ledger protocol adapter.
    Persist hot secret payloads inside the existing encrypted application state.
    Preserve previously stored Ledger sessions when moving to the common cache.
@@ -62,5 +63,5 @@
 - Verify cached-origin `4 -> 3 -> 4` and on-demand `0 -> 0 -> 0` flows for hot
   keys and preserve the Ledger equivalents.
 - Run focused builds, tests, and lint checks needed to establish functionality.
-- Commit bwk and Silent after review. Leave bwk unpushed for the user and report
-  the local dependency paths so Silent can be pinned after that branch is pushed.
+- Commit bwk and Silent after review. Use the published bwk revision in Cargo and
+  Nix so the application no longer depends on a sibling checkout.
