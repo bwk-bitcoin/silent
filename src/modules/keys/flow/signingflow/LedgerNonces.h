@@ -26,7 +26,8 @@ class LedgerNonces final : public QObject {
 
 public:
     LedgerNonces(KeysModule *module, ISigner *device, QString instance_id, QString fingerprint,
-                 QString descriptor, unsigned int quantity, QObject *owner);
+                 QString descriptor, unsigned int quantity, QObject *owner,
+                 QString signing_psbt = QString());
     void start();
 
 signals:
@@ -53,6 +54,7 @@ private:
     QString m_instance_id;
     QString m_fingerprint;
     QString m_descriptor;
+    QString m_signing_psbt;
     unsigned int m_quantity;
     std::shared_ptr<Work> m_work;
     QThread *m_thread = nullptr;

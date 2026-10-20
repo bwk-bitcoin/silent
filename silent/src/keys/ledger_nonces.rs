@@ -119,6 +119,14 @@ struct Session {
     order: u64,
     policy: String,
     nonces: Vec<Nonce>,
+    fetched_for: Option<[u8; 32]>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionSource {
+    #[default]
+    Cached,
+    FetchedForSigning,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -129,6 +137,8 @@ struct Allocation {
     slots: Vec<PublishedNonce>,
     round2_nonces: Option<[u8; 32]>,
     state: AllocationState,
+    #[serde(default)]
+    source: SessionSource,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -314,12 +324,6 @@ impl LockedCache {
         Ok(())
     }
 
-    fn invalidate(&mut self) -> Result<(), String> {
-        let mut next = self.state.clone();
-        next.available.clear();
-        self.save(next)
-    }
-
     fn reserve_order(&mut self) -> Result<u64, String> {
         let mut next = self.state.clone();
         next.fetch_order = next
@@ -381,6 +385,11 @@ impl LockedCache {
             slots: published,
             round2_nonces: None,
             state: AllocationState::Active,
+            source: if session.fetched_for == Some(binding) {
+                SessionSource::FetchedForSigning
+            } else {
+                SessionSource::Cached
+            },
         };
         next.allocated.push(allocation.clone());
         self.save(next)?;
@@ -706,15 +715,71 @@ impl Fetch {
         policy_text: &str,
         quantity: usize,
     ) -> Result<Self, String> {
+        let store = LockedCache::open(root, fingerprint)?;
+        Self::begin_locked(store, policy_text, quantity, None)
+    }
+
+    pub fn for_signing(
+        fingerprint: Fingerprint,
+        policy_text: &str,
+        bytes: &[u8],
+    ) -> Result<Option<Self>, String> {
+        Self::for_signing_at(
+            &datadir().join("ledger-nonces"),
+            fingerprint,
+            policy_text,
+            bytes,
+        )
+    }
+
+    fn for_signing_at(
+        root: &Path,
+        fingerprint: Fingerprint,
+        policy_text: &str,
+        bytes: &[u8],
+    ) -> Result<Option<Self>, String> {
+        let real = psbt::parse_v2(bytes)
+            .map_err(|e| e.to_string())?
+            .into_bitcoin_psbt()
+            .map_err(|e| e.to_string())?;
+        let policy = descriptor(policy_text)?;
+        requested_slots(&real, &policy, fingerprint)?;
+        let binding = binding(&real, &policy, fingerprint)?;
+        let store = LockedCache::open(root, fingerprint)?;
+        if store
+            .state
+            .available
+            .iter()
+            .any(|session| session.policy == policy_text)
+            || store
+                .state
+                .allocated
+                .iter()
+                .any(|allocation| allocation.binding == binding)
+            || store.state.retired.contains(&binding)
+            || musig_status(&real, &policy)
+                .map_err(|e| e.to_string())?
+                .round
+                != MusigRound::Nonces
+        {
+            return Ok(None);
+        }
+        Self::begin_locked(store, policy_text, 1, Some(binding)).map(Some)
+    }
+
+    fn begin_locked(
+        mut store: LockedCache,
+        policy_text: &str,
+        quantity: usize,
+        fetched_for: Option<[u8; 32]>,
+    ) -> Result<Self, String> {
         if !(1..=MAX_LEDGER_NONCE_SESSIONS).contains(&quantity) {
             return Err("nonce quantity must be between 1 and 8".into());
         }
         let policy = descriptor(policy_text)?;
-        let owned = owned_expressions(&policy, fingerprint)?;
-        let template = synthetic(&policy, fingerprint)?;
-        let mut store = LockedCache::open(root, fingerprint)?;
-        store.invalidate()?;
-        let pending = Self::reserve(&mut store, policy_text)?;
+        let owned = owned_expressions(&policy, store.state.fingerprint)?;
+        let template = synthetic(&policy, store.state.fingerprint)?;
+        let pending = Self::reserve(&mut store, policy_text, fetched_for)?;
         Ok(Self {
             store,
             policy_text: policy_text.to_owned(),
@@ -727,7 +792,11 @@ impl Fetch {
         })
     }
 
-    fn reserve(store: &mut LockedCache, policy: &str) -> Result<Session, String> {
+    fn reserve(
+        store: &mut LockedCache,
+        policy: &str,
+        fetched_for: Option<[u8; 32]>,
+    ) -> Result<Session, String> {
         let mut id = [0; 32];
         getrandom::getrandom(&mut id).map_err(|e| e.to_string())?;
         Ok(Session {
@@ -735,6 +804,7 @@ impl Fetch {
             order: store.reserve_order()?,
             policy: policy.to_owned(),
             nonces: Vec::new(),
+            fetched_for,
         })
     }
 
@@ -799,11 +869,11 @@ impl Fetch {
         self.remaining -= 1;
         if self.remaining == 0 {
             let mut next = self.store.state.clone();
-            next.available = self.completed.clone();
+            next.available.extend(self.completed.clone());
             self.store.save(next)?;
             return Ok(true);
         }
-        self.pending = Self::reserve(&mut self.store, &self.policy_text)?;
+        self.pending = Self::reserve(&mut self.store, &self.policy_text, self.pending.fetched_for)?;
         Ok(false)
     }
 }
@@ -871,9 +941,15 @@ fn requested_slots(
 }
 
 pub enum Signing {
-    Nonces(Vec<u8>),
+    Nonces {
+        bytes: Vec<u8>,
+        source: SessionSource,
+    },
     Missing,
-    Payload(Psbt),
+    Payload {
+        psbt: Psbt,
+        source: SessionSource,
+    },
 }
 
 pub fn prepare(
@@ -932,14 +1008,20 @@ fn prepare_at(
         set_musig_input_pub_nonce(&mut v2.inputs[published.input].psbt, &field);
     }
     if round1 {
-        return Ok(Signing::Nonces(v2.serialize().map_err(|e| e.to_string())?));
+        return Ok(Signing::Nonces {
+            bytes: v2.serialize().map_err(|e| e.to_string())?,
+            source: allocation.source,
+        });
     }
     store.bind_round2(&allocation, &real)?;
     let mut private = v2.into_bitcoin_psbt().map_err(|e| e.to_string())?;
     private
         .proprietary
         .insert(session_key(), allocation.id.to_vec());
-    Ok(Signing::Payload(private))
+    Ok(Signing::Payload {
+        psbt: private,
+        source: allocation.source,
+    })
 }
 
 fn nonce_transcript(psbt: &Psbt) -> Result<[u8; 32], String> {
@@ -1262,8 +1344,8 @@ mod tests {
             ledger_nonces::{
                 binding, can_publish, check_round2, count, descriptor, expression_slots, finish_at,
                 owned_expressions, prepare_at, refresh_at, restart_at, session_key, signing_status,
-                start_attempt, synthetic, AllocationState, Fetch, LockedCache, Signing,
-                SigningError, FETCH_FEE_SATS, FUNDING_SATS, MAX_INPUT, SNAPSHOTS,
+                start_attempt, synthetic, AllocationState, Fetch, LockedCache, SessionSource,
+                Signing, SigningError, FETCH_FEE_SATS, FUNDING_SATS, MAX_INPUT, SNAPSHOTS,
             },
             manager::{KeyManager, KeyManagerImpl, UnusableReason},
             record::{DeviceRecord, KeyRecord, RouteKind},
@@ -1439,9 +1521,616 @@ mod tests {
 
     fn publish(root: &Path, policy: &Policy, psbt: Psbt) -> Vec<u8> {
         match prepare_at(root, policy.fingerprint, &policy.text, &v2(psbt)).expect("allocate") {
-            Signing::Nonces(bytes) => bytes,
+            Signing::Nonces { bytes, .. } => bytes,
             _ => panic!("expected cached nonce publication"),
         }
+    }
+
+    fn fetch_sessions(root: &Path, policy: &Policy, quantity: usize, tag: u8) -> Vec<[u8; 32]> {
+        let mut fetch =
+            Fetch::begin_at(root, policy.fingerprint, &policy.text, quantity).expect("fetch batch");
+        let mut ids = Vec::new();
+        for command in 0..quantity {
+            ids.push(fetch.pending.id);
+            assert_eq!(
+                fetch
+                    .accept(&answer(&fetch, tag + command as u8))
+                    .expect("successful nonce command"),
+                command + 1 == quantity,
+                "batch commits exactly after command {quantity}"
+            );
+        }
+        ids
+    }
+
+    fn publish_from(
+        root: &Path,
+        policy: &Policy,
+        bytes: &[u8],
+        expected: SessionSource,
+    ) -> Vec<u8> {
+        match prepare_at(root, policy.fingerprint, &policy.text, bytes).expect("publish nonce step")
+        {
+            Signing::Nonces { bytes, source } => {
+                assert_eq!(
+                    source, expected,
+                    "nonce-step allocation has the expected origin"
+                );
+                bytes
+            }
+            _ => panic!("expected round-one nonce publication"),
+        }
+    }
+
+    fn prepare_round_two(
+        root: &Path,
+        policy: &Policy,
+        published: &[u8],
+        expected: SessionSource,
+    ) -> Vec<u8> {
+        let mut complete = as_v0(published);
+        complete_nonces(policy, &mut complete);
+        let bytes = v2(complete);
+        match prepare_at(root, policy.fingerprint, &policy.text, &bytes).expect("prepare round two")
+        {
+            Signing::Payload { source, .. } => assert_eq!(
+                source, expected,
+                "round two restores durable allocation provenance"
+            ),
+            _ => panic!("expected round-two device payload"),
+        }
+        bytes
+    }
+
+    #[test]
+    fn version_one_without_provenance_preserves_allocations_and_policy_queues() {
+        fn without_provenance(mut state: serde_json::Value) -> serde_json::Value {
+            for allocation in state["allocated"].as_array_mut().expect("allocation array") {
+                allocation
+                    .as_object_mut()
+                    .expect("allocation object")
+                    .remove("source");
+            }
+            for session in state["available"]
+                .as_array_mut()
+                .expect("available sessions")
+            {
+                session
+                    .as_object_mut()
+                    .expect("session object")
+                    .remove("fetched_for");
+            }
+            state
+        }
+
+        let tmp = TempDir::new().expect("temporary cache");
+        let a = policy(false, 0);
+        let b = policy(false, 1);
+        fetch_sessions(tmp.path(), &a, 4, 10);
+        let consumed_request = v2(real(&a, 0, 5, 1));
+        let consumed = publish_from(tmp.path(), &a, &consumed_request, SessionSource::Cached);
+        let complete = prepare_round_two(tmp.path(), &a, &consumed, SessionSource::Cached);
+        finish_at(
+            tmp.path(),
+            a.fingerprint,
+            &a.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("consumed allocation");
+        let active_request = v2(real(&a, 1, 17, 1));
+        let active = publish_from(tmp.path(), &a, &active_request, SessionSource::Cached);
+        fetch_sessions(tmp.path(), &b, 2, 20);
+
+        let store = LockedCache::open(tmp.path(), a.fingerprint).expect("cache fixture");
+        let legacy = without_provenance(serde_json::to_value(&store.state).expect("cache JSON"));
+        assert_eq!(
+            legacy["version"], 1,
+            "fixture uses the actual version-one shape"
+        );
+        let sealed = state_crypt::seal(&serde_json::to_string(&legacy).expect("version-one JSON"))
+            .expect("seal fixture");
+        let path = store.path.clone();
+        fs::write(&path, &sealed).expect("write supplied version-one shape");
+        drop(store);
+
+        let reopened = LockedCache::open(tmp.path(), a.fingerprint)
+            .expect("read cache with consumed allocation lacking source");
+        assert_eq!(
+            reopened.state.allocated[0].state,
+            AllocationState::Consumed,
+            "consumption remains terminal"
+        );
+        assert_eq!(
+            reopened.state.allocated[1].state,
+            AllocationState::Active,
+            "active attempt remains usable"
+        );
+        assert!(
+            reopened
+                .state
+                .allocated
+                .iter()
+                .all(|allocation| allocation.source == SessionSource::Cached),
+            "old allocations retain the original always-replenish semantics"
+        );
+        assert!(
+            reopened
+                .state
+                .available
+                .iter()
+                .all(|session| session.fetched_for.is_none()),
+            "missing optional fetched-for markers already read as ordinary cached entries"
+        );
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.order)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5, 6],
+            "both policy queues preserve their original FIFO orders"
+        );
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.policy.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                a.text.as_str(),
+                a.text.as_str(),
+                b.text.as_str(),
+                b.text.as_str()
+            ],
+            "other policy sessions are retained"
+        );
+        let roundtrip = serde_json::to_string(&reopened.state).expect("roundtrip current fields");
+        let decoded: crate::keys::ledger_nonces::Cache =
+            serde_json::from_str(&roundtrip).expect("read roundtripped cache");
+        assert_eq!(
+            without_provenance(serde_json::to_value(decoded).expect("roundtrip JSON")),
+            legacy,
+            "reading and serializing preserves every preexisting state field"
+        );
+        drop(reopened);
+        assert_eq!(
+            fs::read(&path).expect("unchanged version-one file"),
+            sealed,
+            "reading adds no migration or disk rewrite"
+        );
+        assert!(
+            matches!(
+                prepare_at(tmp.path(), a.fingerprint, &a.text, &consumed_request),
+                Err(SigningError::SessionLost(_))
+            ),
+            "defaulting provenance never revives a consumed allocation"
+        );
+        assert_eq!(
+            publish_from(tmp.path(), &a, &active_request, SessionSource::Cached),
+            active,
+            "old active retries remain idempotent and cached"
+        );
+        prepare_round_two(tmp.path(), &a, &active, SessionSource::Cached);
+    }
+
+    #[test]
+    fn cached_four_sessions_end_with_four_after_successful_signing_and_replacement() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let ids = fetch_sessions(tmp.path(), &policy, 4, 10);
+        let prepared = v2(real(&policy, 1, 17, 1));
+        let published = publish_from(tmp.path(), &policy, &prepared, SessionSource::Cached);
+        let reopened =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("restart after nonce step");
+        assert_eq!(
+            reopened.state.allocated[0].id, ids[0],
+            "oldest cached session is selected"
+        );
+        assert_eq!(
+            reopened.state.allocated[0].source,
+            SessionSource::Cached,
+            "origin reaches disk before publication"
+        );
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.id)
+                .collect::<Vec<_>>(),
+            ids[1..],
+            "three unused sessions are retained"
+        );
+        assert_eq!(
+            reopened.state.fetch_order, 4,
+            "nonce publication does not fetch another session"
+        );
+        drop(reopened);
+        assert_eq!(
+            publish_from(tmp.path(), &policy, &prepared, SessionSource::Cached),
+            published,
+            "active retry keeps the same source and nonces"
+        );
+        let complete = prepare_round_two(tmp.path(), &policy, &published, SessionSource::Cached);
+        finish_at(
+            tmp.path(),
+            policy.fingerprint,
+            &policy.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("successful signing");
+        let replacement = fetch_sessions(tmp.path(), &policy, 1, 20);
+        let reopened =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("completed replacement");
+        let mut expected = ids[1..].to_vec();
+        expected.extend(replacement);
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.id)
+                .collect::<Vec<_>>(),
+            expected,
+            "replacement appends without replacing the three remaining sessions"
+        );
+        assert_eq!(
+            reopened.state.available.len(),
+            4,
+            "manual four, cached sign one, replace one leaves four"
+        );
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.order)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4, 5],
+            "FIFO order survives replacement"
+        );
+        assert_eq!(
+            reopened.state.allocated[0].state,
+            AllocationState::Consumed,
+            "successful cached signing is consumed"
+        );
+    }
+
+    #[test]
+    fn empty_cache_fetches_for_signing_and_durably_skips_replacement() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let prepared = v2(real(&policy, 1, 17, 1));
+        assert!(
+            matches!(
+                prepare_at(tmp.path(), policy.fingerprint, &policy.text, &prepared)
+                    .expect("empty nonce step"),
+                Signing::Missing
+            ),
+            "empty account needs one signing fetch"
+        );
+        let mut fetch =
+            Fetch::for_signing_at(tmp.path(), policy.fingerprint, &policy.text, &prepared)
+                .expect("on-demand fetch")
+                .expect("one command needed");
+        let id = fetch.pending.id;
+        assert_eq!(
+            fetch.remaining, 1,
+            "on-demand fetching requests exactly one session"
+        );
+        assert!(fetch
+            .accept(&answer(&fetch, 7))
+            .expect("signing fetch completed"));
+        drop(fetch);
+        let published = publish_from(
+            tmp.path(),
+            &policy,
+            &prepared,
+            SessionSource::FetchedForSigning,
+        );
+        let reopened =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("restart application");
+        assert_eq!(
+            reopened.state.allocated[0].id, id,
+            "allocation uses the fetched session"
+        );
+        assert_eq!(
+            reopened.state.allocated[0].source,
+            SessionSource::FetchedForSigning,
+            "source is durable across app restart"
+        );
+        assert!(
+            reopened.state.available.is_empty(),
+            "the sole fetched session is allocated"
+        );
+        let sealed = fs::read(&reopened.path).expect("allocation before retry");
+        let path = reopened.path.clone();
+        drop(reopened);
+        assert!(
+            Fetch::for_signing_at(tmp.path(), policy.fingerprint, &policy.text, &prepared)
+                .expect("active retry needs no device request")
+                .is_none(),
+            "active allocation prevents another fetch"
+        );
+        assert_eq!(
+            fs::read(path).expect("unchanged retry state"),
+            sealed,
+            "skipping an active retry does not advance order or write state"
+        );
+        assert_eq!(
+            publish_from(
+                tmp.path(),
+                &policy,
+                &prepared,
+                SessionSource::FetchedForSigning
+            ),
+            published,
+            "active retry preserves fetched origin"
+        );
+        let complete = prepare_round_two(
+            tmp.path(),
+            &policy,
+            &published,
+            SessionSource::FetchedForSigning,
+        );
+        finish_at(
+            tmp.path(),
+            policy.fingerprint,
+            &policy.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("consume fresh-fetched session");
+        let reopened =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("signed without replacement");
+        assert!(
+            reopened.state.available.is_empty(),
+            "empty start ends empty when no cached session was selected"
+        );
+        assert_eq!(
+            reopened.state.fetch_order, 1,
+            "only the original signing fetch advanced order"
+        );
+        assert_eq!(
+            reopened.state.allocated[0].state,
+            AllocationState::Consumed,
+            "fresh-fetched signing still consumes the allocation"
+        );
+    }
+
+    #[test]
+    fn signing_fetch_rechecks_existing_policy_cache_without_mutating_it() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let ids = fetch_sessions(tmp.path(), &policy, 4, 10);
+        let store =
+            LockedCache::open(tmp.path(), policy.fingerprint).expect("cache before signing fetch");
+        let path = store.path.clone();
+        let sealed = fs::read(&path).expect("existing cache");
+        let prepared = v2(real(&policy, 0, 5, 1));
+        assert!(Fetch::for_signing_at(tmp.path(), policy.fingerprint, &policy.text, &prepared).is_err(),
+            "on-demand cache checks must acquire the fingerprint lock even when sessions are already available");
+        drop(store);
+        assert!(
+            Fetch::for_signing_at(tmp.path(), policy.fingerprint, &policy.text, &prepared)
+                .expect("cache appeared before on-demand fetch")
+                .is_none(),
+            "availability is rechecked under the device lock"
+        );
+        assert_eq!(
+            fs::read(path).expect("cache after skip"),
+            sealed,
+            "skip does not reserve an order or overwrite sessions"
+        );
+        let reopened = LockedCache::open(tmp.path(), policy.fingerprint).expect("unchanged cache");
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.id)
+                .collect::<Vec<_>>(),
+            ids,
+            "cached session identities remain unchanged"
+        );
+        assert_eq!(
+            reopened.state.fetch_order, 4,
+            "skip does not advance fetch order"
+        );
+        drop(reopened);
+        publish_from(tmp.path(), &policy, &prepared, SessionSource::Cached);
+    }
+
+    #[test]
+    fn on_demand_source_is_not_changed_by_later_manual_fetches_or_other_policies() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let a = policy(false, 0);
+        let b = policy(false, 1);
+        let prepared = v2(real(&a, 1, 17, 1));
+        let mut fetch = Fetch::for_signing_at(tmp.path(), a.fingerprint, &a.text, &prepared)
+            .expect("on-demand fetch")
+            .expect("empty account");
+        let fetched = fetch.pending.id;
+        assert!(fetch.accept(&answer(&fetch, 1)).expect("command"));
+        drop(fetch);
+        let b_ids = fetch_sessions(tmp.path(), &b, 2, 20);
+        let a_ids = fetch_sessions(tmp.path(), &a, 1, 30);
+        let published = publish_from(tmp.path(), &a, &prepared, SessionSource::FetchedForSigning);
+        let reopened =
+            LockedCache::open(tmp.path(), a.fingerprint).expect("allocation after manual appends");
+        assert_eq!(
+            reopened.state.allocated[0].id, fetched,
+            "FIFO selects the earlier signing fetch rather than later manual sessions"
+        );
+        assert_eq!(
+            reopened.state.available.len(),
+            3,
+            "both policies retain their other sessions"
+        );
+        drop(reopened);
+        let later = fetch_sessions(tmp.path(), &b, 1, 40);
+        assert_eq!(
+            publish_from(tmp.path(), &a, &prepared, SessionSource::FetchedForSigning),
+            published,
+            "a changed cache count after allocation cannot change an active retry's source"
+        );
+        let complete =
+            prepare_round_two(tmp.path(), &a, &published, SessionSource::FetchedForSigning);
+        finish_at(
+            tmp.path(),
+            a.fingerprint,
+            &a.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("successful round two");
+        let reopened = LockedCache::open(tmp.path(), a.fingerprint)
+            .expect("no replacement for fetched origin");
+        let mut expected = b_ids;
+        expected.extend(a_ids);
+        expected.extend(later);
+        assert_eq!(reopened.state.available.iter().map(|session| session.id).collect::<Vec<_>>(), expected,
+            "positive cache counts during round two do not change provenance or clear other sessions");
+        assert_eq!(
+            reopened.state.fetch_order, 5,
+            "no post-signing fetch is required for fetched provenance"
+        );
+    }
+
+    #[test]
+    fn an_on_demand_entry_taken_by_another_transaction_is_cached_for_that_transaction() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let policy = policy(false, 0);
+        let original = real(&policy, 0, 5, 1);
+        let prepared = v2(original.clone());
+        let mut fetch =
+            Fetch::for_signing_at(tmp.path(), policy.fingerprint, &policy.text, &prepared)
+                .expect("signing fetch")
+                .expect("one session");
+        assert!(fetch.accept(&answer(&fetch, 1)).expect("command"));
+        drop(fetch);
+        let mut other = original;
+        other.unsigned_tx.output[0].value =
+            Amount::from_sat(other.unsigned_tx.output[0].value.to_sat() - 1);
+        let published = publish_from(tmp.path(), &policy, &v2(other), SessionSource::Cached);
+        let complete = prepare_round_two(tmp.path(), &policy, &published, SessionSource::Cached);
+        finish_at(
+            tmp.path(),
+            policy.fingerprint,
+            &policy.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("other transaction succeeds");
+        fetch_sessions(tmp.path(), &policy, 1, 2);
+        let reopened = LockedCache::open(tmp.path(), policy.fingerprint)
+            .expect("replacement for cached selection");
+        assert_eq!(
+            reopened.state.available.len(),
+            1,
+            "ordinary available entry selected by another transaction gets a replacement"
+        );
+        assert_eq!(
+            reopened.state.allocated[0].source,
+            SessionSource::Cached,
+            "the intended binding does not reserve a session for its original caller"
+        );
+    }
+
+    #[test]
+    fn other_policy_sessions_neither_suppress_signing_fetches_nor_get_cleared_by_replacement() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let a = policy(false, 0);
+        let b = policy(false, 1);
+        let b_ids = fetch_sessions(tmp.path(), &b, 2, 20);
+        let prepared = v2(real(&a, 0, 5, 1));
+        let mut fetch = Fetch::for_signing_at(tmp.path(), a.fingerprint, &a.text, &prepared)
+            .expect("fetch for empty account")
+            .expect("other policy does not supply this account");
+        assert_eq!(
+            fetch.store.state.available.len(),
+            2,
+            "other policy sessions remain while on-demand request is in flight"
+        );
+        assert!(fetch.accept(&answer(&fetch, 3)).expect("command"));
+        drop(fetch);
+        let fetched = publish_from(tmp.path(), &a, &prepared, SessionSource::FetchedForSigning);
+        let complete =
+            prepare_round_two(tmp.path(), &a, &fetched, SessionSource::FetchedForSigning);
+        finish_at(
+            tmp.path(),
+            a.fingerprint,
+            &a.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("first signing");
+        let mut next = as_v0(&prepared);
+        start_attempt(&mut next).expect("another attempt");
+        fetch_sessions(tmp.path(), &a, 1, 4);
+        let cached = publish_from(tmp.path(), &a, &v2(next), SessionSource::Cached);
+        let complete = prepare_round_two(tmp.path(), &a, &cached, SessionSource::Cached);
+        finish_at(
+            tmp.path(),
+            a.fingerprint,
+            &a.text,
+            &complete,
+            AllocationState::Consumed,
+        )
+        .expect("cached signing");
+        let replacement = fetch_sessions(tmp.path(), &a, 1, 5);
+        let reopened = LockedCache::open(tmp.path(), a.fingerprint).expect("append replacement");
+        let mut expected = b_ids;
+        expected.extend(replacement);
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.id)
+                .collect::<Vec<_>>(),
+            expected,
+            "cached signing appends a replacement even while another policy has unused sessions"
+        );
+        assert_eq!(
+            reopened.state.fetch_order, 5,
+            "every needed fetch advances the device-global order once"
+        );
+    }
+
+    #[test]
+    fn manual_quantity_limit_is_not_a_total_cache_limit() {
+        let tmp = TempDir::new().expect("temporary cache");
+        let a = policy(false, 0);
+        let b = policy(false, 1);
+        let a_ids = fetch_sessions(tmp.path(), &a, 8, 10);
+        let b_ids = fetch_sessions(tmp.path(), &b, 8, 20);
+        let reopened = LockedCache::open(tmp.path(), a.fingerprint).expect("both policy queues");
+        let mut expected = a_ids;
+        expected.extend(b_ids);
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.id)
+                .collect::<Vec<_>>(),
+            expected,
+            "two valid batches append sixteen sessions without eviction"
+        );
+        assert_eq!(
+            reopened.state.available.len(),
+            16,
+            "eight is a per-fetch input bound, not an eviction rule"
+        );
+        assert_eq!(
+            reopened.state.fetch_order, 16,
+            "all appended sessions retain monotonic fetch order"
+        );
     }
 
     #[test]
@@ -1464,7 +2153,7 @@ mod tests {
         let complete = v2(complete);
         assert!(matches!(
             prepare_at(tmp.path(), policy.fingerprint, &policy.text, &complete).expect("round two"),
-            Signing::Payload(_)
+            Signing::Payload { .. }
         ));
         finish_at(
             tmp.path(),
@@ -2129,7 +2818,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fetch_for_another_account_invalidates_available_but_keeps_allocations() {
+    fn a_fetch_for_another_account_appends_without_removing_sessions_or_allocations() {
         let tmp = TempDir::new().expect("temporary cache");
         let a = policy(false, 0);
         let b = policy(false, 1);
@@ -2140,9 +2829,10 @@ mod tests {
         publish(tmp.path(), &a, real(&a, 0, 5, 1));
         let mut replacement =
             Fetch::begin_at(tmp.path(), b.fingerprint, &b.text, 1).expect("fetch b");
-        assert!(
-            replacement.store.state.available.is_empty(),
-            "all account availability cleared before device I/O"
+        assert_eq!(
+            replacement.store.state.available.len(),
+            1,
+            "previous account availability remains during device I/O"
         );
         assert_eq!(
             replacement.store.state.allocated.len(),
@@ -2161,12 +2851,26 @@ mod tests {
             LockedCache::open(tmp.path(), a.fingerprint).expect("shared fingerprint store");
         assert_eq!(
             reopened.state.available.len(),
-            1,
-            "replacement leaves exactly one session"
+            2,
+            "fetch appends to the previous account's session"
         );
         assert_eq!(
-            reopened.state.available[0].policy, b.text,
-            "one account owns availability device-wide"
+            reopened.state.available[0].policy, a.text,
+            "previous account's queue is retained"
+        );
+        assert_eq!(
+            reopened.state.available[1].policy, b.text,
+            "new account gets its own queue"
+        );
+        assert_eq!(
+            reopened
+                .state
+                .available
+                .iter()
+                .map(|session| session.order)
+                .collect::<Vec<_>>(),
+            vec![2, 3],
+            "append retains original fetch order across policies"
         );
         assert_eq!(
             reopened.state.allocated.len(),
@@ -2178,6 +2882,7 @@ mod tests {
     #[test]
     fn incomplete_failed_or_cancelled_fetch_never_commits_a_partial_batch() {
         let tmp = TempDir::new().expect("temporary cache");
+        let other = policy(true, 1);
         let policy = policy(true, 0);
         let mut previous = Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 2)
             .expect("previous batch");
@@ -2187,10 +2892,11 @@ mod tests {
         assert!(previous
             .accept(&answer(&previous, 8))
             .expect("previous second command"));
+        let retained = previous.pending.id;
         drop(previous);
         publish(tmp.path(), &policy, real(&policy, 1, 5, 1));
         let mut fetch =
-            Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 2).expect("fetch");
+            Fetch::begin_at(tmp.path(), other.fingerprint, &other.text, 2).expect("fetch");
         assert!(!fetch.accept(&answer(&fetch, 1)).expect("first command"));
         let mut incomplete = answer(&fetch, 2);
         incomplete.inputs[7].unknown.clear();
@@ -2200,9 +2906,18 @@ mod tests {
         );
         drop(fetch);
         let reopened = LockedCache::open(tmp.path(), policy.fingerprint).expect("restart");
-        assert!(
-            reopened.state.available.is_empty(),
-            "successful prefix is not an available batch"
+        assert_eq!(
+            reopened.state.available.len(),
+            1,
+            "failed batch does not replace the previous account's cache"
+        );
+        assert_eq!(
+            reopened.state.available[0].id, retained,
+            "previous session survives failed fetch"
+        );
+        assert_eq!(
+            reopened.state.available[0].policy, policy.text,
+            "failed fetch does not change the other policy queue"
         );
         assert_eq!(
             reopened.state.fetch_order, 4,
@@ -2214,7 +2929,7 @@ mod tests {
             "failed replacement preserves the pending transaction binding"
         );
         drop(reopened);
-        let fetch = Fetch::begin_at(tmp.path(), policy.fingerprint, &policy.text, 1)
+        let fetch = Fetch::begin_at(tmp.path(), other.fingerprint, &other.text, 1)
             .expect("cancelled fetch");
         assert!(
             LockedCache::open(tmp.path(), policy.fingerprint).is_err(),
@@ -2223,9 +2938,14 @@ mod tests {
         drop(fetch);
         let reopened = LockedCache::open(tmp.path(), policy.fingerprint)
             .expect("lock released after cancellation");
-        assert!(
-            reopened.state.available.is_empty(),
-            "cancelled command creates no availability"
+        assert_eq!(
+            reopened.state.available.len(),
+            1,
+            "cancelled fetch preserves existing availability"
+        );
+        assert_eq!(
+            reopened.state.available[0].id, retained,
+            "cancellation leaves the other account's session intact"
         );
         assert_eq!(reopened.state.fetch_order, 5, "cancelled order is durable");
     }
@@ -2372,7 +3092,7 @@ mod tests {
         )
         .expect("round two")
         {
-            Signing::Payload(private) => assert_eq!(
+            Signing::Payload { psbt: private, .. } => assert_eq!(
                 private.proprietary[&session_key()],
                 id.to_vec(),
                 "restore signer-local ID only on private payload"
@@ -2633,7 +3353,7 @@ mod tests {
         match prepare_at(tmp.path(), policy.fingerprint, &policy.text, &v2(real))
             .expect("retry missing nonce")
         {
-            Signing::Nonces(bytes) => {
+            Signing::Nonces { bytes, .. } => {
                 let restored = PsbtV2::deserialize(&bytes).expect("restored PSBT");
                 assert_eq!(
                     musig_input_pub_nonces(&restored.inputs[0].psbt)

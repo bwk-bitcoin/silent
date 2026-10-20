@@ -16,9 +16,10 @@ namespace keys::flow {
 
 LedgerNonces::LedgerNonces(KeysModule *module, ISigner *device, QString instance_id,
                            QString fingerprint, QString descriptor, unsigned int quantity,
-                           QObject *owner)
+                           QObject *owner, QString signing_psbt)
     : m_device(device), m_instance_id(std::move(instance_id)),
       m_fingerprint(std::move(fingerprint)), m_descriptor(std::move(descriptor)),
+      m_signing_psbt(std::move(signing_psbt)),
       m_quantity(quantity), m_work(std::make_shared<Work>()) {
     connect(this, &LedgerNonces::cacheChanged, module, &KeysModule::nonceSessionsChanged,
             qontrol::UNIQUE);
@@ -37,8 +38,12 @@ void LedgerNonces::start() {
     auto work = m_work;
     m_thread = QThread::create([work, fingerprint = m_fingerprint.toStdString(),
                                descriptor = m_descriptor.toStdString(),
-                               quantity = m_quantity]() mutable {
-        work->fetch.emplace(::ledger_nonce_fetch(fingerprint, descriptor, quantity));
+                               quantity = m_quantity,
+                               signingPsbt = m_signing_psbt.toStdString()]() mutable {
+        work->fetch.emplace(signingPsbt.empty()
+                                ? ::ledger_nonce_fetch(fingerprint, descriptor, quantity)
+                                : ::ledger_nonce_fetch_for_signing(fingerprint, descriptor,
+                                                                   signingPsbt));
         work->payload = work->fetch.value()->payload();
         work.reset();
     });

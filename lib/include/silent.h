@@ -1006,6 +1006,7 @@ struct KeyOpResult;
 struct QrMessageResult;
 struct KeyInfoResult;
 struct SigningCandidate;
+struct LedgerNonceSignResult;
 struct SigningPlan;
 struct FingerprintsResult;
 struct MnemonicResult;
@@ -1060,6 +1061,7 @@ struct CameraHandle;
 struct BbqrFrames;
 struct BbqrScanner;
 struct MusigAccount;
+struct LedgerNonceFetch;
 
 #ifndef CXXBRIDGE1_ENUM_Network
 #define CXXBRIDGE1_ENUM_Network
@@ -1714,6 +1716,22 @@ struct SigningCandidate final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_SigningCandidate
+
+#ifndef CXXBRIDGE1_STRUCT_LedgerNonceSignResult
+#define CXXBRIDGE1_STRUCT_LedgerNonceSignResult
+struct LedgerNonceSignResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  bool musig_session CXX_DEFAULT_VALUE(false);
+  bool need_fetch CXX_DEFAULT_VALUE(false);
+  bool musig CXX_DEFAULT_VALUE(false);
+  bool from_cache CXX_DEFAULT_VALUE(false);
+  ::rust::String psbt_v2_hex;
+  ::rust::String psbt_base64;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_LedgerNonceSignResult
 
 #ifndef CXXBRIDGE1_STRUCT_SigningPlan
 #define CXXBRIDGE1_STRUCT_SigningPlan
@@ -2987,6 +3005,22 @@ private:
 };
 #endif // CXXBRIDGE1_STRUCT_MusigAccount
 
+#ifndef CXXBRIDGE1_STRUCT_LedgerNonceFetch
+#define CXXBRIDGE1_STRUCT_LedgerNonceFetch
+struct LedgerNonceFetch final : public ::rust::Opaque {
+  ::PsbtPayloadResult payload() const noexcept;
+  ::PsbtPayloadResult accept(::rust::Str signed_psbt) noexcept;
+  ~LedgerNonceFetch() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_LedgerNonceFetch
+
 // `m/87'/coin'/account'` for `network`.
 ::rust::String bip87_account_path(::Network network, ::std::uint32_t account) noexcept;
 
@@ -3251,6 +3285,26 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 // keeping its silent-payment input tweaks and ECDH shares. Only signature
 // fields are copied. Cheap; safe to call from the GUI thread.
 ::SignResult usb_merge_signed(::rust::Str original_v2_hex, ::rust::Str signed_v0_base64) noexcept;
+
+::rust::Box<::LedgerNonceFetch> ledger_nonce_fetch(::rust::Str fingerprint, ::rust::Str policy, ::std::uint32_t quantity) noexcept;
+
+::rust::Box<::LedgerNonceFetch> ledger_nonce_fetch_for_signing(::rust::Str fingerprint, ::rust::Str policy, ::rust::Str psbt_v2_hex) noexcept;
+
+::KeyOpResult ledger_nonce_refresh(::rust::Str fingerprint) noexcept;
+
+::SigningPlan ledger_nonce_plan(::Network network, ::rust::Str psbt_v2_hex, ::rust::Vec<::LiveDevice> devices) noexcept;
+
+::SignResult ledger_nonce_invalidate(::rust::Str fingerprint, ::rust::Str policy, ::rust::Str psbt_v2_hex) noexcept;
+
+::SignResult ledger_nonce_restart(::Network network, ::rust::Str policy, ::rust::Str original, ::rust::Str prepared) noexcept;
+
+::std::uint32_t ledger_nonce_count(::rust::Str fingerprint, ::rust::Str policy) noexcept;
+
+::std::uint32_t ledger_nonce_limit() noexcept;
+
+::SignResult ledger_nonce_merge(::rust::Str fingerprint, ::rust::Str policy, ::rust::Str original, ::rust::Str signed_psbt) noexcept;
+
+::LedgerNonceSignResult ledger_nonce_sign(::rust::Str fingerprint, ::rust::Str policy, ::rust::Str psbt_v2_hex) noexcept;
 
 // Merges a signer's v2 answer, made on an earlier copy of the PSBT, into
 // `current_v2_hex`: its signatures and MuSig2 nonces / partial signatures join

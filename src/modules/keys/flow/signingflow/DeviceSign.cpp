@@ -104,7 +104,8 @@ void DeviceSign::onPrepared() {
         fetchNonces();
         return;
     }
-    m_replenish = m_prepared->musig;
+    m_ledger_musig = m_prepared->musig;
+    m_replenish = m_ledger_musig && m_prepared->from_cache;
     sendPayload(KeysModule::toQt(m_prepared->psbt_base64));
 }
 
@@ -118,7 +119,8 @@ void DeviceSign::fetchNonces() {
         return;
     }
     auto *fetch =
-        new LedgerNonces(m_module, m_device, m_instance_id, m_fingerprint, m_descriptor, 1, this);
+        new LedgerNonces(m_module, m_device, m_instance_id, m_fingerprint, m_descriptor, 1, this,
+                          m_psbt_v2_hex);
     connect(fetch, &LedgerNonces::finished, this, &DeviceSign::onNoncesFetched, qontrol::UNIQUE);
     fetch->start();
 }
@@ -148,7 +150,7 @@ void DeviceSign::onDeviceSigned(ReqId req_id, const QString &psbt_base64) {
     m_req = 0;
     m_result = std::make_shared<SignResult>();
     auto result = m_result;
-    auto *thread = QThread::create([result, ledger = m_replenish,
+    auto *thread = QThread::create([result, ledger = m_ledger_musig,
                                     fingerprint = m_fingerprint.toStdString(),
                                     descriptor = m_descriptor.toStdString(),
                                     original = m_psbt_v2_hex.toStdString(),
@@ -163,7 +165,7 @@ void DeviceSign::onDeviceSigned(ReqId req_id, const QString &psbt_base64) {
 
 void DeviceSign::onMerged() {
     auto &merged = *m_result;
-    if (m_replenish && !m_module.isNull()) {
+    if (m_ledger_musig && !m_module.isNull()) {
         emit m_module->nonceSessionsChanged();
     }
     if (!merged.is_ok) {
@@ -189,7 +191,7 @@ void DeviceSign::onDeviceError(std::optional<ReqId> req_id, const QString &messa
         return;
     }
     m_req = 0;
-    if (m_replenish && kind == plugin::SignError::MusigSession) {
+    if (m_ledger_musig && kind == plugin::SignError::MusigSession) {
         m_device_error = message;
         m_result = std::make_shared<SignResult>();
         auto result = m_result;

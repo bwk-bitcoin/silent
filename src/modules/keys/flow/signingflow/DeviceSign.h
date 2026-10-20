@@ -72,6 +72,7 @@ private:
     QString m_psbt_v2_hex;
     QString m_descriptor;
     QString m_fingerprint;
+    bool m_ledger_musig = false;
     bool m_replenish = false;
     std::shared_ptr<LedgerNonceSignResult> m_prepared;
     std::shared_ptr<SignResult> m_result;

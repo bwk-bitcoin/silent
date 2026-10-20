@@ -27,7 +27,7 @@ use crate::{
     keys::{
         crypto::{open_mnemonic, Password},
         hot::{seal_mnemonic, sign_hot, sp_descriptor, xpub_at},
-        ledger_nonces::{self, Fetch, Signing},
+        ledger_nonces::{self, Fetch, SessionSource, Signing},
         manager::{descriptor_has_key, KeyManager, KeyManagerImpl, LiveDevice, SigningCandidate},
         psbt, qr,
         record::{KeyRecord, RouteKind, SecretEnvelope},
@@ -1097,33 +1097,56 @@ fn parse_fingerprint(value: &str) -> Result<Fingerprint, String> {
 }
 
 pub struct LedgerNonceFetch {
-    inner: Result<Fetch, String>,
+    inner: Result<Option<Fetch>, String>,
 }
 
 pub fn ledger_nonce_fetch(fingerprint: &str, policy: &str, quantity: u32) -> Box<LedgerNonceFetch> {
     Box::new(LedgerNonceFetch {
         inner: parse_fingerprint(fingerprint)
-            .and_then(|fp| Fetch::begin(fp, policy, quantity as usize)),
+            .and_then(|fp| Fetch::begin(fp, policy, quantity as usize).map(Some)),
     })
+}
+
+pub fn ledger_nonce_fetch_for_signing(
+    fingerprint: &str,
+    policy: &str,
+    psbt_v2_hex: &str,
+) -> Box<LedgerNonceFetch> {
+    let inner = (|| {
+        let fp = parse_fingerprint(fingerprint)?;
+        let bytes = hex::decode(psbt_v2_hex).map_err(|e| e.to_string())?;
+        Fetch::for_signing(fp, policy, &bytes)
+    })();
+    Box::new(LedgerNonceFetch { inner })
 }
 
 impl LedgerNonceFetch {
     pub fn payload(&self) -> ffi::PsbtPayloadResult {
         match &self.inner {
-            Ok(fetch) => ffi::PsbtPayloadResult {
+            Ok(Some(fetch)) => ffi::PsbtPayloadResult {
                 is_ok: true,
                 error: String::new(),
                 psbt_base64: BASE64_STANDARD.encode(fetch.payload().serialize()),
+            },
+            Ok(None) => ffi::PsbtPayloadResult {
+                is_ok: true,
+                error: String::new(),
+                psbt_base64: String::new(),
             },
             Err(error) => failed_psbt_payload(error),
         }
     }
 
-    // An empty payload means every command completed and the batch reached disk.
+    // An empty payload means the batch reached disk or a signing fetch was unnecessary.
     pub fn accept(&mut self, signed_psbt: &str) -> ffi::PsbtPayloadResult {
         let result: Result<String, String> = (|| {
             let signed = bitcoin::Psbt::from_str(signed_psbt).map_err(|e| e.to_string())?;
-            let fetch = self.inner.as_mut().map_err(|e| e.clone())?;
+            let fetch = self
+                .inner
+                .as_mut()
+                .map_err(|e| e.clone())?
+                .as_mut()
+                .ok_or("no Ledger nonce fetch is in progress")?;
             let done = fetch.accept(&signed)?;
             Ok(if done {
                 String::new()
@@ -1210,6 +1233,7 @@ pub fn ledger_nonce_sign(
         musig_session: false,
         need_fetch: false,
         musig: false,
+        from_cache: false,
         psbt_v2_hex: String::new(),
         psbt_base64: String::new(),
     };
@@ -1236,10 +1260,14 @@ pub fn ledger_nonce_sign(
         }
         response.musig = true;
         match ledger_nonces::prepare(fp, policy, &bytes)? {
-            Signing::Nonces(bytes) => response.psbt_v2_hex = hex::encode(bytes),
+            Signing::Nonces { bytes, source } => {
+                response.psbt_v2_hex = hex::encode(bytes);
+                response.from_cache = source == SessionSource::Cached;
+            }
             Signing::Missing => response.need_fetch = true,
-            Signing::Payload(psbt) => {
-                response.psbt_base64 = BASE64_STANDARD.encode(psbt.serialize())
+            Signing::Payload { psbt, source } => {
+                response.psbt_base64 = BASE64_STANDARD.encode(psbt.serialize());
+                response.from_cache = source == SessionSource::Cached;
             }
         }
         Ok(())

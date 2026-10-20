@@ -547,6 +547,7 @@ mod ffi {
         pub musig_session: bool,
         pub need_fetch: bool,
         pub musig: bool,
+        pub from_cache: bool,
         pub psbt_v2_hex: String,
         pub psbt_base64: String,
     }
@@ -1704,6 +1705,11 @@ mod ffi {
             policy: &str,
             quantity: u32,
         ) -> Box<LedgerNonceFetch>;
+        fn ledger_nonce_fetch_for_signing(
+            fingerprint: &str,
+            policy: &str,
+            psbt_v2_hex: &str,
+        ) -> Box<LedgerNonceFetch>;
         fn payload(self: &LedgerNonceFetch) -> PsbtPayloadResult;
         fn accept(self: &mut LedgerNonceFetch, signed_psbt: &str) -> PsbtPayloadResult;
         fn ledger_nonce_refresh(fingerprint: &str) -> KeyOpResult;
@@ -2458,10 +2464,11 @@ pub use hwi_config::{
 pub use keys::{
     bridge::{
         hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, hot_xpub, ledger_nonce_count,
-        ledger_nonce_fetch, ledger_nonce_invalidate, ledger_nonce_limit, ledger_nonce_merge,
-        ledger_nonce_plan, ledger_nonce_refresh, ledger_nonce_restart, ledger_nonce_sign,
-        merge_signed_psbt, new_keys_module, usb_merge_signed, usb_sign_payload, HotMaterial,
-        KeysModule, LedgerNonceFetch, QrResponse, SealedHotKey,
+        ledger_nonce_fetch, ledger_nonce_fetch_for_signing, ledger_nonce_invalidate,
+        ledger_nonce_limit, ledger_nonce_merge, ledger_nonce_plan, ledger_nonce_refresh,
+        ledger_nonce_restart, ledger_nonce_sign, merge_signed_psbt, new_keys_module,
+        usb_merge_signed, usb_sign_payload, HotMaterial, KeysModule, LedgerNonceFetch, QrResponse,
+        SealedHotKey,
     },
     supports_silent_payments,
 };
