@@ -11,8 +11,9 @@ use std::str::FromStr;
 use bitcoin::{
     bip32::{DerivationPath, Fingerprint, Xpub},
     secp256k1::{All, Secp256k1},
-    Network,
+    Network, Psbt,
 };
+use bwk::bwk_sign::musig::{MusigRound, MusigStatus};
 use bwk_sp::bwk_sign::bwk_descriptor::{
     descriptor::Descriptor, sp_descriptor::SpDescriptor, wallet::WalletDescriptorExt,
 };
@@ -22,8 +23,8 @@ use zeroize::Zeroizing;
 use crate::keys::{
     crypto::{self, Password},
     error::Error,
-    hot, network_name,
-    psbt::{inspect_bytes, PsbtArtifacts},
+    hot, ledger_nonces, network_name,
+    psbt::{inspect_bytes, musig_nonces_complete, parse_v2, PsbtArtifacts},
     record::{DescriptorEntry, DeviceRecord, KeyRecord, RouteKind, SecretEnvelope, XpubEntry},
     store::KeyStore,
     supports_musig, supports_silent_payments,
@@ -277,6 +278,78 @@ pub struct KeyManager {
 }
 
 impl KeyManager {
+    fn requested_musig_policies(
+        &self,
+        real: &Psbt,
+    ) -> Result<BTreeMap<String, MusigStatus>, Error> {
+        let mut policies = BTreeMap::new();
+        for record in self.records.values() {
+            for entry in &record.descriptors {
+                if policies.contains_key(&entry.descriptor) {
+                    continue;
+                }
+                if let Some(status) =
+                    ledger_nonces::signing_status(record.fingerprint, &entry.descriptor, real)
+                        .map_err(Error::State)?
+                {
+                    policies.insert(entry.descriptor.clone(), status);
+                }
+            }
+        }
+        Ok(policies)
+    }
+
+    fn ledger_candidate(
+        &self,
+        candidate: &mut SigningCandidate,
+        real: &Psbt,
+        policies: &BTreeMap<String, MusigStatus>,
+        round1: bool,
+    ) -> Result<(), Error> {
+        let Some(record) = self.records.get(&candidate.fingerprint) else {
+            return Ok(());
+        };
+        if !record.routes.contains(RouteKind::Usb)
+            || !record
+                .devices
+                .iter()
+                .any(|device| ledger_nonces::is_ledger(&device.kind))
+        {
+            return Ok(());
+        }
+        let mut requested = false;
+        let mut done = true;
+        let mut cached = true;
+        let check_cache = round1 && candidate.unusable == Some(UnusableReason::DeviceNotConnected);
+        for (policy, status) in policies {
+            let Some(own) = status
+                .cosigners
+                .iter()
+                .find(|own| own.fingerprint == candidate.fingerprint)
+            else {
+                continue;
+            };
+            requested = true;
+            done &= if round1 {
+                own.nonces == own.expected
+            } else {
+                own.partial_sigs == own.expected
+            };
+            if check_cache && own.nonces < own.expected {
+                cached &= ledger_nonces::can_publish(candidate.fingerprint, policy, real)
+                    .map_err(Error::State)?;
+            }
+        }
+        if requested {
+            candidate.musig_done = done;
+            if check_cache && cached {
+                candidate.route = Some(RouteKind::Usb);
+                candidate.unusable = None;
+            }
+        }
+        Ok(())
+    }
+
     pub fn new(store: KeyStore, network: Network) -> Result<Self, Error> {
         let (records, deleted) = split_deleted(store.list()?);
         Ok(Self {
@@ -907,7 +980,23 @@ impl KeyManagerImpl for KeyManager {
     fn signing_plan(&self, psbt_bytes: &[u8]) -> Result<SigningPlan, Error> {
         let descriptors = self.registered_sp_descriptors()?;
         let artifacts = inspect_bytes(psbt_bytes, &descriptors, &self.secp)?;
-        Ok(self.plan_from_artifacts(&artifacts))
+        let mut plan = self.plan_from_artifacts(&artifacts);
+        let psbt = parse_v2(psbt_bytes)?;
+        if !artifacts.sp_outputs_pending {
+            let missing_nonces = !musig_nonces_complete(&psbt)?;
+            let real = psbt
+                .into_bitcoin_psbt()
+                .map_err(|e| Error::PsbtParse(e.to_string()))?;
+            let policies = self.requested_musig_policies(&real)?;
+            let round1 = missing_nonces
+                || policies
+                    .values()
+                    .any(|status| status.round == MusigRound::Nonces);
+            for candidate in &mut plan.candidates {
+                self.ledger_candidate(candidate, &real, &policies, round1)?;
+            }
+        }
+        Ok(plan)
     }
 }
 

@@ -595,6 +595,10 @@ impl MusigAccount {
             return failed(format!("Failed to restrict the spend path: {e}"));
         }
 
+        if let Err(error) = crate::keys::ledger_nonces::start_attempt(&mut psbt) {
+            return failed(error);
+        }
+
         let bytes_v2 = match PsbtV2::from_bitcoin_psbt(psbt.clone()).and_then(|v2| v2.serialize()) {
             Ok(bytes) => bytes,
             Err(e) => return failed(format!("{e:?}")),

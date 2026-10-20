@@ -8,6 +8,7 @@ pub mod bridge;
 pub mod crypto;
 pub mod error;
 pub mod hot;
+pub mod ledger_nonces;
 pub mod manager;
 pub mod psbt;
 pub mod qr;

@@ -6,29 +6,34 @@
 //! and validating what the manager has no way to check on its own (an xpub or
 //! descriptor's own cryptographic identity).
 
-use std::str::FromStr;
+use std::{collections::BTreeSet, str::FromStr};
 
 use base64::{prelude::BASE64_STANDARD, Engine};
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
 use bitcoin::Network as BtcNetwork;
-use bwk::bwk_descriptor::musig::parse_musig_descriptor;
-use bwk::bwk_keys::musig::MusigKey;
-use bwk::bwk_sign::miniscript;
+use bwk::{
+    bwk_descriptor::{musig::parse_musig_descriptor, wallet::WalletDescriptorExt},
+    bwk_keys::musig::MusigKey,
+    bwk_sign::{miniscript, musig::own_slots},
+};
 use bwk_sp::bwk_sign::bwk_descriptor::descriptor::Descriptor;
 use bwk_sp::bwk_tx::bwk_psbt::Error as PsbtV2Error;
 use zeroize::Zeroizing;
 
-use crate::config::{datadir, list_configs, Config};
-use crate::ffi;
-use crate::hwi::{parse_hmac, wallet_name};
-use crate::keys::{
-    crypto::{open_mnemonic, Password},
-    hot::{seal_mnemonic, sign_hot, sp_descriptor, xpub_at},
-    manager::{descriptor_has_key, KeyManager, KeyManagerImpl, LiveDevice, SigningCandidate},
-    psbt, qr,
-    record::{KeyRecord, RouteKind, SecretEnvelope},
-    store::KeyStore,
-    Error, KEYS_DIR_NAME,
+use crate::{
+    config::{datadir, list_configs, Config},
+    ffi,
+    hwi::{parse_hmac, wallet_name},
+    keys::{
+        crypto::{open_mnemonic, Password},
+        hot::{seal_mnemonic, sign_hot, sp_descriptor, xpub_at},
+        ledger_nonces::{self, Fetch, Signing},
+        manager::{descriptor_has_key, KeyManager, KeyManagerImpl, LiveDevice, SigningCandidate},
+        psbt, qr,
+        record::{KeyRecord, RouteKind, SecretEnvelope},
+        store::KeyStore,
+        Error, KEYS_DIR_NAME,
+    },
 };
 
 /// Owns the manager and the QR session. The only file in `keys/` that names `cxx` or
@@ -1089,6 +1094,263 @@ fn failed_message(error: &str) -> ffi::QrMessageResult {
 /// lowercase hex string and calls this first.
 fn parse_fingerprint(value: &str) -> Result<Fingerprint, String> {
     Fingerprint::from_hex(value).map_err(|e| format!("invalid fingerprint '{value}': {e}"))
+}
+
+pub struct LedgerNonceFetch {
+    inner: Result<Fetch, String>,
+}
+
+pub fn ledger_nonce_fetch(fingerprint: &str, policy: &str, quantity: u32) -> Box<LedgerNonceFetch> {
+    Box::new(LedgerNonceFetch {
+        inner: parse_fingerprint(fingerprint)
+            .and_then(|fp| Fetch::begin(fp, policy, quantity as usize)),
+    })
+}
+
+impl LedgerNonceFetch {
+    pub fn payload(&self) -> ffi::PsbtPayloadResult {
+        match &self.inner {
+            Ok(fetch) => ffi::PsbtPayloadResult {
+                is_ok: true,
+                error: String::new(),
+                psbt_base64: BASE64_STANDARD.encode(fetch.payload().serialize()),
+            },
+            Err(error) => failed_psbt_payload(error),
+        }
+    }
+
+    // An empty payload means every command completed and the batch reached disk.
+    pub fn accept(&mut self, signed_psbt: &str) -> ffi::PsbtPayloadResult {
+        let result: Result<String, String> = (|| {
+            let signed = bitcoin::Psbt::from_str(signed_psbt).map_err(|e| e.to_string())?;
+            let fetch = self.inner.as_mut().map_err(|e| e.clone())?;
+            let done = fetch.accept(&signed)?;
+            Ok(if done {
+                String::new()
+            } else {
+                BASE64_STANDARD.encode(fetch.payload().serialize())
+            })
+        })();
+        match result {
+            Ok(psbt_base64) => ffi::PsbtPayloadResult {
+                is_ok: true,
+                error: String::new(),
+                psbt_base64,
+            },
+            Err(error) => {
+                self.inner = Err(error.clone());
+                failed_psbt_payload(&error)
+            }
+        }
+    }
+}
+
+pub fn ledger_nonce_refresh(fingerprint: &str) -> ffi::KeyOpResult {
+    match parse_fingerprint(fingerprint).and_then(ledger_nonces::refresh) {
+        Ok(()) => ok_op(),
+        Err(error) => failed_op(&error),
+    }
+}
+
+pub fn ledger_nonce_count(fingerprint: &str, policy: &str) -> u32 {
+    match parse_fingerprint(fingerprint) {
+        Ok(fp) => ledger_nonces::count(fp, policy) as u32,
+        Err(error) => {
+            log::error!("{error}");
+            0
+        }
+    }
+}
+
+pub fn ledger_nonce_limit() -> u32 {
+    ledger_nonces::MAX_LEDGER_NONCE_SESSIONS as u32
+}
+
+pub fn ledger_nonce_plan(
+    network: ffi::Network,
+    psbt_v2_hex: &str,
+    devices: Vec<ffi::LiveDevice>,
+) -> ffi::SigningPlan {
+    let result: Result<ffi::SigningPlan, String> = (|| {
+        let mut module = build_module(network);
+        if !module.is_ok() {
+            return Err(module.get_error());
+        }
+        module.set_live_devices(devices);
+        for record in module
+            .inner
+            .as_ref()
+            .ok_or("keys module is unavailable")?
+            .keys()
+        {
+            if record
+                .devices
+                .iter()
+                .any(|device| ledger_nonces::is_ledger(&device.kind))
+            {
+                ledger_nonces::ensure_snapshot(record.fingerprint)?;
+            }
+        }
+        Ok(module.signing_plan(psbt_v2_hex))
+    })();
+    match result {
+        Ok(plan) => plan,
+        Err(error) => failed_signing_plan(&error),
+    }
+}
+
+pub fn ledger_nonce_sign(
+    fingerprint: &str,
+    policy: &str,
+    psbt_v2_hex: &str,
+) -> ffi::LedgerNonceSignResult {
+    let mut response = ffi::LedgerNonceSignResult {
+        is_ok: false,
+        error: String::new(),
+        musig_session: false,
+        need_fetch: false,
+        musig: false,
+        psbt_v2_hex: String::new(),
+        psbt_base64: String::new(),
+    };
+    let result: Result<(), ledger_nonces::SigningError> = (|| {
+        let fp = parse_fingerprint(fingerprint)?;
+        let bytes = hex::decode(psbt_v2_hex).map_err(|e| e.to_string())?;
+        let parsed = psbt::parse_v2(&bytes).map_err(|e| e.to_string())?;
+        let descriptor = ledger_nonces::descriptor(policy)?;
+        let real = parsed.into_bitcoin_psbt().map_err(|e| e.to_string())?;
+        let owned = descriptor.has_musig()
+            && !own_slots(&real, &descriptor, fp)
+                .map_err(|e| e.to_string())?
+                .is_empty();
+        if !owned {
+            if ledger_nonces::requested_by(&real, fp)? {
+                return Err("policy does not cover the requested Ledger MuSig inputs".into());
+            }
+            let payload = usb_sign_payload(psbt_v2_hex, policy, false);
+            if !payload.is_ok {
+                return Err(payload.error.into());
+            }
+            response.psbt_base64 = payload.psbt_base64;
+            return Ok(());
+        }
+        response.musig = true;
+        match ledger_nonces::prepare(fp, policy, &bytes)? {
+            Signing::Nonces(bytes) => response.psbt_v2_hex = hex::encode(bytes),
+            Signing::Missing => response.need_fetch = true,
+            Signing::Payload(psbt) => {
+                response.psbt_base64 = BASE64_STANDARD.encode(psbt.serialize())
+            }
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => response.is_ok = true,
+        Err(error) => {
+            response.musig_session = matches!(error, ledger_nonces::SigningError::SessionLost(_));
+            response.error = error.to_string();
+        }
+    }
+    response
+}
+
+pub fn ledger_nonce_merge(
+    fingerprint: &str,
+    policy: &str,
+    original: &str,
+    signed_psbt: &str,
+) -> ffi::SignResult {
+    let merged = usb_merge_signed(original, signed_psbt);
+    if !merged.is_ok {
+        return merged;
+    }
+    let checked: Result<(), ledger_nonces::SigningError> = (|| {
+        let fp = parse_fingerprint(fingerprint)?;
+        let descriptor = ledger_nonces::descriptor(policy)?;
+        let bytes = hex::decode(&merged.psbt_v2_hex).map_err(|e| e.to_string())?;
+        let real = psbt::parse_v2(&bytes)
+            .map_err(|e| e.to_string())?
+            .into_bitcoin_psbt()
+            .map_err(|e| e.to_string())?;
+        ledger_nonces::check_round2(&real, &descriptor, fp)?;
+        let original = hex::decode(original).map_err(|e| e.to_string())?;
+        ledger_nonces::finish(fp, policy, &original)
+    })();
+    match checked {
+        Ok(()) => merged,
+        Err(error) => failed_ledger_sign(error),
+    }
+}
+
+fn failed_ledger_sign(error: ledger_nonces::SigningError) -> ffi::SignResult {
+    ffi::SignResult {
+        musig_session: matches!(error, ledger_nonces::SigningError::SessionLost(_)),
+        ..failed_sign(&error.to_string())
+    }
+}
+
+pub fn ledger_nonce_invalidate(
+    fingerprint: &str,
+    policy: &str,
+    psbt_v2_hex: &str,
+) -> ffi::SignResult {
+    let result: Result<(), ledger_nonces::SigningError> = (|| {
+        let fp = parse_fingerprint(fingerprint)?;
+        let bytes = hex::decode(psbt_v2_hex).map_err(|e| e.to_string())?;
+        ledger_nonces::invalidate_signing(fp, policy, &bytes)
+    })();
+    match result {
+        Ok(()) => ffi::SignResult {
+            is_ok: true,
+            ..failed_sign("")
+        },
+        Err(error) => failed_ledger_sign(error),
+    }
+}
+
+pub fn ledger_nonce_restart(
+    network: ffi::Network,
+    policy: &str,
+    original: &str,
+    prepared: &str,
+) -> ffi::SignResult {
+    let result: Result<Vec<u8>, String> = (|| {
+        let manager = open_manager(network)?;
+        let registered: BTreeSet<_> = manager
+            .keys()
+            .iter()
+            .filter(|record| {
+                record
+                    .devices
+                    .iter()
+                    .any(|device| ledger_nonces::is_ledger(&device.kind))
+            })
+            .map(|record| record.fingerprint)
+            .collect();
+        let descriptor = ledger_nonces::descriptor(policy)?;
+        let named: BTreeSet<_> = descriptor
+            .plain_keys()
+            .iter()
+            .map(|key| key.master_fingerprint())
+            .collect();
+        let mut fingerprints = Vec::new();
+        for fingerprint in named {
+            if registered.contains(&fingerprint) || ledger_nonces::has_cache(fingerprint)? {
+                fingerprints.push(fingerprint);
+            }
+        }
+        let original = hex::decode(original).map_err(|e| e.to_string())?;
+        let prepared = hex::decode(prepared).map_err(|e| e.to_string())?;
+        ledger_nonces::restart(policy, &original, &prepared, &fingerprints)
+    })();
+    match result {
+        Ok(bytes) => ffi::SignResult {
+            is_ok: true,
+            psbt_v2_hex: hex::encode(bytes),
+            ..failed_sign("")
+        },
+        Err(error) => failed_sign(&error),
+    }
 }
 
 /// True when `child` is exactly one derivation step below `parent`.

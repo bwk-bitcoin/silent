@@ -540,6 +540,17 @@ mod ffi {
         pub musig_done: bool,
     }
 
+    #[derive(Debug, Clone)]
+    pub struct LedgerNonceSignResult {
+        pub is_ok: bool,
+        pub error: String,
+        pub musig_session: bool,
+        pub need_fetch: bool,
+        pub musig: bool,
+        pub psbt_v2_hex: String,
+        pub psbt_base64: String,
+    }
+
     /// Signer picker for one PSBT, built by `KeysModule::signing_plan`.
     #[derive(Debug, Clone)]
     pub struct SigningPlan {
@@ -1686,6 +1697,47 @@ mod ffi {
         /// fields are copied. Cheap; safe to call from the GUI thread.
         fn usb_merge_signed(original_v2_hex: &str, signed_v0_base64: &str) -> SignResult;
 
+        type LedgerNonceFetch;
+        // Disk operations: callers run these on a worker, never the GUI thread.
+        fn ledger_nonce_fetch(
+            fingerprint: &str,
+            policy: &str,
+            quantity: u32,
+        ) -> Box<LedgerNonceFetch>;
+        fn payload(self: &LedgerNonceFetch) -> PsbtPayloadResult;
+        fn accept(self: &mut LedgerNonceFetch, signed_psbt: &str) -> PsbtPayloadResult;
+        fn ledger_nonce_refresh(fingerprint: &str) -> KeyOpResult;
+        fn ledger_nonce_plan(
+            network: Network,
+            psbt_v2_hex: &str,
+            devices: Vec<LiveDevice>,
+        ) -> SigningPlan;
+        fn ledger_nonce_invalidate(
+            fingerprint: &str,
+            policy: &str,
+            psbt_v2_hex: &str,
+        ) -> SignResult;
+        fn ledger_nonce_restart(
+            network: Network,
+            policy: &str,
+            original: &str,
+            prepared: &str,
+        ) -> SignResult;
+        // Memory-only snapshot for rows and offline route selection.
+        fn ledger_nonce_count(fingerprint: &str, policy: &str) -> u32;
+        fn ledger_nonce_limit() -> u32;
+        fn ledger_nonce_merge(
+            fingerprint: &str,
+            policy: &str,
+            original: &str,
+            signed_psbt: &str,
+        ) -> SignResult;
+        fn ledger_nonce_sign(
+            fingerprint: &str,
+            policy: &str,
+            psbt_v2_hex: &str,
+        ) -> LedgerNonceSignResult;
+
         /// Merges a signer's v2 answer, made on an earlier copy of the PSBT, into
         /// `current_v2_hex`: its signatures and MuSig2 nonces / partial signatures join
         /// the ones gathered since, so several signers can work at once. An answer
@@ -2405,9 +2457,11 @@ pub use hwi_config::{
 };
 pub use keys::{
     bridge::{
-        hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, hot_xpub, merge_signed_psbt,
-        new_keys_module, usb_merge_signed, usb_sign_payload, HotMaterial, KeysModule, QrResponse,
-        SealedHotKey,
+        hot_reveal, hot_seal, hot_sign, hot_sp_descriptor, hot_xpub, ledger_nonce_count,
+        ledger_nonce_fetch, ledger_nonce_invalidate, ledger_nonce_limit, ledger_nonce_merge,
+        ledger_nonce_plan, ledger_nonce_refresh, ledger_nonce_restart, ledger_nonce_sign,
+        merge_signed_psbt, new_keys_module, usb_merge_signed, usb_sign_payload, HotMaterial,
+        KeysModule, LedgerNonceFetch, QrResponse, SealedHotKey,
     },
     supports_silent_payments,
 };
