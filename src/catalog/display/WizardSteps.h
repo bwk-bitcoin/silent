@@ -12,8 +12,8 @@ namespace catalog {
 
 class Label;
 
-// The step trail atop a wizard modal, centred: one numbered dot per step, joined by a
-// fixed rule;
+// The step trail atop a wizard modal, centred: numbered dots at a fixed pitch,
+// with rules filling the remaining space;
 // done steps show a check, the current one is accent and bold, later ones muted.
 // Display only: the modal's Back and Continue move between steps.
 class WizardSteps : public QWidget {

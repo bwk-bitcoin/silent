@@ -7,6 +7,7 @@
 #include <QLabel>
 #include <QStyle>
 #include <Qontrol>
+#include <algorithm>
 
 namespace catalog {
 
@@ -14,8 +15,34 @@ namespace {
 
 const int DOT_SIZE = 20;
 const int CHECK_SIZE = 12;
-// The fixed rule between two steps.
-const int RULE_WIDTH = 40;
+// Six steps fit the wizard header, regardless of label language.
+const int NUMBER_PITCH = 120;
+const int MAX_NAME_WIDTH = 70;
+const int MAX_TRAIL_WIDTH = 695;
+
+void sizeName(Label *name, int max_width) {
+    name->ensurePolished();
+    auto nameFont = name->font();
+    auto normalSize = name->sizeHint();
+    nameFont.setWeight(font::DEMIBOLD);
+    name->setFont(nameFont);
+    auto boldSize = name->sizeHint();
+    auto width = std::max(normalSize.width(), boldSize.width());
+    auto height = std::max(normalSize.height(), boldSize.height());
+    if (width > max_width) {
+        name->setWordWrap(true);
+        if (name->minimumSizeHint().width() > max_width) {
+            // Even an unbroken translated word must stay inside its number interval.
+            name->setTextWrapAnywhere(name->text());
+        }
+        width = max_width;
+        height = name->heightForWidth(width);
+        nameFont.setWeight(QFont::Normal);
+        name->setFont(nameFont);
+        height = std::max(height, name->heightForWidth(width));
+    }
+    name->setFixedSize(width, height);
+}
 
 void repolish(QWidget *widget) {
     widget->style()->unpolish(widget);
@@ -28,16 +55,9 @@ WizardSteps::WizardSteps(const QStringList &steps, QWidget *parent) : QWidget(pa
     setProperty("class", "wizard-steps");
     setAttribute(Qt::WA_StyledBackground, true);
     // Centred across the modal.
-    auto *row = (new qontrol::Row)->spacing(resolve(Spacing::XS))->pushSpacer();
+    auto gap = resolve(Spacing::XS);
+    auto *row = (new qontrol::Row)->spacing(0)->pushSpacer();
     for (int i = 0; i < steps.size(); ++i) {
-        if (i > 0) {
-            auto *rule = new QWidget(this);
-            rule->setProperty("class", "wizard-rule");
-            rule->setAttribute(Qt::WA_StyledBackground, true);
-            rule->setFixedSize(RULE_WIDTH, 1);
-            m_rules.append(rule);
-            row->push(rule);
-        }
         auto *dot = new QLabel(this);
         dot->setProperty("class", "wizard-dot");
         dot->setFixedSize(DOT_SIZE, DOT_SIZE);
@@ -48,9 +68,27 @@ WizardSteps::WizardSteps(const QStringList &steps, QWidget *parent) : QWidget(pa
         dotFont.setWeight(font::DEMIBOLD);
         dot->setFont(dotFont);
         auto *name = new Label(steps.at(i), LabelRole::Caption, this);
+        bool last = i == steps.size() - 1;
+        auto nameWidth =
+            last ? std::max(MAX_NAME_WIDTH, MAX_TRAIL_WIDTH - i * NUMBER_PITCH - DOT_SIZE - gap)
+                 : MAX_NAME_WIDTH;
+        sizeName(name, nameWidth);
         m_dots.append(dot);
         m_names.append(name);
-        row->push((new qontrol::Row)->spacing(resolve(Spacing::XS))->push(dot)->push(name));
+        auto *step = (new qontrol::Row)->spacing(gap)->push(dot)->push(name);
+        if (!last) {
+            auto *rule = new QWidget(this);
+            rule->setProperty("class", "wizard-rule");
+            rule->setAttribute(Qt::WA_StyledBackground, true);
+            rule->setFixedHeight(1);
+            rule->setMinimumWidth(gap);
+            m_rules.append(rule);
+            step->push(rule, 1)->margins(0, 0, gap, 0);
+            step->setFixedWidth(NUMBER_PITCH);
+        } else {
+            step->setFixedWidth(DOT_SIZE + gap + name->width());
+        }
+        row->push(step);
     }
     row->pushSpacer();
     (new qontrol::Column)->margins(0, 0, 0, resolve(Spacing::S))->push(row)->into(this);
