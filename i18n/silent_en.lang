@@ -2,6 +2,14 @@
 # Format: id => "Text"
 # Use \n for line breaks
 
+keys-nonces => "Nonces"
+keys-fetch-nonces => "Fetch nonces"
+keys-nonces-quantity => "Sessions to fetch"
+keys-nonces-available => "%1 available"
+keys-nonces-fetching => "Fetching nonce sessions"
+keys-nonces-wait => "Keep Ledger connected until fetching finishes."
+keys-nonces-connect => "Connect Ledger to fetch nonce sessions."
+
 coins-height => "Height"
 coins-label => "Label"
 coins-outpoint => "OutPoint"

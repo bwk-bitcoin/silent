@@ -1,5 +1,6 @@
 #include "KeyDetail.h"
 
+#include "FetchNonces.h"
 #include "FetchXpub.h"
 #include "RevealMnemonic.h"
 #include "Unseal.h"
@@ -40,6 +41,7 @@
 #include <QDebug>
 #include <QHash>
 #include <QLabel>
+#include <QThread>
 
 #include <algorithm>
 #include <utility>
@@ -144,6 +146,8 @@ void KeyDetail::doConnect() {
             qontrol::UNIQUE);
     connect(m_module, &KeysModule::mnemonicRevealed, this, &KeyDetail::onMnemonicRevealed,
             qontrol::UNIQUE);
+    connect(m_module, &KeysModule::nonceSessionsChanged, this, &KeyDetail::onNonceSessionsChanged,
+            qontrol::UNIQUE);
     connectDetail();
 }
 
@@ -191,6 +195,14 @@ void KeyDetail::initDetail() {
     m_register_error = new catalog::Notice(catalog::Notice::Tone::Error);
     m_register_error->setVisible(false);
 
+    m_nonces_table = new catalog::Table;
+    m_nonces_table->setHeaderVisible(false);
+    m_nonces_table->addColumn({.grow = true});
+    m_nonces_table->addColumn({.width = metric::ACCOUNT_MODULE_COLUMN});
+    m_nonces_table->addColumn({.width = metric::ACCOUNT_PILL_COLUMN, .alignment = Qt::AlignRight});
+    m_nonces_error = new catalog::Notice(catalog::Notice::Tone::Error);
+    m_nonces_error->setVisible(false);
+
     m_reveal = catalog::btnRevealMnemonic();
     m_remove = catalog::btnRemoveKey();
     m_detail_actions = new catalog::ModalActions;
@@ -205,7 +217,8 @@ void KeyDetail::connectDetail() {
             qontrol::UNIQUE);
     connect(m_save_alias, &QPushButton::clicked, this, &KeyDetail::onSaveAliasClicked,
             qontrol::UNIQUE);
-    for (auto *table : {m_devices_table, m_routes_table, m_xpubs_table, m_accounts_table}) {
+    for (auto *table :
+         {m_devices_table, m_routes_table, m_xpubs_table, m_accounts_table, m_nonces_table}) {
         connect(table, &catalog::Table::rebuilt, this, &KeyDetail::adjustSize, qontrol::UNIQUE);
     }
     connect(m_reveal, &QPushButton::clicked, this, &KeyDetail::onRevealClicked, qontrol::UNIQUE);
@@ -235,8 +248,12 @@ auto KeyDetail::viewDetail() -> catalog::ScrollArea * {
                                        ->push(m_accounts_table)
                                        ->push(m_accounts_empty)
                                        ->push(m_register_error));
+    m_nonces_section = denseSection(TR("keys-nonces"), true);
+    m_nonces_section->setContent(
+        (new qontrol::Column)->push(m_nonces_table)->push(m_nonces_error));
+    m_nonces_section->setVisible(false);
     for (auto *section :
-         {m_devices_section, m_routes_section, m_xpubs_section, m_accounts_section}) {
+         {m_devices_section, m_routes_section, m_xpubs_section, m_accounts_section, m_nonces_section}) {
         connect(section->header(), &catalog::SectionHeader::toggled, this, &KeyDetail::adjustSize,
                 qontrol::UNIQUE);
     }
@@ -248,7 +265,8 @@ auto KeyDetail::viewDetail() -> catalog::ScrollArea * {
                        ->push(m_devices_section)
                        ->push(m_routes_section)
                        ->push(m_xpubs_section)
-                       ->push(m_accounts_section);
+                       ->push(m_accounts_section)
+                       ->push(m_nonces_section);
     auto *scroll = new catalog::ScrollArea;
     scroll->setFitContent(true);
     scroll->setWidget(column);
@@ -429,6 +447,60 @@ void KeyDetail::refreshAccounts(const KeyInfo &info) {
     m_accounts_table->setVisible(!list.isEmpty());
     m_accounts_empty->setVisible(list.isEmpty());
     m_accounts_section->header()->setCount(countText(static_cast<int>(list.size())));
+    refreshNonces(list);
+}
+
+void KeyDetail::refreshNonces(const QList<KeyAccount> &accounts) {
+    bool ledger = false;
+    for (const auto &device : m_module->rust()->key_devices(m_fingerprint.toStdString())) {
+        if (KeysModule::toQt(device.kind).startsWith(QStringLiteral("ledger"), Qt::CaseInsensitive)) {
+            ledger = true;
+            break;
+        }
+    }
+    m_nonce_accounts.clear();
+    if (ledger) {
+        for (const auto &account : accounts) {
+            if (account.plugin_id == MUSIG_PLUGIN_ID) {
+                m_nonce_accounts.insert(account.descriptor, account.name);
+            }
+        }
+    }
+    m_nonces_section->setVisible(!m_nonce_accounts.isEmpty());
+    populateNonces();
+    if (m_nonce_loading || m_nonce_accounts.isEmpty()) {
+        return;
+    }
+    m_nonce_loading = true;
+    m_nonce_error = std::make_shared<QString>();
+    auto error = m_nonce_error;
+    auto *thread = QThread::create([error, fingerprint = m_fingerprint.toStdString()] {
+        auto result = ::ledger_nonce_refresh(fingerprint);
+        *error = KeysModule::toQt(result.error);
+    });
+    connect(thread, &QThread::finished, this, &KeyDetail::onNonceSnapshotReady, qontrol::UNIQUE);
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
+void KeyDetail::populateNonces() {
+    m_nonces_table->clearRows();
+    auto device = readyDevice(m_fingerprint);
+    bool connected = device.has_value() &&
+                     device->signer->brand().startsWith(QStringLiteral("ledger"), Qt::CaseInsensitive);
+    for (auto account = m_nonce_accounts.cbegin(); account != m_nonce_accounts.cend(); ++account) {
+        auto count = ::ledger_nonce_count(m_fingerprint.toStdString(), account.key().toStdString());
+        auto *fetch = new catalog::Button(TR("keys-fetch-nonces"), catalog::ButtonRole::Inline);
+        fetch->setProperty(K_DESCRIPTOR, account.key());
+        fetch->setEnabled(connected);
+        if (!connected) {
+            fetch->setToolTip(TR("keys-nonces-connect"));
+        }
+        connect(fetch, &QPushButton::clicked, this, &KeyDetail::onFetchNoncesClicked, qontrol::UNIQUE);
+        m_nonces_table->addWidgetRow(
+            account.key(), {accountName(account.value()),
+                            new Label(TR("keys-nonces-available").arg(count), LabelRole::Body), fetch});
+    }
 }
 
 auto KeyDetail::registrationCell(const KeyAccount &account, bool applies) -> QWidget * {
@@ -669,6 +741,23 @@ void KeyDetail::onCancelRouteClicked() {
 void KeyDetail::onFetchXpubClicked() {
     // Over this modal, which shows the new xpub once the key records it.
     AppController::execModal(new FetchXpub(m_module, m_fingerprint));
+}
+
+void KeyDetail::onFetchNoncesClicked() {
+    AppController::execModal(
+        new FetchNonces(m_module, m_fingerprint, sender()->property(K_DESCRIPTOR).toString()));
+}
+
+void KeyDetail::onNonceSessionsChanged() {
+    m_nonces_error->setVisible(false);
+    populateNonces();
+}
+
+void KeyDetail::onNonceSnapshotReady() {
+    m_nonce_loading = false;
+    m_nonces_error->setText(*m_nonce_error);
+    m_nonces_error->setVisible(!m_nonce_error->isEmpty());
+    populateNonces();
 }
 
 void KeyDetail::onRegisterClicked() {

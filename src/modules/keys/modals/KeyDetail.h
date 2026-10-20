@@ -1,9 +1,11 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 
 #include <QHash>
 #include <QList>
+#include <QMap>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
@@ -68,6 +70,9 @@ public slots:
     void onConfirmRouteClicked();
     void onCancelRouteClicked();
     void onFetchXpubClicked();
+    void onFetchNoncesClicked();
+    void onNonceSnapshotReady();
+    void onNonceSessionsChanged();
     void onRemoveXpubClicked();
     void onRegisterClicked();
     void onDescriptorIsRegistered(ReqId req_id, bool registered);
@@ -97,6 +102,8 @@ protected:
     void showRouteResult(const KeyOpResult &result);
     void refreshXpubs();
     void refreshAccounts(const KeyInfo &info);
+    void refreshNonces(const QList<KeyAccount> &accounts);
+    void populateNonces();
     [[nodiscard]] auto registrationCell(const KeyAccount &account, bool applies) -> QWidget *;
     // Follows the key's ready device: a new one is asked about every account, and
     // accounts added since are asked about on the same one.
@@ -133,6 +140,12 @@ private:
     catalog::Table *m_xpubs_table = nullptr;
     catalog::Section *m_accounts_section = nullptr;
     catalog::Table *m_accounts_table = nullptr;
+    catalog::Section *m_nonces_section = nullptr;
+    catalog::Table *m_nonces_table = nullptr;
+    catalog::Notice *m_nonces_error = nullptr;
+    QMap<QString, QString> m_nonce_accounts;
+    std::shared_ptr<QString> m_nonce_error;
+    bool m_nonce_loading = false;
     catalog::Label *m_accounts_empty = nullptr;
     catalog::Notice *m_register_error = nullptr;
     catalog::Button *m_reveal = nullptr;

@@ -178,6 +178,8 @@ set(SILENT_APP_SOURCES
     src/modules/keys/modals/keydetail/RemoveFlow.cpp
     src/modules/keys/modals/FetchXpub.h
     src/modules/keys/modals/FetchXpub.cpp
+    src/modules/keys/modals/FetchNonces.h
+    src/modules/keys/modals/FetchNonces.cpp
     src/modules/keys/modals/Unseal.h
     src/modules/keys/modals/Unseal.cpp
     src/modules/keys/modals/RevealMnemonic.h
