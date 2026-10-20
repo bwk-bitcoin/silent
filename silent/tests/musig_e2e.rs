@@ -219,6 +219,14 @@ impl Spend {
 }
 
 fn fund_and_prepare(bitcoind: &mut bwk_test::corepc_node::Client, electrum_url: &str) -> Spend {
+    fund_and_prepare_at_rate(bitcoind, electrum_url, FEE_RATE)
+}
+
+fn fund_and_prepare_at_rate(
+    bitcoind: &mut bwk_test::corepc_node::Client,
+    electrum_url: &str,
+    fee_rate: f64,
+) -> Spend {
     let (a, b, c) = (signer(MNEMONIC_A), signer(MNEMONIC_B), signer(MNEMONIC_C));
     let account_name = test_account_name();
     let mut account = open_account(&account_name, two_of_three(&a, &b, &c), electrum_url);
@@ -273,7 +281,7 @@ fn fund_and_prepare(bitcoind: &mut bwk_test::corepc_node::Client, electrum_url: 
                 label: String::new(),
                 max: false,
             }],
-            fee_rate: FEE_RATE,
+            fee_rate,
             fee: 0,
             input_outpoints: vec![outpoint],
         },
@@ -449,6 +457,30 @@ fn finish(spend: &mut Spend, bitcoind: &mut bwk_test::corepc_node::Client, psbt:
 }
 
 // ===== Tests =====
+
+#[test]
+#[ignore = "needs bitcoind and electrs"]
+fn musig_sub_one_fee_survives_builder_and_restore() {
+    let (bbd, mut node, electrum_url) = setup_blindbitd_with_electrum();
+    bwk_test::generate_blocks(&mut node.client, 101);
+    let mut spend = fund_and_prepare_at_rate(&mut node.client, &electrum_url, 0.5);
+    let psbt = PsbtV2::deserialize(&hex::decode(&spend.prepared).expect("PSBT hex"))
+        .expect("prepared multikey PSBT")
+        .into_bitcoin_psbt()
+        .expect("PSBT v0");
+    let fee = psbt.fee().expect("multikey PSBT fee").to_sat();
+    assert!(
+        fee > 0 && fee < psbt.unsigned_tx.vsize() as u64,
+        "actual multikey builder must charge less than 1 sat/vB, got {fee}"
+    );
+    let restored = spend.reload();
+    assert_eq!(
+        restored.entry.frozen_template.fee, fee,
+        "restore keeps actual sub-1 fee"
+    );
+    cleanup_test_account(&spend.account_name);
+    drop(bbd);
+}
 
 #[test]
 #[ignore = "needs bitcoind and electrs"]

@@ -13,6 +13,7 @@
 #include "catalog/form/FieldGroup.h"
 #include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/Checkbox.h"
+#include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
 #include "catalog/inputs/Toggle.h"
 #include "catalog/panels/send/TxFlow.h"
@@ -24,6 +25,7 @@
 #include "views/utils.h"
 #include <QApplication>
 #include <QBoxLayout>
+#include <QComboBox>
 #include <QDebug>
 #include <QDoubleValidator>
 #include <QIntValidator>
@@ -293,6 +295,8 @@ void Send::restoreSavedPsbt(const SavedPsbtEntry &entry) {
     // Lock before setting fields: textChanged must never simulate a restored PSBT.
     m_locked = true;
     m_restored = true;
+    m_fee_mode = FeeMode::Manual;
+    m_fee_mode_picker->setCurrentIndex(static_cast<int>(m_fee_mode));
     for (auto *output : m_outputs) {
         delete output->widget();
         delete output;
@@ -319,6 +323,7 @@ void Send::restoreSavedPsbt(const SavedPsbtEntry &entry) {
     m_auto_coin_selection->setChecked(false);
     m_estimated_fee = entry.frozen_template.fee;
     m_fee_toggle->setChecked(false);
+    onFeeToggled();
     m_fee_value_input->setText(QString::number(m_estimated_fee));
     m_fee_estimate_label->setText(toBitcoin(m_estimated_fee));
     m_fee_estimate_label->setVisible(true);
@@ -357,6 +362,7 @@ Send::Send(AccountBackend *backend) : m_backend(backend) {
     this->onAddOutput();
     this->view();
     this->onFeeToggled();
+    initializeFees();
 }
 
 void Send::init() {
@@ -377,8 +383,16 @@ void Send::init() {
     m_fee_toggle->setChecked(true); // Default to sats/vb mode
 
     m_fee_value_input = new Input(InputRole::Mono);
+    m_fee_value_input->setObjectName(QStringLiteral("fee-value"));
     m_fee_value_input->setWidth(Size::XS);
     m_fee_value_input->setText("1");
+    m_fee_mode_picker = new catalog::ComboBox;
+    m_fee_mode_picker->setObjectName(QStringLiteral("fee-mode"));
+    m_fee_mode_picker->addItems({TR("fee-manual"), TR("fee-default"), TR("fee-smart")});
+    m_fee_tier_picker = new catalog::ComboBox;
+    m_fee_tier_picker->setObjectName(QStringLiteral("fee-tier"));
+    m_fee_tier_picker->addItems({TR("fee-low"), TR("fee-medium"), TR("fee-fast")});
+    m_fee_tier_picker->setVisible(false);
 
     m_fee_indicator = new catalog::ValidationMark;
 
@@ -458,6 +472,13 @@ void Send::init() {
 }
 
 void Send::doConnect() {
+    connect(Host::get()->events(), &HostEvents::selectedFeesChanged, this,
+            &Send::onSelectedFeesChanged, qontrol::UNIQUE);
+    connect(m_fee_mode_picker, qOverload<int>(&QComboBox::activated), this,
+            &Send::onFeeModeActivated, qontrol::UNIQUE);
+    connect(m_fee_tier_picker, qOverload<int>(&QComboBox::activated), this,
+            &Send::onFeeTierActivated, qontrol::UNIQUE);
+    connect(m_fee_value_input, &QLineEdit::textEdited, this, &Send::onFeeEdited, qontrol::UNIQUE);
     connect(Host::get()->events(), &HostEvents::selectedPriceChanged, this,
             &Send::onSelectedPriceChanged, qontrol::UNIQUE);
     qDebug() << "Send::doConnect()";
@@ -471,7 +492,7 @@ void Send::doConnect() {
     connect(m_signing, &SendSigning::lockedChanged, this, &Send::onSigningLocked, qontrol::UNIQUE);
     connect(m_signing, &SendSigning::estimateChanged, this, &Send::onProcess, qontrol::UNIQUE);
     connect(m_signing, &SendSigning::sent, this, &Send::onSigningSent, qontrol::UNIQUE);
-    connect(m_fee_toggle, &QCheckBox::toggled, this, &Send::onFeeToggled, qontrol::UNIQUE);
+    connect(m_fee_toggle, &QCheckBox::clicked, this, &Send::onFeeOverrideToggled, qontrol::UNIQUE);
     connect(m_fee_value_input, &QLineEdit::textChanged, this, &Send::onProcess, qontrol::UNIQUE);
 }
 
@@ -804,6 +825,8 @@ auto Send::transactionView() -> QWidget * {
 
     auto *warningRow = (new qontrol::Row)->push(m_warning_label)->pushSpacer();
     auto *actionRow = (new qontrol::Row)
+                          ->push(m_fee_mode_picker)
+                          ->push(m_fee_tier_picker)
                           ->push(m_fee_rate_label)
                           ->pushSpacer(resolve(Spacing::S))
                           ->push(m_fee_toggle)
@@ -846,6 +869,8 @@ void Send::applyLocked() {
              m_fee_rate_label, m_fee_toggle, m_fee_value_input, m_fee_indicator, m_fee_label}) {
         feeInput->setVisible(!m_locked);
     }
+    m_fee_mode_picker->setVisible(!m_locked);
+    m_fee_tier_picker->setVisible(!m_locked && m_fee_mode == FeeMode::Smart);
     m_clear_outputs_btn->setVisible(!m_locked);
     for (auto *output : m_outputs) {
         output->widget()->setEnabled(!m_locked);
@@ -1527,6 +1552,7 @@ void Send::onSigningLocked(bool locked) {
     }
     applyLocked();
     if (!locked) {
+        onSelectedFeesChanged();
         onProcess();
     }
 }
@@ -1534,6 +1560,67 @@ void Send::onSigningLocked(bool locked) {
 void Send::onSigningSent() {
     onClearOutputs();
     onClearInputs();
+    initializeFees();
+}
+
+void Send::initializeFees() {
+    auto preferences = Host::get()->selectedFees().preferences;
+    m_fee_mode = preferences.mode;
+    m_fee_tier = preferences.tier;
+    m_fee_mode_picker->setCurrentIndex(static_cast<int>(m_fee_mode));
+    m_fee_tier_picker->setCurrentIndex(static_cast<int>(m_fee_tier));
+    m_fee_toggle->setChecked(true);
+    onFeeToggled();
+    m_fee_value_input->setText(QStringLiteral("1"));
+    onSelectedFeesChanged();
+}
+
+void Send::onSelectedFeesChanged() {
+    if (m_locked || m_restored || m_fee_mode == FeeMode::Manual) {
+        return;
+    }
+    auto rate = Host::get()->selectedFees().rate(m_fee_mode, m_fee_tier);
+    if (!rate.has_value()) {
+        m_fee_mode = FeeMode::Manual;
+        m_fee_mode_picker->setCurrentIndex(static_cast<int>(m_fee_mode));
+    }
+    m_fee_tier_picker->setVisible(m_fee_mode == FeeMode::Smart);
+    m_fee_value_input->setText(QString::number(rate.value_or(1.0), 'g', 15));
+}
+
+void Send::onFeeEdited() {
+    if (m_locked || m_restored) {
+        return;
+    }
+    m_fee_mode = FeeMode::Manual;
+    m_fee_mode_picker->setCurrentIndex(static_cast<int>(m_fee_mode));
+    m_fee_tier_picker->setVisible(false);
+}
+
+void Send::onFeeOverrideToggled() {
+    onFeeEdited();
+    onFeeToggled();
+}
+
+void Send::onFeeModeActivated(int index) {
+    if (m_locked || m_restored) {
+        return;
+    }
+    m_fee_mode = static_cast<FeeMode>(index);
+    m_fee_tier_picker->setVisible(m_fee_mode == FeeMode::Smart);
+    if (m_fee_mode != FeeMode::Manual) {
+        m_fee_toggle->setChecked(true);
+        onFeeToggled();
+        onSelectedFeesChanged();
+    }
+}
+
+void Send::onFeeTierActivated(int index) {
+    if (m_locked || m_restored) {
+        return;
+    }
+    m_fee_tier = static_cast<FeeTier>(index);
+    onSelectedFeesChanged();
 }
 
 void Send::onSavedWarningChanged(const QString &message) {

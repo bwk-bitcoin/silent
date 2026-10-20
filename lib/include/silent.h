@@ -977,6 +977,7 @@ enum class KeyUnusableReason : ::std::uint8_t;
 enum class QrResponseKind : ::std::uint8_t;
 enum class MusigRound : ::std::uint8_t;
 enum class QrErrorKind : ::std::uint8_t;
+struct RustFeePreferences;
 struct Notification;
 struct RustCoin;
 struct CoinState;
@@ -1231,6 +1232,19 @@ enum class QrErrorKind : ::std::uint8_t {
   MusigSession = 3,
 };
 #endif // CXXBRIDGE1_ENUM_QrErrorKind
+
+#ifndef CXXBRIDGE1_STRUCT_RustFeePreferences
+#define CXXBRIDGE1_STRUCT_RustFeePreferences
+// Global fee mode (Manual=0, Default=1, Smart=2) and tier (Low=0, Medium=1, Fast=2).
+struct RustFeePreferences final {
+  ::std::uint8_t mode CXX_DEFAULT_VALUE(0);
+  ::rust::String default_source;
+  ::rust::String smart_source;
+  ::std::uint8_t tier CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_RustFeePreferences
 
 #ifndef CXXBRIDGE1_STRUCT_Notification
 #define CXXBRIDGE1_STRUCT_Notification
@@ -3241,6 +3255,10 @@ void app_set_plugin_enabled(::rust::String id, bool enabled) noexcept;
 
 // Set the active app theme name.
 void app_set_active_theme(::rust::String name) noexcept;
+
+::RustFeePreferences app_fee_preferences() noexcept;
+
+void app_set_fee_preferences(::RustFeePreferences preferences) noexcept;
 
 ::rust::String app_price_source() noexcept;
 

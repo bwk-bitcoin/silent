@@ -52,15 +52,15 @@ protected:
     void view();
     // Warns about address reuse and asks to go on. false when the user cancelled
     // (the transaction is dropped).
-    auto showReuseWarning(PsbtValidation result) -> bool;
+    static auto showReuseWarning(PsbtValidation result) -> bool;
     // Hands the PSBT to the keys module, once it is reachable.
     void showSignerStep();
     // Stops listening to the keys module once the signing request has its answer.
     void disconnectSigner() const;
     // Sign before signing, the signed pill, Cancel and Broadcast after.
     void updateButtons();
-    // Lets go of the signed transaction, and Send of its payments.
-    void dropSigned();
+    // Lets go of the prepared or signed transaction, and Send of its payments.
+    void dropTransaction();
 
 private:
     AccountController *m_controller = nullptr;

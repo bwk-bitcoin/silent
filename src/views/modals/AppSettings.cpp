@@ -165,6 +165,7 @@ void AppSettings::initMain() {
     m_language_note->setVisible(false);
 
     initPrices();
+    initFees();
 
     m_plugin_drop = new catalog::Card(catalog::Card::Role::Inset);
     m_plugin_drop->setPad(catalog::Card::Pad::M);
@@ -197,6 +198,7 @@ void AppSettings::initMain() {
 
 void AppSettings::connectMain() {
     connectPrices();
+    connectFees();
     connect(m_theme_picker, qOverload<int>(&QComboBox::currentIndexChanged), this,
             &AppSettings::onThemeSelectionChanged, qontrol::UNIQUE);
     connect(m_language_picker, qOverload<int>(&QComboBox::currentIndexChanged), this,
@@ -219,6 +221,8 @@ auto AppSettings::viewMain() -> catalog::ScrollArea * {
                        ->push(buildGeneral())
                        ->push(m_prices_separator)
                        ->push(m_prices)
+                       ->push(new catalog::Separator)
+                       ->push(m_fees)
                        ->push(new catalog::Separator)
                        ->push(buildPlugins())
                        ->push(m_extensions_separator)
@@ -271,6 +275,90 @@ void AppSettings::connectPrices() {
             &AppSettings::onPriceSourcesChanged, qontrol::UNIQUE);
     connect(m_host_events, &HostEvents::selectedPriceChanged, this,
             &AppSettings::onPriceSourcesChanged, qontrol::UNIQUE);
+}
+
+void AppSettings::initFees() {
+    m_fee_mode_picker = new catalog::ComboBox;
+    m_default_fee_picker = new catalog::ComboBox;
+    m_smart_fee_picker = new catalog::ComboBox;
+    m_fee_tier_picker = new catalog::ComboBox;
+    m_fee_tier_picker->addItems({TR("fee-low"), TR("fee-medium"), TR("fee-fast")});
+    m_fee_mode_field = new catalog::FieldGroup;
+    m_fee_mode_field->addField(TR("settings-fee-mode"), m_fee_mode_picker);
+    m_default_fee_field = new catalog::FieldGroup;
+    m_default_fee_field->addField(TR("settings-default-fee-source"), m_default_fee_picker);
+    m_smart_fee_field = new catalog::FieldGroup;
+    m_smart_fee_field->addField(TR("settings-smart-fee-source"), m_smart_fee_picker);
+    m_fee_tier_field = new catalog::FieldGroup;
+    m_fee_tier_field->addField(TR("settings-fee-tier"), m_fee_tier_picker);
+    m_fees = foldable(TR("settings-fees"));
+    m_fees->setContent((new qontrol::Column)
+                           ->spacing(resolve(Spacing::S))
+                           ->push(m_fee_mode_field)
+                           ->push(m_default_fee_field)
+                           ->push(m_smart_fee_field)
+                           ->push(m_fee_tier_field));
+    onFeeSourcesChanged();
+}
+
+void AppSettings::connectFees() {
+    for (auto *picker :
+         {m_fee_mode_picker, m_default_fee_picker, m_smart_fee_picker, m_fee_tier_picker}) {
+        connect(picker, qOverload<int>(&QComboBox::activated), this,
+                &AppSettings::onFeePreferencesActivated, qontrol::UNIQUE);
+    }
+    connect(m_host_events, &HostEvents::feeSourcesChanged, this, &AppSettings::onFeeSourcesChanged,
+            qontrol::UNIQUE);
+    connect(m_host_events, &HostEvents::selectedFeesChanged, this,
+            &AppSettings::onFeeSourcesChanged, qontrol::UNIQUE);
+}
+
+void AppSettings::onFeeSourcesChanged() {
+    auto preferences = m_host->selectedFees().preferences;
+    m_default_fee_picker->clear();
+    m_smart_fee_picker->clear();
+    m_default_fee_picker->addItem(TR("settings-price-none"), QString());
+    m_smart_fee_picker->addItem(TR("settings-price-none"), QString());
+    bool hasDefault = false;
+    bool hasSmart = false;
+    for (const auto &source : m_host->feeSources()) {
+        if (source.has_default) {
+            hasDefault = true;
+            m_default_fee_picker->addItem(source.name, source.id);
+        }
+        if (source.has_smart) {
+            hasSmart = true;
+            m_smart_fee_picker->addItem(source.name, source.id);
+        }
+    }
+    m_default_fee_field->setVisible(hasDefault);
+    m_smart_fee_field->setVisible(hasSmart);
+    m_fee_tier_field->setVisible(hasSmart);
+    for (auto pair : {std::pair{m_default_fee_picker, preferences.default_source},
+                      std::pair{m_smart_fee_picker, preferences.smart_source}}) {
+        if (!pair.second.isEmpty() && pair.first->findData(pair.second) < 0) {
+            pair.first->addItem(TR("settings-price-unavailable").arg(pair.second), pair.second);
+        }
+        pair.first->setCurrentIndex(pair.first->findData(pair.second));
+    }
+    m_fee_mode_picker->clear();
+    m_fee_mode_picker->addItem(TR("fee-manual"), static_cast<int>(FeeMode::Manual));
+    if (hasDefault || preferences.mode == FeeMode::Default) {
+        m_fee_mode_picker->addItem(TR("fee-default"), static_cast<int>(FeeMode::Default));
+    }
+    if (hasSmart || preferences.mode == FeeMode::Smart) {
+        m_fee_mode_picker->addItem(TR("fee-smart"), static_cast<int>(FeeMode::Smart));
+    }
+    m_fee_mode_picker->setCurrentIndex(
+        m_fee_mode_picker->findData(static_cast<int>(preferences.mode)));
+    m_fee_tier_picker->setCurrentIndex(static_cast<int>(preferences.tier));
+}
+
+void AppSettings::onFeePreferencesActivated([[maybe_unused]] int index) {
+    m_host->selectFees({.mode = static_cast<FeeMode>(m_fee_mode_picker->currentData().toInt()),
+                        .default_source = m_default_fee_picker->currentData().toString(),
+                        .smart_source = m_smart_fee_picker->currentData().toString(),
+                        .tier = static_cast<FeeTier>(m_fee_tier_picker->currentIndex())});
 }
 
 auto AppSettings::buildPlugins() -> QWidget * {
@@ -529,6 +617,15 @@ void AppSettings::hideEvent(QHideEvent *event) {
 }
 
 void AppSettings::retranslateUi() {
+    m_fees->header()->setLabel(TR("settings-fees"));
+    m_fee_mode_field->setFieldLabel(m_fee_mode_picker, TR("settings-fee-mode"));
+    m_default_fee_field->setFieldLabel(m_default_fee_picker, TR("settings-default-fee-source"));
+    m_smart_fee_field->setFieldLabel(m_smart_fee_picker, TR("settings-smart-fee-source"));
+    m_fee_tier_field->setFieldLabel(m_fee_tier_picker, TR("settings-fee-tier"));
+    m_fee_tier_picker->setItemText(0, TR("fee-low"));
+    m_fee_tier_picker->setItemText(1, TR("fee-medium"));
+    m_fee_tier_picker->setItemText(2, TR("fee-fast"));
+    onFeeSourcesChanged();
     m_prices->header()->setLabel(TR("settings-prices"));
     m_price_fields->setFieldLabel(m_price_source_picker, TR("settings-price-source"));
     m_price_fields->setFieldLabel(m_price_currency_picker, TR("settings-price-currency"));

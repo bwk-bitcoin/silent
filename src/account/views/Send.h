@@ -1,5 +1,6 @@
 #pragma once
 
+#include "interfaces/host.h"
 #include "theme/Palette.h"
 #include <Qontrol>
 #include <cstdint>
@@ -9,7 +10,8 @@
 
 namespace catalog {
 class Button;
-}
+class ComboBox;
+} // namespace catalog
 
 namespace catalog {
 class Checkbox;
@@ -140,6 +142,7 @@ public slots:
     void onClearOutputs();
     void onClearInputs();
     void onFeeToggled();
+    void onFeeOverrideToggled();
     void onCoinToggled();
     void onCoinSelectionChanged(const QString &row_id, bool selected);
     void onAutoSelectionToggled();
@@ -150,6 +153,10 @@ public slots:
     void onProcess();
     void onFiatEdited();
     void onSelectedPriceChanged();
+    void onSelectedFeesChanged();
+    void onFeeEdited();
+    void onFeeModeActivated(int index);
+    void onFeeTierActivated(int index);
     void onCoinsUpdated(CoinState state);
     // The signing step took or let go of a transaction.
     void onSigningLocked(bool locked);
@@ -179,6 +186,7 @@ protected:
     void updateCoinRows();
     void applyInputsMode();
     void updateInputsTitle();
+    void initializeFees();
 
 private:
     static constexpr int SPLIT_WIDTH = 1569;
@@ -215,6 +223,10 @@ private:
     catalog::Label *m_change_fiat = nullptr;
 
     catalog::Toggle *m_fee_toggle = nullptr;
+    catalog::ComboBox *m_fee_mode_picker = nullptr;
+    catalog::ComboBox *m_fee_tier_picker = nullptr;
+    FeeMode m_fee_mode = FeeMode::Manual;
+    FeeTier m_fee_tier = FeeTier::Medium;
     catalog::Input *m_fee_value_input = nullptr;
     catalog::Label *m_fee_label = nullptr;
     catalog::Label *m_fee_rate_label = nullptr;

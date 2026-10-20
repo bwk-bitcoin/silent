@@ -17,7 +17,7 @@ public:
     ~IFeed() override = default;
 
     // Signals may borrow plugin literals for the duration of emit. The host copies
-    // price payloads directly before queueing. Instance stop must join all emitters
+    // payloads directly before queueing. Instance stop must join all emitters
     // before returning; the library cannot unload while its code is executing.
 
     [[nodiscard]] virtual bool implemented() const = 0;
@@ -33,8 +33,24 @@ public:
         return 0;
     }
 
+    // Discover first, then request only supported recommendations. Feeds push updates.
+    virtual auto feeCapabilities() -> ReqId {
+        return 0;
+    }
+
+    virtual auto requestDefaultFeeRate() -> ReqId {
+        return 0;
+    }
+
+    virtual auto requestSmartFeeRates() -> ReqId {
+        return 0;
+    }
+
 signals:
-    void feeRate(ReqId req_id, double satvb);
+    // Non-positive or non-finite values withdraw the matching recommendation.
+    void defaultFeeRate(ReqId req_id, double default_satvb);
+    void smartFeeRates(ReqId req_id, double low_satvb, double medium_satvb, double fast_satvb);
+    void feeCapabilities(ReqId req_id, bool has_default, bool has_smart);
     void currencies(ReqId req_id, QStringList currencies);
     // Fiat units per BTC. Non-positive or non-finite values withdraw this quote.
     void conversionRate(ReqId req_id, QString currency, double value);
@@ -42,4 +58,4 @@ signals:
     void error(std::optional<ReqId> req_id, QString message);
 };
 
-Q_DECLARE_INTERFACE(IFeed, "dev.silent.IFeed/2.0")
+Q_DECLARE_INTERFACE(IFeed, "dev.silent.IFeed/3.0")

@@ -44,8 +44,11 @@ auto SpSigning::coinsWidget() -> QWidget * {
 
 void SpSigning::setTransaction(const std::optional<TransactionTemplate> &tx,
                                [[maybe_unused]] const QStringList &outpoints) {
+    if (m_tx_template.has_value()) {
+        return;
+    }
     m_tx = tx;
-    m_sign_btn->setEnabled(m_tx.has_value());
+    updateButtons();
 }
 
 auto SpSigning::estimatesFee() const -> bool {
@@ -103,18 +106,14 @@ auto SpSigning::showReuseWarning(PsbtValidation result) -> bool {
     modal->setMainWidget(margin(col, resolve(Padding::L)));
     int dialogResult = modal->exec();
     delete modal;
-    if (dialogResult != QDialog::Accepted) {
-        m_psbt_result = std::nullopt;
-        m_tx_template = std::nullopt;
-        return false;
-    }
-    return true;
+    return dialogResult == QDialog::Accepted;
 }
 
 void SpSigning::showSignerStep() {
     auto &account = m_controller->getAccount();
     auto *keys = Host::get()->keys(SpModule::get());
     if (!account.has_value() || !m_psbt_result.has_value() || keys == nullptr) {
+        dropTransaction();
         AppController::execModal(
             new catalog::MessageModal(TR("common-error"), TR("send-transaction-state-lost")));
         return;
@@ -147,11 +146,15 @@ void SpSigning::updateButtons() {
     m_cancel_btn->setVisible(isSigned);
     m_sign_btn->setVisible(!isSigned);
     m_broadcast_btn->setVisible(isSigned);
+    m_sign_btn->setEnabled(!m_tx_template.has_value() && m_tx.has_value());
 }
 
-void SpSigning::dropSigned() {
+void SpSigning::dropTransaction() {
+    disconnectSigner();
     m_signed_tx_hex.clear();
+    m_psbt_result = std::nullopt;
     m_tx_template = std::nullopt;
+    m_sign_req_id = 0;
     updateButtons();
     emit lockedChanged(false);
 }
@@ -160,6 +163,9 @@ void SpSigning::dropSigned() {
 
 void SpSigning::onSignClicked() {
     qDebug() << "SpSigning::onSignClicked()";
+    if (m_tx_template.has_value()) {
+        return;
+    }
     if (!m_tx.has_value()) {
         AppController::execModal(
             new catalog::MessageModal(TR("common-error"), TR("send-invalid-transaction-template")));
@@ -185,9 +191,10 @@ void SpSigning::onSignClicked() {
     // Store psbt and tx template for use in validation, signing and logging
     m_psbt_result = std::make_optional(std::move(psbt));
     m_tx_template = m_tx;
+    updateButtons();
+    emit lockedChanged(true);
 
     // Run PSBT validation on background thread before showing confirm modal
-    m_sign_btn->setEnabled(false);
     const Account *workerAccount = &*account.value();
     auto *thread = QThread::create([this, workerAccount]() {
         auto result = workerAccount->validate_before_sign(*m_psbt_result.value());
@@ -204,6 +211,8 @@ void SpSigning::onBroadcastClicked() {
     auto signedHex = m_signed_tx_hex.toStdString();
     auto &account = m_controller->getAccount();
     if (!account.has_value()) {
+        m_status_label->setVisible(false);
+        dropTransaction();
         return;
     }
     const Account *workerAccount = &*account.value();
@@ -215,14 +224,18 @@ void SpSigning::onBroadcastClicked() {
 }
 
 void SpSigning::onCancelClicked() {
-    dropSigned();
+    if (!m_signed_tx_hex.isEmpty()) {
+        dropTransaction();
+    }
 }
 
 void SpSigning::onValidationResult(PsbtValidation result) {
     qDebug() << "SpSigning::onValidationResult() is_ok:" << result.is_ok
              << "is_valid:" << result.is_valid;
 
-    m_sign_btn->setEnabled(m_tx.has_value());
+    if (!m_psbt_result.has_value() || !m_tx_template.has_value()) {
+        return;
+    }
 
     if (!result.is_ok) {
         // Connection/protocol error: warn but don't block
@@ -235,12 +248,12 @@ void SpSigning::onValidationResult(PsbtValidation result) {
         auto issues = QString::fromStdString(std::string(result.issues.c_str()));
         AppController::execModal(new catalog::MessageModal(
             TR("common-error"), TR("send-inputs-already-spent").arg(issues)));
-        m_psbt_result = std::nullopt;
-        m_tx_template = std::nullopt;
+        dropTransaction();
         return;
     } else if (result.reused_output_count > 0) {
         // Address reuse: warn and ask user via accept/reject modal
         if (!showReuseWarning(result)) {
+            dropTransaction();
             return;
         }
     }
@@ -253,7 +266,7 @@ void SpSigning::onValidationResult(PsbtValidation result) {
 }
 
 void SpSigning::onSignerSigned(ReqId req_id, const QString &psbt_v2_hex) {
-    if (req_id != m_sign_req_id) {
+    if (m_sign_req_id == 0 || req_id != m_sign_req_id) {
         return;
     }
 
@@ -263,6 +276,7 @@ void SpSigning::onSignerSigned(ReqId req_id, const QString &psbt_v2_hex) {
         QString::fromLatin1(QByteArray::fromHex(psbt_v2_hex.toLatin1()).toBase64()).toStdString();
     auto &account = m_controller->getAccount();
     if (!account.has_value()) {
+        dropTransaction();
         return;
     }
     const Account *workerAccount = &*account.value();
@@ -274,7 +288,7 @@ void SpSigning::onSignerSigned(ReqId req_id, const QString &psbt_v2_hex) {
 }
 
 void SpSigning::onSignerError(std::optional<ReqId> req_id, const QString &message) {
-    if (!req_id.has_value() || req_id.value() != m_sign_req_id) {
+    if (m_sign_req_id == 0 || !req_id.has_value() || req_id.value() != m_sign_req_id) {
         return;
     }
 
@@ -287,13 +301,10 @@ void SpSigning::onSignerError(std::optional<ReqId> req_id, const QString &messag
 }
 
 void SpSigning::onSignerCancelled(ReqId req_id) {
-    if (req_id != m_sign_req_id) {
+    if (m_sign_req_id == 0 || req_id != m_sign_req_id) {
         return;
     }
-    disconnectSigner();
-    m_psbt_result = std::nullopt;
-    m_tx_template = std::nullopt;
-    m_sign_req_id = 0;
+    dropTransaction();
 }
 
 void SpSigning::onSignResult(TxResult result) {
@@ -302,9 +313,7 @@ void SpSigning::onSignResult(TxResult result) {
 
     if (!result.is_ok) {
         auto error = QString::fromStdString(std::string(result.error.c_str()));
-        m_psbt_result = std::nullopt;
-        m_tx_template = std::nullopt;
-        m_sign_req_id = 0;
+        dropTransaction();
         AppController::execModal(new catalog::MessageModal(TR("send-signing-failed"), error));
         return;
     }
@@ -315,7 +324,6 @@ void SpSigning::onSignResult(TxResult result) {
     m_broadcast_btn->setEnabled(true);
     m_cancel_btn->setEnabled(true);
     updateButtons();
-    emit lockedChanged(true);
 }
 
 void SpSigning::onBroadcastResult(TxResult result) {
@@ -332,7 +340,7 @@ void SpSigning::onBroadcastResult(TxResult result) {
         }
     }
 
-    dropSigned();
+    dropTransaction();
 
     if (result.is_ok) {
         AppController::execModal(new catalog::MessageModal(

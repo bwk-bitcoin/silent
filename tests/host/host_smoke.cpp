@@ -39,6 +39,7 @@
 #include <modules/keys/KeysModule.h>
 #include <modules/musig/MusigModule.h>
 #include <modules/musig/creator/MusigCreatorModule.h>
+#include <theme/Theme.h>
 
 #include "MockPlugin.h"
 #include "PriceProbe.h"
@@ -153,11 +154,27 @@ auto launcherLists(const PluginRegistry &registry, const IModule *module, const 
 
 } // namespace
 
+namespace smoke {
+void pluginAbiSmoke();
+void spSigningSmoke(const QString &name);
+} // namespace smoke
+
 auto main(int argc, char *argv[]) -> int {
     QApplication app(argc, argv);
     qRegisterMetaType<plugin::SignError>();
     qRegisterMetaType<std::optional<ReqId>>();
     i18n::I18nManager::get()->init(&app);
+    auto arguments = QApplication::arguments();
+    if (arguments.size() == 4 && arguments.at(1) == QStringLiteral("--sp-signing")) {
+        auto error = ::state_unlock_with_device(rust::String(arguments.at(2).toStdString()));
+        check(error.empty(), "the funded SP fixture state should unlock");
+        Host::get();
+        AppController::init();
+        Theme::init();
+        smoke::spSigningSmoke(arguments.at(3));
+        std::fprintf(stdout, "SP signing smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
 
     // The app state is encrypted: a throwaway one, opened with a password.
     auto stateError = ::state_unlock_info().exists
@@ -168,9 +185,15 @@ auto main(int argc, char *argv[]) -> int {
     // Initialise the host singleton before the registry connects to its events.
     Host::get();
     AppController::init();
+#ifdef SILENT_ABI2_FIXTURE_PATH
+    smoke::pluginAbiSmoke();
+#endif
     check(smoke::priceFeedSmoke(), "price feed lifecycle and Send invariants");
 
     smoke::MockPlugin plugin;
+    check(qobject_cast<IPlugin *>(&plugin) == &plugin &&
+              plugin.qt_metacast("dev.silent.IPlugin/2.0") == nullptr,
+          "mock plugin metadata exposes ABI 3 only");
     auto *module = plugin.module();
 
     PluginRegistry registry;

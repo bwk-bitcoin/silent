@@ -135,6 +135,12 @@ electrum-gave-up-message
 => "The connection to %1 dropped %2 times in the last minute, so Silent stopped reconnecting. Check the server, then connect again from the status bar or the Settings.";;
 electrum-gave-up-title => "Electrum Disconnected" => "Electrum Disconnected"
 electrum-the-server => "the server" => "the server"
+fee-default => "Default" => "Par défaut"
+fee-fast => "Fast" => "Rapide"
+fee-low => "Low" => "Bas"
+fee-manual => "Manual" => "Manuel"
+fee-medium => "Medium" => "Moyen"
+fee-smart => "Smart" => "Intelligent"
 flow-camera-contrast => "Contrast:" => "NONE"
 flow-camera-denied-body
 => "Silent has no permission to use the camera, or another app is using it. Allow access in the system settings."
@@ -1013,6 +1019,7 @@ settings-capabilities-template
 => "Tweaks Only: %1\nFull Basic: %2\nFull + Dust Filter: %3\nCut-Through + Dust Filter: %4"
 => "Tweaks seulement: %1\nFull Basic: %2\nFull + filtre poussiere: %3\nCut-Through + filtre poussiere: %4";;
 settings-connection => "Connection" => "Connexion"
+settings-default-fee-source => "Default source" => "Source par défaut"
 settings-disable-account-one => "1 open account closes" => "NONE"
 settings-disable-account-one-text
 => "%1 comes from this plugin and will close. Enable the plugin again to reopen it."
@@ -1042,6 +1049,9 @@ settings-failed-start-electrum
 settings-failed-start-scanner
 => "Failed to start scanner"
 => "Echec du demarrage du scanner";;
+settings-fee-mode => "Fee mode" => "Mode de frais"
+settings-fee-tier => "Initial smart tier" => "Niveau intelligent initial"
+settings-fees => "Transaction fees" => "Frais de transaction"
 settings-general => "General" => "General"
 settings-language => "Language:" => "Langue:"
 settings-language-saved
@@ -1075,6 +1085,7 @@ settings-section-belongs
 => "NONE";;
 settings-section-fallback => "Section %1" => "Section %1"
 settings-section-from => "From %1." => "NONE"
+settings-smart-fee-source => "Smart source" => "Source intelligente"
 settings-theme => "Theme:" => "Theme:"
 settings-theme-dark => "Dark" => "Sombre"
 settings-theme-light => "Light" => "Clair"

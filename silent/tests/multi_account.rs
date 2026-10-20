@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use common::{
     cleanup_test_account, create_test_account, descriptor_from_mnemonic, fund_sp_wallet,
-    fund_sp_wallet_at_index, setup_blindbitd, test_account_name, wait_for_scan_complete,
-    wait_for_sync_and_index, TEST_MNEMONIC,
+    fund_sp_wallet_at_index, isolated_state, setup_blindbitd, test_account_name,
+    wait_for_scan_complete, wait_for_sync_and_index, TEST_MNEMONIC,
 };
 
 // ===== Test Helpers =====
@@ -34,6 +34,7 @@ fn create_test_config(account_name: String) -> Config {
 
 #[test]
 fn test_multiple_accounts_independent_state() {
+    isolated_state();
     let account1_name = format!("test_account_1_{}", std::process::id());
     let account2_name = format!("test_account_2_{}", std::process::id());
 
@@ -89,6 +90,7 @@ fn test_multiple_accounts_independent_state() {
 
 #[test]
 fn test_account_config_isolation() {
+    isolated_state();
     let account1_name = format!("test_iso_1_{}", std::process::id());
     let account2_name = format!("test_iso_2_{}", std::process::id());
 

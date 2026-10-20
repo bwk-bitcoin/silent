@@ -22,6 +22,21 @@ public:
         return 1;
     }
 
+    auto feeCapabilities() -> ReqId override {
+        emit IFeed::feeCapabilities(3, true, true);
+        return 3;
+    }
+
+    auto requestDefaultFeeRate() -> ReqId override {
+        emit defaultFeeRate(4, 0.5);
+        return 4;
+    }
+
+    auto requestSmartFeeRates() -> ReqId override {
+        emit smartFeeRates(5, 0.25, 0.5, 0.75);
+        return 5;
+    }
+
     auto raw(const QByteArray &request) -> ReqId override {
         if (request == "literal-address") {
             return reinterpret_cast<quintptr>(QStringLiteral("EUR").constData());
@@ -32,6 +47,9 @@ public:
         std::thread emitter([this]() {
             emit IFeed::currencies(2, {QStringLiteral("USD")});
             emit conversionRate(2, QStringLiteral("EUR"), 12345);
+            emit IFeed::feeCapabilities(6, false, false);
+            emit defaultFeeRate(7, 99);
+            emit smartFeeRates(8, 98, 99, 100);
         });
         emitter.join();
         return 2;

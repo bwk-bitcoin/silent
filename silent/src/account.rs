@@ -455,7 +455,7 @@ impl Account {
         }
 
         // Get builder (pre-configured with coin_source, sp_provider, change)
-        let feerate_msats_vb = (tx_template.fee_rate.max(1.0) * 1000.0) as u64;
+        let feerate_msats_vb = fee_rate_msats(tx_template.fee_rate, tx_template.fee)?;
         let mut builder = inner.account.tx_builder();
         if tx_template.fee > 0 {
             builder = builder.fee(tx_template.fee);
@@ -1644,6 +1644,8 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 /// Errors from validating a TransactionTemplate before handing it to the builder.
 #[derive(Debug, thiserror::Error)]
 pub enum TemplateError {
+    #[error("Fee rate must be finite and at least 0.001 sat/vB")]
+    FeeRate,
     #[error("Invalid address '{0}': {1}")]
     Address(String, String),
     #[error("Only one output can have max=true")]
@@ -1660,6 +1662,18 @@ pub enum TemplateError {
     Txid(String, String),
     #[error("Invalid vout in '{0}': {1}")]
     Vout(String, String),
+}
+
+pub(crate) fn fee_rate_msats(rate: f64, absolute_fee: u64) -> Result<u64, TemplateError> {
+    const MSATS_PER_SAT: u64 = 1000;
+    if absolute_fee > 0 {
+        // Keep the existing coin-selection estimate when the builder uses an absolute fee.
+        return Ok(MSATS_PER_SAT);
+    }
+    if !rate.is_finite() || rate < 0.001 || rate * MSATS_PER_SAT as f64 >= u64::MAX as f64 {
+        return Err(TemplateError::FeeRate);
+    }
+    Ok((rate * MSATS_PER_SAT as f64).round() as u64)
 }
 
 /// Parse an outpoint string ("txid:vout") into a bitcoin::OutPoint.
@@ -1708,7 +1722,29 @@ mod tests {
     };
     use bwk_sp::bwk_tx::bwk_psbt::{Input as PsbtInput, Output as PsbtOutput, PsbtV2};
 
-    use crate::account::{inputs_to_check, outputs_to_check};
+    use crate::account::{fee_rate_msats, inputs_to_check, outputs_to_check};
+
+    #[test]
+    fn fee_rate_conversion_preserves_sub_one_and_rejects_invalid_rates() {
+        for (rate, expected) in [(0.001, 1), (0.125, 125), (0.5, 500), (1.0, 1000)] {
+            assert_eq!(
+                fee_rate_msats(rate, 0).expect("valid fee rate"),
+                expected,
+                "convert {rate} sat/vB without clamping"
+            );
+        }
+        for rate in [0.0, -1.0, 0.0001, f64::NAN, f64::INFINITY, f64::MAX] {
+            assert!(
+                fee_rate_msats(rate, 0).is_err(),
+                "reject invalid/unrepresentable rate {rate}"
+            );
+            assert_eq!(
+                fee_rate_msats(rate, 1234).expect("absolute fee"),
+                1000,
+                "absolute fees do not depend on rate {rate}"
+            );
+        }
+    }
 
     fn input_at(vout: u32) -> PsbtInput {
         PsbtInput {

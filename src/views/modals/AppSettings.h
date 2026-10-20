@@ -67,6 +67,8 @@ public slots:
     void onPriceSourcesChanged();
     void onPriceSourceActivated(int index);
     void onPriceCurrencyActivated(int index);
+    void onFeeSourcesChanged();
+    void onFeePreferencesActivated(int index);
 
 protected:
     void init();
@@ -79,6 +81,8 @@ protected:
     void connectMain();
     void initPrices();
     void connectPrices();
+    void initFees();
+    void connectFees();
     auto viewMain() -> catalog::ScrollArea *;
     auto buildGeneral() -> QWidget *;
     auto buildPlugins() -> QWidget *;
@@ -127,6 +131,15 @@ private:
     catalog::FieldGroup *m_price_fields = nullptr;
     catalog::ComboBox *m_price_source_picker = nullptr;
     catalog::ComboBox *m_price_currency_picker = nullptr;
+    catalog::Section *m_fees = nullptr;
+    catalog::FieldGroup *m_fee_mode_field = nullptr;
+    catalog::ComboBox *m_fee_mode_picker = nullptr;
+    catalog::ComboBox *m_default_fee_picker = nullptr;
+    catalog::ComboBox *m_smart_fee_picker = nullptr;
+    catalog::ComboBox *m_fee_tier_picker = nullptr;
+    catalog::FieldGroup *m_default_fee_field = nullptr;
+    catalog::FieldGroup *m_smart_fee_field = nullptr;
+    catalog::FieldGroup *m_fee_tier_field = nullptr;
 
     catalog::Section *m_plugins = nullptr;
     // The only way a plugin comes in: dropped on the window, sealed into the state.

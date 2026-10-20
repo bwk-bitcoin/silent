@@ -528,7 +528,12 @@ public:
     virtual auto currencies() -> ReqId;                // default 0: no price capability
     virtual auto requestRates(const QStringList &currencies) -> ReqId; // default 0
 signals:
-    void feeRate(ReqId, double satvb);
+    virtual auto feeCapabilities() -> ReqId; // default 0
+    virtual auto requestDefaultFeeRate() -> ReqId; // default 0
+    virtual auto requestSmartFeeRates() -> ReqId; // default 0
+    void feeCapabilities(ReqId, bool has_default, bool has_smart);
+    void defaultFeeRate(ReqId, double default_satvb);
+    void smartFeeRates(ReqId, double low_satvb, double medium_satvb, double fast_satvb);
     void currencies(ReqId, QStringList currencies);
     void conversionRate(ReqId, QString currency, double value);
     void raw(ReqId, QByteArray response);
@@ -644,11 +649,13 @@ can scan the account, so an external plugin calls it only with the Accounts gran
 
 ### Feeds
 
-A feed is a single capability (`IFeed`), no subtypes. It pushes up to three kinds of
+A feed is a single capability (`IFeed`), no subtypes. It pushes up to four kinds of
 update on its own signals (typically with `ReqId == 0`, since these are unsolicited
 pushes a consumer subscribes to):
 
-- `feeRate(ReqId, double satvb)`: current fee-rate estimate.
+- `defaultFeeRate(ReqId, double default_satvb)`: default recommended sat/vB.
+- `smartFeeRates(ReqId, double low_satvb, double medium_satvb, double fast_satvb)`:
+  Low, Medium and Fast recommended sat/vB. Each invalid value withdraws that tier.
 - `conversionRate(ReqId, QString currency, double value)`: BTC/FIAT price.
 - `raw(ReqId, QByteArray data)`: feed-defined raw bytes for anything not covered by
   the typed signals.
@@ -657,6 +664,26 @@ Prices go through the host's internal coordinator, not direct consumer subscript
 On instance registration, including startup and late plugin loading, it connects to
 the feed before calling `currencies()`. Reply with the offered currency codes through
 `currencies(req_id, codes)`. This operation only discovers currencies, not rates.
+Fee discovery is separate from prices: implement `feeCapabilities()` and emit
+`feeCapabilities(req_id, has_default, has_smart)`. The same internal coordinator calls
+`requestDefaultFeeRate()` and/or `requestSmartFeeRates()` only for offered capabilities.
+Connect before requesting, since replies may be synchronous. Later recommendations
+are pushed by the provider; there is no host polling or automatic expiry.
+
+`Host::feeSources()` lists each source's Default/Smart capabilities.
+`Host::selectedFees()` returns cached optional recommendations and `FeePreferences`:
+mode Manual/Default/Smart, independent `default_source` and `smart_source`, and smart
+tier Low/Medium/Fast. `selectFees(preferences)` persists these globally for all networks.
+`HostEvents::feeSourcesChanged` and `selectedFeesChanged` notify consumers. Missing
+sources retain their configured IDs; the host never automatically selects another.
+Invalid or withdrawn rates are unavailable, not zero-fee recommendations.
+
+New Send transactions follow their selected recommendation while editable. A manual
+rate or absolute-fee override stops following. Missing recommendations fall back to
+Manual at 1 sat/vB, even after recovery; a new transaction can use the configured
+preference again. Prepared/signing/restored transactions keep their actual fees.
+Positive fractional rates are supported at milli-sat/vB precision by both builders.
+
 The coordinator separately calls `requestRates(codes)` for the initial quotes. Reply
 with `conversionRate(req_id, currency, value)`, in fiat units per BTC. Both synchronous
 and asynchronous replies work. Subsequent quotes are pushed by the feed; the host
@@ -864,10 +891,10 @@ through one or more `ISigner` instances.
 
 ## ABI & Linking Rules (Plugin Authors Must Read)
 
-The current plugin IID is `dev.silent.IPlugin/2.0` and the feed IID is
-`dev.silent.IFeed/2.0`. The price request methods and cached Host API change the
+The current plugin IID is `dev.silent.IPlugin/3.0` and the feed IID is
+`dev.silent.IFeed/3.0`. The price/fee request methods and cached Host API change the
 virtual interfaces. Rebuild plugins against this checkout and use
-`SILENT_IPlugin_IID` in plugin metadata. Old 1.0 plugins are refused rather than
+`SILENT_IPlugin_IID` in plugin metadata. Old 1.0 and 2.0 plugins are refused rather than
 called through incompatible vtables.
 
 Silent statically links Qt, and the host binary acts as the **single Qt provider**:

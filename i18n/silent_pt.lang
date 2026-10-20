@@ -135,6 +135,12 @@ electrum-gave-up-message
 => "The connection to %1 dropped %2 times in the last minute, so Silent stopped reconnecting. Check the server, then connect again from the status bar or the Settings.";;
 electrum-gave-up-title => "Electrum Disconnected" => "Electrum Disconnected"
 electrum-the-server => "the server" => "the server"
+fee-default => "Default" => "Padrão"
+fee-fast => "Fast" => "Rápida"
+fee-low => "Low" => "Baixa"
+fee-manual => "Manual" => "Manual"
+fee-medium => "Medium" => "Média"
+fee-smart => "Smart" => "Inteligente"
 flow-camera-contrast => "Contrast:" => "NONE"
 flow-camera-denied-body
 => "Silent has no permission to use the camera, or another app is using it. Allow access in the system settings."
@@ -1011,6 +1017,7 @@ settings-capabilities-template
 => "Tweaks Only: %1\nFull Basic: %2\nFull + Dust Filter: %3\nCut-Through + Dust Filter: %4"
 => "Tweaks Only: %1\nFull Basic: %2\nFull + Dust Filter: %3\nCut-Through + Dust Filter: %4";;
 settings-connection => "Connection" => "Conexao"
+settings-default-fee-source => "Default source" => "Fonte padrão"
 settings-disable-account-one => "1 open account closes" => "NONE"
 settings-disable-account-one-text
 => "%1 comes from this plugin and will close. Enable the plugin again to reopen it."
@@ -1040,6 +1047,9 @@ settings-failed-start-electrum
 settings-failed-start-scanner
 => "Failed to start scanner"
 => "Failed to start scanner";;
+settings-fee-mode => "Fee mode" => "Modo de taxa"
+settings-fee-tier => "Initial smart tier" => "Nível inteligente inicial"
+settings-fees => "Transaction fees" => "Taxas de transação"
 settings-general => "General" => "Geral"
 settings-language => "Language:" => "Idioma:"
 settings-language-saved
@@ -1073,6 +1083,7 @@ settings-section-belongs
 => "NONE";;
 settings-section-fallback => "Section %1" => "Secao %1"
 settings-section-from => "From %1." => "NONE"
+settings-smart-fee-source => "Smart source" => "Fonte inteligente"
 settings-theme => "Theme:" => "Tema:"
 settings-theme-dark => "Dark" => "Escuro"
 settings-theme-light => "Light" => "Claro"

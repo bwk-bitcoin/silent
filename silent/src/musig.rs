@@ -428,7 +428,8 @@ impl MusigAccount {
             }
         }
 
-        let feerate_msats_vb = (tx_template.fee_rate.max(1.0) * 1000.0) as u64;
+        let feerate_msats_vb =
+            crate::account::fee_rate_msats(tx_template.fee_rate, tx_template.fee)?;
         let mut builder = inner.account.tx_builder();
         if tx_template.fee > 0 {
             builder = builder.fee(tx_template.fee);

@@ -27,6 +27,52 @@ struct SelectedPrice {
     std::optional<double> rate;
 };
 
+enum class FeeMode { Manual, Default, Smart };
+enum class FeeTier { Low, Medium, Fast };
+
+struct FeePreferences {
+    FeeMode mode = FeeMode::Manual;
+    QString default_source;
+    QString smart_source;
+    FeeTier tier = FeeTier::Medium;
+    auto operator==(const FeePreferences &) const -> bool = default;
+};
+
+struct FeeSource {
+    QString id;
+    QString name;
+    bool has_default = false;
+    bool has_smart = false;
+};
+
+struct SelectedFees {
+    FeePreferences preferences;
+    std::optional<double> default_rate;
+    std::optional<double> low;
+    std::optional<double> medium;
+    std::optional<double> fast;
+    auto operator==(const SelectedFees &) const -> bool = default;
+
+    [[nodiscard]] auto rate(FeeMode mode, FeeTier tier) const -> std::optional<double> {
+        switch (mode) {
+        case FeeMode::Manual:
+            return std::nullopt;
+        case FeeMode::Default:
+            return default_rate;
+        case FeeMode::Smart:
+            switch (tier) {
+            case FeeTier::Low:
+                return low;
+            case FeeTier::Medium:
+                return medium;
+            case FeeTier::Fast:
+                return fast;
+            }
+        }
+        return std::nullopt;
+    }
+};
+
 class HostI18n {
 public:
     virtual ~HostI18n() = default;
@@ -49,6 +95,8 @@ signals:
     void launcherRefreshRequested();
     void priceSourcesChanged();
     void selectedPriceChanged();
+    void feeSourcesChanged();
+    void selectedFeesChanged();
 };
 
 class Host {
@@ -135,4 +183,7 @@ public:
     [[nodiscard]] virtual auto priceSources() const -> QList<PriceSource> = 0;
     [[nodiscard]] virtual auto selectedPrice() const -> SelectedPrice = 0;
     virtual void selectPrice(const QString &source, const QString &currency) = 0;
+    [[nodiscard]] virtual auto feeSources() const -> QList<FeeSource> = 0;
+    [[nodiscard]] virtual auto selectedFees() const -> SelectedFees = 0;
+    virtual void selectFees(const FeePreferences &preferences) = 0;
 };

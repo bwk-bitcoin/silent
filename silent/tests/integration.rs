@@ -313,7 +313,7 @@ fn test_send_receive_sp_flow() {
             label: String::from("test send"),
             max: false,
         }],
-        fee_rate: 1.0,
+        fee_rate: 0.5,
         fee: 0,
         input_outpoints: vec![],
     };
@@ -326,6 +326,20 @@ fn test_send_receive_sp_flow() {
         simulation.error
     );
     assert!(simulation.fee > 0, "Fee should be non-zero");
+    let mut full_rate = tx_template.clone();
+    full_rate.fee_rate = 1.0;
+    let full_rate = account.simulate_transaction(full_rate);
+    assert!(
+        full_rate.is_valid,
+        "1 sat/vB comparison: {}",
+        full_rate.error
+    );
+    assert!(
+        simulation.fee < full_rate.fee,
+        "sub-1 SP builder fee {} must be below 1 sat/vB fee {}",
+        simulation.fee,
+        full_rate.fee
+    );
 
     // Prepare transaction
     let psbt = account.prepare_transaction(tx_template);
@@ -333,6 +347,13 @@ fn test_send_receive_sp_flow() {
         psbt.is_ok(),
         "Transaction preparation should succeed: {}",
         psbt.get_psbt_error()
+    );
+    let prepared = bitcoin::Psbt::deserialize(&hex::decode(psbt.bytes_hex()).expect("PSBT hex"))
+        .expect("prepared SP PSBT");
+    assert_eq!(
+        prepared.fee().expect("SP PSBT fee").to_sat(),
+        simulation.fee,
+        "actual SP builder preserves the simulated sub-1 fee"
     );
 
     // Note: sign_and_broadcast requires a broadcast URL (Esplora-style HTTP endpoint)

@@ -39,6 +39,36 @@ public:
     QStringList offered{QStringLiteral("EUR"), QStringLiteral("USD")};
     QStringList requested;
     double value = 50000;
+    bool has_default = false;
+    bool has_smart = false;
+    int fee_discoveries = 0;
+    int default_requests = 0;
+    int smart_requests = 0;
+    double default_rate = 0.5;
+
+    auto feeCapabilities() -> ReqId override {
+        ++fee_discoveries;
+        if (!deferred) {
+            publishFeeCapabilities();
+        }
+        return 2;
+    }
+
+    void publishFeeCapabilities() {
+        emit IFeed::feeCapabilities(2, has_default, has_smart);
+    }
+
+    auto requestDefaultFeeRate() -> ReqId override {
+        ++default_requests;
+        emit defaultFeeRate(3, default_rate);
+        return 3;
+    }
+
+    auto requestSmartFeeRates() -> ReqId override {
+        ++smart_requests;
+        emit smartFeeRates(4, 0.25, 0.5, 0.75);
+        return 4;
+    }
 
     [[nodiscard]] auto implemented() const -> bool override {
         return active;
@@ -179,6 +209,7 @@ public:
     int simulations = 0;
     bool validSimulation = false;
     PriceSigning *signing = nullptr;
+    Network selected_network = Network::Regtest;
 
     auto getCoins() -> rust::Vec<RustCoin> override {
         return {};
@@ -189,7 +220,7 @@ public:
     }
 
     auto network() -> Network override {
-        return Network::Regtest;
+        return selected_network;
     }
 
     auto module() -> IModule * override {

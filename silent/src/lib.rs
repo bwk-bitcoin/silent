@@ -163,6 +163,15 @@ mod ffi {
 
     // ===== Shared Structs =====
 
+    /// Global fee mode (Manual=0, Default=1, Smart=2) and tier (Low=0, Medium=1, Fast=2).
+    #[derive(Debug, Clone, Default)]
+    struct RustFeePreferences {
+        mode: u8,
+        default_source: String,
+        smart_source: String,
+        tier: u8,
+    }
+
     /// Notification from the account scanner.
     #[derive(Debug, Clone)]
     pub struct Notification {
@@ -1195,6 +1204,8 @@ mod ffi {
 
         /// Set the active app theme name.
         fn app_set_active_theme(name: String);
+        fn app_fee_preferences() -> RustFeePreferences;
+        fn app_set_fee_preferences(preferences: RustFeePreferences);
         fn app_price_source() -> String;
         fn app_price_currency() -> String;
         fn app_set_price_selection(source: String, currency: String);
@@ -2556,11 +2567,11 @@ fn failed_psbt_file(error: String) -> ffi::PsbtFileResult {
 // Re-export main types
 pub use account::{new_account, Account, NotificationReceiver, Poll, PsbtResult};
 pub use app_state::{
-    app_active_theme, app_enabled_plugins, app_language, app_last_endpoint, app_plugin_access,
-    app_price_currency, app_price_source, app_qr_camera_contrast_level, app_qr_display_levels,
-    app_set_active_theme, app_set_language, app_set_last_endpoint, app_set_plugin_access,
-    app_set_plugin_enabled, app_set_price_selection, app_set_qr_camera_contrast_level,
-    app_set_qr_display_levels,
+    app_active_theme, app_enabled_plugins, app_fee_preferences, app_language, app_last_endpoint,
+    app_plugin_access, app_price_currency, app_price_source, app_qr_camera_contrast_level,
+    app_qr_display_levels, app_set_active_theme, app_set_fee_preferences, app_set_language,
+    app_set_last_endpoint, app_set_plugin_access, app_set_plugin_enabled, app_set_price_selection,
+    app_set_qr_camera_contrast_level, app_set_qr_display_levels,
 };
 pub use bbqr::{bbqr_frames, bbqr_scanner_new, bbqr_text_scanner_new, BbqrFrames, BbqrScanner};
 pub use camera::{camera_list, camera_open, CameraHandle};

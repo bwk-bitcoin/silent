@@ -57,6 +57,16 @@ public:
 
 HostImpl::HostImpl() : QObject(nullptr), m_i18n(new HostI18nImpl()) {
     m_prices = new PriceFeedCoordinator(this);
+    auto fees = ::app_fee_preferences();
+    m_prices->selectFees(
+        {.mode = static_cast<FeeMode>(fees.mode),
+         .default_source = QString::fromStdString(std::string(fees.default_source)),
+         .smart_source = QString::fromStdString(std::string(fees.smart_source)),
+         .tier = static_cast<FeeTier>(fees.tier)});
+    connect(m_prices, &PriceFeedCoordinator::feeSourcesChanged, &m_events,
+            &HostEvents::feeSourcesChanged, qontrol::UNIQUE);
+    connect(m_prices, &PriceFeedCoordinator::selectedFeesChanged, &m_events,
+            &HostEvents::selectedFeesChanged, qontrol::UNIQUE);
     m_prices->select(QString::fromStdString(std::string(::app_price_source())),
                      QString::fromStdString(std::string(::app_price_currency())));
     connect(m_prices, &PriceFeedCoordinator::sourcesChanged, &m_events,
@@ -680,4 +690,24 @@ void HostImpl::selectPrice(const QString &source, const QString &currency) {
     ::app_set_price_selection(rust::String(source.toStdString()),
                               rust::String(currency.toStdString()));
     m_prices->select(source, currency);
+}
+
+auto HostImpl::feeSources() const -> QList<FeeSource> {
+    assertGuiThread();
+    return m_prices->feeSources();
+}
+
+auto HostImpl::selectedFees() const -> SelectedFees {
+    assertGuiThread();
+    return m_prices->selectedFees();
+}
+
+void HostImpl::selectFees(const FeePreferences &preferences) {
+    assertGuiThread();
+    ::app_set_fee_preferences(
+        {.mode = static_cast<uint8_t>(preferences.mode),
+         .default_source = rust::String(preferences.default_source.toStdString()),
+         .smart_source = rust::String(preferences.smart_source.toStdString()),
+         .tier = static_cast<uint8_t>(preferences.tier)});
+    m_prices->selectFees(preferences);
 }

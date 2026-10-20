@@ -135,6 +135,12 @@ electrum-gave-up-message
 => "The connection to %1 dropped %2 times in the last minute, so Silent stopped reconnecting. Check the server, then connect again from the status bar or the Settings.";;
 electrum-gave-up-title => "Electrum Disconnected" => "Electrum Disconnected"
 electrum-the-server => "the server" => "the server"
+fee-default => "Default" => "Predefinita"
+fee-fast => "Fast" => "Rapida"
+fee-low => "Low" => "Bassa"
+fee-manual => "Manual" => "Manuale"
+fee-medium => "Medium" => "Media"
+fee-smart => "Smart" => "Intelligente"
 flow-camera-contrast => "Contrast:" => "NONE"
 flow-camera-denied-body
 => "Silent has no permission to use the camera, or another app is using it. Allow access in the system settings."
@@ -1011,6 +1017,7 @@ settings-capabilities-template
 => "Tweaks Only: %1\nFull Basic: %2\nFull + Dust Filter: %3\nCut-Through + Dust Filter: %4"
 => "Solo Tweaks: %1\nFull Basic: %2\nFull + filtro dust: %3\nCut-Through + filtro dust: %4";;
 settings-connection => "Connection" => "Connessione"
+settings-default-fee-source => "Default source" => "Fonte predefinita"
 settings-disable-account-one => "1 open account closes" => "NONE"
 settings-disable-account-one-text
 => "%1 comes from this plugin and will close. Enable the plugin again to reopen it."
@@ -1038,6 +1045,9 @@ settings-failed-start-electrum
 => "Failed to start electrum"
 => "Avvio Electrum fallito";;
 settings-failed-start-scanner => "Failed to start scanner" => "Avvio scanner fallito"
+settings-fee-mode => "Fee mode" => "Modalità commissioni"
+settings-fee-tier => "Initial smart tier" => "Livello intelligente iniziale"
+settings-fees => "Transaction fees" => "Commissioni di transazione"
 settings-general => "General" => "Generale"
 settings-language => "Language:" => "Lingua:"
 settings-language-saved
@@ -1071,6 +1081,7 @@ settings-section-belongs
 => "NONE";;
 settings-section-fallback => "Section %1" => "Sezione %1"
 settings-section-from => "From %1." => "NONE"
+settings-smart-fee-source => "Smart source" => "Fonte intelligente"
 settings-theme => "Theme:" => "Tema:"
 settings-theme-dark => "Dark" => "Scuro"
 settings-theme-light => "Light" => "Chiaro"

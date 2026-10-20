@@ -16,6 +16,10 @@ PriceFeedConnection::PriceFeedConnection(quint64 registration_id, IFeed *feed, Q
             &PriceFeedConnection::onCurrencies, directUnique);
     connect(feed, &IFeed::conversionRate, this, &PriceFeedConnection::onConversionRate,
             directUnique);
+    connect(feed, qOverload<ReqId, bool, bool>(&IFeed::feeCapabilities), this,
+            &PriceFeedConnection::onFeeCapabilities, directUnique);
+    connect(feed, &IFeed::defaultFeeRate, this, &PriceFeedConnection::onDefaultFee, directUnique);
+    connect(feed, &IFeed::smartFeeRates, this, &PriceFeedConnection::onSmartFees, directUnique);
 }
 
 void PriceFeedConnection::disconnectFeed() {
@@ -54,14 +58,29 @@ void PriceFeedCoordinator::addSource(const QString &id, const QString &name, IFe
                           .currencies = {},
                           .rates = {},
                           .registration_id = registrationId,
-                          .connection = connection});
+                          .connection = connection,
+                          .has_default = false,
+                          .has_smart = false,
+                          .default_rate = {},
+                          .low = {},
+                          .medium = {},
+                          .fast = {}});
     connect(connection, &PriceFeedConnection::currenciesReady, this,
             &PriceFeedCoordinator::onCurrencies, qontrol::UNIQUE);
     connect(connection, &PriceFeedConnection::conversionRateReady, this,
             &PriceFeedCoordinator::onConversionRate, qontrol::UNIQUE);
     connect(feed, &QObject::destroyed, this, &PriceFeedCoordinator::onFeedDestroyed,
             qontrol::UNIQUE);
+    connect(connection, &PriceFeedConnection::feeCapabilitiesReady, this,
+            &PriceFeedCoordinator::onFeeCapabilities, qontrol::UNIQUE);
+    connect(connection, &PriceFeedConnection::defaultFeeReady, this,
+            &PriceFeedCoordinator::onDefaultFee, qontrol::UNIQUE);
+    connect(connection, &PriceFeedConnection::smartFeesReady, this,
+            &PriceFeedCoordinator::onSmartFees, qontrol::UNIQUE);
     feed->currencies();
+    if (m_sources.contains(id) && m_sources.value(id).registration_id == registrationId) {
+        feed->feeCapabilities();
+    }
 }
 
 auto PriceFeedCoordinator::removeSource(const QString &id) -> std::unique_ptr<PriceFeedConnection> {
@@ -69,6 +88,7 @@ auto PriceFeedCoordinator::removeSource(const QString &id) -> std::unique_ptr<Pr
         return nullptr;
     }
     auto previous = selected();
+    auto previousFees = selectedFees();
     auto source = m_sources.take(id);
     auto connection = std::unique_ptr<PriceFeedConnection>(source.connection);
     connection->disconnectFeed();
@@ -84,6 +104,10 @@ auto PriceFeedCoordinator::removeSource(const QString &id) -> std::unique_ptr<Pr
     }
     emit sourcesChanged();
     notifySelected(previous);
+    emit feeSourcesChanged();
+    if (previousFees != selectedFees()) {
+        emit selectedFeesChanged();
+    }
     return connection;
 }
 
@@ -179,8 +203,11 @@ void PriceFeedCoordinator::onConversionRate(quint64 registration_id, const QStri
 void PriceFeedCoordinator::onFeedDestroyed([[maybe_unused]] QObject *feed) {
     // QPointer is already cleared when destroyed() arrives.
     bool changed = false;
+    bool feesChanged = false;
     for (auto it = m_sources.begin(); it != m_sources.end();) {
         if (it->feed == nullptr) {
+            feesChanged = feesChanged || it.key() == m_fee_preferences.default_source ||
+                          it.key() == m_fee_preferences.smart_source;
             delete it->connection;
             it = m_sources.erase(it);
             changed = true;
@@ -191,5 +218,134 @@ void PriceFeedCoordinator::onFeedDestroyed([[maybe_unused]] QObject *feed) {
     if (changed) {
         emit sourcesChanged();
         emit selectedChanged();
+        emit feeSourcesChanged();
+        if (feesChanged) {
+            emit selectedFeesChanged();
+        }
+    }
+}
+
+void PriceFeedConnection::onFeeCapabilities([[maybe_unused]] ReqId req_id, bool has_default,
+                                            bool has_smart) {
+    emit feeCapabilitiesReady(m_registration_id, has_default, has_smart);
+}
+
+void PriceFeedConnection::onDefaultFee([[maybe_unused]] ReqId req_id, double rate) {
+    emit defaultFeeReady(m_registration_id, rate);
+}
+
+void PriceFeedConnection::onSmartFees([[maybe_unused]] ReqId req_id, double low, double medium,
+                                      double fast) {
+    emit smartFeesReady(m_registration_id, low, medium, fast);
+}
+
+void PriceFeedCoordinator::selectFees(const FeePreferences &preferences) {
+    auto previous = selectedFees();
+    m_fee_preferences = preferences;
+    m_fee_preferences.default_source.detach();
+    m_fee_preferences.smart_source.detach();
+    if (previous != selectedFees()) {
+        emit selectedFeesChanged();
+    }
+}
+
+auto PriceFeedCoordinator::feeSources() const -> QList<FeeSource> {
+    QList<FeeSource> result;
+    for (auto it = m_sources.cbegin(); it != m_sources.cend(); ++it) {
+        if (it->feed != nullptr && (it->has_default || it->has_smart)) {
+            result.append({.id = it.key(),
+                           .name = it->name,
+                           .has_default = it->has_default,
+                           .has_smart = it->has_smart});
+        }
+    }
+    std::ranges::sort(result, {}, &FeeSource::id);
+    return result;
+}
+
+auto PriceFeedCoordinator::selectedFees() const -> SelectedFees {
+    SelectedFees result{
+        .preferences = m_fee_preferences, .default_rate = {}, .low = {}, .medium = {}, .fast = {}};
+    auto source = m_sources.constFind(m_fee_preferences.default_source);
+    if (source != m_sources.cend() && source->feed != nullptr && source->has_default) {
+        result.default_rate = source->default_rate;
+    }
+    source = m_sources.constFind(m_fee_preferences.smart_source);
+    if (source != m_sources.cend() && source->feed != nullptr && source->has_smart) {
+        result.low = source->low;
+        result.medium = source->medium;
+        result.fast = source->fast;
+    }
+    return result;
+}
+
+void PriceFeedCoordinator::onFeeCapabilities(quint64 registration_id, bool has_default,
+                                             bool has_smart) {
+    auto source = std::ranges::find_if(m_sources, [registration_id](const Source &entry) {
+        return entry.registration_id == registration_id;
+    });
+    if (source == m_sources.end() || source->feed == nullptr) {
+        return;
+    }
+    auto previous = selectedFees();
+    auto feed = source->feed;
+    source->has_default = has_default;
+    source->has_smart = has_smart;
+    if (!has_default) {
+        source->default_rate.reset();
+    }
+    if (!has_smart) {
+        source->low.reset();
+        source->medium.reset();
+        source->fast.reset();
+    }
+    emit feeSourcesChanged();
+    if (previous != selectedFees()) {
+        emit selectedFeesChanged();
+    }
+    auto registered = [this, registration_id]() {
+        return std::ranges::any_of(m_sources, [registration_id](const Source &entry) {
+            return entry.registration_id == registration_id;
+        });
+    };
+    if (registered() && feed != nullptr && has_default) {
+        feed->requestDefaultFeeRate();
+    }
+    if (registered() && feed != nullptr && has_smart) {
+        feed->requestSmartFeeRates();
+    }
+}
+
+void PriceFeedCoordinator::onDefaultFee(quint64 registration_id, double rate) {
+    auto source = std::ranges::find_if(m_sources, [registration_id](const Source &entry) {
+        return entry.registration_id == registration_id;
+    });
+    if (source == m_sources.end() || source->feed == nullptr || !source->has_default) {
+        return;
+    }
+    auto previous = selectedFees();
+    source->default_rate = std::isfinite(rate) && rate > 0 ? std::optional(rate) : std::nullopt;
+    if (previous != selectedFees()) {
+        emit selectedFeesChanged();
+    }
+}
+
+void PriceFeedCoordinator::onSmartFees(quint64 registration_id, double low, double medium,
+                                       double fast) {
+    auto source = std::ranges::find_if(m_sources, [registration_id](const Source &entry) {
+        return entry.registration_id == registration_id;
+    });
+    if (source == m_sources.end() || source->feed == nullptr || !source->has_smart) {
+        return;
+    }
+    auto previous = selectedFees();
+    auto valid = [](double rate) -> std::optional<double> {
+        return std::isfinite(rate) && rate > 0 ? std::optional(rate) : std::nullopt;
+    };
+    source->low = valid(low);
+    source->medium = valid(medium);
+    source->fast = valid(fast);
+    if (previous != selectedFees()) {
+        emit selectedFeesChanged();
     }
 }

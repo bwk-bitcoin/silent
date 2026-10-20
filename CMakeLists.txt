@@ -566,6 +566,15 @@ if(SILENT_BUILD_HOST_SMOKE)
     set(SMOKE host_smoke)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        foreach(ABI_VERSION 2 3)
+            qt_add_library(plugin_abi${ABI_VERSION}_fixture MODULE tests/host/PluginAbiFixture.cpp)
+            target_link_libraries(plugin_abi${ABI_VERSION}_fixture PRIVATE silent_interfaces)
+            target_include_directories(plugin_abi${ABI_VERSION}_fixture PRIVATE
+                $<TARGET_PROPERTY:Qt6::Core,INTERFACE_INCLUDE_DIRECTORIES>)
+            target_compile_definitions(plugin_abi${ABI_VERSION}_fixture PRIVATE
+                $<TARGET_PROPERTY:Qt6::Core,INTERFACE_COMPILE_DEFINITIONS>)
+        endforeach()
+        target_compile_definitions(plugin_abi2_fixture PRIVATE SILENT_ABI2_FIXTURE)
         qt_add_library(price_feed_fixture MODULE tests/host/PriceFeedPlugin.cpp)
         # Like real plugins, use Qt headers but resolve Qt symbols from the host.
         target_link_libraries(price_feed_fixture PRIVATE silent_interfaces)
@@ -579,14 +588,19 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/host_smoke.cpp
         tests/host/MockPlugin.h
         tests/host/PriceProbe.h
+        tests/host/SpSigningProbe.h
         tests/host/price_feed_smoke.cpp
+        tests/host/sp_signing_smoke.cpp
         ${SILENT_APP_SOURCES}
     )
 
     add_dependencies(${SMOKE} RunBeforeBuild qontrol)
     if(TARGET price_feed_fixture)
-        add_dependencies(${SMOKE} price_feed_fixture)
+        target_sources(${SMOKE} PRIVATE tests/host/plugin_abi_smoke.cpp)
+        add_dependencies(${SMOKE} price_feed_fixture plugin_abi2_fixture plugin_abi3_fixture)
         target_compile_definitions(${SMOKE} PRIVATE
+            SILENT_ABI2_FIXTURE_PATH="$<TARGET_FILE:plugin_abi2_fixture>"
+            SILENT_ABI3_FIXTURE_PATH="$<TARGET_FILE:plugin_abi3_fixture>"
             SILENT_PRICE_FEED_FIXTURE="$<TARGET_FILE:price_feed_fixture>")
     endif()
 

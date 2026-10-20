@@ -28,6 +28,9 @@ public:
     [[nodiscard]] auto priceSources() const -> QList<PriceSource> override;
     [[nodiscard]] auto selectedPrice() const -> SelectedPrice override;
     void selectPrice(const QString &source, const QString &currency) override;
+    [[nodiscard]] auto feeSources() const -> QList<FeeSource> override;
+    [[nodiscard]] auto selectedFees() const -> SelectedFees override;
+    void selectFees(const FeePreferences &preferences) override;
     // The registry supplies the stable plugin id once it attributes a live instance.
     void registerPriceSource(const QString &instance_id, const QString &plugin_id);
     void setKeys(IKeys *keys, IModule *owner) override;

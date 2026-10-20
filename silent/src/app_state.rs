@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::set_datadir;
 use crate::{
     config::datadir,
-    ffi::{BackendServer, Network, PluginAccess, PluginGrant, QrDisplayLevels},
+    ffi::{BackendServer, Network, PluginAccess, PluginGrant, QrDisplayLevels, RustFeePreferences},
     state_crypt,
 };
 
@@ -27,6 +27,8 @@ pub struct AppState {
     pub price_source: String,
     #[serde(default)]
     pub price_currency: String,
+    #[serde(default = "default_fee_preferences")]
+    pub fee_preferences: FeePreferencesInternal,
     /// The QR display tuning picked last, as the steppers' levels, for every account.
     #[serde(default = "default_qr_level")]
     pub qr_density: u8,
@@ -92,6 +94,21 @@ fn default_qr_level() -> u8 {
     DEFAULT_QR_LEVEL
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FeePreferencesInternal {
+    mode: u8,
+    default_source: String,
+    smart_source: String,
+    tier: u8,
+}
+
+fn default_fee_preferences() -> FeePreferencesInternal {
+    FeePreferencesInternal {
+        tier: 1,
+        ..FeePreferencesInternal::default()
+    }
+}
+
 fn default_active_theme() -> String {
     DEFAULT_THEME.to_string()
 }
@@ -104,6 +121,7 @@ impl Default for AppState {
             language: String::new(),
             price_source: String::new(),
             price_currency: String::new(),
+            fee_preferences: default_fee_preferences(),
             qr_density: DEFAULT_QR_LEVEL,
             qr_contrast: DEFAULT_QR_LEVEL,
             qr_speed: DEFAULT_QR_LEVEL,
@@ -213,6 +231,31 @@ pub fn app_language() -> String {
 
 pub fn app_price_source() -> String {
     AppState::load().price_source
+}
+
+pub fn app_fee_preferences() -> RustFeePreferences {
+    let preferences = AppState::load().fee_preferences;
+    RustFeePreferences {
+        mode: preferences.mode,
+        default_source: preferences.default_source,
+        smart_source: preferences.smart_source,
+        tier: preferences.tier,
+    }
+}
+
+pub fn app_set_fee_preferences(preferences: RustFeePreferences) {
+    if preferences.mode > 2 || preferences.tier > 2 {
+        log::error!("invalid fee mode or tier");
+        return;
+    }
+    let mut state = AppState::load();
+    state.fee_preferences = FeePreferencesInternal {
+        mode: preferences.mode,
+        default_source: preferences.default_source,
+        smart_source: preferences.smart_source,
+        tier: preferences.tier,
+    };
+    state.save();
 }
 
 pub fn app_price_currency() -> String {
@@ -382,6 +425,54 @@ mod tests {
                 state.language.is_empty(),
                 "missing file should pick no language, got {:?}",
                 state.language
+            );
+        });
+    }
+
+    #[test]
+    fn fee_preferences_roundtrip_all_modes_and_tiers() {
+        with_isolated_datadir(|_base| {
+            let legacy: AppState = serde_json::from_str("{}").expect("legacy app state");
+            assert_eq!(legacy.fee_preferences.mode, 0, "old state starts Manual");
+            assert_eq!(legacy.fee_preferences.tier, 1, "old state starts Medium");
+            for mode in 0..=2 {
+                for tier in 0..=2 {
+                    app_set_fee_preferences(RustFeePreferences {
+                        mode,
+                        default_source: "default-provider".into(),
+                        smart_source: "smart-provider".into(),
+                        tier,
+                    });
+                    let loaded = app_fee_preferences();
+                    assert_eq!(loaded.mode, mode, "persist fee mode {mode}");
+                    assert_eq!(loaded.tier, tier, "persist smart tier {tier}");
+                    assert_eq!(
+                        loaded.default_source, "default-provider",
+                        "retain default source"
+                    );
+                    assert_eq!(
+                        loaded.smart_source, "smart-provider",
+                        "retain independent smart source"
+                    );
+                }
+            }
+            app_set_fee_preferences(RustFeePreferences {
+                mode: 3,
+                ..RustFeePreferences::default()
+            });
+            assert_eq!(
+                app_fee_preferences().mode,
+                2,
+                "reject invalid mode without overwriting preferences"
+            );
+            app_set_fee_preferences(RustFeePreferences {
+                tier: 3,
+                ..RustFeePreferences::default()
+            });
+            assert_eq!(
+                app_fee_preferences().tier,
+                2,
+                "reject invalid tier without overwriting preferences"
             );
         });
     }
