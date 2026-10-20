@@ -19,6 +19,7 @@
 #include <QDebug>
 #include <QThread>
 #include <common.h>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -285,12 +286,35 @@ void MusigAccountController::finalizeIfReady() {
     emit transactionReady(m_tx_hex);
 }
 
-// The prepared PSBT is already restricted to the leaf and holds no nonce and no
-// partial sig.
+// Retire the old attempt before publishing the reset PSBT.
 void MusigAccountController::restartRounds() {
-    m_psbt_v2_hex = m_prepared_psbt_v2_hex;
-    m_tx_hex.clear();
+    if (m_restart_thread != nullptr || m_psbt_v2_hex.isEmpty()) {
+        return;
+    }
+    m_restart_pending = true;
+    m_sign_reqs.clear();
+    m_restart_generation = ++m_signing_generation;
+    m_restart_source = m_psbt_v2_hex;
+    m_restart_result = std::make_shared<SignResult>();
+    auto result = m_restart_result;
+    m_restart_thread = QThread::create([result, network = network(),
+                                        policy = toQString(getDescriptor()).toStdString(),
+                                        original = m_restart_source.toStdString(),
+                                        prepared = m_prepared_psbt_v2_hex.toStdString()] {
+        *result = ::ledger_nonce_restart(network, policy, original, prepared);
+    });
+    connect(m_restart_thread, &QThread::finished, this,
+            &MusigAccountController::onRestartFinished, qontrol::UNIQUE);
+    startWorker(m_restart_thread);
     emit roundChanged(roundStatus());
+}
+
+auto MusigAccountController::isRestarting() const -> bool {
+    return m_restart_thread != nullptr;
+}
+
+auto MusigAccountController::restartPending() const -> bool {
+    return m_restart_pending;
 }
 
 // ===== Slots =====
@@ -480,6 +504,9 @@ void MusigAccountController::prepareTransaction(TransactionTemplate tx, MusigSpe
         return;
     }
     m_prepared_psbt_v2_hex = toQString(psbt->bytes_v2_hex());
+    ++m_signing_generation;
+    m_restart_pending = false;
+    m_sign_reqs.clear();
     m_psbt_v2_hex = m_prepared_psbt_v2_hex;
     m_spend_signers = signers;
     m_tx_hex.clear();
@@ -489,6 +516,13 @@ void MusigAccountController::prepareTransaction(TransactionTemplate tx, MusigSpe
 
 auto MusigAccountController::beginSignRequest(const QString &fingerprint)
     -> std::pair<IKeys *, ReqId> {
+    if (m_restart_pending) {
+        restartRounds();
+        return {nullptr, 0};
+    }
+    if (m_restart_thread != nullptr) {
+        return {nullptr, 0};
+    }
     if (m_psbt_v2_hex.isEmpty() || !m_account.has_value() ||
         signingKeys().contains(fingerprint.toLower())) {
         return {nullptr, 0};
@@ -534,6 +568,8 @@ void MusigAccountController::signRoundOnDevice(const QString &fingerprint) {
 }
 
 void MusigAccountController::cancelSigning() {
+    ++m_signing_generation;
+    m_restart_pending = false;
     m_spend_signers.clear();
     m_prepared_psbt_v2_hex.clear();
     m_psbt_v2_hex.clear();
@@ -542,7 +578,8 @@ void MusigAccountController::cancelSigning() {
 }
 
 void MusigAccountController::broadcast() {
-    if (m_tx_hex.isEmpty() || !m_account.has_value() || m_broadcast_thread != nullptr) {
+    if (m_restart_pending || m_restart_thread != nullptr || m_tx_hex.isEmpty() ||
+        !m_account.has_value() || m_broadcast_thread != nullptr) {
         return;
     }
     // stop() waits on this thread before it drops the account and before stopped()
@@ -593,9 +630,34 @@ void MusigAccountController::onKeysError(std::optional<ReqId> req_id, const QStr
     if (kind == plugin::SignError::MusigSession) {
         // Every nonce is dropped: the answers still to come are for the old ones.
         m_sign_reqs.clear();
+        m_restart_message = message;
         restartRounds();
+        return;
     }
     emit signingFailed(message, kind);
+}
+
+void MusigAccountController::onRestartFinished() {
+    m_restart_thread = nullptr;
+    if (m_stopping) {
+        return;
+    }
+    if (m_restart_generation != m_signing_generation || m_restart_source != m_psbt_v2_hex) {
+        if (!m_psbt_v2_hex.isEmpty()) {
+            emit roundChanged(roundStatus());
+        }
+        return;
+    }
+    if (!m_restart_result->is_ok) {
+        emit signingFailed(toQString(m_restart_result->error), plugin::SignError::Other);
+        return;
+    }
+    m_restart_pending = false;
+    m_psbt_v2_hex = toQString(m_restart_result->psbt_v2_hex);
+    m_prepared_psbt_v2_hex = m_psbt_v2_hex;
+    m_tx_hex.clear();
+    emit roundChanged(roundStatus());
+    emit signingFailed(m_restart_message, plugin::SignError::MusigSession);
 }
 
 // The PSBT keeps the round it was at.
@@ -653,4 +715,3 @@ void MusigAccountController::receiveClicked() {
 void MusigAccountController::settingsClicked() {
     loadPanel("settings");
 }
-

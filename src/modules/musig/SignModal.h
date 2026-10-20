@@ -6,6 +6,7 @@
 #include <QSet>
 #include <QString>
 #include <cstdint>
+#include <memory>
 #include <silent.h>
 
 class MusigAccountController;
@@ -51,6 +52,9 @@ public slots:
     void onSigningFailed(const QString &message, plugin::SignError kind);
     void onFinalizeFailed(const QString &message);
     void onBroadcastDone(const TxResult &result);
+    void onPlanReady();
+    void onDevicesChanged();
+    void onRetryClicked();
 
 protected:
     // What the notice reports, so a language change can retitle it.
@@ -63,6 +67,7 @@ protected:
     void retranslateUi();
     // Rebuilds the rows, the step and the action from the controller's round.
     void refresh();
+    void requestPlan();
     // The same from `status`.
     void render(const MusigRoundStatus &status);
     void showFailure(Failure failure, const QString &text);
@@ -78,6 +83,7 @@ private:
     qontrol::Column *m_rows = nullptr;
     catalog::Button *m_continue_btn = nullptr;
     catalog::Button *m_broadcast_btn = nullptr;
+    catalog::Button *m_retry_btn = nullptr;
     catalog::ModalActions *m_actions = nullptr;
     // The partial signatures step is shown: Continue was clicked, or the modal opened
     // on a session past its nonces.
@@ -85,6 +91,11 @@ private:
     Failure m_failure = Failure::None;
     // The keys of a single-key path that signed, lowercased.
     QSet<QString> m_signed;
+    std::shared_ptr<SigningPlan> m_plan;
+    QString m_plan_psbt;
+    bool m_plan_loading = false;
+    bool m_plan_ready = false;
+    bool m_plan_dirty = false;
 };
 
 } // namespace musig

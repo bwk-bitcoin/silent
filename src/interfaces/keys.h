@@ -137,8 +137,9 @@ signals:
     // The device's answer to checkDescriptorRegistered().
     void registrationChecked(ReqId req_id, bool registered);
     // A failure the caller reports, once. `kind` is MusigSession when a key lost its
-    // MuSig2 session: drop every nonce and partial signature and start again from
-    // round 1. Other for everything else.
+    // MuSig2 session: retire the account's Ledger attempts before dropping every nonce
+    // and partial signature and starting a fresh attempt at round 1. Other for
+    // everything else.
     void error(std::optional<ReqId> req_id, QString message,
                plugin::SignError kind = plugin::SignError::Other);
     // The user closed the flow, or it already showed why there is no answer: the

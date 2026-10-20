@@ -211,6 +211,7 @@ public:
     [[nodiscard]] static auto deviceXpubPaths(quint32 capabilities) -> QStringList;
     // The capability bits `entry`'s device reports, 0 for a signer that is no USB device.
     [[nodiscard]] static auto deviceCapabilities(const plugin::SignerEntry &entry) -> quint32;
+    [[nodiscard]] static auto toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice;
     // 0 on Bitcoin, 1 on every test network.
     [[nodiscard]] static auto coinType() -> int;
     // The Rust handle, for the tab and the modals of this module only. Null until the
@@ -289,6 +290,7 @@ public:
 signals:
     // The key records changed; the tab rebuilds on it.
     void keysChanged();
+    void nonceSessionsChanged();
     // The live device set changed and the Rust handle already has it.
     void liveDevicesChanged();
 
@@ -364,7 +366,6 @@ protected:
     void teardownModule();
     void refreshLiveDevices();
     void bindHwiModule();
-    [[nodiscard]] static auto toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice;
     // Adds a key with its routes and its xpubs, or nothing at all, without
     // keysChanged(): the caller changes the new key further first.
     [[nodiscard]] auto insertKey(const QString &fingerprint, const QString &alias,

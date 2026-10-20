@@ -117,6 +117,7 @@ signals:
     void cancelled(ReqId req_id);
 
 public slots:
+    void onNonceSnapshotReady();
     void onRowClicked();
     // A device came, went or changed state: the picker on display lists it as it is.
     void onDevicesChanged();
@@ -166,6 +167,7 @@ private:
     std::optional<FlowRow> m_current;
     std::optional<VerifyResult> m_verify_result;
     bool m_answered = false;
+    bool m_nonce_loaded = false;
 
     // Picker: one row per key the request needs, an empty state when there is none,
     // then the connected devices that cannot help.

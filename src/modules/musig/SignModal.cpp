@@ -15,6 +15,7 @@
 #include "interfaces/keys.h"
 #include "interfaces/signer.h"
 #include "modules/keys/DeviceName.h"
+#include "modules/keys/KeysModule.h"
 #include "modules/musig/MusigAccountController.h"
 #include "modules/musig/MusigModule.h"
 #include "theme/Palette.h"
@@ -23,9 +24,12 @@
 #include <QEvent>
 #include <QHash>
 #include <QPushButton>
+#include <QThread>
 #include <Qontrol>
 #include <algorithm>
 #include <common.h>
+#include <memory>
+#include <utility>
 
 namespace musig {
 
@@ -67,13 +71,12 @@ void greyRow(catalog::SelectRow *row, const QString &why) {
 } // namespace
 
 SignModal::SignModal(MusigAccountController *controller) : m_controller(controller) {
-    init();
-    doConnect();
-    view();
     // Reopened past its nonces, the session goes on with the partial signatures.
     auto round = m_controller->roundStatus().round;
     m_partial = round == MusigRound::PartialSigs || round == MusigRound::Ready;
-    refresh();
+    init();
+    doConnect();
+    view();
 }
 
 void SignModal::init() {
@@ -87,17 +90,26 @@ void SignModal::init() {
     m_rows->spacing(resolve(Spacing::XS));
     m_continue_btn = catalog::btnContinue();
     m_broadcast_btn = catalog::btnBroadcast();
+    m_retry_btn = catalog::btnTryAgain();
+    m_retry_btn->setVisible(false);
     m_actions = new catalog::ModalActions;
     m_actions->setBack(catalog::ModalActions::Back::None);
     m_actions->addAction(m_continue_btn);
     m_actions->addAction(m_broadcast_btn);
+    m_actions->addAction(m_retry_btn);
 }
 
 void SignModal::doConnect() {
+    connect(m_controller, &QObject::destroyed, this, &QDialog::reject, qontrol::UNIQUE);
+    connect(Host::get()->events(), &HostEvents::instanceRegistered, this,
+            &SignModal::onDevicesChanged, qontrol::UNIQUE);
+    connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
+            &SignModal::onDevicesChanged, qontrol::UNIQUE);
     connect(m_continue_btn, &QPushButton::clicked, this, &SignModal::onContinueClicked,
             qontrol::UNIQUE);
     connect(m_broadcast_btn, &QPushButton::clicked, this, &SignModal::onBroadcastClicked,
             qontrol::UNIQUE);
+    connect(m_retry_btn, &QPushButton::clicked, this, &SignModal::onRetryClicked, qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::roundChanged, this, &SignModal::onRoundChanged,
             qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::transactionReady, this,
@@ -142,16 +154,52 @@ void SignModal::retranslateUi() {
 }
 
 void SignModal::refresh() {
+    requestPlan();
     render(m_controller->roundStatus());
+}
+
+void SignModal::requestPlan() {
+    m_plan_ready = false;
+    if (m_plan_loading) {
+        m_plan_dirty = true;
+        return;
+    }
+    m_plan_loading = true;
+    m_plan_dirty = false;
+    m_plan_psbt = m_controller->psbtInFlight();
+    m_plan = std::make_shared<SigningPlan>();
+    auto plan = m_plan;
+    rust::Vec<LiveDevice> devices;
+    for (const auto &entry : Host::get()->signers()) {
+        if (entry.signer != nullptr && entry.signer->state() == plugin::SignerState::Ready) {
+            devices.push_back(keys::KeysModule::toLiveDevice(entry));
+        }
+    }
+    auto *thread = QThread::create([plan, network = m_controller->network(),
+                                    psbt = m_plan_psbt.toStdString(),
+                                    devices = std::move(devices)]() mutable {
+        *plan = ::ledger_nonce_plan(network, psbt, std::move(devices));
+    });
+    connect(thread, &QThread::finished, this, &SignModal::onPlanReady, qontrol::UNIQUE);
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater, qontrol::UNIQUE);
+    thread->start();
 }
 
 void SignModal::render(const MusigRoundStatus &status) {
     // clear() also resets the layout spacing.
     catalog::clearRows(m_rows);
     m_rows->spacing(resolve(Spacing::XS));
+    m_retry_btn->setVisible(m_controller->restartPending());
+    m_retry_btn->setEnabled(!m_controller->isRestarting());
     if (!status.is_ok) {
         showFailure(Failure::Sign, toQString(status.error));
         m_continue_btn->setVisible(false);
+        m_broadcast_btn->setEnabled(false);
+        return;
+    }
+    if (!m_plan_ready) {
+        m_lead->setText(TR("pill-checking"));
+        m_continue_btn->setEnabled(false);
         m_broadcast_btn->setEnabled(false);
         return;
     }
@@ -170,6 +218,21 @@ void SignModal::render(const MusigRoundStatus &status) {
     if (auto *keys = Host::get()->keys(MusigModule::get()); keys != nullptr) {
         for (const auto &entry : keys->keys(m_controller->network())) {
             entries.insert(entry.fingerprint.toLower(), entry);
+        }
+    }
+    if (m_plan->is_ok) {
+        for (const auto &candidate : m_plan->candidates) {
+            auto fingerprint = toQString(candidate.fingerprint).toLower();
+            auto entry = entries.value(fingerprint);
+            bool cachedRoundOne = !entry.can_sign && candidate.can_sign &&
+                                  candidate.route == KeyRouteKind::Usb;
+            entry.can_musig = entry.can_musig || cachedRoundOne;
+            entry.can_sign = candidate.can_sign;
+            if (candidate.route != KeyRouteKind::Unknown) {
+                entry.route = candidate.route;
+            }
+            entry.on_device = entry.on_device && entry.route == KeyRouteKind::Usb && entry.can_sign;
+            entries.insert(fingerprint, entry);
         }
     }
     bool finalized = !m_controller->finalizedTx().isEmpty();
@@ -232,7 +295,8 @@ void SignModal::render(const MusigRoundStatus &status) {
         }
         auto *row = keyRow(entry, fingerprint, pill);
         // Each key answers one request at a time; the others stay clickable meanwhile.
-        row->setClickable(!in && usable && !signing);
+        row->setClickable(!in && usable && !signing && m_plan->is_ok &&
+                          !m_controller->restartPending());
         if (!usable) {
             greyRow(row, why);
         }
@@ -295,7 +359,7 @@ void SignModal::render(const MusigRoundStatus &status) {
         reason = TR("musig-sign-reason").arg(left);
     }
     m_actions->setReason(reason);
-    bool idle = busy.isEmpty();
+    bool idle = busy.isEmpty() && m_plan->is_ok && !m_controller->restartPending();
     m_continue_btn->setVisible(!partial);
     m_continue_btn->setEnabled(idle && left == 0);
     m_broadcast_btn->setVisible(partial);
@@ -337,8 +401,45 @@ auto SignModal::failureTitle() const -> QString {
 
 // ===== Slots =====
 
+void SignModal::onPlanReady() {
+    m_plan_loading = false;
+    if (m_plan_dirty || m_plan_psbt != m_controller->psbtInFlight()) {
+        refresh();
+        return;
+    }
+    m_plan_ready = true;
+    if (!m_plan->is_ok) {
+        showFailure(Failure::Sign, toQString(m_plan->error));
+    }
+    render(m_controller->roundStatus());
+}
+
+void SignModal::onDevicesChanged() {
+    refresh();
+}
+
+void SignModal::onRetryClicked() {
+    m_notice->setVisible(false);
+    m_controller->restartRounds();
+    refresh();
+}
+
 void SignModal::onCosignerClicked() {
+    if (!m_plan_ready || !m_plan->is_ok || m_plan_psbt != m_controller->psbtInFlight() ||
+        m_controller->restartPending()) {
+        return;
+    }
     auto fingerprint = sender()->property(K_FINGERPRINT).toString();
+    bool usable = false;
+    for (const auto &candidate : m_plan->candidates) {
+        if (toQString(candidate.fingerprint).compare(fingerprint, Qt::CaseInsensitive) == 0) {
+            usable = candidate.can_sign && !candidate.musig_done;
+            break;
+        }
+    }
+    if (!usable) {
+        return;
+    }
     m_notice->setVisible(false);
     // A key on its connected USB device signs in place, its row On Device while every
     // other key can be asked too; another route runs in its own window, over this one.
@@ -371,6 +472,7 @@ void SignModal::onSignerAnswered(const QString &fingerprint) {
 
 void SignModal::onRoundChanged(const MusigRoundStatus &status) {
     // A single-key path has no rounds to say who signed: the key asked did.
+    requestPlan();
     render(status);
 }
 

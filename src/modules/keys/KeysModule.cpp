@@ -513,12 +513,27 @@ void KeysModule::signOnDevice(ReqId req_id, const QString &psbt_v2_hex, const QS
                               const QString &fingerprint) {
     auto device = flow::liveDevice(fingerprint);
     if (!device.has_value()) {
-        m_bus->deliverError(req_id, TR("flow-usb-disconnected-body").arg(fingerprint));
-        return;
+        bool ledger = false;
+        if (rust() != nullptr) {
+            for (const auto &record : rust()->key_devices(fingerprint.toStdString())) {
+                if (toQt(record.kind).startsWith(QStringLiteral("ledger"), Qt::CaseInsensitive)) {
+                    ledger = true;
+                    break;
+                }
+            }
+        }
+        if (!ledger) {
+            m_bus->deliverError(req_id, TR("flow-usb-disconnected-body").arg(fingerprint));
+            return;
+        }
     }
     // Deleted once it answers, or with this module.
-    auto *sign = new flow::DeviceSign(device->signer, device->instanceId, psbt_v2_hex, this);
-    m_device_signs.insert(sign, {.bus_req = req_id, .device = deviceName(*device->signer)});
+    auto *sign = new flow::DeviceSign(this, device.has_value() ? device->signer : nullptr,
+                                     device.has_value() ? device->instanceId : QString(),
+                                     psbt_v2_hex, fingerprint, this);
+    m_device_signs.insert(
+        sign, {.bus_req = req_id,
+               .device = device.has_value() ? deviceName(*device->signer) : fingerprint});
     connect(sign, &flow::DeviceSign::signedPsbt, this, &KeysModule::onDeviceSignedPsbt,
             qontrol::UNIQUE);
     connect(sign, &flow::DeviceSign::failed, this, &KeysModule::onDeviceSignFailed,

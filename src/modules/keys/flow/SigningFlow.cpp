@@ -23,6 +23,7 @@
 
 #include <QDebug>
 #include <Qontrol>
+#include <QThread>
 
 #include <algorithm>
 #include <utility>
@@ -147,6 +148,24 @@ SigningFlow::SigningFlow(KeysModule *module, Request request)
 }
 
 void SigningFlow::begin() {
+    if (m_request.context == Context::Sign && !m_nonce_loaded) {
+        QStringList fingerprints;
+        for (const auto &key : m_module->keys()) {
+            fingerprints.append(KeysModule::toQt(key.fingerprint));
+        }
+        auto *thread = QThread::create([fingerprints] {
+            for (const auto &fingerprint : fingerprints) {
+                auto result = ::ledger_nonce_refresh(fingerprint.toStdString());
+                if (!result.is_ok) {
+                    qWarning() << "Ledger nonce cache:" << KeysModule::toQt(result.error);
+                }
+            }
+        });
+        connect(thread, &QThread::finished, this, &SigningFlow::onNonceSnapshotReady, qontrol::UNIQUE);
+        connect(thread, &QThread::finished, thread, &QObject::deleteLater, qontrol::UNIQUE);
+        thread->start();
+        return;
+    }
     switch (m_request.context) {
     case Context::Sign: {
         auto rows = signRows();
@@ -488,9 +507,16 @@ void SigningFlow::closeFlow() {
 
 // ===== Slots =====
 
+void SigningFlow::onNonceSnapshotReady() {
+    m_nonce_loaded = true;
+    if (!m_answered) {
+        begin();
+    }
+}
+
 void SigningFlow::onDevicesChanged() {
     // Only the picker lists devices: a route on display keeps its own device.
-    if (m_flow != nullptr || m_answered) {
+    if (m_flow != nullptr || m_answered || (m_request.context == Context::Sign && !m_nonce_loaded)) {
         return;
     }
     switch (m_request.context) {

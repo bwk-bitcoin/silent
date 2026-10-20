@@ -12,6 +12,7 @@
 #include <QStringList>
 #include <Qontrol>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <silent.h>
 
@@ -21,8 +22,8 @@ class QThread;
 
 // Owns the Rust account and the PSBT in flight. Drives MuSig2 as one
 // keys()->sign() per round: Nonces, then PartialSigs, then finalize at Ready. On
-// SignError::MusigSession it drops every nonce and partial sig and goes back to
-// round 1 over the prepared PSBT.
+// SignError::MusigSession it retires Ledger allocations on a worker, then drops
+// every nonce and partial sig and starts a fresh attempt over the prepared PSBT.
 class MusigAccountController : public AccountBackend {
     Q_OBJECT
 
@@ -66,6 +67,8 @@ public:
     // The finalized transaction hex, empty until the PSBT in flight is finalized.
     // The keys asked to sign now, lowercased fingerprints.
     [[nodiscard]] auto signingKeys() const -> QSet<QString>;
+    [[nodiscard]] auto isRestarting() const -> bool;
+    [[nodiscard]] auto restartPending() const -> bool;
     [[nodiscard]] auto finalizedTx() const -> QString;
     // The fingerprints of the spend path the prepared transaction spends with, empty
     // with no transaction prepared.
@@ -117,6 +120,7 @@ public slots:
     // the wait.
     void signRoundOnDevice(const QString &fingerprint);
     void cancelSigning();
+    void restartRounds();
     void broadcast();
     void onKeysSigned(ReqId req_id, const QString &psbt_v2_hex);
     void onKeysError(std::optional<ReqId> req_id, const QString &message, plugin::SignError kind);
@@ -124,6 +128,7 @@ public slots:
     void onBroadcastResult(const TxResult &result);
     void onBroadcastThreadFinished();
     void onWorkerFinished();
+    void onRestartFinished();
     void historyClicked();
     void coinsClicked();
     void sendClicked();
@@ -137,7 +142,6 @@ protected:
     // PSBT, or that key already asked). Every key may be asked at once.
     [[nodiscard]] auto beginSignRequest(const QString &fingerprint) -> std::pair<IKeys *, ReqId>;
     void finalizeIfReady();
-    void restartRounds();
 
 private:
     QPointer<qontrol::Panel> m_current_panel;
@@ -157,6 +161,13 @@ private:
     // Sign requests in flight, each one key's, by request id. Answers are merged into
     // the PSBT as it is by then, so keys sign at once.
     QHash<ReqId, QString> m_sign_reqs;
+    QThread *m_restart_thread = nullptr;
+    std::shared_ptr<SignResult> m_restart_result;
+    QString m_restart_source;
+    QString m_restart_message;
+    bool m_restart_pending = false;
+    std::uint64_t m_signing_generation = 0;
+    std::uint64_t m_restart_generation = 0;
     bool m_init = false;
     bool m_stopping = false;
 };

@@ -44,18 +44,19 @@ void UsbRouteFlow::start() {
     if (!device.has_value()) {
         device = liveDevice(row().fingerprint);
     }
-    if (!device.has_value()) {
+    if (!device.has_value() && request().context != Context::Sign) {
         showUsbError(UsbError::Disconnected);
         return;
     }
-    m_device = device->signer;
-    m_device_instance = device->instanceId;
+    m_device = device.has_value() ? device->signer : nullptr;
+    m_device_instance = device.has_value() ? device->instanceId : QString();
 
     QString address;
     switch (request().context) {
     case Context::Sign: {
         // Deleted once it answers, or with this flow.
-        auto *sign = new DeviceSign(m_device, m_device_instance, psbt(), this);
+        auto *sign =
+            new DeviceSign(module(), m_device, m_device_instance, psbt(), row().fingerprint, this);
         connect(sign, &DeviceSign::signedPsbt, this, &UsbRouteFlow::onDeviceSignedPsbt,
                 qontrol::UNIQUE);
         connect(sign, &DeviceSign::failed, this, &UsbRouteFlow::onDeviceSignFailed,
@@ -256,6 +257,9 @@ void UsbRouteFlow::onDeviceSignFailed(UsbError error, const QString &message,
         return;
     }
     showUsbError(error);
+    if (error == UsbError::Failed && !message.isEmpty()) {
+        m_usb_status->setSubtitle(message);
+    }
 }
 
 void UsbRouteFlow::onDeviceXpub(ReqId req_id, const QString &xpub) {

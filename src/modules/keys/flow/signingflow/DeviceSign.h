@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 
 #include <QObject>
@@ -11,6 +12,12 @@
 #include <interfaces/types.h>
 
 class ISigner;
+struct LedgerNonceSignResult;
+struct SignResult;
+
+namespace keys {
+class KeysModule;
+}
 
 namespace keys::flow {
 
@@ -28,8 +35,8 @@ class DeviceSign final : public QObject {
     Q_OBJECT
 
 public:
-    DeviceSign(ISigner *device, QString instance_id, QString psbt_v2_hex,
-               QObject *parent = nullptr);
+    DeviceSign(KeysModule *module, ISigner *device, QString instance_id, QString psbt_v2_hex,
+               QString fingerprint, QObject *parent = nullptr);
     ~DeviceSign() override;
     // Asks the device to sign for the wallet `descriptor`.
     void start(const QString &descriptor);
@@ -40,21 +47,35 @@ signals:
     void failed(UsbError error, QString message, plugin::SignError kind);
 
 public slots:
+    void onPrepared();
+    void onMerged();
+    void onInvalidated();
+    void onNoncesFetched(const QString &error);
     void onDeviceSigned(ReqId req_id, const QString &psbt_base64);
     void onDeviceError(std::optional<ReqId> req_id, const QString &message, plugin::SignError kind);
     // An unplugged device never answers: its request fails here.
     void onInstanceRemoved(const QString &id);
 
 protected:
+    void prepareLedger();
+    void fetchNonces();
+    void sendPayload(const QString &payload);
     // Stops listening to the device and deletes this once the answer is out.
     void finish();
     void fail(UsbError error, const QString &message,
               plugin::SignError kind = plugin::SignError::Other);
 
 private:
+    QPointer<KeysModule> m_module;
     QPointer<ISigner> m_device;
     QString m_instance_id;
     QString m_psbt_v2_hex;
+    QString m_descriptor;
+    QString m_fingerprint;
+    bool m_replenish = false;
+    std::shared_ptr<LedgerNonceSignResult> m_prepared;
+    std::shared_ptr<SignResult> m_result;
+    QString m_device_error;
     ReqId m_req = 0;
 };
 
