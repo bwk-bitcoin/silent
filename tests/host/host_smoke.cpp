@@ -24,6 +24,7 @@
 #include <Qontrol>
 #include <algorithm>
 #include <common.h>
+#include <memory>
 #include <optional>
 #include <silent.h>
 
@@ -47,6 +48,8 @@
 #include "ExternalSpendConsumer.h"
 #include "MockPlugin.h"
 #include "PriceProbe.h"
+#include "StorageProbe.h"
+#include "example_storage_smoke.h"
 
 namespace {
 
@@ -239,6 +242,13 @@ auto main(int argc, char *argv[]) -> int {
     // Initialise the host singleton before the registry connects to its events.
     Host::get();
     AppController::init();
+    if (arguments.size() == 3 && arguments.at(1) == QStringLiteral("--storage-example")) {
+        Theme::init();
+        AppController::get()->registerBuiltinPlugin(std::make_unique<smoke::MockPlugin>());
+        smoke::exampleStorageSmoke(arguments.at(2));
+        std::fprintf(stdout, "Example storage smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
     if (arguments.contains(QStringLiteral("--rust-boundary"))) {
         Theme::init();
         smoke::boundarySmoke();
@@ -251,7 +261,18 @@ auto main(int argc, char *argv[]) -> int {
         std::fprintf(stdout, "MuSig reset smoke: OK\n");
         return gOk ? 0 : 1;
     }
+    if (arguments.contains(QStringLiteral("--storage-contract"))) {
+        Theme::init();
+        check(smoke::storageSmoke(QStringLiteral("host smoke")), "storage contract");
+        std::fprintf(stdout, "storage contract smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
 #ifdef SILENT_ABI2_FIXTURE_PATH
+    if (arguments.contains(QStringLiteral("--plugin-abi"))) {
+        smoke::pluginAbiSmoke();
+        std::fprintf(stdout, "plugin ABI smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
     smoke::pluginAbiSmoke();
 #endif
     check(smoke::priceFeedSmoke(), "price feed lifecycle and Send invariants");
@@ -259,8 +280,9 @@ auto main(int argc, char *argv[]) -> int {
     smoke::MockPlugin plugin;
     check(qobject_cast<IPlugin *>(&plugin) == &plugin &&
               plugin.qt_metacast("dev.silent.IPlugin/2.0") == nullptr &&
-              plugin.qt_metacast("dev.silent.IPlugin/3.0") == nullptr,
-          "mock plugin metadata exposes ABI 4 only");
+              plugin.qt_metacast("dev.silent.IPlugin/3.0") == nullptr &&
+              plugin.qt_metacast("dev.silent.IPlugin/4.0") == nullptr,
+          "mock plugin metadata exposes ABI 5 only");
     auto *module = plugin.module();
 
     PluginRegistry registry;

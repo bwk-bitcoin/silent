@@ -7,8 +7,11 @@
 #include <QPointer>
 #include <map>
 #include <memory>
-#include <optional>
 #include <utility>
+
+namespace host {
+class StorageHandle;
+} // namespace host
 
 class IKeys;
 class MainWindow;
@@ -37,8 +40,7 @@ public:
     [[nodiscard]] IKeys *keys(IModule *caller) override;
     [[nodiscard]] auto transactions(IModule *caller) -> ITransactions * override;
     auto requestAccess(IModule *caller, plugin::Access wanted) -> plugin::Access override;
-    auto loadState(IModule *caller) -> std::optional<QByteArray> override;
-    auto saveState(IModule *caller, const QByteArray &state) -> bool override;
+    [[nodiscard]] auto storage(IModule *caller) -> IStorage * override;
     void requestSignerPolling(IModule *requester, bool enabled) override;
     void refreshLauncher() override;
 
@@ -133,6 +135,7 @@ private:
     // The handles each module was given, so a module gets the same one every call.
     QHash<IModule *, host::KeysHandle *> m_keys_handles;
     QHash<IModule *, host::TransactionsHandle *> m_transaction_handles;
+    QHash<IModule *, host::StorageHandle *> m_storage_handles;
     std::map<std::pair<IModule *, IInstance *>, std::unique_ptr<host::InstanceHandle>>
         m_instance_handles;
     // A plugin is being asked: a call made meanwhile is refused, not asked again.

@@ -19,11 +19,16 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Mutex,
+    sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 #[cfg(any(unix, windows))]
 use std::io::Write;
+#[cfg(unix)]
+use std::{
+    ffi::OsStr,
+    os::fd::{AsFd, BorrowedFd},
+};
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -37,12 +42,21 @@ use chacha20poly1305::{
     aead::{AeadInPlace, KeyInit},
     XChaCha20Poly1305, XNonce,
 };
+#[cfg(unix)]
+use rustix::{
+    fs::{fsync, openat, renameat, unlinkat, AtFlags, Mode, OFlags},
+    io::Errno,
+};
 use zeroize::Zeroizing;
 
-use crate::config::datadir;
-use crate::ffi::{PluginStateResult, StateIndexResult, StateUnlockInfo};
-use crate::keys::crypto::{self, Password};
-use crate::keys::record::SecretEnvelope;
+use crate::{
+    config::datadir,
+    ffi::{StateIndexResult, StateUnlockInfo},
+    keys::{
+        crypto::{self, Password},
+        record::SecretEnvelope,
+    },
+};
 
 /// The password key, sealed under the password.
 pub const KEY_FILE: &str = "unlock.key";
@@ -69,6 +83,16 @@ static KEY: Mutex<Option<PublicKey>> = Mutex::new(None);
 /// part of every envelope, so any single file can be opened for debug with the
 /// device (ws-plaude/silent#44).
 static KEY_PATH: Mutex<Option<DerivationPath>> = Mutex::new(None);
+// Take this before key/session locks. Grant/key changes exclude authorization through rename.
+static PUBLICATION: RwLock<()> = RwLock::new(());
+
+pub(crate) fn publication_guard() -> RwLockReadGuard<'static, ()> {
+    PUBLICATION.read().unwrap_or_else(|e| e.into_inner())
+}
+
+pub(crate) fn publication_change_guard() -> RwLockWriteGuard<'static, ()> {
+    PUBLICATION.write().unwrap_or_else(|e| e.into_inner())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnlockKind {
@@ -148,8 +172,19 @@ impl bwk::persist::cipher::Cipher for StateCipher {
 }
 
 fn set_key(key: Option<PublicKey>, path: Option<DerivationPath>) {
-    *KEY.lock().unwrap_or_else(|e| e.into_inner()) = key;
-    *KEY_PATH.lock().unwrap_or_else(|e| e.into_inner()) = key.and(path);
+    let _publication = publication_change_guard();
+    let path = key.and(path);
+    let changed = {
+        let mut held_key = KEY.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held_path = KEY_PATH.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = *held_key != key || *held_path != path;
+        *held_key = key;
+        *held_path = path;
+        changed
+    };
+    if changed {
+        crate::storage::key_changed();
+    }
     bwk::persist::cipher::set_cipher(key.map(|_| {
         std::sync::Arc::new(StateCipher) as std::sync::Arc<dyn bwk::persist::cipher::Cipher>
     }));
@@ -190,6 +225,12 @@ pub fn opaque_name(kind: &str, name: &str) -> Result<String, String> {
 
 pub fn is_unlocked() -> bool {
     key().is_ok()
+}
+
+/// Whether the unlock key is held. Unlike `is_unlocked`, the crate tests' fixed key
+/// does not count, so a locked state reads as locked in every build.
+pub fn holds_key() -> bool {
+    KEY.lock().unwrap_or_else(|e| e.into_inner()).is_some()
 }
 
 /// Forgets the key: the state cannot be read or written until the next unlock.
@@ -313,20 +354,83 @@ pub(crate) fn write_state_durable(path: &Path, text: &str) -> Result<(), String>
     write_sealed_durable(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(unix)]
 fn write_sealed_durable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| std::io::Error::other("state path has no parent"))?;
     let parent = fs::canonicalize(parent)?;
-    #[cfg(unix)]
     let directory = fs::File::open(&parent)?;
     // An account directory may have just been created; persist its ancestor links too.
-    #[cfg(unix)]
     for ancestor in parent.ancestors().skip(1) {
         fs::File::open(ancestor)?.sync_all()?;
     }
-    #[cfg(windows)]
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("state path has no file name"))?;
+    let temp = Path::new(name).with_extension("tmp");
+    replace_at(directory.as_fd(), name, temp.as_os_str(), bytes, || {
+        Ok::<(), std::io::Error>(())
+    })
+}
+
+/// Replaces `name` in `directory` with `bytes`, relative to the directory handle and
+/// without following a link: writes a newly created private `temp`, syncs it, asks
+/// `commit` and only if it passes renames the temp over `name`, then syncs the
+/// directory. An error after the rename can leave the complete new file installed; a
+/// partial file is never installed. `commit`'s own error is returned as it is.
+#[cfg(unix)]
+pub(crate) fn replace_at<E: From<std::io::Error>, G>(
+    directory: BorrowedFd<'_>,
+    name: &OsStr,
+    temp: &OsStr,
+    bytes: &[u8],
+    commit: impl FnOnce() -> Result<G, E>,
+) -> Result<(), E> {
+    // A temp left by an interrupted write, or planted there, is unlinked, never followed.
+    match unlinkat(directory, temp, AtFlags::empty()) {
+        Ok(()) | Err(Errno::NOENT) => {}
+        Err(error) => return Err(std::io::Error::from(error).into()),
+    }
+    let created = openat(
+        directory,
+        temp,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )
+    .map_err(std::io::Error::from)?;
+    let mut file = fs::File::from(created);
+    #[cfg(test)]
+    let bytes = {
+        let (first, rest) = bytes.split_at(bytes.len() / 2);
+        file.write_all(first)?;
+        durable_write_checkpoint(DurableWriteStage::TempPartial)?;
+        rest
+    };
+    file.write_all(bytes)?;
+    #[cfg(test)]
+    durable_write_checkpoint(DurableWriteStage::TempWritten)?;
+    file.sync_all()?;
+    drop(file);
+    #[cfg(test)]
+    durable_write_checkpoint(DurableWriteStage::TempSynced)?;
+    let guard = commit()?;
+    #[cfg(test)]
+    durable_write_checkpoint(DurableWriteStage::Authorized)?;
+    renameat(directory, temp, directory, name).map_err(std::io::Error::from)?;
+    drop(guard);
+    #[cfg(test)]
+    durable_write_checkpoint(DurableWriteStage::Renamed)?;
+    fsync(directory).map_err(std::io::Error::from)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn write_sealed_durable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("state path has no parent"))?;
+    let parent = fs::canonicalize(parent)?;
     if !parent.is_dir() {
         return Err(std::io::Error::other("state directory does not exist"));
     }
@@ -335,7 +439,16 @@ fn write_sealed_durable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             .ok_or_else(|| std::io::Error::other("state path has no file name"))?,
     );
     let temp = path.with_extension("tmp");
-    let mut file = fs::File::create(&temp)?;
+    // A stale temp is removed, never truncated through a link left in its place.
+    match fs::remove_file(&temp) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
     file.write_all(bytes)?;
     #[cfg(test)]
     durable_write_checkpoint(DurableWriteStage::TempWritten)?;
@@ -343,19 +456,14 @@ fn write_sealed_durable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     drop(file);
     #[cfg(test)]
     durable_write_checkpoint(DurableWriteStage::TempSynced)?;
-    #[cfg(unix)]
-    fs::rename(&temp, &path)?;
-    #[cfg(windows)]
     replace_write_through(&temp, &path)?;
     #[cfg(test)]
     durable_write_checkpoint(DurableWriteStage::Renamed)?;
-    #[cfg(unix)]
-    directory.sync_all()?;
     Ok(())
 }
 
 #[cfg(windows)]
-fn replace_write_through(temp: &Path, path: &Path) -> std::io::Result<()> {
+pub(crate) fn replace_write_through(temp: &Path, path: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
 
     #[link(name = "kernel32")]
@@ -400,8 +508,10 @@ fn write_sealed_durable(_path: &Path, _bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DurableWriteStage {
+    TempPartial,
     TempWritten,
     TempSynced,
+    Authorized,
     Renamed,
 }
 
@@ -411,12 +521,44 @@ thread_local! {
 }
 
 #[cfg(test)]
+struct DurableWriteHook {
+    stage: DurableWriteStage,
+    action: Box<dyn FnOnce()>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static DURABLE_WRITE_HOOK: std::cell::RefCell<Option<DurableWriteHook>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
 pub(crate) fn fail_durable_write_at(stage: DurableWriteStage) {
     DURABLE_WRITE_FAILURE.with(|failure| failure.set(Some(stage)));
 }
 
+/// Runs `hook` once the next durable write of this thread reaches `stage`.
+#[cfg(test)]
+pub(crate) fn on_durable_write_at(stage: DurableWriteStage, hook: impl FnOnce() + 'static) {
+    DURABLE_WRITE_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(DurableWriteHook {
+            stage,
+            action: Box::new(hook),
+        });
+    });
+}
+
 #[cfg(test)]
 fn durable_write_checkpoint(stage: DurableWriteStage) -> std::io::Result<()> {
+    let hook = DURABLE_WRITE_HOOK.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        match slot.as_ref() {
+            Some(hook) if hook.stage == stage => slot.take(),
+            _ => None,
+        }
+    });
+    if let Some(hook) = hook {
+        (hook.action)();
+    }
     DURABLE_WRITE_FAILURE.with(|failure| {
         if failure.get() == Some(stage) {
             failure.set(None);
@@ -532,65 +674,39 @@ pub fn clear_state_file() -> Option<PathBuf> {
     None
 }
 
-/// Where a plugin's own state lives.
+/// Where the single state blob each plugin saved before its file storage lives, kept
+/// only to be migrated (`crate::storage`).
 pub const PLUGIN_STATE_DIR: &str = "plugin-state";
 
-fn plugin_state_path(plugin_id: &str) -> Result<PathBuf, String> {
-    let valid = !plugin_id.is_empty()
+/// A plugin id as plugins and their data are named by: no path separator, no leading dot.
+pub fn valid_plugin_id(plugin_id: &str) -> bool {
+    !plugin_id.is_empty()
         && plugin_id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
-        && !plugin_id.starts_with('.');
-    if !valid {
+        && !plugin_id.starts_with('.')
+}
+
+/// The file name, in `PLUGIN_STATE_DIR`, of the state blob `plugin_id` saved before
+/// its file storage, its content base64 sealed with `write_state`.
+pub fn legacy_plugin_state_name(plugin_id: &str) -> Result<String, String> {
+    if !valid_plugin_id(plugin_id) {
         return Err(format!("invalid plugin id '{plugin_id}'"));
     }
-    Ok(datadir().join(PLUGIN_STATE_DIR).join(format!(
+    Ok(format!(
         "{}.{SEALED_EXTENSION}",
         opaque_name("plugin", plugin_id)?
-    )))
+    ))
 }
 
-/// The bytes `plugin_id` saved, `None` when it never saved anything.
-pub fn read_plugin_state(plugin_id: &str) -> Result<Option<Vec<u8>>, String> {
-    let Some(text) = read_state(&plugin_state_path(plugin_id)?)? else {
-        return Ok(None);
-    };
-    BASE64_STANDARD
-        .decode(text.trim())
-        .map(Some)
-        .map_err(|e| format!("plugin state of '{plugin_id}': {e}"))
-}
-
-/// Saves `data` as the state of `plugin_id`, sealed with the app state key.
-pub fn write_plugin_state(plugin_id: &str, data: &[u8]) -> Result<(), String> {
-    write_state(
-        &plugin_state_path(plugin_id)?,
-        &BASE64_STANDARD.encode(data),
-    )
+/// The state blob `plugin_id` saved under `data_dir` before its file storage.
+pub fn legacy_plugin_state_path(data_dir: &Path, plugin_id: &str) -> Result<PathBuf, String> {
+    Ok(data_dir
+        .join(PLUGIN_STATE_DIR)
+        .join(legacy_plugin_state_name(plugin_id)?))
 }
 
 // ===== Bridge =====
-
-pub fn plugin_state_load(plugin_id: String) -> PluginStateResult {
-    match read_plugin_state(&plugin_id) {
-        Ok(data) => PluginStateResult {
-            is_ok: true,
-            exists: data.is_some(),
-            data: data.unwrap_or_default(),
-            error: String::new(),
-        },
-        Err(error) => PluginStateResult {
-            is_ok: false,
-            exists: false,
-            data: Vec::new(),
-            error,
-        },
-    }
-}
-
-pub fn plugin_state_save(plugin_id: String, data: Vec<u8>) -> String {
-    error_of(write_plugin_state(&plugin_id, &data))
-}
 
 fn error_of(result: Result<(), String>) -> String {
     result.err().unwrap_or_default()

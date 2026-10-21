@@ -288,10 +288,10 @@ public:
     // external plugin has no answer for yet. GUI thread only.
     plugin::Access requestAccess(IModule *caller, plugin::Access wanted);
 
-    // the calling plugin's own state, one per plugin id, sealed with the app state key:
-    // an empty array when nothing was saved, std::nullopt when refused. GUI thread only.
-    std::optional<QByteArray> loadState(IModule *caller);
-    bool saveState(IModule *caller, const QByteArray &state);
+    // the calling module's storage: its plugin's private file tree, through an IStorage
+    // bound to the caller (see "Plugin storage"). The same one every call; null when the
+    // caller is no active module or storage is unavailable. GUI thread only.
+    IStorage *storage(IModule *caller);
 
     // a module states whether it needs signing devices polled. One flag per module,
     // ORed: polling runs while any module wants it. Asking twice is asking once.
@@ -368,8 +368,8 @@ errors tied to no request, go to every caller allowed to use accounts (or keys).
 The host hashes an external plugin's library before `QPluginLoader::load()`, so a plugin
 update has a new hash. Built-in modules may use everything. An external plugin needs
 separate grants, kept in `~/.silent/app.json` per library hash: **Accounts** (`IAccount`,
-on every account), **Keys** (`IKeys`) and **Saved Data** (`loadState()` /
-`saveState()`). On its first call needing a grant it has no
+on every account), **Keys** (`IKeys`) and **Saved Data** (`storage()`). On its first
+call needing a grant it has no
 answer for, the host asks the user (Allow / Deny) and keeps the answer; a denied grant
 is not asked again. A refused request answers `error()` (IKeys) or returns `0` and
 answers `error(std::nullopt, ...)` (IAccount). A plugin can ask up front, at a moment it
@@ -378,15 +378,127 @@ Settings, Plugin Manager, Access, per library hash.
 
 An account can enforce a finer whitelist of its own on top, since it knows the caller.
 
-### Plugin state
+### Plugin storage
 
-A plugin persists its own state through the host rather than writing files of its own:
-`Host::get()->saveState(this, bytes)` and `Host::get()->loadState(this)`. There is one
-state per plugin id, in `~/.silent/plugin-state/<id>.json`, sealed with BIP138 to the
-app state's unlock key like the rest of `~/.silent/` (ws-plaude/silent#37). The bytes
-are the plugin's own format. Every library hash of the plugin the user allowed the
-Saved Data grant opens the same state: an update is asked again, and a rollback to a
-version allowed before finds its state again.
+A plugin persists its own data through the host rather than writing files of its own:
+`Host::get()->storage(this)` gives the calling module an `IStorage`
+(`interfaces/storage.h`). The plugin picks its own layout of logical files and
+directories and its own format for their bytes; it never sees a physical path, a file
+descriptor or the encryption.
+
+```cpp
+class IStorage : public QObject {
+    Q_OBJECT
+public:
+    virtual void request(const QByteArray &message) = 0;  // one JSON request
+    virtual void cancel(const QString &id) = 0;
+signals:
+    void completed(QByteArray message);                   // one JSON answer per request
+};
+```
+
+Each message is one JSON object, so the same contract can later run over an IPC
+connection to a sandboxed plugin process (bwk-bitcoin/silent#78). A message never names
+its sender: the host binds the caller to the `IStorage` it handed out, from the identity
+the plugin registry recorded when it loaded the library (plugin id, library hash,
+built-in or not). Over IPC the identity comes from the authenticated connection.
+
+```json
+{"id": "1", "op": "open", "storage": "private"}
+{"id": "1", "error": "", "storage": "<opaque handle>"}
+{"id": "2", "op": "write", "storage": "<handle>", "path": "settings/example.json",
+ "data": "<base64>", "mode": "upsert"}
+{"id": "2", "error": ""}
+```
+
+Operations: `discover` (the storages the caller may open, today only
+`{"id": "private", "name": "Private plugin storage"}`), `open`, `inspect`, `list`
+(paged by `after` / `limit`), `mkdir`, `read`, `write` (`create`, `replace` or
+`upsert`), `rename` (never replaces), `remove` (`recursive` for a non-empty directory)
+and `migrate`. `interfaces/storage.h` lists every field, answer and error code. A field
+the op does not take, an unknown op or a malformed message answers `invalid_request`.
+
+- **Paths.** Logical paths are names joined by `/`, relative to the storage root. A name
+  is 1 to 255 UTF-8 bytes, not `.` or `..`, without `/`, `\`, `:` or control
+  characters. Names are case-sensitive and never Unicode-normalized; a path is at
+  most 4096 bytes. The empty path is the root, taken only by `inspect` and `list`. An
+  entry is created in an existing directory: `mkdir` does not create parents.
+
+- **Whole files.** A read answers the whole file and a write replaces it whole: a write
+  leaves the previous or the new complete file, never a part of one. No offsets, no
+  random access, no chunks.
+- **Backend.** The logical request/result contract does not depend on the physical
+  filesystem or its layout. The initial backend rewrites one encrypted document for
+  the whole tree. An embedded filesystem backend is deferred, not implemented here;
+  changing the backend must not expose its paths or handles to plugins.
+- **Limits.** A file holds at most 1 MiB before base64, a message at most 2 MiB of JSON
+  and an id at most 256 bytes. A list page holds at most 128 entries. A storage holds at
+  most 4096 entries, and the JSON document of its whole tree, files in base64, is at
+  most 16 MiB before encryption. At most 8 requests are outstanding per `IStorage`, a
+  cancelled one counted until it stopped running: one more answers `busy`.
+- **Scope.** The modules of one plugin share its storage, each through its own
+  `IStorage`; a handle opened by one does not work on another (`invalid_handle`).
+  Active caller identity is stamped from the installed registry record and loaded
+  library hash at activation, not re-read from plugin or module metadata. A library
+  claiming a different installed ID is refused before module activation; changing
+  metadata later cannot change its identity, grants or storage root. The same
+  caller identity is used for Account and Keys access.
+- **On disk.** The storage lives under `.silent/<plugin_id>/` in the configured data
+  directory, as one document sealed with BIP138 to the app state's unlock key like the
+  rest of `~/.silent/` (ws-plaude/silent#37). The plugin id is visible; file names,
+  directories and contents are not. A plugin whose id names a directory the host keeps
+  there (`keys`, `plugins`, `plugin-state`, `musig-sessions`, `locked`), a reserved
+  application file extension or an opaque account directory gets no storage
+  (`storage()` answers null). Each document is bound to its exact plugin ID, so
+  different IDs cannot silently share a root on case-insensitive filesystems.
+  On Linux and macOS the files are opened relative to directory handles without
+  following links. On Windows, handle-relative opens and replacement reject reparse
+  points. Other platforms answer `unavailable`. The configured data directory itself
+  is trusted host configuration and may be a link. A replacement writes and syncs a
+  private temp, rechecks authorization, renames it and syncs the containing directory.
+  An error after rename can leave the complete new version published.
+  A persistent, no-follow `tree.lock` is held from loading the tree through mutation,
+  replacement and migration readback. It uses an exclusive native lock through fs2
+  on Unix and Windows; contention answers `busy` without waiting, and other lock
+  failures are explicit errors. The lock is never replaced or unlinked. The same
+  root handle is used for loading and publication, so a second process cannot
+  overwrite a newer tree or publish another process's partial temp.
+  The storage stays across plugin updates, while the
+  Saved Data grant stays per library hash: an update is asked again, and a rollback to
+  a version allowed before finds its data again.
+- **Grant.** `storage()` asks for the Saved Data grant when the library has no answer
+  yet; every request checks it again and answers `denied` without it, or `locked` while
+  the app state is locked. An answer computed before the grant was withdrawn or the
+  state locked is delivered as that error, never with its data.
+  Final write authorization and rename hold the state publication barrier. Key
+  changes and grant updates take its exclusive side before any key/session locks.
+  Grant persistence and generation invalidation finish together after any already
+  authorized rename; no older, not-yet-authorized write can publish afterwards.
+  A failed grant save is logged and leaves the stored grant and generation unchanged.
+  Other app-state updates use the same barrier before loading their snapshot, so
+  settings persistence cannot restore a stale grant. A key/grant transition that
+  completes before authorization prevents publication.
+- **Asynchronous.** An accepted request runs off the GUI thread, one at a time per
+  `IStorage`, and its `completed()` comes after `request()` returned, on the GUI thread.
+  A request refused before it is accepted (`too_large`, `invalid_request`, `busy`,
+  `revoked`) answers from inside `request()`, so a caller flooding past the bound
+  piles up nothing; connect `completed()` before sending. `cancel()` answers the
+  request `cancelled` from inside the call and drops its result: a request that had not
+  started changes nothing, one already running may still complete.
+- **Revocation.** When the plugin is disabled or unloaded the host revokes its
+  `IStorage`: outstanding requests get no answer, later ones answer `revoked`.
+  Session revocation and cancellation do not drain workers or wait for disk I/O.
+  They prevent publication if completed before the final lifecycle check, including
+  for requests queued behind another operation. A commit that passed this check may
+  still finish; its response is suppressed. They are not backend-shutdown fences.
+- **Migration.** `migrate` copies the plugin's single saved blob of the former
+  `loadState()` / `saveState()` API to the new logical file `path`, without reading its
+  format, and reads it back. It answers `migrated: false` when there is no such blob
+  (`reason: "absent"`), or when migration already completed (`reason: "completed"`).
+  Before completion, an existing destination answers `already_exists` and is never
+  overwritten. The completion marker and file are committed together; the legacy
+  envelope is retained unchanged. Removing the new file afterwards never imports the
+  old blob again.
 
 Plugins run in Silent's process: a hostile plugin can bypass the handles. The access
 check gates well-behaved plugins, it is not a security boundary.
@@ -1066,12 +1178,13 @@ they are not evidence of a supported funded signing combination.
 
 ## ABI & Linking Rules (Plugin Authors Must Read)
 
-The current plugin IID is `dev.silent.IPlugin/4.0`, the account IID is
+The current plugin IID is `dev.silent.IPlugin/5.0`, the account IID is
 `dev.silent.IAccount/2.0`, the keys IID is `dev.silent.IKeys/2.0`, and the transaction
 service IID is `dev.silent.ITransactions/1.0`. The feed IID remains
-`dev.silent.IFeed/3.0`. The richer coin result and coordination methods change the ABI. Rebuild plugins
+`dev.silent.IFeed/3.0`. `Host::storage()` replacing `loadState()` / `saveState()` changes
+the ABI. Rebuild plugins
 against this checkout and use `SILENT_IPlugin_IID` in plugin metadata. Include both
-`src` and the matching generated `lib/include` directory. Old 1.0, 2.0 and 3.0 plugins are refused rather than
+`src` and the matching generated `lib/include` directory. Old 1.0 to 4.0 plugins are refused rather than
 called through incompatible vtables.
 
 Silent statically links Qt, and the host binary acts as the **single Qt provider**:

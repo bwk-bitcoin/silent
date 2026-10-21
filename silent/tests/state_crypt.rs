@@ -165,23 +165,30 @@ fn the_state_opens_with_its_unlock_key_only() {
     state_crypt::write_state(&file, "{\"name\":\"b2\"}").unwrap();
     assert_eq!(envelope_paths(&fs::read(&file).unwrap()), device_path);
 
-    // A plugin's own state: bytes, sealed, by plugin id.
-    assert_eq!(state_crypt::read_plugin_state("example").unwrap(), None);
-    state_crypt::write_plugin_state("example", b"\x00plugin bytes").unwrap();
-    assert_eq!(
-        state_crypt::read_plugin_state("example")
-            .unwrap()
-            .as_deref(),
-        Some(&b"\x00plugin bytes"[..])
-    );
-    let sealed = fs::read(base.join("plugin-state").join(format!(
-        "{}.bip138",
-        state_crypt::opaque_name("plugin", "example").unwrap()
-    )))
+    // A plugin's file storage: one tree, sealed, its envelope naming the device path.
+    let session = silent::storage_session_open("example".into(), String::new(), false);
+    assert_ne!(session, 0, "a built-in session opens");
+    let opened: serde_json::Value = serde_json::from_str(&silent::storage_request(
+        session,
+        r#"{"id":"1","op":"open","storage":"private"}"#.into(),
+    ))
     .unwrap();
+    let handle = opened["storage"].as_str().unwrap().to_string();
+    let written = silent::storage_request(
+        session,
+        format!(
+            r#"{{"id":"2","op":"write","storage":"{handle}","path":"state.json","data":"AHBsdWdpbiBieXRlcw==","mode":"create"}}"#
+        ),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&written).unwrap(),
+        serde_json::json!({"id": "2", "error": ""})
+    );
+    let sealed = fs::read(base.join("example").join("tree.bip138")).unwrap();
     assert!(state_crypt::is_sealed(&sealed));
     assert_eq!(envelope_paths(&sealed), device_path);
-    assert!(state_crypt::write_plugin_state("../escape", b"x").is_err());
+    silent::storage_session_revoke(session);
+    assert!(state_crypt::legacy_plugin_state_name("../escape").is_err());
 
     // A state file in clear is found, and refused: bwk's stores and its version file
     // too. Only its lock sentinels stay in clear.

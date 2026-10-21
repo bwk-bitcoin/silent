@@ -41,6 +41,7 @@ private:
     QPointer<QObject> m_instance;
 #ifdef Q_OS_LINUX
     void *m_handle = nullptr;
+    int m_fd = -1;
 #else
     QTemporaryDir *m_dir = nullptr;
     QPluginLoader *m_loader = nullptr;

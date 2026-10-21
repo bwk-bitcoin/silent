@@ -197,6 +197,7 @@ pub fn app_enabled_plugins() -> Vec<String> {
 }
 
 pub fn app_set_plugin_enabled(id: String, enabled: bool) {
+    let _publication = state_crypt::publication_change_guard();
     let mut state = AppState::load();
 
     if enabled {
@@ -215,6 +216,7 @@ pub fn app_active_theme() -> String {
 }
 
 pub fn app_set_active_theme(name: String) {
+    let _publication = state_crypt::publication_change_guard();
     let mut state = AppState::load();
     state.active_theme = if name.is_empty() {
         default_active_theme()
@@ -247,6 +249,7 @@ pub fn app_set_fee_preferences(preferences: RustFeePreferences) {
         log::error!("invalid fee mode or tier");
         return;
     }
+    let _publication = state_crypt::publication_change_guard();
     let mut state = AppState::load();
     state.fee_preferences = FeePreferencesInternal {
         mode: preferences.mode,
@@ -262,6 +265,7 @@ pub fn app_price_currency() -> String {
 }
 
 pub fn app_set_price_selection(source: String, currency: String) {
+    let _publication = state_crypt::publication_change_guard();
     let mut state = AppState::load();
     state.price_source = source;
     state.price_currency = crate::feed::currency(&currency);
@@ -269,6 +273,7 @@ pub fn app_set_price_selection(source: String, currency: String) {
 }
 
 pub fn app_set_language(locale: String) {
+    let _publication = state_crypt::publication_change_guard();
     let mut state = AppState::load();
     state.language = locale;
     state.save();
@@ -284,6 +289,7 @@ pub fn app_qr_display_levels() -> QrDisplayLevels {
 }
 
 pub fn app_set_qr_display_levels(levels: QrDisplayLevels) {
+    let _publication = state_crypt::publication_change_guard();
     let mut state = AppState::load();
     state.qr_density = levels.density;
     state.qr_contrast = levels.contrast;
@@ -296,6 +302,7 @@ pub fn app_qr_camera_contrast_level() -> u8 {
 }
 
 pub fn app_set_qr_camera_contrast_level(level: u8) {
+    let _publication = state_crypt::publication_change_guard();
     let mut state = AppState::load();
     state.qr_camera_contrast = level;
     state.save();
@@ -326,6 +333,7 @@ pub fn app_last_endpoint(server: BackendServer, network: Network) -> String {
 }
 
 pub fn app_set_last_endpoint(server: BackendServer, network: Network, url: String) {
+    let _publication = state_crypt::publication_change_guard();
     let mut state = AppState::load();
     let key = endpoint_key(server, network);
     if url.is_empty() {
@@ -340,6 +348,7 @@ pub(crate) fn remember_endpoints(
     network: Network,
     endpoints: &[(BackendServer, String)],
 ) -> Result<(), String> {
+    let _publication = state_crypt::publication_change_guard();
     let mut state = AppState::try_load()?;
     for (server, url) in endpoints {
         state
@@ -394,10 +403,18 @@ pub fn app_plugin_history(plugin_id: String) -> Vec<PluginAccess> {
 }
 
 pub fn app_set_plugin_access(access: PluginAccess) {
-    let mut state = AppState::load();
+    if let Err(error) = try_set_plugin_access(access) {
+        log::error!("failed to save plugin access: {error}");
+    }
+}
+
+fn try_set_plugin_access(access: PluginAccess) -> Result<(), String> {
+    let _publication = state_crypt::publication_change_guard();
+    let mut state = AppState::try_load()?;
+    let hash = access.hash.to_ascii_lowercase();
     let stored = StoredAccess {
         plugin_id: access.plugin_id,
-        hash: access.hash.to_lowercase(),
+        hash: hash.clone(),
         account: access.account.into(),
         keys: access.keys.into(),
         state: access.state.into(),
@@ -417,13 +434,19 @@ pub fn app_set_plugin_access(access: PluginAccess) {
         None if unasked => {}
         None => state.plugin_access.push(stored),
     }
-    state.save();
+    state.try_save()?;
+    crate::storage::grants_changed(&hash);
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
+    use std::{
+        sync::{mpsc, Mutex, OnceLock},
+        thread,
+        time::Duration,
+    };
     use temp_dir::TempDir;
 
     // `set_datadir` uses a process-wide `OnceLock`, so every test in this binary shares a
@@ -442,6 +465,73 @@ mod tests {
         set_datadir(base.clone());
         let _ = fs::remove_file(base.join("app.bip138"));
         test(base);
+    }
+
+    #[test]
+    fn grant_and_endpoint_updates_wait_before_loading_their_snapshots() {
+        with_isolated_datadir(|base| {
+            let access = |state| PluginAccess {
+                plugin_id: "example".into(),
+                hash: "publication-test".into(),
+                account: PluginGrant::Unasked,
+                keys: PluginGrant::Unasked,
+                state,
+            };
+            app_set_plugin_access(access(PluginGrant::Allowed));
+            let before = fs::read(base.join("app.bip138")).expect("original granted state");
+            let publication = crate::state_crypt::publication_guard();
+            let (started_tx, started_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            let grant_started = started_tx.clone();
+            let grant_done = done_tx.clone();
+            let revoker = thread::spawn(move || {
+                grant_started.send(()).expect("grant update started");
+                app_set_plugin_access(access(PluginGrant::Denied));
+                grant_done.send(()).expect("grant update completed");
+            });
+            let settings = thread::spawn(move || {
+                started_tx.send(()).expect("endpoint update started");
+                remember_endpoints(
+                    Network::Regtest,
+                    &[(BackendServer::Electrum, "local-test:50001".into())],
+                )
+                .expect("endpoint update persisted");
+                done_tx.send(()).expect("endpoint update completed");
+            });
+            for _ in 0..2 {
+                started_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("state updater attempting the barrier");
+            }
+            assert!(
+                matches!(
+                    done_rx.recv_timeout(Duration::from_millis(100)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ),
+                "neither state updater may save while an authorized publication holds the barrier"
+            );
+            assert_eq!(
+                fs::read(base.join("app.bip138")).expect("state during publication"),
+                before,
+                "state remains unchanged until publication finishes"
+            );
+            drop(publication);
+            revoker
+                .join()
+                .expect("grant update finishes after publication");
+            settings
+                .join()
+                .expect("endpoint update finishes after publication");
+            assert!(
+                !app_plugin_grants("publication-test".into()).state,
+                "a settings snapshot never restores the old grant"
+            );
+            assert_eq!(
+                app_last_endpoint(BackendServer::Electrum, Network::Regtest),
+                "local-test:50001",
+                "the grant snapshot never loses the endpoint update"
+            );
+        });
     }
 
     #[test]

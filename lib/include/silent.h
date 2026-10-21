@@ -1072,7 +1072,6 @@ struct PluginLibraryResult;
 struct StateIndexResult;
 enum class PluginGrant : ::std::uint8_t;
 struct PluginAccess;
-struct PluginStateResult;
 struct PsbtFileResult;
 struct DescriptorBackupResult;
 struct MusigDescriptorResult;
@@ -2725,20 +2724,6 @@ struct PluginAccess final {
 };
 #endif // CXXBRIDGE1_STRUCT_PluginAccess
 
-#ifndef CXXBRIDGE1_STRUCT_PluginStateResult
-#define CXXBRIDGE1_STRUCT_PluginStateResult
-// A plugin's saved state, as `plugin_state_load` answers it.
-struct PluginStateResult final {
-  bool is_ok CXX_DEFAULT_VALUE(false);
-  // False when the plugin never saved anything.
-  bool exists CXX_DEFAULT_VALUE(false);
-  ::rust::Vec<::std::uint8_t> data;
-  ::rust::String error;
-
-  using IsRelocatable = ::std::true_type;
-};
-#endif // CXXBRIDGE1_STRUCT_PluginStateResult
-
 #ifndef CXXBRIDGE1_STRUCT_PsbtFileResult
 #define CXXBRIDGE1_STRUCT_PsbtFileResult
 struct PsbtFileResult final {
@@ -4128,12 +4113,36 @@ void state_lock() noexcept;
 // Removes the installed plugin `plugin_id`. Answers the error, empty on success.
 ::rust::String plugin_remove(::rust::String plugin_id) noexcept;
 
-// The state `plugin_id` saved, sealed with the app state key.
-::PluginStateResult plugin_state_load(::rust::String plugin_id) noexcept;
+// Opens a storage session for the plugin the host authenticated as
+// `plugin_id`, its library `plugin_hash`. Host only: the caller is never asked
+// who it is. `external` false for a module the host ships, which needs no
+// Saved Data grant. Answers 0 when refused.
+::std::uint64_t storage_session_open(::rust::String plugin_id, ::rust::String plugin_hash, bool external) noexcept;
 
-// Saves `data` as the state of `plugin_id`, replacing it. Answers the error,
-// empty on success.
-::rust::String plugin_state_save(::rust::String plugin_id, ::rust::Vec<::std::uint8_t> data) noexcept;
+// Ends the session on unload: outstanding requests answer `revoked`. Never
+// waits for a request.
+void storage_session_revoke(::std::uint64_t session) noexcept;
+
+// Answers the JSON storage request on `session` with a JSON response. Blocks
+// on disk and on other sessions' requests: off the GUI thread.
+::rust::String storage_request(::std::uint64_t session, ::rust::String request) noexcept;
+
+// Cancels the request `id` on `session`, sent or not yet: it answers
+// `cancelled`. A request already replacing its tree may complete.
+void storage_request_cancel(::std::uint64_t session, ::rust::String id) noexcept;
+
+// Forgets the cancellation of `id` on `session`, once its `storage_request`
+// returned or will never be made.
+void storage_request_forget(::std::uint64_t session, ::rust::String id) noexcept;
+
+// The session's generation now, taken when a request is sent and given back
+// to `storage_delivery_error` with its answer. 0 for a closed session.
+::std::uint64_t storage_session_generation(::std::uint64_t session) noexcept;
+
+// Why an answer computed at `generation` must not be delivered: "revoked",
+// "locked", "denied" once the grant or the key changed, empty when it may.
+// Reads memory only: safe on the GUI thread.
+::rust::String storage_delivery_error(::std::uint64_t session, ::std::uint64_t generation) noexcept;
 
 // The answers given to external plugin libraries, in the order they were given.
 ::rust::Vec<::PluginAccess> app_plugin_access() noexcept;

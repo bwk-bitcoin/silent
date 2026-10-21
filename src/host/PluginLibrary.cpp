@@ -8,6 +8,7 @@
 #include <QtPlugin>
 #include <cstddef>
 #include <cstring>
+#include <utility>
 
 #ifdef Q_OS_LINUX
 #include <dlfcn.h>
@@ -27,7 +28,7 @@ struct PluginMetadataRecord {
 
 auto readMetadataRecord(const QByteArray &bytes, qsizetype header_offset, qsizetype end_offset)
     -> PluginMetadataRecord {
-    if (end_offset - header_offset <= sizeof(QPluginMetaData::Header)) {
+    if (std::cmp_less_equal(end_offset - header_offset, sizeof(QPluginMetaData::Header))) {
         return {.error = QStringLiteral("truncated Qt plugin metadata header")};
     }
     QPluginMetaData::Header header;
@@ -98,13 +99,13 @@ auto pluginMetadataError(const QByteArray &bytes, const QString &expected_iid) -
                 continue;
             }
             headerOffset = noteStart + c_header_offset;
-            if (elfNote.n_descsz > static_cast<quint64>(bytes.size() - headerOffset)) {
+            if (std::cmp_greater(elfNote.n_descsz, bytes.size() - headerOffset)) {
                 return QStringLiteral("invalid Qt plugin metadata note");
             }
             endOffset = headerOffset + elfNote.n_descsz;
         } else {
             offset = headerOffset;
-            if (bytes.size() - headerOffset < sizeof(QPluginMetaData::Header)) {
+            if (std::cmp_less(bytes.size() - headerOffset, sizeof(QPluginMetaData::Header))) {
                 continue;
             }
             QPluginMetaData::Header header;
@@ -179,17 +180,17 @@ auto PluginLibrary::load(const QByteArray &bytes, const QString &name) -> bool {
     }
     QByteArray path = QStringLiteral("/proc/self/fd/%1").arg(fd).toUtf8();
     m_handle = dlopen(path.constData(), RTLD_NOW | RTLD_LOCAL);
-    // The mapping keeps the bytes: the descriptor is no longer needed.
-    ::close(fd);
     if (m_handle == nullptr) {
         const char *error = dlerror();
         m_error = QString::fromUtf8(error != nullptr ? error : "dlopen failed");
+        ::close(fd);
         return false;
     }
     auto entry = reinterpret_cast<PluginInstanceFn>(dlsym(m_handle, "qt_plugin_instance"));
     if (entry == nullptr) {
         dlclose(m_handle);
         m_handle = nullptr;
+        ::close(fd);
         m_error = QStringLiteral("not a Qt plugin: no qt_plugin_instance");
         return false;
     }
@@ -197,9 +198,12 @@ auto PluginLibrary::load(const QByteArray &bytes, const QString &name) -> bool {
     if (m_instance == nullptr) {
         dlclose(m_handle);
         m_handle = nullptr;
+        ::close(fd);
         m_error = QStringLiteral("the plugin created no instance");
         return false;
     }
+    // dlopen caches names: reusing /proc/self/fd/N could return another live library.
+    m_fd = fd;
     return true;
 }
 
@@ -215,6 +219,8 @@ auto PluginLibrary::unload() -> bool {
         return false;
     }
     m_handle = nullptr;
+    ::close(m_fd);
+    m_fd = -1;
     return true;
 }
 

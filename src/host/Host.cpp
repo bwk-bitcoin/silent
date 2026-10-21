@@ -6,6 +6,7 @@
 #include "host/PluginAccess.h"
 #include "host/PluginRegistry.h"
 #include "host/PriceFeedCoordinator.h"
+#include "host/StorageHandle.h"
 #include "i18n/I18nManager.h"
 #include "interfaces/instance.h"
 #include "interfaces/keys.h"
@@ -299,16 +300,13 @@ auto HostImpl::allowed(IModule *module, host::Grant grant, bool ask) -> bool {
         return true;
     }
     plugin::Access wanted{.account = grant == host::Grant::Account,
-                          .keys = grant == host::Grant::Keys,
-                          .state = grant == host::Grant::State};
+                          .keys = grant == host::Grant::Keys};
     auto access = ask ? requestAccess(module, wanted) : pluginaccess::stored(known->pluginHash);
     switch (grant) {
     case host::Grant::Account:
         return access.account;
     case host::Grant::Keys:
         return access.keys;
-    case host::Grant::State:
-        return access.state;
     }
     return false;
 }
@@ -354,40 +352,39 @@ auto HostImpl::requestAccess(IModule *caller, plugin::Access wanted) -> plugin::
             .state = answers.state == PluginGrant::Allowed};
 }
 
-auto HostImpl::loadState(IModule *caller) -> std::optional<QByteArray> {
+auto HostImpl::storage(IModule *caller) -> IStorage * {
     assertGuiThread();
-    auto known = caller == nullptr ? plugin::Caller{} : HostImpl::caller(caller);
-    if (known.pluginId.isEmpty() || !allowed(caller, host::Grant::State, true)) {
-        return std::nullopt;
+    if (auto *handle = m_storage_handles.value(caller, nullptr); handle != nullptr) {
+        return handle;
     }
-    auto result = ::plugin_state_load(rust::String(known.pluginId.toStdString()));
-    if (!result.is_ok) {
-        qWarning() << "Host: plugin state of" << known.pluginId
-                   << QString::fromStdString(std::string(result.error));
-        return std::nullopt;
+    auto *registry = AppController::get()->pluginRegistry();
+    auto known = registry == nullptr ? std::nullopt : registry->caller(caller);
+    if (!known.has_value()) {
+        return nullptr;
     }
-    return QByteArray(reinterpret_cast<const char *>(result.data.data()),
-                      static_cast<qsizetype>(result.data.size()));
-}
-
-auto HostImpl::saveState(IModule *caller, const QByteArray &state) -> bool {
-    assertGuiThread();
-    auto known = caller == nullptr ? plugin::Caller{} : HostImpl::caller(caller);
-    if (known.pluginId.isEmpty() || !allowed(caller, host::Grant::State, true)) {
-        return false;
+    // Asked here, on the GUI thread; the Rust session checks the answer on every request.
+    requestAccess(caller, {.state = true});
+    // The prompt runs an event loop: the module may have gone, or got its handle, meanwhile.
+    auto current = registry->caller(caller);
+    if (!current.has_value() || current->pluginId != known->pluginId ||
+        current->pluginHash != known->pluginHash || current->external != known->external ||
+        current->moduleId != known->moduleId) {
+        return nullptr;
     }
-    rust::Vec<std::uint8_t> data;
-    data.reserve(state.size());
-    for (char byte : state) {
-        data.push_back(static_cast<std::uint8_t>(byte));
+    if (auto *handle = m_storage_handles.value(caller, nullptr); handle != nullptr) {
+        return handle;
     }
-    auto error = ::plugin_state_save(rust::String(known.pluginId.toStdString()), std::move(data));
-    if (!error.empty()) {
-        qWarning() << "Host: saving the plugin state of" << known.pluginId
-                   << QString::fromStdString(std::string(error));
-        return false;
+    auto session =
+        ::storage_session_open(rust::String(known->pluginId.toStdString()),
+                               rust::String(known->pluginHash.toStdString()), known->external);
+    if (session == 0) {
+        qWarning() << "Host: storage unavailable for" << known->pluginId;
+        return nullptr;
     }
-    return true;
+    auto *handle = new host::StorageHandle(session);
+    handle->setParent(this);
+    m_storage_handles.insert(caller, handle);
+    return handle;
 }
 
 void HostImpl::dropCaller(IModule *module) {
@@ -397,6 +394,11 @@ void HostImpl::dropCaller(IModule *module) {
     if (auto *handle = m_transaction_handles.take(module); handle != nullptr) {
         handle->retire();
         handle->deleteLater();
+    }
+    // Revoked but kept until the host goes: a built-in module outlives its deactivation
+    // and may still call the IStorage it holds, which then answers revoked.
+    if (auto *handle = m_storage_handles.take(module); handle != nullptr) {
+        handle->revoke();
     }
     for (auto it = m_instance_handles.begin(); it != m_instance_handles.end();) {
         it = it->first.first == module ? m_instance_handles.erase(it) : std::next(it);

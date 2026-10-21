@@ -23,6 +23,7 @@ pub mod policy;
 pub mod saved_psbt;
 pub mod spending;
 pub mod state_crypt;
+pub mod storage;
 pub mod sync_estimator;
 pub mod tx_details;
 mod tx_preview;
@@ -1226,16 +1227,6 @@ mod ffi {
         pub state: PluginGrant,
     }
 
-    /// A plugin's saved state, as `plugin_state_load` answers it.
-    #[derive(Debug, Clone)]
-    pub struct PluginStateResult {
-        pub is_ok: bool,
-        /// False when the plugin never saved anything.
-        pub exists: bool,
-        pub data: Vec<u8>,
-        pub error: String,
-    }
-
     #[derive(Debug, Clone)]
     pub struct PsbtFileResult {
         pub is_ok: bool,
@@ -1795,12 +1786,36 @@ mod ffi {
         /// Removes the installed plugin `plugin_id`. Answers the error, empty on success.
         fn plugin_remove(plugin_id: String) -> String;
 
-        /// The state `plugin_id` saved, sealed with the app state key.
-        fn plugin_state_load(plugin_id: String) -> PluginStateResult;
+        /// Opens a storage session for the plugin the host authenticated as
+        /// `plugin_id`, its library `plugin_hash`. Host only: the caller is never asked
+        /// who it is. `external` false for a module the host ships, which needs no
+        /// Saved Data grant. Answers 0 when refused.
+        fn storage_session_open(plugin_id: String, plugin_hash: String, external: bool) -> u64;
 
-        /// Saves `data` as the state of `plugin_id`, replacing it. Answers the error,
-        /// empty on success.
-        fn plugin_state_save(plugin_id: String, data: Vec<u8>) -> String;
+        /// Ends the session on unload: outstanding requests answer `revoked`. Never
+        /// waits for a request.
+        fn storage_session_revoke(session: u64);
+
+        /// Answers the JSON storage request on `session` with a JSON response. Blocks
+        /// on disk and on other sessions' requests: off the GUI thread.
+        fn storage_request(session: u64, request: String) -> String;
+
+        /// Cancels the request `id` on `session`, sent or not yet: it answers
+        /// `cancelled`. A request already replacing its tree may complete.
+        fn storage_request_cancel(session: u64, id: String);
+
+        /// Forgets the cancellation of `id` on `session`, once its `storage_request`
+        /// returned or will never be made.
+        fn storage_request_forget(session: u64, id: String);
+
+        /// The session's generation now, taken when a request is sent and given back
+        /// to `storage_delivery_error` with its answer. 0 for a closed session.
+        fn storage_session_generation(session: u64) -> u64;
+
+        /// Why an answer computed at `generation` must not be delivered: "revoked",
+        /// "locked", "denied" once the grant or the key changed, empty when it may.
+        /// Reads memory only: safe on the GUI thread.
+        fn storage_delivery_error(session: u64, generation: u64) -> String;
 
         /// The answers given to external plugin libraries, in the order they were given.
         fn app_plugin_access() -> Vec<PluginAccess>;
@@ -3219,17 +3234,18 @@ pub use ffi::{
     FingerprintsResult, KeyDescriptor, KeyDevice, KeyFileFailure, KeyInfo, KeyInfoResult,
     KeyOpResult, KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice, LogLevel, MnemonicResult,
     MusigAttemptSnapshot, MusigCreationRequest, MusigFinalizeResult, MusigRound, MusigSpendLeaf,
-    Network, Notification, NotificationFlag, Output, PluginGrantedAccess, PluginMetadata,
-    PluginMetadataField, PluginMetadataKind, PolicyCompileResult, PolicyDraft, PolicyDraftError,
-    PolicyDraftResult, PolicyDurationUnit, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath,
-    PolicyReview, PolicyReviewKey, PolicyReviewPath, PolicySemantic, PolicySpec, PsbtFileResult,
-    PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult, QrResponseKind,
-    RegtestDefaults, RetryDecision, RustCoin, RustSelectedInput, RustSpendCoin, RustSpendLock,
-    RustSpendVariant, RustTx, RustTxDetails, RustTxIo, SavedPsbtAttempt, SavedPsbtEntry,
-    SavedPsbtInput, SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset,
-    SavedPsbtRestore, SendAmounts, SignResult, SigningCandidate, SigningPlan, SigningProgress,
-    SigningStage, SpCreationRequest, SpendAvailability, SpendCoinStatus, SpendCoinsResult,
-    SpendError, SpendLockKind, SpendMaturity, TransactionSimulation, TransactionTemplate,
+    Network, Notification, NotificationFlag, Output, PluginAccess, PluginGrant,
+    PluginGrantedAccess, PluginMetadata, PluginMetadataField, PluginMetadataKind,
+    PolicyCompileResult, PolicyDraft, PolicyDraftError, PolicyDraftResult, PolicyDurationUnit,
+    PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey,
+    PolicyReviewPath, PolicySemantic, PolicySpec, PsbtFileResult, PsbtPayloadResult,
+    PsbtValidation, QrErrorKind, QrMessageResult, QrResponseKind, RegtestDefaults, RetryDecision,
+    RustCoin, RustSelectedInput, RustSpendCoin, RustSpendLock, RustSpendVariant, RustTx,
+    RustTxDetails, RustTxIo, SavedPsbtAttempt, SavedPsbtEntry, SavedPsbtInput, SavedPsbtList,
+    SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore, SendAmounts, SignResult,
+    SigningCandidate, SigningPlan, SigningProgress, SigningStage, SpCreationRequest,
+    SpendAvailability, SpendCoinStatus, SpendCoinsResult, SpendError, SpendLockKind, SpendMaturity,
+    TransactionSimulation, TransactionTemplate,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{
@@ -3274,9 +3290,13 @@ pub use policy::{
     renewable_height, resolve_policy_draft, review_policy,
 };
 pub use state_crypt::{
-    plugin_state_load, plugin_state_save, state_clear_file, state_create_with_device,
-    state_create_with_password, state_device_path, state_draw_index, state_lock, state_unlock_info,
-    state_unlock_with_device, state_unlock_with_password,
+    state_clear_file, state_create_with_device, state_create_with_password, state_device_path,
+    state_draw_index, state_lock, state_unlock_info, state_unlock_with_device,
+    state_unlock_with_password,
+};
+pub use storage::{
+    storage_delivery_error, storage_request, storage_request_cancel, storage_request_forget,
+    storage_session_generation, storage_session_open, storage_session_revoke,
 };
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};
 pub use tx_details::test_and_save_endpoint;

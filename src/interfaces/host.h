@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QByteArray>
 #include <QList>
 #include <QObject>
 #include <QString>
@@ -14,6 +13,7 @@ class QWidget;
 class IInstance;
 class IKeys;
 class IModule;
+class IStorage;
 class ITransactions;
 
 struct PriceSource {
@@ -148,14 +148,13 @@ public:
     // only needed to ask at a moment the plugin picks. GUI thread only.
     virtual auto requestAccess(IModule *caller, plugin::Access wanted) -> plugin::Access = 0;
 
-    // The calling plugin's own state: one per plugin id, sealed with the app state key.
-    // Any version of the plugin the user allowed opens it (the Saved Data grant, asked
-    // on a version's first use), so a rollback finds its state again. loadState()
-    // answers an empty array when nothing was saved, std::nullopt when refused or
-    // unreadable; saveState() replaces it and answers whether it was saved. GUI thread
-    // only.
-    virtual auto loadState(IModule *caller) -> std::optional<QByteArray> = 0;
-    virtual auto saveState(IModule *caller, const QByteArray &state) -> bool = 0;
+    // The calling module's storage (see interfaces/storage.h): the private storage of its
+    // plugin, shared by the plugin's modules, each through its own IStorage. The same one
+    // for every call of one module, bound to the caller the host knows, so no request
+    // names who sends it. For an external plugin, asks the user for the Saved Data grant
+    // when its library has no answer yet; every request checks the grant. Null when the
+    // caller is no active module or the storage is unavailable. GUI thread only.
+    [[nodiscard]] virtual auto storage(IModule *caller) -> IStorage * = 0;
 
     // A module states whether it currently needs signing devices polled. The host keeps
     // one flag per module and polls while any of them is true, so asking twice is the

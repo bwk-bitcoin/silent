@@ -1,4 +1,4 @@
-#if defined(SILENT_ABI2_FIXTURE) || defined(SILENT_ABI3_FIXTURE)
+#if defined(SILENT_ABI2_FIXTURE) || defined(SILENT_ABI3_FIXTURE) || defined(SILENT_ABI4_FIXTURE)
 #include "legacy/ModuleV2.h"
 #else
 #include "interfaces/module.h"
@@ -43,15 +43,15 @@ public:
     }
 
     [[nodiscard]] auto meta() const -> QMap<QString, QString> override {
-#if defined(SILENT_ABI2_FIXTURE) || defined(SILENT_ABI3_FIXTURE)
+#if defined(SILENT_ABI2_FIXTURE) || defined(SILENT_ABI3_FIXTURE) || defined(SILENT_ABI4_FIXTURE)
         qFatal("registry must reject old ABI before calling plugin virtual methods");
 #else
-        return {};
+        return {{QStringLiteral("id"), QStringLiteral("abi5")}};
 #endif
     }
 
     [[nodiscard]] auto modules() const -> QList<IModule *> override {
-#if defined(SILENT_ABI2_FIXTURE) || defined(SILENT_ABI3_FIXTURE)
+#if defined(SILENT_ABI2_FIXTURE) || defined(SILENT_ABI3_FIXTURE) || defined(SILENT_ABI4_FIXTURE)
         qFatal("registry must reject old ABI before discovering modules or feeds");
 #else
         return {};

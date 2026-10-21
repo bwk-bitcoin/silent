@@ -216,6 +216,7 @@ void PluginRegistry::registerBuiltin(IPlugin *plugin) {
     auto &record = m_records[id];
     record.id = id;
     record.builtin = true;
+    record.external = false;
     record.plugin = plugin;
     record.enabled = true;
     if (!m_plugin_order.contains(id)) {
@@ -231,7 +232,7 @@ void PluginRegistry::registerBuiltin(IPlugin *plugin) {
     record.modules = modules;
     for (auto *module : modules) {
         m_builtin_modules.insert(module);
-        activateModule(module, plugin);
+        activateModule(module, id);
     }
 
     rebuildPluginList();
@@ -296,17 +297,15 @@ auto PluginRegistry::caller(IModule *module) const -> std::optional<plugin::Call
     if (module == nullptr) {
         return std::nullopt;
     }
-    auto *plugin = m_module_owner.value(module, nullptr);
-    if (plugin == nullptr) {
+    auto ownerIt = m_module_owner.constFind(module);
+    if (ownerIt == m_module_owner.constEnd()) {
         return std::nullopt;
     }
-    QString id = pluginId(plugin);
-    bool external = !isBuiltinModule(module);
     return plugin::Caller{
-        .moduleId = module->meta().value(QStringLiteral("id")),
-        .pluginId = id,
-        .external = external,
-        .pluginHash = external ? pluginHash(id) : QString(),
+        .moduleId = ownerIt->module_id,
+        .pluginId = ownerIt->plugin_id,
+        .external = ownerIt->external,
+        .pluginHash = ownerIt->plugin_hash,
     };
 }
 
@@ -714,6 +713,16 @@ bool PluginRegistry::enablePlugin(const QString &plugin_id) {
         return false;
     }
 
+    // The installed record names the plugin: a library claiming another id is refused
+    // before module activation, so it never acts as that plugin through the host.
+    if (QString claimedId = pluginId(plugin); claimedId != plugin_id) {
+        qWarning() << "Plugin claims another id:" << plugin_id << claimedId;
+        record.load_error = QStringLiteral("plugin library claims the id '%1'").arg(claimedId);
+        delete record.library;
+        record.library = nullptr;
+        return false;
+    }
+
     record.load_error.clear();
     record.plugin_object = root;
     record.plugin = plugin;
@@ -724,7 +733,7 @@ bool PluginRegistry::enablePlugin(const QString &plugin_id) {
         m_plugin_order.append(plugin_id);
     }
     for (auto *module : record.modules) {
-        activateModule(module, plugin);
+        activateModule(module, plugin_id);
     }
     rebuildPluginList();
     syncPluginTranslations(plugin_id, true);
@@ -770,7 +779,7 @@ bool PluginRegistry::disablePlugin(const QString &plugin_id) {
         qWarning() << "Plugin unload failed:" << plugin_id;
         // Roll back module wiring best-effort so runtime state stays internally consistent.
         for (auto *module : record.modules) {
-            activateModule(module, record.plugin);
+            activateModule(module, plugin_id);
         }
         return false;
     }
@@ -809,12 +818,21 @@ bool PluginRegistry::unloadPlugin(const QString &plugin_id) {
     return true;
 }
 
-void PluginRegistry::activateModule(IModule *module, IPlugin *plugin) {
-    if (module == nullptr) {
+void PluginRegistry::activateModule(IModule *module, const QString &plugin_id) {
+    if (module == nullptr || plugin_id.isEmpty()) {
         return;
     }
 
-    m_module_owner.insert(module, plugin);
+    auto record = m_records.constFind(plugin_id);
+    if (record == m_records.constEnd()) {
+        qWarning() << "Module activation has no plugin record:" << plugin_id;
+        return;
+    }
+    m_module_owner.insert(module,
+                          {.plugin_id = plugin_id,
+                           .module_id = module->meta().value(QStringLiteral("id")),
+                           .plugin_hash = record->external ? record->plugin_hash : QString(),
+                           .external = record->external});
     if (m_signer_polling) {
         module->setSignerPolling(true);
     }
@@ -881,14 +899,8 @@ bool PluginRegistry::startOwnedInstance(IModule *module, const QString &instance
         return false;
     }
 
-    auto ownerIt = m_module_owner.find(module);
-    if (ownerIt == m_module_owner.end() || ownerIt.value() == nullptr) {
-        return false;
-    }
-
-    QString ownerPluginId = pluginId(ownerIt.value());
     QString trimmedInstanceId = instance_id.trimmed();
-    if (ownerPluginId.isEmpty() || trimmedInstanceId.isEmpty()) {
+    if (!m_module_owner.contains(module) || trimmedInstanceId.isEmpty()) {
         return false;
     }
 
@@ -963,16 +975,12 @@ void PluginRegistry::onHostInstanceRegistered(const QString &id) {
     if (hostImpl == nullptr) {
         return;
     }
-    auto *ownerPlugin = m_module_owner.value(hostImpl->instanceOwner(instanceId), nullptr);
-    if (ownerPlugin == nullptr) {
+    auto ownerIt = m_module_owner.constFind(hostImpl->instanceOwner(instanceId));
+    if (ownerIt == m_module_owner.constEnd()) {
         return;
     }
-    QString ownerPluginId = pluginId(ownerPlugin);
-    if (ownerPluginId.isEmpty()) {
-        return;
-    }
-    m_instance_owner_by_id.insert(instanceId, ownerPluginId);
-    hostImpl->registerPriceSource(instanceId, ownerPluginId);
+    m_instance_owner_by_id.insert(instanceId, ownerIt->plugin_id);
+    hostImpl->registerPriceSource(instanceId, ownerIt->plugin_id);
 }
 
 void PluginRegistry::relistModules() {

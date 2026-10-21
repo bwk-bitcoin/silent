@@ -19,7 +19,7 @@ class IModule;
 
 namespace host {
 
-enum class Grant : std::uint8_t { Account, Keys, State };
+enum class Grant : std::uint8_t { Account, Keys };
 
 // Stamps the caller on `target` for one call, and puts back the one it replaced when
 // the call returns: a request that runs a modal flow can see another one nested in it.

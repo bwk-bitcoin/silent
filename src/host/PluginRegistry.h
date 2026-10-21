@@ -114,6 +114,16 @@ private:
         bool discovered = false;
     };
 
+    // Who an active module is, taken from its plugin record when it was activated. The
+    // plugin's and the module's meta() are never read again for it (ws-plaude/silent#60).
+    struct ModuleOwner {
+        QString plugin_id;
+        QString module_id;
+        // The library's sha256, empty for a built-in module.
+        QString plugin_hash;
+        bool external = false;
+    };
+
     QString pluginId(IPlugin *plugin) const;
     QString pluginI18nDir(IPlugin *plugin) const;
     void syncPluginTranslations(const QString &plugin_id, bool enabled);
@@ -121,7 +131,7 @@ private:
     bool enablePlugin(const QString &plugin_id);
     bool disablePlugin(const QString &plugin_id);
     bool unloadPlugin(const QString &plugin_id);
-    void activateModule(IModule *module, IPlugin *plugin);
+    void activateModule(IModule *module, const QString &plugin_id);
     void deactivateModule(IModule *module);
     bool startOwnedInstance(IModule *module, const QString &instance_id);
     void stopPluginInstances(const QString &plugin_id);
@@ -136,7 +146,7 @@ private:
     QHash<IModule *, QSet<ReqId>> m_pending_list_requests;
     QHash<IModule *, QSet<ReqId>> m_pending_auto_start_requests;
     QHash<IModule *, QList<QPair<QString, QString>>> m_launcher_instances;
-    QHash<IModule *, IPlugin *> m_module_owner;
+    QHash<IModule *, ModuleOwner> m_module_owner;
     QHash<QString, QString> m_instance_owner_by_id;
     QHash<IModule *, QPair<ReqId, QList<QPair<QString, QString>>>> m_sync_list_responses;
     QHash<IModule *, QPair<ReqId, QStringList>> m_sync_auto_start_responses;

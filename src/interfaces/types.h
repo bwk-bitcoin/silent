@@ -112,8 +112,8 @@ struct Caller {
     QString pluginHash;
 };
 
-// What a plugin may use: IAccount (every account), IKeys, and its own saved state
-// (Host::loadState / saveState). An internal module may use all three.
+// What a plugin may use: IAccount (every account), IKeys, and its own storage
+// (Host::storage). An internal module may use all three.
 struct Access {
     bool account{};
     bool keys{};
