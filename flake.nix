@@ -781,6 +781,68 @@ TOOLCHAIN
       };
 
     in {
+      # Plugins share the host's Qt ABI and cross-compilation toolchains.
+      lib.mkPluginPackages = { src, pname, version }:
+        let
+          vendor = pkgs.rustPlatform.importCargoLock { lockFile = src + /Cargo.lock; };
+          targets = {
+            linux = { qt = linuxQt6; triple = "x86_64-unknown-linux-gnu"; };
+            windows = { qt = windowsQt6; triple = "x86_64-pc-windows-gnu"; };
+            aarch64-apple-darwin = { qt = macosArmQt6; triple = "aarch64-apple-darwin"; arch = "aarch64"; };
+            x86_64-apple-darwin = { qt = macosX86Qt6; triple = "x86_64-apple-darwin"; arch = "x86_64"; };
+          };
+          buildPlugin = platform: target:
+            let
+              isWindows = platform == "windows";
+              isApple = target ? arch;
+              stdenv = if isWindows then mingwPkgs.stdenv else pkgs.stdenv;
+            in stdenv.mkDerivation {
+              inherit pname version src;
+              nativeBuildInputs = [ pkgs.cmake pkgs.ninja pkgs.pkg-config rustToolchain ]
+                ++ pkgs.lib.optionals isApple [ llvmPkgs.clang-unwrapped llvmPkgs.lld llvmPkgs.llvm ];
+              buildInputs = pkgs.lib.optionals (platform == "linux") linuxGuiBuildInputs
+                ++ pkgs.lib.optionals isWindows [ mingwPkgs.windows.pthreads ];
+              dontWrapQtApps = true;
+              dontStrip = isApple;
+              enableParallelBuilding = false;
+              CARGO_BUILD_JOBS = "1";
+              CMAKE_BUILD_PARALLEL_LEVEL = "1";
+              CARGO_NET_OFFLINE = "true";
+              HOST_CC = "${pkgs.stdenv.cc}/bin/cc";
+              HOST_CXX = "${pkgs.stdenv.cc}/bin/c++";
+              postUnpack = pkgs.lib.optionalString isApple (macosGuiPostUnpack target.arch);
+              preConfigure = ''
+                export HOME="$TMPDIR"
+                export CARGO_HOME="$TMPDIR/cargo-home"
+                mkdir -p "$CARGO_HOME"
+                cat > "$CARGO_HOME/config.toml" <<EOF
+                [source.crates-io]
+                replace-with = "vendored-sources"
+                [source.vendored-sources]
+                directory = "${vendor}"
+                EOF
+              '' + pkgs.lib.optionalString isApple ''
+                ${macosRustSetup target.arch}
+                cmakeFlagsArray+=("-DCMAKE_TOOLCHAIN_FILE=$TMPDIR/macos-gui-cross/toolchain.cmake")
+              '';
+              cmakeFlags = [
+                "-DCMAKE_BUILD_TYPE=Release"
+                "-DCMAKE_PREFIX_PATH=${target.qt}"
+                "-DSILENT_SOURCE_DIR=${self}"
+                "-DQONTROL_SOURCE_DIR=${qontrol}"
+                "-DRUST_PROFILE=release"
+                "-DRUST_TARGET=${target.triple}"
+              ] ++ pkgs.lib.optional isWindows "-DSILENT_HOST_IMPORT_LIB=${windows}/lib/libsilent_host_exports.a"
+                ++ pkgs.lib.optionals isApple [
+                  "-DCMAKE_INSTALL_NAME_TOOL=${llvmPkgs.llvm}/bin/llvm-install-name-tool"
+                  "-DCMAKE_OSX_ARCHITECTURES=${if target.arch == "aarch64" then "arm64" else "x86_64"}"
+                  "-DCMAKE_FIND_ROOT_PATH=${target.qt};${sdkRoot}"
+                ];
+              passthru = { rustTarget = target.triple; hostPackage = self.packages.${system}.${platform}; };
+            };
+          packages = builtins.mapAttrs buildPlugin targets;
+        in packages // { default = packages.linux; };
+
       packages.${system} = {
         inherit linux windows;
         linux-trace = linuxTrace;
