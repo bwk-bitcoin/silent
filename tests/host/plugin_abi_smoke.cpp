@@ -5,6 +5,8 @@
 #include <QCborValue>
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <QtPlugin>
 #include <cstddef>
@@ -18,6 +20,96 @@ auto metadataBytes(const QCborMap &map) -> QByteArray {
     QPluginMetaData::MagicHeader header;
     return QByteArray(reinterpret_cast<const char *>(&header), sizeof(header)) +
            QCborValue(map).toCbor();
+}
+
+auto elfMetadataBytes(const QCborMap &map) -> QByteArray {
+    auto payload = QCborValue(map).toCbor();
+    QPluginMetaData::ElfNoteHeader note(payload.size());
+    auto prefixSize = offsetof(QPluginMetaData::ElfNoteHeader, header) + sizeof(note.header);
+    return QByteArray(reinterpret_cast<const char *>(&note), prefixSize) + payload;
+}
+
+void metadataCandidateSmoke() {
+    auto expected = QStringLiteral("dev.silent.IPlugin/4.0");
+    QCborMap root;
+    root.insert(2, expected);
+    auto regular = metadataBytes(root);
+    auto elf = elfMetadataBytes(root);
+    auto description =
+        QJsonDocument::fromJson(
+            R"({"description":"QTMETADATA ! and qt-project!\u0000 are ordinary text"})")
+            .object();
+    root.insert(4, QCborMap::fromJsonObject(description));
+    for (const auto &record : {metadataBytes(root), elfMetadataBytes(root)}) {
+        if (!pluginMetadataError(record, expected).isEmpty()) {
+            qFatal("Qt marker text in JSON metadata descriptions must be accepted");
+        }
+    }
+    auto magicText =
+        QByteArray(QPluginMetaData::MagicString, sizeof(QPluginMetaData::MagicString)) +
+        QByteArray(" ordinary text");
+    auto noteText = QByteArray(offsetof(QPluginMetaData::ElfNoteHeader, name), '\0') +
+                    QByteArray(QPluginMetaData::ElfNoteHeader::NoteName,
+                               sizeof(QPluginMetaData::ElfNoteHeader::NoteName)) +
+                    QByteArray(sizeof(QPluginMetaData::Header), '\0');
+    for (const auto &record : {regular, elf}) {
+        if (!pluginMetadataError(magicText + noteText + record + noteText + magicText, expected)
+                 .isEmpty()) {
+            qFatal("unrelated marker strings with invalid surrounding headers must be ignored");
+        }
+    }
+    QCborMap oldRoot;
+    oldRoot.insert(2, QStringLiteral("dev.silent.IPlugin/3.0"));
+    for (const auto &duplicate :
+         {regular + regular, elf + elf, regular + elf, elf + regular,
+          metadataBytes(oldRoot) + regular, regular + metadataBytes(oldRoot),
+          elfMetadataBytes(oldRoot) + elf, elf + elfMetadataBytes(oldRoot)}) {
+        if (pluginMetadataError(duplicate, expected).isEmpty()) {
+            qFatal("independent metadata records must be rejected regardless of their root IID");
+        }
+    }
+    auto invalidBounds = elf;
+    invalidBounds.replace(offsetof(QPluginMetaData::ElfNoteHeader, n_descsz), sizeof(quint32),
+                          QByteArray(sizeof(quint32), char(0xff)));
+    auto invalidVersion = regular;
+    invalidVersion[sizeof(QPluginMetaData::MagicString)] = char(0xff);
+    auto invalidCbor = regular;
+    invalidCbor[sizeof(QPluginMetaData::MagicHeader)] = char(0xff);
+    QPluginMetaData::ElfNoteHeader oversizedNote(QCborValue(root).toCbor().size() + regular.size());
+    auto oversized = QByteArray(reinterpret_cast<const char *>(&oversizedNote),
+                                offsetof(QPluginMetaData::ElfNoteHeader, header) +
+                                    sizeof(oversizedNote.header)) +
+                     QCborValue(root).toCbor() + regular;
+    for (const auto &invalid : {invalidBounds, invalidVersion, invalidCbor, oversized}) {
+        if (pluginMetadataError(invalid, expected).isEmpty() ||
+            pluginMetadataError(invalid + regular, expected).isEmpty() ||
+            pluginMetadataError(regular + invalid, expected).isEmpty()) {
+            qFatal("malformed recognized records must fail even beside valid metadata");
+        }
+    }
+    root.insert(4, metadataBytes(oldRoot) + elfMetadataBytes(oldRoot));
+    for (const auto &record : {metadataBytes(root), elfMetadataBytes(root)}) {
+        if (!pluginMetadataError(record, expected).isEmpty()) {
+            qFatal("complete metadata records embedded inside a validated payload are only data");
+        }
+    }
+    oldRoot.insert(4, regular);
+    if (pluginMetadataError(metadataBytes(oldRoot), expected).isEmpty()) {
+        qFatal("nested ABI 4 metadata must not override the ABI 3 root IID");
+    }
+    QPluginMetaData::MagicHeader header;
+    header.header.qt_minor_version = 6;
+    auto qt66 = QByteArray(reinterpret_cast<const char *>(&header), sizeof(header)) +
+                QCborValue(root).toCbor();
+    if (!pluginMetadataError(qt66, expected).isEmpty()) {
+        qFatal("Qt 6.6.3 metadata must remain accepted on supported hosts");
+    }
+    header.header.qt_minor_version = 8;
+    auto qt68 = QByteArray(reinterpret_cast<const char *>(&header), sizeof(header)) +
+                QCborValue(root).toCbor();
+    if (pluginMetadataError(qt68, expected).isEmpty() != (QT_VERSION_MINOR >= 8)) {
+        qFatal("Qt 6.8.2 metadata must be accepted only by a sufficiently new Qt host");
+    }
 }
 
 void metadataRejectionSmoke(const QByteArray &bytes) {
@@ -38,7 +130,7 @@ void metadataRejectionSmoke(const QByteArray &bytes) {
         qFatal("regular Qt metadata with the exact root IID must be accepted");
     }
     if (pluginMetadataError(valid + valid, expected).isEmpty()) {
-        qFatal("duplicate Qt metadata markers must be rejected");
+        qFatal("duplicate Qt metadata records must be rejected");
     }
     QPluginMetaData::MagicHeader header;
     auto prefix = QByteArray(reinterpret_cast<const char *>(&header), sizeof(header));
@@ -82,10 +174,17 @@ void metadataRejectionSmoke(const QByteArray &bytes) {
             qFatal("missing or malformed metadata must fail before loading the library");
         }
     }
+    for (const auto &invalid : {malformed, invalidCbor}) {
+        if (pluginMetadataError(invalid + valid, expected).isEmpty() ||
+            pluginMetadataError(valid + invalid, expected).isEmpty()) {
+            qFatal("a valid record must not override malformed recognized metadata");
+        }
+    }
 }
 } // namespace
 
 void pluginAbiSmoke() {
+    metadataCandidateSmoke();
     for (auto version : {2, 3, 4}) {
         auto legacy = version != 4;
         QTemporaryDir directory;

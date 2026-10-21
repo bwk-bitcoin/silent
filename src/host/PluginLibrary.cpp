@@ -18,54 +18,30 @@
 #include <QPluginLoader>
 #endif
 
-auto pluginMetadataError(const QByteArray &bytes, const QString &expected_iid) -> QString {
-    // Qt 6.6.3 qplugin.h: ELF note payloads and PE/Mach-O magic headers.
-    auto magic = QByteArray(QPluginMetaData::MagicString, sizeof(QPluginMetaData::MagicString));
-    auto note = QByteArray(QPluginMetaData::ElfNoteHeader::NoteName,
-                           sizeof(QPluginMetaData::ElfNoteHeader::NoteName));
-    auto magicOffset = bytes.indexOf(magic);
-    auto noteOffset = bytes.indexOf(note);
-    if ((magicOffset < 0) == (noteOffset < 0) ||
-        (magicOffset >= 0 && bytes.indexOf(magic, magicOffset + 1) >= 0) ||
-        (noteOffset >= 0 && bytes.indexOf(note, noteOffset + 1) >= 0)) {
-        return QStringLiteral("missing or ambiguous Qt plugin metadata");
-    }
+namespace {
+struct PluginMetadataRecord {
+    QString iid;
+    qsizetype end = 0;
+    QString error;
+};
 
-    qsizetype headerOffset = magicOffset + magic.size();
-    qsizetype endOffset = bytes.size();
-    if (noteOffset >= 0) {
-        auto noteStart =
-            noteOffset - static_cast<qsizetype>(offsetof(QPluginMetaData::ElfNoteHeader, name));
-        constexpr auto c_header_offset =
-            static_cast<qsizetype>(offsetof(QPluginMetaData::ElfNoteHeader, header));
-        if (noteStart < 0 || bytes.size() - noteStart < sizeof(QPluginMetaData::ElfNoteHeader)) {
-            return QStringLiteral("truncated Qt plugin metadata note");
-        }
-        QPluginMetaData::ElfNoteHeader elfNote(0);
-        std::memcpy(&elfNote, bytes.constData() + noteStart, sizeof(elfNote));
-        headerOffset = noteStart + c_header_offset;
-        if (elfNote.n_namesz != sizeof(QPluginMetaData::ElfNoteHeader::NoteName) ||
-            elfNote.n_type != QPluginMetaData::ElfNoteHeader::NoteType ||
-            elfNote.n_descsz > static_cast<quint64>(bytes.size() - headerOffset)) {
-            return QStringLiteral("invalid Qt plugin metadata note");
-        }
-        endOffset = headerOffset + elfNote.n_descsz;
-    }
-    if (endOffset - headerOffset <= sizeof(QPluginMetaData::Header)) {
-        return QStringLiteral("truncated Qt plugin metadata header");
+auto readMetadataRecord(const QByteArray &bytes, qsizetype header_offset, qsizetype end_offset)
+    -> PluginMetadataRecord {
+    if (end_offset - header_offset <= sizeof(QPluginMetaData::Header)) {
+        return {.error = QStringLiteral("truncated Qt plugin metadata header")};
     }
     QPluginMetaData::Header header;
-    std::memcpy(&header, bytes.constData() + headerOffset, sizeof(header));
+    std::memcpy(&header, bytes.constData() + header_offset, sizeof(header));
     if (header.version != QPluginMetaData::CurrentMetaDataVersion ||
         header.qt_major_version != QT_VERSION_MAJOR || header.qt_minor_version > QT_VERSION_MINOR) {
-        return QStringLiteral("unsupported Qt plugin metadata version");
+        return {.error = QStringLiteral("unsupported Qt plugin metadata version")};
     }
-    auto payloadOffset = headerOffset + sizeof(header);
+    auto payloadOffset = header_offset + static_cast<qsizetype>(sizeof(header));
     QCborStreamReader reader(reinterpret_cast<const quint8 *>(bytes.constData() + payloadOffset),
-                             endOffset - payloadOffset);
+                             end_offset - payloadOffset);
     auto metadata = QCborValue::fromCbor(reader);
     if (reader.lastError() != QCborError::NoError || !metadata.isMap()) {
-        return QStringLiteral("invalid Qt plugin metadata CBOR");
+        return {.error = QStringLiteral("invalid Qt plugin metadata CBOR")};
     }
     // Qt 6.6.3 qplugin_p.h: IID is integer key 2 in the root map, not MetaData.
     constexpr qint64 c_iid_key = 2;
@@ -76,12 +52,86 @@ auto pluginMetadataError(const QByteArray &bytes, const QString &expected_iid) -
         if (it.key().isInteger() && it.key().toInteger() == c_iid_key) {
             ++iidCount;
             if (!it.value().isString()) {
-                return QStringLiteral("invalid Qt plugin root IID");
+                return {.error = QStringLiteral("invalid Qt plugin root IID")};
             }
             iid = it.value().toString();
         }
     }
-    if (iidCount != 1 || iid != expected_iid) {
+    if (iidCount != 1) {
+        return {.error = QStringLiteral("missing or duplicate Qt plugin root IID")};
+    }
+    return {.iid = iid, .end = payloadOffset + reader.currentOffset()};
+}
+} // namespace
+
+auto pluginMetadataError(const QByteArray &bytes, const QString &expected_iid) -> QString {
+    // Qt 6.6.3 qplugin.h: ELF note payloads and PE/Mach-O magic headers.
+    auto magic = QByteArray(QPluginMetaData::MagicString, sizeof(QPluginMetaData::MagicString));
+    auto note = QByteArray(QPluginMetaData::ElfNoteHeader::NoteName,
+                           sizeof(QPluginMetaData::ElfNoteHeader::NoteName));
+    qsizetype offset = 0;
+    int recordCount = 0;
+    QString iid;
+    while (offset < bytes.size()) {
+        auto magicOffset = bytes.indexOf(magic, offset);
+        auto noteOffset = bytes.indexOf(note, offset);
+        if (magicOffset < 0 && noteOffset < 0) {
+            break;
+        }
+        auto isNote = noteOffset >= 0 && (magicOffset < 0 || noteOffset < magicOffset);
+        qsizetype headerOffset = magicOffset + magic.size();
+        qsizetype endOffset = bytes.size();
+        if (isNote) {
+            offset = noteOffset + note.size();
+            auto noteStart =
+                noteOffset - static_cast<qsizetype>(offsetof(QPluginMetaData::ElfNoteHeader, name));
+            constexpr auto c_header_offset =
+                static_cast<qsizetype>(offsetof(QPluginMetaData::ElfNoteHeader, header));
+            if (noteStart < 0 || bytes.size() - noteStart < c_header_offset) {
+                continue;
+            }
+            QPluginMetaData::ElfNoteHeader elfNote(0);
+            // Supported targets use native little-endian ELF note fields.
+            std::memcpy(&elfNote, bytes.constData() + noteStart, c_header_offset);
+            if (elfNote.n_namesz != sizeof(QPluginMetaData::ElfNoteHeader::NoteName) ||
+                elfNote.n_type != QPluginMetaData::ElfNoteHeader::NoteType) {
+                continue;
+            }
+            headerOffset = noteStart + c_header_offset;
+            if (elfNote.n_descsz > static_cast<quint64>(bytes.size() - headerOffset)) {
+                return QStringLiteral("invalid Qt plugin metadata note");
+            }
+            endOffset = headerOffset + elfNote.n_descsz;
+        } else {
+            offset = headerOffset;
+            if (bytes.size() - headerOffset < sizeof(QPluginMetaData::Header)) {
+                continue;
+            }
+            QPluginMetaData::Header header;
+            std::memcpy(&header, bytes.constData() + headerOffset, sizeof(header));
+            if (header.version != QPluginMetaData::CurrentMetaDataVersion &&
+                header.qt_major_version != QT_VERSION_MAJOR) {
+                continue;
+            }
+        }
+        auto record = readMetadataRecord(bytes, headerOffset, endOffset);
+        if (!record.error.isEmpty()) {
+            return record.error;
+        }
+        if (isNote && record.end != endOffset) {
+            return QStringLiteral("invalid Qt plugin metadata descriptor size");
+        }
+        if (++recordCount > 1) {
+            return QStringLiteral("ambiguous Qt plugin metadata records");
+        }
+        iid = record.iid;
+        // Marker text inside validated metadata is data, not another record.
+        offset = isNote ? endOffset : record.end;
+    }
+    if (recordCount == 0) {
+        return QStringLiteral("missing or invalid Qt plugin metadata");
+    }
+    if (iid != expected_iid) {
         return QStringLiteral("incompatible Qt plugin root IID (expected %1)").arg(expected_iid);
     }
     return {};
