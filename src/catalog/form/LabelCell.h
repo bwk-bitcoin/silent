@@ -42,6 +42,7 @@ public slots:
 
 protected:
     auto eventFilter(QObject *watched, QEvent *event) -> bool override;
+    void refreshText();
     void showLabel();
 
 private:

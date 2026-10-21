@@ -15,6 +15,8 @@ namespace catalog {
 LabelCell::LabelCell(const QString &label, QWidget *parent) : QWidget(parent) {
     m_text = new Label(LabelRole::Body);
     m_text->setMinimumWidth(0);
+    m_text->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_text->installEventFilter(this);
     m_edit = btnEditLabelRow();
     m_input = new Input(InputRole::Table);
     m_input->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -36,8 +38,14 @@ LabelCell::LabelCell(const QString &label, QWidget *parent) : QWidget(parent) {
 
 void LabelCell::setLabel(const QString &label) {
     m_label = label;
-    m_text->setText(label.isEmpty() ? QStringLiteral("-") : label);
+    refreshText();
     m_text->setTone(label.isEmpty() ? LabelTone::Muted : LabelTone::Default);
+}
+
+void LabelCell::refreshText() {
+    QString text = m_label.isEmpty() ? QStringLiteral("-") : m_label;
+    m_text->setText(m_text->fontMetrics().elidedText(text, Qt::ElideRight, m_text->width()));
+    m_text->setToolTip(m_label);
 }
 
 auto LabelCell::label() const -> QString {
@@ -58,6 +66,9 @@ auto LabelCell::isEditing() const -> bool {
 }
 
 auto LabelCell::eventFilter(QObject *watched, QEvent *event) -> bool {
+    if (watched == m_text && event->type() == QEvent::Resize) {
+        refreshText();
+    }
     if (watched == m_input && event->type() == QEvent::KeyPress &&
         static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape) {
         showLabel();

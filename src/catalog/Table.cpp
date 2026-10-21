@@ -424,12 +424,10 @@ auto Table::buildWidgetCell(const Row &row, int column) -> QWidget * {
         cell->push(content, 1, Qt::AlignCenter);
     } else if (spec.grow) {
         content->setMinimumWidth(0);
-        // Wrapped text takes the whole column to wrap in; anything else keeps its size.
-        if (content->hasHeightForWidth()) {
-            cell->push(content, 1);
-        } else {
-            cell->push(content, 1, spec.alignment | Qt::AlignVCenter);
+        if (!content->hasHeightForWidth()) {
+            content->setSizePolicy(QSizePolicy::Ignored, content->sizePolicy().verticalPolicy());
         }
+        cell->push(content, 1);
     } else {
         cell->push(content, 0, spec.alignment | Qt::AlignVCenter);
     }

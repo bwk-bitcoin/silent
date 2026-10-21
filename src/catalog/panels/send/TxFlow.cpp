@@ -72,9 +72,6 @@ constexpr int CARD_SHADOW_ALPHA = 89;
 constexpr int CARD_TITLE_PX = 13;
 constexpr int CARD_FIAT_PX = 13;
 constexpr int CARD_ADDR_PX = 11;
-constexpr int ADDR_FULL = 30; // addr length above which to shorten
-constexpr int ADDR_HEAD = 26; // leading chars kept
-constexpr int ADDR_TAIL = 4;  // trailing chars kept
 
 // TxFlowEmpty: a 116x60 sketch above a muted line of text at most 200 wide.
 constexpr int EMPTY_ART_W = 116;
@@ -191,13 +188,6 @@ auto kindLabelText(const TxFlow::OutputItem &item) -> QString {
     return TR("txflow-recipient").toUpper();
 }
 
-auto txMidAddr(const QString &s) -> QString {
-    if (s.size() > ADDR_FULL) {
-        return s.left(ADDR_HEAD) + QString::fromUtf8("… ") + s.right(ADDR_TAIL);
-    }
-    return s;
-}
-
 enum class Anchor { Start, Middle, End };
 
 // Draws `text` on `baseline` anchored at `x` as SVG text-anchor does.
@@ -300,6 +290,7 @@ public:
         m_fiat->setFont(fiatFont);
 
         m_addr = new Label(LabelRole::Mono);
+        m_addr->setFixedWidth(CARD_WIDTH - 2 * CARD_PAD_H);
         m_addr->setTone(LabelTone::Muted);
         QFont addrFont = m_addr->font();
         addrFont.setPixelSize(CARD_ADDR_PX);
@@ -323,8 +314,12 @@ public:
         m_title->setText(title);
         m_fiat->setText(fiat);
         m_fiat->setVisible(!fiat.isEmpty());
-        m_addr->setTextWrapAnywhere(txMidAddr(addr));
+        m_addr->setTextWrapAnywhere(addr);
+        m_addr->ensurePolished();
+        m_addr->setMinimumHeight(m_addr->heightForWidth(m_addr->width()));
         m_addr->setVisible(!addr.isEmpty());
+        m_addr->parentWidget()->layout()->activate();
+        layout()->activate();
         adjustSize();
     }
 

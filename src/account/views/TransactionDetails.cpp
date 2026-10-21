@@ -35,8 +35,7 @@ using catalog::LabelTone;
 
 namespace {
 
-const int INDEX_W = 40;     // the design's 3em index column
-const int IO_VALUE_W = 120; // inputs and outputs value column
+const int INDEX_W = 40; // the design's 3em index column
 const int INPUT_REF_HEAD = 8;
 const int INPUT_REF_TAIL = 4;
 const int OUTPUT_REF_HEAD = 10;
@@ -435,7 +434,16 @@ auto TransactionDetails::ioTable(const rust::Vec<RustTxIo> &ios, bool inputs) co
     table->addColumn({.width = INDEX_W});
     table->addColumn({.grow = true});
     table->addColumn({.width = resolve(BtnWidth::Icon), .icon = true});
-    table->addColumn({.width = IO_VALUE_W, .alignment = Qt::AlignRight});
+    int valueWidth = 0;
+    QList<Label *> amounts;
+    for (const auto &io : ios) {
+        auto *amount = catalog::amountLabel(io.value, io.value_known);
+        amount->ensurePolished();
+        valueWidth = qMax(valueWidth, amount->sizeHint().width());
+        amounts.append(amount);
+    }
+    table->addColumn({.width = valueWidth, .alignment = Qt::AlignRight});
+    int index = 0;
     for (const auto &io : ios) {
         QString outpoint = toQString(io.outpoint);
         QString label = toQString(io.label);
@@ -451,8 +459,7 @@ auto TransactionDetails::ioTable(const rust::Vec<RustTxIo> &ios, bool inputs) co
                 &TransactionDetails::interactionFinished, qontrol::UNIQUE);
 
         table->addWidgetRow(outpoint, {new catalog::TxLegend(swatch, QString::number(io.index)),
-                                       cell, cell->takeEditButton(),
-                                       catalog::amountLabel(io.value, io.value_known)});
+                                       cell, cell->takeEditButton(), amounts[index++]});
     }
     return table;
 }
