@@ -33,6 +33,7 @@ public:
     [[nodiscard]] QString serial() const override;
     [[nodiscard]] plugin::SignerState state() const override;
     [[nodiscard]] QString stateDetail() const override;
+    [[nodiscard]] auto capabilities() const -> plugin::SignerCapabilities override;
 
     ReqId init() override;
     ReqId info() override;

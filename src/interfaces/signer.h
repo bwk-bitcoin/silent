@@ -9,6 +9,21 @@
 
 #include <interfaces/types.h>
 
+namespace plugin {
+
+enum class Support : quint8 { Unsupported = 0, Supported = 1 };
+
+// Immutable supported operations. Each field serializes as 0 or 1.
+struct SignerCapabilities {
+    Support ordinary = Support::Unsupported;
+    Support taproot = Support::Unsupported;
+    Support musig2 = Support::Unsupported;
+    Support silentPayments = Support::Unsupported;
+    auto operator==(const SignerCapabilities &) const -> bool = default;
+};
+
+} // namespace plugin
+
 class ISigner : public QObject {
     Q_OBJECT
 
@@ -35,6 +50,7 @@ public:
     // can show (a pairing code, "app is not open", "wrong network").
     [[nodiscard]] virtual plugin::SignerState state() const = 0;
     [[nodiscard]] virtual QString stateDetail() const = 0;
+    [[nodiscard]] virtual auto capabilities() const -> plugin::SignerCapabilities = 0;
 
     virtual ReqId init() = 0;
     virtual ReqId info() = 0;
@@ -67,4 +83,4 @@ signals:
                plugin::SignError kind = plugin::SignError::Other);
 };
 
-Q_DECLARE_INTERFACE(ISigner, "dev.silent.ISigner/1.0")
+Q_DECLARE_INTERFACE(ISigner, "dev.silent.ISigner/2.0")

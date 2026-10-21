@@ -40,6 +40,25 @@ pub const KEYS_DIR_NAME: &str = "keys";
 /// bwk-qr protocol's `CAPABILITIES` field (ENCODING.md).
 pub const CAPABILITY_SILENT_PAYMENTS: u32 = 1 << 2;
 pub const CAPABILITY_MUSIG: u32 = 1 << 3;
+pub const CAPABILITY_ORDINARY: u32 = 1;
+pub const CAPABILITY_TAPROOT: u32 = 1 << 1;
+
+/// Full signing metadata for a supported HWI record; locked records export no bits.
+pub fn hwi_device_capabilities(
+    kind: &bwk_hwi::DeviceKind,
+    version: Option<&bwk_hwi::Version>,
+) -> u32 {
+    let capabilities = bwk_hwi::service::capabilities(kind, version);
+    let mut bits = CAPABILITY_ORDINARY | hwi_capabilities(capabilities);
+    let taproot_kind = match kind {
+        bwk_hwi::DeviceKind::LedgerSimulator => &bwk_hwi::DeviceKind::Ledger,
+        kind => kind,
+    };
+    if bwk_hwi::service::is_compatible_with_tapminiscript(taproot_kind, version) {
+        bits |= CAPABILITY_TAPROOT;
+    }
+    bits
+}
 
 /// The capability bits of a device bwk-hwi lists.
 pub fn hwi_capabilities(capabilities: bwk_hwi::service::Capabilities) -> u32 {
@@ -99,6 +118,31 @@ mod tests {
                 supports_silent_payments(mapped),
                 silent_payments,
                 "supports_silent_payments({mapped:#x})"
+            );
+        }
+    }
+
+    #[test]
+    fn hwi_device_capabilities_use_provider_kind_and_version() {
+        let version = |minor| bwk_hwi::Version {
+            major: 2,
+            minor,
+            patch: 0,
+            prerelease: None,
+        };
+        for (kind, firmware, expected) in [
+            (bwk_hwi::DeviceKind::Ledger, Some(version(1)), 1),
+            (bwk_hwi::DeviceKind::Ledger, Some(version(2)), 3),
+            (bwk_hwi::DeviceKind::Ledger, Some(version(4)), 11),
+            (bwk_hwi::DeviceKind::LedgerSimulator, Some(version(4)), 11),
+            (bwk_hwi::DeviceKind::Jade, None, 1),
+            (bwk_hwi::DeviceKind::Specter, None, 3),
+            (bwk_hwi::DeviceKind::ColdcardSimulator, None, 11),
+        ] {
+            assert_eq!(
+                hwi_device_capabilities(&kind, firmware.as_ref()),
+                expected,
+                "provider metadata {kind}, {firmware:?}"
             );
         }
     }

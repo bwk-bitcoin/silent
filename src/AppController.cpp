@@ -5,7 +5,6 @@
 #include "interfaces/instance.h"
 #include "interfaces/module.h"
 #include "interfaces/theme.h"
-#include "modules/keys/KeysModule.h"
 #include "theme/Theme.h"
 #include "views/modals/ConfirmDelete.h"
 #include <algorithm>
@@ -31,15 +30,6 @@ auto AppController::get() -> AppController * {
 
 auto AppController::pluginRegistry() const -> PluginRegistry * {
     return m_plugin_registry.get();
-}
-
-auto AppController::keysTab() const -> QWidget * {
-    auto *module = moduleForPluginId(QStringLiteral("keys"));
-    auto *keysModule = dynamic_cast<keys::KeysModule *>(module);
-    if (keysModule == nullptr) {
-        return nullptr;
-    }
-    return keysModule->tab();
 }
 
 auto AppController::registerBuiltinPlugin(std::unique_ptr<IPlugin> plugin) -> void {
@@ -254,10 +244,7 @@ auto AppController::deleteAccount(const QString &name) -> void {
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void AppController::showKeysTab() {
-    auto *window = dynamic_cast<MainWindow *>(AppController::window());
-    if (window != nullptr) {
-        window->showKeysTab();
-    }
+    Host::get()->showInstanceTab(QStringLiteral("keys"));
 }
 
 auto AppController::onDeleteConfirmed(const QString &account) -> void {

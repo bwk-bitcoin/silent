@@ -1288,6 +1288,7 @@ enum class KeyUnusableReason : ::std::uint8_t {
   NoHotSecret = 4,
   SpOutputsPending = 5,
   UnsupportedMusig = 6,
+  UnsupportedOperation = 7,
 };
 #endif // CXXBRIDGE1_ENUM_KeyUnusableReason
 
@@ -2217,7 +2218,7 @@ struct HwiDevice final {
   ::rust::String fingerprint;
   // Empty when the device did not report one.
   ::rust::String version;
-  // The capability bits it supports (bit 2 silent payments, bit 3 MuSig2), 0
+  // Capability bits: 0 ordinary, 1 Taproot, 2 silent payments, 3 MuSig2. Zero
   // unless the device is Supported.
   ::std::uint32_t capabilities CXX_DEFAULT_VALUE(0);
   ::HwiDeviceState state;
@@ -2285,7 +2286,7 @@ struct KeyDevice final {
   ::rust::String module;
   // Firmware version, empty for a USB device.
   ::rust::String version;
-  // bwk-qr capability bits, 0 for a USB device.
+  // Last reported bwk-qr capability bits, including ordinary/Taproot for USB.
   ::std::uint32_t capabilities CXX_DEFAULT_VALUE(0);
 
   using IsRelocatable = ::std::true_type;
@@ -2307,7 +2308,7 @@ struct LiveDevice final {
   ::rust::String module;
   // Firmware version, empty for a USB device.
   ::rust::String version;
-  // bwk-qr capability bits, 0 for a USB device.
+  // Explicit ordinary, Taproot, silent payments and MuSig2 capability bits.
   ::std::uint32_t capabilities CXX_DEFAULT_VALUE(0);
 
   using IsRelocatable = ::std::true_type;
@@ -3472,6 +3473,7 @@ struct KeysModule final : public ::rust::Opaque {
   // devicesChanged from the hwi module.
   void set_live_devices(::rust::Vec<::LiveDevice> devices) noexcept;
 
+  ::KeyOpResult check_device_signing(::rust::Str psbt_v2_hex, ::rust::Str fingerprint, ::std::uint32_t capabilities) const noexcept;
   ::rust::Vec<::LiveDevice> live_devices() const noexcept;
 
   // Remembers a device for the key with that fingerprint.

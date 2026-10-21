@@ -42,7 +42,7 @@ namespace keys {
 using RustKeys = ::KeysModule;
 
 class KeysModule;
-class KeysTab;
+class KeysInstance;
 
 // One registerDescriptor() waiting on the key's connected device: its bus request,
 // the device instance and signer, and whether the device is checking or registering.
@@ -217,7 +217,7 @@ public:
     // BIP86 and BIP87, plus the BIP352 silent payment account when its `capabilities`
     // include silent payments, at the coin type of the network.
     [[nodiscard]] static auto deviceXpubPaths(quint32 capabilities) -> QStringList;
-    // The capability bits `entry`'s device reports, 0 for a signer that is no USB device.
+    // Converts public signer metadata to the Rust device protocol bits.
     [[nodiscard]] static auto deviceCapabilities(const plugin::SignerEntry &entry) -> quint32;
     [[nodiscard]] static auto toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice;
     // 0 on Bitcoin, 1 on every test network.
@@ -229,9 +229,6 @@ public:
     [[nodiscard]] HwiModule *hwi() const;
     [[nodiscard]] KeysBus *bus() const;
     ReqId nextReqId();
-    // The Keys tab widget. Built on first call and reused afterwards; a QPointer
-    // leaves this null again if the host that owns the widget deletes it.
-    [[nodiscard]] auto tab() -> QWidget *;
     // Each request below opens one signing flow modal and returns once it has closed;
     // the flow answers `req_id` through the bus exactly once.
     // Signs `psbt_v2_hex` with every key it needs, one after the other, or with the key
@@ -299,6 +296,7 @@ public:
     [[nodiscard]] static auto toQt(const rust::String &value) -> QString;
 
 signals:
+    void autoStartRequested(ReqId req_id);
     // The key records changed; the tab rebuilds on it.
     void keysChanged();
     void nonceSessionsChanged();
@@ -347,6 +345,7 @@ private slots:
     // network has a USB route: every flow signing, checking or registering with such a
     // key needs its device listed, from whatever tab it starts.
     void updateSignerPolling();
+    void onAutoStartRequested(ReqId req_id);
     // The answers of a key's connected device to registerDescriptor().
     void onDeviceIsRegistered(ReqId req_id, bool registered);
     void onDeviceRegistered(ReqId req_id, bool registered);
@@ -443,8 +442,8 @@ private:
     // Set by NetworkScope while a request for that network runs.
     std::optional<Network> m_scope;
     std::unique_ptr<KeysBus> m_bus;
-    HwiModule *m_hwi = nullptr;
-    QPointer<KeysTab> m_tab;
+    QPointer<HwiModule> m_hwi;
+    std::unique_ptr<KeysInstance> m_instance;
     bool m_tab_shown = false;
     ReqId m_next_req_id = 0;
     QHash<QThread *, std::shared_ptr<HotWork>> m_hot_work;

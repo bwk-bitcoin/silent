@@ -50,8 +50,7 @@ public:
 
     [[nodiscard]] QString kind() const;
     [[nodiscard]] QString version() const;
-    // The capability bits the device reports (bit 2 silent payments, bit 3 MuSig2).
-    [[nodiscard]] quint32 capabilities() const;
+    [[nodiscard]] auto capabilities() const -> plugin::SignerCapabilities override;
     // Whether the device record still describes this signer. A change means a new
     // instance, because the accessors are immutable.
     [[nodiscard]] bool matches(const HwiDevice &device) const;

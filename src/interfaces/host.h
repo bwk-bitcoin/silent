@@ -106,6 +106,9 @@ public:
     using SectionId = quint64;
     using WizardId = quint64;
 
+    // Wire values: 0 is the closable account strip, 1 the module strip before Settings.
+    enum class PagePlacement : quint8 { Normal = 0, Module = 1 };
+
     struct SettingSectionView {
         SectionId id = 0;
         QWidget *content = nullptr;
@@ -165,7 +168,11 @@ public:
     // Callable from any thread; the work runs on the GUI thread. It never starts an instance.
     virtual void refreshLauncher() = 0;
 
-    virtual TabId openTab(QWidget *content, IInstance *owner) = 0;
+    // GUI thread only. One page per instance. Invalid placement returns 0.
+    // Module pages do not steal focus on publication and have no user close button.
+    virtual TabId openTab(QWidget *content, IInstance *owner,
+                          PagePlacement placement = PagePlacement::Normal) = 0;
+    virtual void showInstanceTab(const QString &instance_id) = 0;
     virtual void setTabTitle(TabId tab, const QString &title) = 0;
     // delete_content=false detaches the tab from view but keeps the content
     // widget alive, leaving its deletion to the caller.

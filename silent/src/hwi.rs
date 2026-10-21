@@ -21,9 +21,11 @@ use bwk_hwi::{
 };
 use crossbeam::channel;
 
-use crate::ffi::{HwiDevice, HwiDeviceState, HwiErrorKind, HwiEvent, HwiEventFlag, Network};
-use crate::hwi_config::PersistedBitboxNoiseConfig;
-use crate::keys::hwi_capabilities;
+use crate::{
+    ffi::{HwiDevice, HwiDeviceState, HwiErrorKind, HwiEvent, HwiEventFlag, Network},
+    hwi_config::PersistedBitboxNoiseConfig,
+    keys::hwi_device_capabilities,
+};
 
 /// The service is generic over its message type; this is ours. `Shutdown` is ours
 /// alone: it wakes the blocking recv on the C++ side, which dropping the sender cannot
@@ -318,7 +320,7 @@ fn to_device(id: String, device: &SigningDevice<HwiMessage, u64>) -> HwiDevice {
                 .version()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
-            hwi_capabilities(supported.capabilities()),
+            hwi_device_capabilities(supported.kind(), supported.version()),
             String::new(),
         ),
         SigningDevice::Locked { pairing_code, .. } => (

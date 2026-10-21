@@ -75,6 +75,11 @@ QString RouteSigner::stateDetail() const {
     return QString();
 }
 
+auto RouteSigner::capabilities() const -> plugin::SignerCapabilities {
+    // This metadata-only adapter does not sign; IKeys drives the selected route.
+    return {};
+}
+
 auto RouteSigner::route() const -> KeyRouteKind {
     return m_route;
 }

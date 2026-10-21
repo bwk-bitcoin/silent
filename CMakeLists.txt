@@ -124,6 +124,8 @@ set(SILENT_APP_SOURCES
     src/modules/hwi/HwiSigner.cpp
     src/modules/keys/KeysModule.h
     src/modules/keys/KeysModule.cpp
+    src/modules/keys/KeysInstance.h
+    src/modules/keys/KeysInstance.cpp
     src/modules/keys/KeysTab.h
     src/modules/keys/KeysTab.cpp
     src/modules/keys/BwkQrEngine.h
@@ -586,7 +588,7 @@ if(SILENT_BUILD_HOST_SMOKE)
     set(SMOKE host_smoke)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        foreach(ABI_VERSION 2 3 4 5)
+        foreach(ABI_VERSION 2 3 4 5 6)
             qt_add_library(plugin_abi${ABI_VERSION}_fixture MODULE tests/host/PluginAbiFixture.cpp)
             add_dependencies(plugin_abi${ABI_VERSION}_fixture RunBeforeBuild)
             target_link_libraries(plugin_abi${ABI_VERSION}_fixture PRIVATE silent_interfaces)
@@ -598,6 +600,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         target_compile_definitions(plugin_abi2_fixture PRIVATE SILENT_ABI2_FIXTURE)
         target_compile_definitions(plugin_abi3_fixture PRIVATE SILENT_ABI3_FIXTURE)
         target_compile_definitions(plugin_abi4_fixture PRIVATE SILENT_ABI4_FIXTURE)
+        target_compile_definitions(plugin_abi5_fixture PRIVATE SILENT_ABI5_FIXTURE)
         qt_add_library(price_feed_fixture MODULE tests/host/PriceFeedPlugin.cpp)
         add_dependencies(price_feed_fixture RunBeforeBuild)
         # Like real plugins, use Qt headers but resolve Qt symbols from the host.
@@ -631,19 +634,23 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/sp_signing_smoke.cpp
         tests/host/musig_reset_smoke.cpp
         tests/host/boundary_smoke.cpp
+        tests/host/keys_contract_smoke.cpp
         tests/host/storage_smoke.cpp
         ${SILENT_APP_SOURCES}
     )
 
     add_dependencies(${SMOKE} RunBeforeBuild qontrol)
+    target_compile_definitions(${SMOKE} PRIVATE
+        SILENT_KEYS_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/host/fixtures")
     if(TARGET price_feed_fixture)
         target_sources(${SMOKE} PRIVATE tests/host/plugin_abi_smoke.cpp)
-        add_dependencies(${SMOKE} price_feed_fixture plugin_abi2_fixture plugin_abi3_fixture plugin_abi4_fixture plugin_abi5_fixture)
+        add_dependencies(${SMOKE} price_feed_fixture plugin_abi2_fixture plugin_abi3_fixture plugin_abi4_fixture plugin_abi5_fixture plugin_abi6_fixture)
         target_compile_definitions(${SMOKE} PRIVATE
             SILENT_ABI2_FIXTURE_PATH="$<TARGET_FILE:plugin_abi2_fixture>"
             SILENT_ABI3_FIXTURE_PATH="$<TARGET_FILE:plugin_abi3_fixture>"
             SILENT_ABI4_FIXTURE_PATH="$<TARGET_FILE:plugin_abi4_fixture>"
             SILENT_ABI5_FIXTURE_PATH="$<TARGET_FILE:plugin_abi5_fixture>"
+            SILENT_ABI6_FIXTURE_PATH="$<TARGET_FILE:plugin_abi6_fixture>"
             SILENT_PRICE_FEED_FIXTURE="$<TARGET_FILE:price_feed_fixture>")
     endif()
     if(TARGET storage_fixture)

@@ -75,6 +75,12 @@ pub enum Error {
     DuplicateKey(Fingerprint),
     #[error("key '{0}' is not registered")]
     UnknownKey(Fingerprint),
+    #[error("signer '{fingerprint}' does not support the PSBT operations (required {required:#x}, available {available:#x})")]
+    UnsupportedOperation {
+        fingerprint: Fingerprint,
+        required: u32,
+        available: u32,
+    },
     #[error("key '{fingerprint}' has {count} descriptor(s) registered")]
     DescriptorsRegistered {
         fingerprint: Fingerprint,

@@ -49,6 +49,20 @@ DeviceSign::~DeviceSign() {
 
 void DeviceSign::start(const QString &descriptor) {
     m_descriptor = descriptor;
+    if (!m_device.isNull()) {
+        if (m_module.isNull() || m_module->rust() == nullptr ||
+            m_device->state() != plugin::SignerState::Ready) {
+            fail(UsbError::Failed, TR("keys-module-not-ready"));
+            return;
+        }
+        auto checked = m_module->rust()->check_device_signing(
+            m_psbt_v2_hex.toStdString(), m_fingerprint.toStdString(),
+            KeysModule::deviceCapabilities({.instanceId = m_instance_id, .signer = m_device}));
+        if (!checked.is_ok) {
+            fail(UsbError::Failed, KeysModule::toQt(checked.error));
+            return;
+        }
+    }
     bool ledger = m_device.isNull() ||
                   m_device->brand().startsWith(QStringLiteral("ledger"), Qt::CaseInsensitive);
     if (ledger) {

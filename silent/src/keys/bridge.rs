@@ -643,6 +643,29 @@ impl KeysModule {
             .collect()
     }
 
+    pub fn check_device_signing(
+        &self,
+        psbt_v2_hex: &str,
+        fingerprint: &str,
+        capabilities: u32,
+    ) -> ffi::KeyOpResult {
+        let Some(manager) = self.inner.as_ref() else {
+            return failed_op(&self.error);
+        };
+        let fingerprint = match parse_fingerprint(fingerprint) {
+            Ok(fp) => fp,
+            Err(error) => return failed_op(&error),
+        };
+        let bytes = match hex::decode(psbt_v2_hex) {
+            Ok(bytes) => bytes,
+            Err(error) => return failed_op(&format!("invalid psbt hex: {error}")),
+        };
+        match manager.check_device_signing(&bytes, fingerprint, capabilities) {
+            Ok(()) => ok_op(),
+            Err(error) => failed_op(&error.to_string()),
+        }
+    }
+
     /// Builds the signer picker for `psbt_v2_hex`. The PSBT's own SP fields (spend
     /// derivation, tweak) name which registered key must sign first; the manager
     /// cross-checks that against every `sp(` descriptor registered on any key.
@@ -1843,6 +1866,9 @@ impl From<ffi::KeyUnusableReason> for Option<crate::keys::manager::UnusableReaso
             ffi::KeyUnusableReason::NoHotSecret => Some(UnusableReason::NoHotSecret),
             ffi::KeyUnusableReason::SpOutputsPending => Some(UnusableReason::SpOutputsPending),
             ffi::KeyUnusableReason::UnsupportedMusig => Some(UnusableReason::UnsupportedMusig),
+            ffi::KeyUnusableReason::UnsupportedOperation => {
+                Some(UnusableReason::UnsupportedOperation)
+            }
             _ => unreachable!("CXX enum type safety guarantees no other variants exist"),
         }
     }
@@ -1859,6 +1885,9 @@ impl From<Option<crate::keys::manager::UnusableReason>> for ffi::KeyUnusableReas
             Some(UnusableReason::NoHotSecret) => ffi::KeyUnusableReason::NoHotSecret,
             Some(UnusableReason::SpOutputsPending) => ffi::KeyUnusableReason::SpOutputsPending,
             Some(UnusableReason::UnsupportedMusig) => ffi::KeyUnusableReason::UnsupportedMusig,
+            Some(UnusableReason::UnsupportedOperation) => {
+                ffi::KeyUnusableReason::UnsupportedOperation
+            }
         }
     }
 }

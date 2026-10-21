@@ -412,10 +412,14 @@ void HostImpl::dropInstanceHandles(IInstance *instance) {
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
-Host::TabId HostImpl::openTab(QWidget *content, IInstance *owner) {
+Host::TabId HostImpl::openTab(QWidget *content, IInstance *owner, PagePlacement placement) {
     assertGuiThread();
     if (content == nullptr || owner == nullptr) {
         qWarning() << "Host openTab failed: null content or owner";
+        return 0;
+    }
+    if (placement != PagePlacement::Normal && placement != PagePlacement::Module) {
+        qWarning() << "Host openTab failed: invalid placement";
         return 0;
     }
     ensureMainWindowHooked();
@@ -428,15 +432,27 @@ Host::TabId HostImpl::openTab(QWidget *content, IInstance *owner) {
     if (m_tab_by_owner.contains(owner)) {
         // This owner already has a hosted tab; host does not take ownership of replacement content.
         // Dispose the extra widget to avoid ambiguous ownership/lifecycle leaks.
-        content->deleteLater();
+        if (m_tabs.value(m_tab_by_owner.value(owner)).content != content) {
+            content->deleteLater();
+        }
         return m_tab_by_owner.value(owner);
     }
 
     const TabId tab_id = ++m_next_tab_id;
-    window->addTab(content, QString());
+    window->addTab(content, QString(), placement);
     m_tabs.insert(tab_id, TabEntry{.id = tab_id, .content = content, .owner = owner});
     m_tab_by_owner.insert(owner, tab_id);
     return tab_id;
+}
+
+void HostImpl::showInstanceTab(const QString &instance_id) {
+    assertGuiThread();
+    auto *owner = m_instances.value(instance_id, nullptr);
+    auto entry = m_tabs.value(m_tab_by_owner.value(owner));
+    auto *window = mainWindow();
+    if (window != nullptr && entry.content != nullptr) {
+        window->showTab(entry.content);
+    }
 }
 
 void HostImpl::setTabTitle(TabId tab, const QString &title) {

@@ -174,6 +174,7 @@ mod ffi {
         NoHotSecret,
         SpOutputsPending,
         UnsupportedMusig,
+        UnsupportedOperation,
     }
 
     /// Kind of a decoded and validated QR response.
@@ -850,7 +851,7 @@ mod ffi {
         pub fingerprint: String,
         /// Empty when the device did not report one.
         pub version: String,
-        /// The capability bits it supports (bit 2 silent payments, bit 3 MuSig2), 0
+        /// Capability bits: 0 ordinary, 1 Taproot, 2 silent payments, 3 MuSig2. Zero
         /// unless the device is Supported.
         pub capabilities: u32,
         pub state: HwiDeviceState,
@@ -906,7 +907,7 @@ mod ffi {
         pub module: String,
         /// Firmware version, empty for a USB device.
         pub version: String,
-        /// bwk-qr capability bits, 0 for a USB device.
+        /// Last reported bwk-qr capability bits, including ordinary/Taproot for USB.
         pub capabilities: u32,
     }
 
@@ -924,7 +925,7 @@ mod ffi {
         pub module: String,
         /// Firmware version, empty for a USB device.
         pub version: String,
-        /// bwk-qr capability bits, 0 for a USB device.
+        /// Explicit ordinary, Taproot, silent payments and MuSig2 capability bits.
         pub capabilities: u32,
     }
 
@@ -2239,6 +2240,12 @@ mod ffi {
         /// Replaces the live list wholesale; the C++ side calls this on every
         /// devicesChanged from the hwi module.
         fn set_live_devices(self: &mut KeysModule, devices: Vec<LiveDevice>);
+        fn check_device_signing(
+            self: &KeysModule,
+            psbt_v2_hex: &str,
+            fingerprint: &str,
+            capabilities: u32,
+        ) -> KeyOpResult;
         fn live_devices(self: &KeysModule) -> Vec<LiveDevice>;
         /// Remembers a device for the key with that fingerprint.
         fn record_device(self: &mut KeysModule, device: LiveDevice) -> KeyOpResult;

@@ -44,7 +44,9 @@ public:
     void requestSignerPolling(IModule *requester, bool enabled) override;
     void refreshLauncher() override;
 
-    TabId openTab(QWidget *content, IInstance *owner) override;
+    TabId openTab(QWidget *content, IInstance *owner,
+                  PagePlacement placement = PagePlacement::Normal) override;
+    void showInstanceTab(const QString &instance_id) override;
     void setTabTitle(TabId tab, const QString &title) override;
     void closeTab(TabId tab, bool delete_content = true) override;
 

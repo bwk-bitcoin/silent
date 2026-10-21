@@ -41,6 +41,10 @@ class InertSigner final : public ISigner {
 public:
     using ISigner::ISigner;
 
+    [[nodiscard]] auto capabilities() const -> plugin::SignerCapabilities override {
+        return {};
+    }
+
     [[nodiscard]] bool implemented() const override { return false; }
     [[nodiscard]] QString id() const override { return QString(); }
     [[nodiscard]] QString fingerprint() const override { return QString(); }

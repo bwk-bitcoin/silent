@@ -3,10 +3,9 @@
 #include "account/TransactionJob.h"
 
 #include "DeviceName.h"
-#include "KeysTab.h"
+#include "KeysInstance.h"
 #include "KeysView.h"
 #include "modules/hwi/HwiModule.h"
-#include "modules/hwi/HwiSigner.h"
 #include "modules/keys/flow/HotSign.h"
 #include "modules/keys/flow/SigningFlow.h"
 #include "modules/keys/flow/signingflow/DeviceQuery.h"
@@ -33,6 +32,11 @@
 namespace keys {
 
 namespace {
+
+constexpr quint32 CAPABILITY_SILENT_PAYMENTS = 1U << 2;
+constexpr quint32 CAPABILITY_MUSIG2 = 1U << 3;
+constexpr quint32 CAPABILITY_ORDINARY = 1U;
+constexpr quint32 CAPABILITY_TAPROOT = 1U << 1;
 
 auto failedOp(const QString &error) -> KeyOpResult {
     KeyOpResult result;
@@ -315,6 +319,9 @@ void KeysBus::deliverRegistrationChecked(ReqId req_id, bool registered) {
 }
 
 KeysModule::KeysModule(QObject *parent) : IModule(parent) {
+    // Registry activation precedes shell creation; deliver the auto-start answer asynchronously.
+    connect(this, &KeysModule::autoStartRequested, this, &KeysModule::onAutoStartRequested,
+            static_cast<Qt::ConnectionType>(Qt::QueuedConnection | Qt::UniqueConnection));
     connect(Host::get()->events(), &HostEvents::instanceRegistered, this,
             &KeysModule::onInstanceRegistered, qontrol::UNIQUE);
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
@@ -345,6 +352,9 @@ KeysModule::KeysModule(QObject *parent) : IModule(parent) {
 }
 
 KeysModule::~KeysModule() {
+    if (m_instance != nullptr) {
+        Host::get()->removeInstance(m_instance->id(), this);
+    }
     teardownModule();
 }
 
@@ -364,23 +374,35 @@ QList<IModule *> KeysModule::modules() const {
 }
 
 ReqId KeysModule::list() {
-    // Nothing to launch from the launcher: this module's widget is hosted directly by
-    // the main window, not through an instance.
     ReqId reqId = nextReqId();
     emit IModule::instances(reqId, QList<QPair<QString, QString>>{});
     return reqId;
 }
 
 ReqId KeysModule::autoStart() {
-    // This module pushes no instance: its widget is hosted directly by the main
-    // window in a later task.
     ReqId reqId = nextReqId();
-    emit IModule::autoStart(reqId, QStringList{});
+    emit autoStartRequested(reqId);
     return reqId;
 }
 
+void KeysModule::onAutoStartRequested(ReqId req_id) {
+    emit IModule::autoStart(req_id, {QStringLiteral("keys")});
+}
+
 void KeysModule::startInstance(const QString &id) {
-    emit error(std::nullopt, QStringLiteral("keys: unknown instance %1").arg(id));
+    if (id != QStringLiteral("keys")) {
+        emit error(std::nullopt, QStringLiteral("keys: unknown instance %1").arg(id));
+        return;
+    }
+    if (m_instance != nullptr) {
+        return;
+    }
+    m_instance = std::make_unique<KeysInstance>(this);
+    Host::get()->registerInstance(id, m_instance.get(), this);
+    if (!m_instance->openPage()) {
+        Host::get()->removeInstance(id, this);
+        emit error(std::nullopt, QStringLiteral("keys: page publication failed"));
+    }
 }
 
 void KeysModule::createModule() {
@@ -1500,8 +1522,21 @@ auto KeysModule::deviceXpubPaths(quint32 capabilities) -> QStringList {
 }
 
 auto KeysModule::deviceCapabilities(const plugin::SignerEntry &entry) -> quint32 {
-    auto *device = qobject_cast<HwiSigner *>(entry.signer);
-    return device != nullptr ? device->capabilities() : 0;
+    auto capabilities = entry.signer->capabilities();
+    quint32 bits = 0;
+    if (capabilities.ordinary == plugin::Support::Supported) {
+        bits |= CAPABILITY_ORDINARY;
+    }
+    if (capabilities.taproot == plugin::Support::Supported) {
+        bits |= CAPABILITY_TAPROOT;
+    }
+    if (capabilities.silentPayments == plugin::Support::Supported) {
+        bits |= CAPABILITY_SILENT_PAYMENTS;
+    }
+    if (capabilities.musig2 == plugin::Support::Supported) {
+        bits |= CAPABILITY_MUSIG2;
+    }
+    return bits;
 }
 
 auto KeysModule::toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice {
@@ -1570,13 +1605,6 @@ KeysBus *KeysModule::bus() const {
     return m_bus.get();
 }
 
-auto KeysModule::tab() -> QWidget * {
-    if (m_tab.isNull()) {
-        m_tab = new KeysTab(this);
-    }
-    return m_tab.data();
-}
-
 ReqId KeysModule::nextReqId() {
     ++m_next_req_id;
     if (m_next_req_id == 0) {
@@ -1618,6 +1646,9 @@ void KeysModule::onInstanceRegistered(const QString &id) {
 }
 
 void KeysModule::onInstanceRemoved(const QString &id) {
+    if (m_instance != nullptr && m_instance->id() == id) {
+        m_instance.reset();
+    }
     for (auto it = m_device_registrations.begin(); it != m_device_registrations.end();) {
         if (it->instance_id == id) {
             m_bus->deliverError(it->bus_req, TR("keys-register-disconnected"));

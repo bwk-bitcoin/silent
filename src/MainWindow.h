@@ -7,6 +7,7 @@
 #include <QTabBar>
 #include <QWidget>
 #include <Qontrol>
+#include <interfaces/host.h>
 
 namespace catalog {
 class Tabs;
@@ -19,12 +20,13 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
 
-    auto addTab(QWidget *content, const QString &title) -> int;
+    auto addTab(QWidget *content, const QString &title,
+                Host::PagePlacement placement = Host::PagePlacement::Normal) -> int;
     auto removeTab(QWidget *content, bool delete_content = true) -> void;
     auto setTabTitle(QWidget *content, const QString &title) -> void;
     auto tabExists(QWidget *content) const -> bool;
     auto updateTabs() -> void;
-    void showKeysTab();
+    void showTab(QWidget *content);
 
 signals:
     void hostedTabCloseRequested(QWidget *content);
@@ -42,16 +44,16 @@ protected:
     auto initWindow() -> void;
     auto retranslateUi() -> void;
     void updateModuleTabs();
-    // The module pages, in the order of their tabs: Keys, then Settings.
+    // Published module pages in insertion order, followed by Settings.
     [[nodiscard]] auto modulePages() const -> QList<QPair<QWidget *, QString>>;
 
 private:
     bool m_init = false;
     catalog::Tabs *m_tab = nullptr;
-    // The module tabs (Keys, Settings), right aligned, apart from the accounts.
+    // Published module tabs and Settings, right aligned, apart from the accounts.
     QTabBar *m_module_bar = nullptr;
     QList<QPair<QString, QWidget *>> m_tabs;
+    QList<QPair<QString, QWidget *>> m_module_tabs;
     QWidget *m_menu_tab = nullptr;
-    QWidget *m_keys_tab = nullptr;
     QWidget *m_settings_tab = nullptr;
 };

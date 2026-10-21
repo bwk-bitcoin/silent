@@ -64,6 +64,10 @@ QString OfflineSigner::stateDetail() const {
     return TR("keys-no-usable-route");
 }
 
+auto OfflineSigner::capabilities() const -> plugin::SignerCapabilities {
+    return {};
+}
+
 ReqId OfflineSigner::init() {
     ReqId reqId = m_module->nextReqId();
     emit deferredError(reqId, TR("keys-no-usable-route"));

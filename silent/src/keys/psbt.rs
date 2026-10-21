@@ -26,7 +26,10 @@ use bwk_sp::{
     },
 };
 
-use crate::keys::{error::Error, musig_sessions::attempt_id};
+use crate::keys::{
+    error::Error, musig_sessions::attempt_id, CAPABILITY_MUSIG, CAPABILITY_ORDINARY,
+    CAPABILITY_SILENT_PAYMENTS, CAPABILITY_TAPROOT,
+};
 
 const FINGERPRINT_LEN: usize = 4;
 const MUSIG_INPUT_TYPES: [u8; 2] = [PSBT_IN_MUSIG2_PUB_NONCE, PSBT_IN_MUSIG2_PARTIAL_SIG];
@@ -36,6 +39,8 @@ const MUSIG_INPUT_TYPES: [u8; 2] = [PSBT_IN_MUSIG2_PUB_NONCE, PSBT_IN_MUSIG2_PAR
 pub struct PsbtArtifacts {
     /// Every fingerprint that has to sign, in a deterministic order.
     pub required: BTreeSet<Fingerprint>,
+    /// Signing operations required of each fingerprint, using the device capability bits.
+    pub required_capabilities: BTreeMap<Fingerprint, u32>,
     /// The fingerprint of the sp() key that must sign first, when resolved.
     pub sp_fingerprint: Option<Fingerprint>,
     /// At least one input is a silent payment input.
@@ -388,6 +393,61 @@ fn resolve_by_input_owner(
     Ok(Some(owner))
 }
 
+fn signing_capabilities(
+    psbt: &PsbtV2,
+    sp_fingerprint: Option<Fingerprint>,
+) -> Result<BTreeMap<Fingerprint, u32>, Error> {
+    let mut required = BTreeMap::new();
+    for input in &psbt.inputs {
+        let restricted = is_partial_tap_tree(&input.psbt);
+        let participants: BTreeSet<_> = musig_input_participants_all(&input.psbt)
+            .map_err(musig_field_error)?
+            .into_iter()
+            .filter(|entry| {
+                !restricted
+                    || input
+                        .psbt
+                        .tap_key_origins
+                        .get(&entry.aggregate.x_only_public_key().0)
+                        .is_some_and(|(leaves, _)| !leaves.is_empty())
+            })
+            .flat_map(|entry| entry.participants)
+            .map(|key| key.x_only_public_key().0)
+            .collect();
+        let silent_payment = input.psbt.unknown.keys().any(|key| {
+            key.type_value == PSBT_IN_SP_TWEAK
+                || key.type_value == PSBT_IN_SP_SPEND_BIP32_DERIVATION
+        });
+        let taproot = input
+            .psbt
+            .witness_utxo
+            .as_ref()
+            .is_some_and(|utxo| utxo.script_pubkey.is_p2tr());
+        for (fingerprint, _) in input.psbt.bip32_derivation.values() {
+            *required.entry(*fingerprint).or_default() |= if taproot {
+                CAPABILITY_TAPROOT
+            } else {
+                CAPABILITY_ORDINARY
+            };
+        }
+        for (key, (leaves, (fingerprint, _))) in &input.psbt.tap_key_origins {
+            if restricted && leaves.is_empty() {
+                continue;
+            }
+            let capability = match (silent_payment, participants.contains(key)) {
+                (true, _) => CAPABILITY_SILENT_PAYMENTS,
+                (false, true) => CAPABILITY_MUSIG,
+                (false, false) => CAPABILITY_TAPROOT,
+            };
+            *required.entry(*fingerprint).or_default() |= capability;
+        }
+    }
+    if let Some(fingerprint) = sp_fingerprint {
+        *required.entry(fingerprint).or_default() |= CAPABILITY_SILENT_PAYMENTS;
+    }
+    Ok(required)
+}
+
 pub fn inspect(
     psbt: &PsbtV2,
     sp_descriptors: &[SpDescriptor],
@@ -405,7 +465,10 @@ pub fn inspect(
         required.insert(fingerprint);
     }
 
+    let mut required_capabilities = signing_capabilities(psbt, sp_fingerprint)?;
+    required_capabilities.retain(|fingerprint, _| required.contains(fingerprint));
     Ok(PsbtArtifacts {
+        required_capabilities,
         required,
         sp_fingerprint,
         sp_inputs,
@@ -1107,6 +1170,32 @@ mod tests {
 
         let artifacts = inspect(&psbt, &[], &secp).expect("inspect succeeds");
         assert_eq!(artifacts.required, BTreeSet::from([inside]));
+        assert_eq!(
+            artifacts.required_capabilities,
+            BTreeMap::from([(inside, CAPABILITY_TAPROOT)]),
+            "a plain leaf requires Taproot, not ordinary signing"
+        );
+    }
+
+    #[test]
+    fn an_inactive_musig_internal_key_does_not_change_the_plain_leaf_operation() {
+        let secp = secp();
+        let inside = fingerprint(0x21);
+        let outside = fingerprint(0x22);
+        let mut input = two_leaf_input(&[0], inside, outside);
+        set_musig_input_participants(
+            &mut input.psbt,
+            public_key(&secp, 0xc3),
+            &[public_key(&secp, 0xc2), public_key(&secp, 0xc4)],
+        );
+        let mut psbt = empty_psbt();
+        psbt.inputs.push(input);
+        let artifacts = inspect(&psbt, &[], &secp).expect("restricted leaf inspects");
+        assert_eq!(
+            artifacts.required_capabilities,
+            BTreeMap::from([(inside, CAPABILITY_TAPROOT)]),
+            "retained internal MuSig metadata must not gate a plain leaf"
+        );
     }
 
     #[test]

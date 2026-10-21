@@ -313,7 +313,10 @@ public:
         QString   title;           // empty when none was given
     };
 
-    TabId     openTab(QWidget *content, IInstance *owner);           // at most one/instance
+    enum class PagePlacement : quint8 { Normal = 0, Module = 1 };
+    TabId     openTab(QWidget *content, IInstance *owner,
+                      PagePlacement placement = PagePlacement::Normal); // at most one/instance
+    void      showInstanceTab(const QString &instance_id);
     void      setTabTitle(TabId tab, const QString &title);          // dynamic, any time
     void      closeTab(TabId tab);
 
@@ -668,6 +671,7 @@ public:
     virtual QString walletName()  const = 0;
     virtual plugin::SignerState state() const = 0;  // Ready / Locked / Unsupported
     virtual QString stateDetail() const = 0;   // why it is not Ready, in one line
+    virtual auto capabilities() const -> plugin::SignerCapabilities = 0;
     // requests (touch the device): result on the matching signal
     virtual ReqId init() = 0;                                       // open/handshake
     virtual ReqId info() = 0;                                       // device kind, version...
@@ -722,6 +726,40 @@ public:
     virtual IThemeProvider *theme()   = 0;
 };
 ```
+
+`ISigner::capabilities()` returns immutable `plugin::SignerCapabilities` metadata:
+`ordinary`, `taproot`, `musig2` and `silentPayments`, each explicitly
+`plugin::Support::Supported` or `Unsupported`. Omitted fields mean Unsupported.
+Serialize each field separately as an unsigned byte, 0 for Unsupported and 1 for
+Supported, not the C++ struct layout. This describes the operations exposed by this
+signer, not a guarantee that a particular descriptor or request will succeed.
+Metadata-only route adapters and offline stand-ins explicitly advertise no signing
+operations; IKeys drives those routes separately. A provider replaces its signer
+instance when metadata changes. HWI network configuration remains provider-owned.
+All four fields reach Rust's live-device list as bwk-qr bits 0 through 3. HWI derives
+ordinary support from its supported record and Taproot support from its provider's
+kind/version compatibility metadata. The legacy SP/MuSig2 bit meanings are unchanged.
+Signing candidates select a USB device supporting the operations requested of that
+fingerprint by the PSBT, not merely a connected device. Mixed ordinary/Taproot inputs
+require both capabilities. Unsupported operations are refused again before device
+dispatch. Hot routes use their own signing implementation; cached offline MuSig2
+nonce publication does not require a live device.
+
+`Host::openTab()` defaults to `PagePlacement::Normal`, the closable account strip.
+`Module` publishes a non-closable page in the right strip before the Settings gear,
+in publication order, without changing the current page. Wire values are unsigned
+bytes 0 and 1; other values are refused with TabId 0, leaving ownership with the
+caller. `showInstanceTab(id)` activates a live instance's page and ignores removed
+IDs. Both placements use the same instance teardown and title update contract.
+Keys auto-starts its `keys` instance and publishes its page through this contract;
+the shell does not create or obtain a concrete Keys widget. Removing the instance
+destroys its page; starting it again creates a fresh one. These are in-process UI
+contracts, not proof of sandbox isolation.
+
+With `SILENT_BUILD_HOST_SMOKE=ON`, run `build/host_smoke --keys-contract` under
+`QT_QPA_PLATFORM=offscreen` and a fresh HOME. An optional second argument names an
+existing screenshot directory. It checks public non-HWI capability combinations,
+page publication failures, placement, Settings visibility and instance recreation.
 
 A consumer reaches a capability via its accessor and gates on `implemented()`, e.g.
 `instance->account()->implemented()`; if true it issues requests and connects that
@@ -1178,13 +1216,14 @@ they are not evidence of a supported funded signing combination.
 
 ## ABI & Linking Rules (Plugin Authors Must Read)
 
-The current plugin IID is `dev.silent.IPlugin/5.0`, the account IID is
+The current plugin IID is `dev.silent.IPlugin/6.0`, the signer IID is
+`dev.silent.ISigner/2.0`, the account IID is
 `dev.silent.IAccount/2.0`, the keys IID is `dev.silent.IKeys/2.0`, and the transaction
 service IID is `dev.silent.ITransactions/1.0`. The feed IID remains
-`dev.silent.IFeed/3.0`. `Host::storage()` replacing `loadState()` / `saveState()` changes
-the ABI. Rebuild plugins
+`dev.silent.IFeed/3.0`. Typed signer capabilities and the optional host page placement
+change the ABI. Rebuild plugins
 against this checkout and use `SILENT_IPlugin_IID` in plugin metadata. Include both
-`src` and the matching generated `lib/include` directory. Old 1.0 to 4.0 plugins are refused rather than
+`src` and the matching generated `lib/include` directory. Old 1.0 to 5.0 plugins are refused rather than
 called through incompatible vtables.
 
 Silent statically links Qt, and the host binary acts as the **single Qt provider**:

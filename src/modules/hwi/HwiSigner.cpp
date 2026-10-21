@@ -14,6 +14,11 @@
 #include <silent.h>
 
 namespace {
+constexpr quint32 CAPABILITY_SILENT_PAYMENTS = 1U << 2;
+constexpr quint32 CAPABILITY_MUSIG2 = 1U << 3;
+constexpr quint32 CAPABILITY_ORDINARY = 1U;
+constexpr quint32 CAPABILITY_TAPROOT = 1U << 1;
+
 auto toState(HwiDeviceState state) -> plugin::SignerState {
     switch (state) {
     case HwiDeviceState::Supported:
@@ -104,8 +109,16 @@ QString HwiSigner::version() const {
     return m_version;
 }
 
-quint32 HwiSigner::capabilities() const {
-    return m_capabilities;
+auto HwiSigner::capabilities() const -> plugin::SignerCapabilities {
+    return {.ordinary = (m_capabilities & CAPABILITY_ORDINARY) != 0 ? plugin::Support::Supported
+                                                                    : plugin::Support::Unsupported,
+            .taproot = (m_capabilities & CAPABILITY_TAPROOT) != 0 ? plugin::Support::Supported
+                                                                  : plugin::Support::Unsupported,
+            .musig2 = (m_capabilities & CAPABILITY_MUSIG2) != 0 ? plugin::Support::Supported
+                                                                : plugin::Support::Unsupported,
+            .silentPayments = (m_capabilities & CAPABILITY_SILENT_PAYMENTS) != 0
+                                  ? plugin::Support::Supported
+                                  : plugin::Support::Unsupported};
 }
 
 bool HwiSigner::ready() const {

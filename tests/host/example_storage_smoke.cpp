@@ -74,7 +74,7 @@ void requireBinaryAbi(const QString &library) {
     QPluginLoader loader(library);
     require(loader.metaData().value(QStringLiteral("IID")).toString() ==
                 QLatin1String(SILENT_IPlugin_IID),
-            "the example library declares plugin ABI 5");
+            "the example library declares plugin ABI 6");
 }
 
 void install(const QString &directory) {
@@ -114,8 +114,8 @@ void requireLoadedAbi(PluginRegistry *registry) {
         }
         auto *object = dynamic_cast<QObject *>(plugin);
         require(object != nullptr && object->qt_metacast(SILENT_IPlugin_IID) != nullptr &&
-                    object->qt_metacast("dev.silent.IPlugin/4.0") == nullptr,
-                "the loaded example plugin exposes ABI 5 only");
+                    object->qt_metacast("dev.silent.IPlugin/5.0") == nullptr,
+                "the loaded example plugin exposes ABI 6 only");
         return;
     }
     qFatal("example storage smoke: the example plugin is not loaded");

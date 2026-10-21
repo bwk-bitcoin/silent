@@ -1,5 +1,4 @@
 #include "MainWindow.h"
-#include "AppController.h"
 #include "catalog/containers/Tabs.h"
 #include "host/Host.h"
 #include "i18n/Tr.h"
@@ -35,7 +34,6 @@ auto MainWindow::initWindow() -> void {
 
     m_tab = new catalog::Tabs(this);
     m_menu_tab = new MenuTab(this);
-    m_keys_tab = AppController::get()->keysTab();
     m_settings_tab = new modal::AppSettings;
 
     m_tab->setTabsClosable(true);
@@ -110,10 +108,10 @@ auto MainWindow::updateTabs() -> void {
 
 auto MainWindow::modulePages() const -> QList<QPair<QWidget *, QString>> {
     QList<QPair<QWidget *, QString>> pages;
-    if (m_keys_tab != nullptr) {
-        pages.append({m_keys_tab, TR("main-keys-tab")});
+    for (const auto &tab : m_module_tabs) {
+        pages.append({tab.second, tab.first});
     }
-    // The global settings, right of Keys (ws-plaude/silent#46).
+    // Global Settings follows the published module pages.
     pages.append({m_settings_tab, TR("main-settings-tab")});
     return pages;
 }
@@ -141,8 +139,9 @@ void MainWindow::updateModuleTabs() {
             m_module_bar->setTabButton(index, QTabBar::LeftSide, handle);
             m_tab->tabBar()->ensurePolished();
             auto launcher = m_tab->tabBar()->tabRect(m_tab->indexOf(m_menu_tab));
-            auto frame = m_module_bar->tabRect(index).size() - handle->size();
-            handle->setFixedWidth(launcher.width() - frame.width());
+            auto frame = m_module_bar->tabRect(index).size() - handle->sizeHint();
+            handle->setFixedWidth(
+                std::max(handle->sizeHint().width(), launcher.width() - frame.width()));
             m_module_bar->setTabButton(index, QTabBar::LeftSide, handle);
             handle->show();
             m_module_bar->setTabToolTip(index, title);
@@ -150,27 +149,40 @@ void MainWindow::updateModuleTabs() {
         m_module_bar->setTabData(index, QVariant::fromValue(static_cast<QObject *>(page)));
     }
     m_module_bar->adjustSize();
+    onCurrentTabChanged();
 }
 
-void MainWindow::showKeysTab() {
-    if (m_keys_tab != nullptr) {
-        m_tab->setCurrentWidget(m_keys_tab);
+void MainWindow::showTab(QWidget *content) {
+    if (content != nullptr && m_tab->indexOf(content) >= 0) {
+        m_tab->setCurrentWidget(content);
     }
 }
 
 auto MainWindow::tabExists(QWidget *content) const -> bool {
-    return std::ranges::any_of(m_tabs,
-                               [content](const auto &tab) { return tab.second == content; });
+    auto contains = [content](const auto &tab) { return tab.second == content; };
+    return std::ranges::any_of(m_tabs, contains) || std::ranges::any_of(m_module_tabs, contains);
 }
 
-auto MainWindow::addTab(QWidget *content, const QString &title) -> int {
+auto MainWindow::addTab(QWidget *content, const QString &title, Host::PagePlacement placement)
+    -> int {
     if (content == nullptr || tabExists(content)) {
         return -1;
     }
-    m_tabs.append(QPair<QString, QWidget *>(title, content));
+    switch (placement) {
+    case Host::PagePlacement::Normal:
+        m_tabs.append({title, content});
+        break;
+    case Host::PagePlacement::Module:
+        m_module_tabs.append({title, content});
+        break;
+    default:
+        return -1;
+    }
     updateTabs();
     // The account just opened is the one to show.
-    m_tab->setCurrentWidget(content);
+    if (placement == Host::PagePlacement::Normal) {
+        m_tab->setCurrentWidget(content);
+    }
     return m_tab->indexOf(content);
 }
 
@@ -179,19 +191,22 @@ auto MainWindow::removeTab(QWidget *content, bool delete_content) -> void {
         return;
     }
 
-    for (int i = 0; i < m_tabs.size(); ++i) {
-        if (m_tabs.at(i).second == content) {
-            int tabIndex = m_tab->indexOf(content);
-            if (tabIndex >= 0) {
-                m_tab->removeTab(tabIndex);
+    for (auto *tabs : {&m_tabs, &m_module_tabs}) {
+        for (int i = 0; i < tabs->size(); ++i) {
+            if (tabs->at(i).second == content) {
+                int tabIndex = m_tab->indexOf(content);
+                if (tabIndex >= 0) {
+                    m_tab->removeTab(tabIndex);
+                }
+                tabs->removeAt(i);
+                updateTabs();
+                if (delete_content) {
+                    content->deleteLater();
+                } else {
+                    content->setParent(nullptr);
+                }
+                return;
             }
-            m_tabs.removeAt(i);
-            if (delete_content) {
-                content->deleteLater();
-            } else {
-                content->setParent(nullptr);
-            }
-            return;
         }
     }
 }
@@ -200,14 +215,17 @@ auto MainWindow::setTabTitle(QWidget *content, const QString &title) -> void {
     if (content == nullptr) {
         return;
     }
-    for (auto &tab : m_tabs) {
-        if (tab.second == content) {
-            tab.first = title;
-            int tabIndex = m_tab->indexOf(content);
-            if (tabIndex >= 0) {
-                m_tab->setTabText(tabIndex, title);
+    for (auto *tabs : {&m_tabs, &m_module_tabs}) {
+        for (auto &tab : *tabs) {
+            if (tab.second == content) {
+                tab.first = title;
+                int tabIndex = m_tab->indexOf(content);
+                if (tabIndex >= 0) {
+                    m_tab->setTabText(tabIndex, title);
+                }
+                updateModuleTabs();
+                return;
             }
-            return;
         }
     }
 }
@@ -240,8 +258,8 @@ auto MainWindow::closeEvent(QCloseEvent *event) -> void {
 
 auto MainWindow::onTabCloseRequested(int index) -> void {
     auto *hosted = m_tab->widget(index);
-    if (hosted != nullptr && hosted != m_menu_tab && hosted != m_keys_tab &&
-        hosted != m_settings_tab) {
+    if (hosted != nullptr &&
+        std::ranges::any_of(m_tabs, [hosted](const auto &tab) { return tab.second == hosted; })) {
         emit hostedTabCloseRequested(hosted);
     }
 }

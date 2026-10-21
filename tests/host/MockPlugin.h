@@ -42,6 +42,10 @@ public:
         return m_implemented;
     }
 
+    [[nodiscard]] auto capabilities() const -> plugin::SignerCapabilities override {
+        return {};
+    }
+
     [[nodiscard]] QString id() const override {
         return m_id;
     }

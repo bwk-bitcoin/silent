@@ -28,11 +28,11 @@ use crate::keys::{
     hot, ledger_nonces, network_name,
     psbt::{
         inspect_bytes, musig_completed_fingerprints, musig_nonces_complete,
-        musig_required_fingerprints, ordinary_signature_complete, parse_v2, PsbtArtifacts,
+        ordinary_signature_complete, parse_v2, PsbtArtifacts,
     },
     record::{DescriptorEntry, DeviceRecord, KeyRecord, RouteKind, SecretEnvelope, XpubEntry},
     store::KeyStore,
-    supports_musig, supports_silent_payments,
+    supports_musig, CAPABILITY_MUSIG,
 };
 
 /// One signing device as currently seen by a hardware backend, for example HWI.
@@ -47,7 +47,7 @@ pub struct LiveDevice {
     pub module: String,
     /// Firmware version, empty when the module does not report one (hwi).
     pub version: String,
-    /// bwk-qr capability bits (`CAPABILITY_*`), as the QR signer or bwk-hwi reports them.
+    /// Explicit ordinary, Taproot, SP and MuSig2 capability bits (`CAPABILITY_*`).
     pub capabilities: u32,
     /// None until the device reports one: a locked or unsupported device has none.
     pub fingerprint: Option<Fingerprint>,
@@ -80,6 +80,7 @@ pub enum UnusableReason {
     /// The SP key has not completed the output scripts yet.
     SpOutputsPending,
     UnsupportedMusig,
+    UnsupportedOperation,
 }
 
 /// One fingerprint the PSBT requires, whether or not a key is registered for it and
@@ -397,22 +398,54 @@ impl KeyManager {
         }
     }
 
-    /// The first usable route of the key that can sign its silent payment inputs: a
-    /// USB device only when it reports the silent payments capability.
-    fn best_sp_route(&self, fingerprint: Fingerprint) -> Option<RouteKind> {
-        let record = self.records.get(&fingerprint)?;
-        record.routes.as_slice().iter().copied().find(|kind| {
-            self.route_is_usable(record, *kind)
-                && (*kind != RouteKind::Usb
-                    || self
-                        .live_device_for(fingerprint)
-                        .is_some_and(|device| supports_silent_payments(device.capabilities)))
+    fn signing_device(&self, fingerprint: Fingerprint, required: u32) -> Option<&LiveDevice> {
+        self.live.iter().find(|device| {
+            device.fingerprint == Some(fingerprint) && device.capabilities & required == required
         })
+    }
+
+    fn best_signing_route(&self, fingerprint: Fingerprint, required: u32) -> Option<RouteKind> {
+        let record = self.records.get(&fingerprint)?;
+        record
+            .routes
+            .as_slice()
+            .iter()
+            .copied()
+            .find(|kind| match kind {
+                RouteKind::Hot => record.secret.is_some(),
+                RouteKind::Usb => self.signing_device(fingerprint, required).is_some(),
+                RouteKind::Qr | RouteKind::SdCard => {
+                    required & CAPABILITY_MUSIG == 0 || self.can_musig(fingerprint)
+                }
+            })
     }
 
     /// Derived from the record and the live device list, never stored.
     pub fn is_connected(&self, fingerprint: Fingerprint) -> bool {
         self.live_device_for(fingerprint).is_some()
+    }
+
+    pub fn check_device_signing(
+        &self,
+        psbt_bytes: &[u8],
+        fingerprint: Fingerprint,
+        available: u32,
+    ) -> Result<(), Error> {
+        let descriptors = self.registered_sp_descriptors()?;
+        let artifacts = inspect_bytes(psbt_bytes, &descriptors, &self.secp)?;
+        let required = artifacts
+            .required_capabilities
+            .get(&fingerprint)
+            .filter(|_| artifacts.required.contains(&fingerprint))
+            .ok_or_else(|| Error::PsbtParse(format!("key '{fingerprint}' is not required")))?;
+        if available & required != *required {
+            return Err(Error::UnsupportedOperation {
+                fingerprint,
+                required: *required,
+                available,
+            });
+        }
+        Ok(())
     }
 
     /// Whether the key can sign MuSig2: silent signs with its hot secret, or one of its
@@ -451,81 +484,58 @@ impl KeyManager {
         artifacts: &PsbtArtifacts,
     ) -> SigningCandidate {
         let is_sp = artifacts.sp_fingerprint == Some(fingerprint);
-        let must_sign_first = is_sp && artifacts.sp_outputs_pending;
-        let musig_done = artifacts.musig_done.contains(&fingerprint);
-
-        let record = match self.records.get(&fingerprint) {
-            Some(record) => record,
-            None => {
-                return SigningCandidate {
-                    fingerprint,
-                    alias: String::new(),
-                    registered: false,
-                    route: None,
-                    device_id: String::new(),
-                    must_sign_first,
-                    unusable: Some(UnusableReason::NotRegistered),
-                    musig_done,
-                    nonces_done: false,
-                    signatures_done: false,
-                };
-            }
+        let record = self.records.get(&fingerprint);
+        let mut candidate = SigningCandidate {
+            fingerprint,
+            alias: record
+                .map(|record| record.alias.clone())
+                .unwrap_or_default(),
+            registered: record.is_some(),
+            route: None,
+            device_id: String::new(),
+            must_sign_first: is_sp && artifacts.sp_outputs_pending,
+            unusable: Some(UnusableReason::NotRegistered),
+            musig_done: artifacts.musig_done.contains(&fingerprint),
+            nonces_done: false,
+            signatures_done: false,
         };
-
+        let Some(record) = record else {
+            return candidate;
+        };
         if artifacts.sp_outputs_pending && !is_sp {
-            return SigningCandidate {
-                fingerprint,
-                alias: record.alias.clone(),
-                registered: true,
-                route: None,
-                device_id: String::new(),
-                must_sign_first: false,
-                unusable: Some(UnusableReason::SpOutputsPending),
-                musig_done,
-                nonces_done: false,
-                signatures_done: false,
-            };
+            candidate.unusable = Some(UnusableReason::SpOutputsPending);
+            return candidate;
         }
-
-        let route = if is_sp {
-            self.best_sp_route(fingerprint)
-        } else {
-            self.best_route(fingerprint)
+        let Some(required) = artifacts.required_capabilities.get(&fingerprint).copied() else {
+            candidate.unusable = Some(UnusableReason::UnsupportedOperation);
+            return candidate;
         };
-        match route {
-            Some(route) => {
-                let device_id = if route == RouteKind::Usb {
-                    self.live_device_for(fingerprint)
-                        .map(|device| device.id.clone())
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                };
-                SigningCandidate {
-                    fingerprint,
-                    alias: record.alias.clone(),
-                    registered: true,
-                    route: Some(route),
-                    device_id,
-                    must_sign_first,
-                    unusable: None,
-                    musig_done,
-                    nonces_done: false,
-                    signatures_done: false,
-                }
+        candidate.route = self.best_signing_route(fingerprint, required);
+        candidate.unusable = candidate
+            .route
+            .is_none()
+            .then(|| self.signing_unusable_reason(record, required));
+        if candidate.route == Some(RouteKind::Usb) {
+            candidate.device_id = self
+                .signing_device(fingerprint, required)
+                .map(|device| device.id.clone())
+                .unwrap_or_default();
+        }
+        candidate
+    }
+
+    fn signing_unusable_reason(&self, record: &KeyRecord, required: u32) -> UnusableReason {
+        let connected = record.routes.contains(RouteKind::Usb)
+            && self.live_device_for(record.fingerprint).is_some();
+        match unusable_reason(record) {
+            reason @ (UnusableReason::NoRoute | UnusableReason::NoHotSecret) => reason,
+            _ if required & CAPABILITY_MUSIG != 0
+                && (connected || !self.can_musig(record.fingerprint)) =>
+            {
+                UnusableReason::UnsupportedMusig
             }
-            None => SigningCandidate {
-                fingerprint,
-                alias: record.alias.clone(),
-                registered: true,
-                route: None,
-                device_id: String::new(),
-                must_sign_first,
-                unusable: Some(unusable_reason(record)),
-                musig_done,
-                nonces_done: false,
-                signatures_done: false,
-            },
+            _ if connected => UnusableReason::UnsupportedOperation,
+            reason => reason,
         }
     }
 
@@ -989,7 +999,6 @@ impl KeyManagerImpl for KeyManager {
             let missing_nonces = !musig_nonces_complete(&psbt)?;
             let nonces = musig_completed_fingerprints(&psbt, true)?;
             let signatures = musig_completed_fingerprints(&psbt, false)?;
-            let required = musig_required_fingerprints(&psbt)?;
             let real = psbt
                 .into_bitcoin_psbt()
                 .map_err(|e| Error::PsbtParse(e.to_string()))?;
@@ -1012,12 +1021,17 @@ impl KeyManagerImpl for KeyManager {
                     Some(RouteKind::Usb) => {
                         cached
                             || self
-                                .live_device_for(candidate.fingerprint)
+                                .live
+                                .iter()
+                                .find(|device| device.id == candidate.device_id)
                                 .is_some_and(|device| supports_musig(device.capabilities))
                     }
                     _ => self.can_musig(candidate.fingerprint),
                 };
-                if required.contains(&candidate.fingerprint)
+                if artifacts
+                    .required_capabilities
+                    .get(&candidate.fingerprint)
+                    .is_some_and(|required| required & CAPABILITY_MUSIG != 0)
                     && candidate.unusable.is_none()
                     && !capable
                 {
@@ -1103,7 +1117,9 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
-    use crate::keys::record::SecretEnvelope;
+    use crate::keys::{
+        record::SecretEnvelope, CAPABILITY_ORDINARY, CAPABILITY_SILENT_PAYMENTS, CAPABILITY_TAPROOT,
+    };
 
     fn fingerprint(value: u32) -> Fingerprint {
         Fingerprint::from(value.to_be_bytes())
@@ -1876,7 +1892,7 @@ mod tests {
             (crate::keys::CAPABILITY_SILENT_PAYMENTS, RouteKind::Usb),
         ] {
             manager.set_live_devices(vec![device(capabilities)]);
-            let route = manager.best_sp_route(fingerprint(1));
+            let route = manager.best_signing_route(fingerprint(1), CAPABILITY_SILENT_PAYMENTS);
             assert_eq!(
                 route,
                 Some(expected),
@@ -2738,7 +2754,7 @@ mod tests {
             serial: serial.to_string(),
             module: "hwi".to_string(),
             version: String::new(),
-            capabilities: 0,
+            capabilities: CAPABILITY_ORDINARY | CAPABILITY_TAPROOT,
             fingerprint: fp,
         }
     }
@@ -2769,6 +2785,11 @@ mod tests {
 
         let artifacts = PsbtArtifacts {
             required: BTreeSet::from([sp_fp, other_a, other_b]),
+            required_capabilities: BTreeMap::from([
+                (sp_fp, CAPABILITY_SILENT_PAYMENTS),
+                (other_a, CAPABILITY_ORDINARY),
+                (other_b, CAPABILITY_ORDINARY),
+            ]),
             sp_fingerprint: Some(sp_fp),
             sp_inputs: true,
             sp_outputs: true,
@@ -2786,6 +2807,7 @@ mod tests {
         let (a, b) = (fingerprint(1), fingerprint(2));
         let artifacts = PsbtArtifacts {
             required: BTreeSet::from([a, b]),
+            required_capabilities: BTreeMap::from([(a, CAPABILITY_MUSIG), (b, CAPABILITY_MUSIG)]),
             sp_fingerprint: None,
             sp_inputs: false,
             sp_outputs: false,
@@ -2819,6 +2841,10 @@ mod tests {
 
         let artifacts = PsbtArtifacts {
             required: BTreeSet::from([fingerprint(1), fingerprint(2)]),
+            required_capabilities: BTreeMap::from([
+                (fingerprint(1), CAPABILITY_ORDINARY),
+                (fingerprint(2), CAPABILITY_ORDINARY),
+            ]),
             sp_fingerprint: None,
             sp_inputs: false,
             sp_outputs: false,
@@ -2942,6 +2968,7 @@ mod tests {
 
         let artifacts = PsbtArtifacts {
             required: BTreeSet::from([fp]),
+            required_capabilities: BTreeMap::from([(fp, CAPABILITY_ORDINARY)]),
             sp_fingerprint: None,
             sp_inputs: false,
             sp_outputs: false,
@@ -2974,6 +3001,7 @@ mod tests {
 
         let artifacts = PsbtArtifacts {
             required: BTreeSet::from([fp]),
+            required_capabilities: BTreeMap::from([(fp, CAPABILITY_ORDINARY)]),
             sp_fingerprint: None,
             sp_inputs: false,
             sp_outputs: false,
@@ -3041,6 +3069,10 @@ mod tests {
 
         let artifacts = PsbtArtifacts {
             required: BTreeSet::from([no_route, no_hot_secret, device_not_connected]),
+            required_capabilities: [no_route, no_hot_secret, device_not_connected]
+                .into_iter()
+                .map(|fp| (fp, CAPABILITY_ORDINARY))
+                .collect(),
             sp_fingerprint: None,
             sp_inputs: false,
             sp_outputs: false,
@@ -3101,6 +3133,10 @@ mod tests {
 
         let artifacts = PsbtArtifacts {
             required: BTreeSet::from([usable, unregistered, no_route]),
+            required_capabilities: [usable, unregistered, no_route]
+                .into_iter()
+                .map(|fp| (fp, CAPABILITY_ORDINARY))
+                .collect(),
             sp_fingerprint: None,
             sp_inputs: false,
             sp_outputs: false,
@@ -3133,6 +3169,7 @@ mod tests {
 
         let artifacts = PsbtArtifacts {
             required: BTreeSet::from([required_fp]),
+            required_capabilities: BTreeMap::from([(required_fp, CAPABILITY_ORDINARY)]),
             sp_fingerprint: None,
             sp_inputs: false,
             sp_outputs: false,
@@ -3162,6 +3199,7 @@ mod tests {
 
         let artifacts = PsbtArtifacts {
             required: BTreeSet::from([fingerprint(1)]),
+            required_capabilities: BTreeMap::from([(fingerprint(1), CAPABILITY_ORDINARY)]),
             sp_fingerprint: None,
             sp_inputs: false,
             sp_outputs: false,

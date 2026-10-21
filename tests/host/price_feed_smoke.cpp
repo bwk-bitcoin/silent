@@ -635,7 +635,7 @@ void libraryUnload(HostImpl *host, PriceModule *module) {
     PluginLibrary library;
     require(library.load(bytes, QStringLiteral("price-feed-fixture.so")), "test library loads");
     require(qobject_cast<IPlugin *>(library.instance()) != nullptr,
-            "test library has an ABI 5 root");
+            "test library has an ABI 6 root");
     auto *feed = dynamic_cast<IFeed *>(library.instance());
     require(feed != nullptr, "test library exports its real feed QObject");
     auto pageSize = static_cast<std::uintptr_t>(::sysconf(_SC_PAGESIZE));

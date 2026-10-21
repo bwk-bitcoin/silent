@@ -166,6 +166,7 @@ void pluginAbiSmoke();
 void spSigningSmoke(const QString &name);
 void musigResetSmoke();
 void boundarySmoke();
+void keysContractSmoke(const QString &screenshots);
 } // namespace smoke
 
 auto main(int argc, char *argv[]) -> int {
@@ -242,6 +243,12 @@ auto main(int argc, char *argv[]) -> int {
     // Initialise the host singleton before the registry connects to its events.
     Host::get();
     AppController::init();
+    if (arguments.contains(QStringLiteral("--keys-contract"))) {
+        Theme::init();
+        smoke::keysContractSmoke(arguments.size() > 2 ? arguments.at(2) : QString());
+        std::fprintf(stdout, "Keys contract smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
     if (arguments.size() == 3 && arguments.at(1) == QStringLiteral("--storage-example")) {
         Theme::init();
         AppController::get()->registerBuiltinPlugin(std::make_unique<smoke::MockPlugin>());
@@ -281,8 +288,9 @@ auto main(int argc, char *argv[]) -> int {
     check(qobject_cast<IPlugin *>(&plugin) == &plugin &&
               plugin.qt_metacast("dev.silent.IPlugin/2.0") == nullptr &&
               plugin.qt_metacast("dev.silent.IPlugin/3.0") == nullptr &&
-              plugin.qt_metacast("dev.silent.IPlugin/4.0") == nullptr,
-          "mock plugin metadata exposes ABI 5 only");
+              plugin.qt_metacast("dev.silent.IPlugin/4.0") == nullptr &&
+              plugin.qt_metacast("dev.silent.IPlugin/5.0") == nullptr,
+          "mock plugin metadata exposes ABI 6 only");
     auto *module = plugin.module();
 
     PluginRegistry registry;
