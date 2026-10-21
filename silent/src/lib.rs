@@ -9,10 +9,14 @@ pub mod bbqr;
 pub mod camera;
 pub mod config;
 pub mod coordination;
+pub mod endpoint;
+pub mod error;
+pub mod feed;
 pub mod hwi;
 pub mod hwi_config;
 pub mod image;
 pub mod keys;
+pub mod money;
 pub mod musig;
 pub mod plugin_bundle;
 pub mod policy;
@@ -21,12 +25,49 @@ pub mod spending;
 pub mod state_crypt;
 pub mod sync_estimator;
 pub mod tx_details;
+mod tx_preview;
 
 use bwk_sp::bwk::bwk_electrum::url::ElectrumScheme;
 
 #[cxx::bridge]
 mod ffi {
     // ===== Shared Enums =====
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum KeyFileFailure {
+        None,
+        Read,
+        Newer,
+        Network,
+        Invalid,
+    }
+    #[derive(Debug, Clone, Copy)]
+    pub enum PluginMetadataKind {
+        Text,
+        Number,
+        Flag,
+        Strings,
+    }
+    #[derive(Debug, Clone, Copy)]
+    pub enum BackendErrorKind {
+        Other,
+        None,
+        InvalidInput,
+        Storage,
+        Network,
+        Electrum,
+        Backend,
+        Signing,
+        Broadcast,
+        InputConflict,
+        AddressReuse,
+    }
+    #[derive(Debug, Clone, Copy)]
+    pub enum EndpointPhase {
+        Ready,
+        Draining,
+        Complete,
+    }
 
     /// Bitcoin network types.
     #[derive(Debug, Clone, Copy)]
@@ -131,6 +172,7 @@ mod ffi {
         DeviceNotConnected,
         NoHotSecret,
         SpOutputsPending,
+        UnsupportedMusig,
     }
 
     /// Kind of a decoded and validated QR response.
@@ -166,6 +208,111 @@ mod ffi {
 
     // ===== Shared Structs =====
 
+    #[derive(Debug, Clone, Default)]
+    pub struct RetryDecision {
+        pub schedule: bool,
+        pub give_up: bool,
+        pub losses: u32,
+        pub delay_ms: u32,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct FeedQuote {
+        pub available: bool,
+        pub value: f64,
+    }
+    #[derive(Debug, Clone)]
+    pub struct FeedPrice {
+        pub source: String,
+        pub currency: String,
+        pub quote: FeedQuote,
+    }
+    #[derive(Debug, Clone)]
+    pub struct FeedSelection {
+        pub preferences: RustFeePreferences,
+        pub default_rate: FeedQuote,
+        pub low: FeedQuote,
+        pub medium: FeedQuote,
+        pub fast: FeedQuote,
+    }
+    #[derive(Debug, Clone, Default)]
+    pub struct FeedSourceState {
+        pub currencies: Vec<String>,
+        pub has_default: bool,
+        pub has_smart: bool,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct PluginMetadataField {
+        pub key: String,
+        pub kind: PluginMetadataKind,
+        pub text: String,
+        pub number: f64,
+        pub flag: bool,
+        pub items: Vec<String>,
+    }
+    #[derive(Debug, Clone)]
+    pub struct PluginMetadata {
+        pub id: String,
+        pub fields: Vec<PluginMetadataField>,
+    }
+    #[derive(Debug, Clone)]
+    pub struct PluginGrantedAccess {
+        pub account: bool,
+        pub keys: bool,
+        pub state: bool,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct AmountParseResult {
+        pub is_ok: bool,
+        pub sats: u64,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct FeeParseResult {
+        pub is_ok: bool,
+        pub fee: u64,
+        pub fee_rate: f64,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct SendAmounts {
+        pub is_ok: bool,
+        pub input_total: u64,
+        pub sending_total: u64,
+        pub remaining: u64,
+        pub change: u64,
+        pub transaction_total: u64,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct SpCreationRequest {
+        pub account_name: String,
+        pub network: Network,
+        pub descriptor: String,
+        pub taproot_descriptor: String,
+        pub segwit_descriptor: String,
+        pub blindbit_url: String,
+        pub electrum_url: String,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct MusigCreationRequest {
+        pub account_name: String,
+        pub network: Network,
+        pub descriptor: String,
+        pub electrum_url: String,
+        pub verify_certificate: bool,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct AccountCreationResult {
+        pub is_ok: bool,
+        pub error: String,
+        pub preference_error: String,
+    }
+
     /// Global fee mode (Manual=0, Default=1, Smart=2) and tier (Low=0, Medium=1, Fast=2).
     #[derive(Debug, Clone, Default)]
     struct RustFeePreferences {
@@ -180,6 +327,8 @@ mod ffi {
     pub struct Notification {
         pub flag: NotificationFlag,
         pub payload: String,
+        pub current: u32,
+        pub end: u32,
     }
 
     /// A coin entry from the wallet.
@@ -390,6 +539,9 @@ mod ffi {
 
     #[derive(Debug, Clone, Default)]
     pub struct EndpointResult {
+        pub kind: BackendErrorKind,
+        /// Reopen succeeded; transport confirmation still arrives through notifications.
+        pub connection_pending: bool,
         pub is_ok: bool,
         pub saved: bool,
         pub error: String,
@@ -424,8 +576,9 @@ mod ffi {
     }
 
     /// Result of transaction simulation.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Default)]
     pub struct TransactionSimulation {
+        pub kind: BackendErrorKind,
         /// Whether the transaction can be created with current funds
         pub is_valid: bool,
         /// Estimated fee in satoshis (0 if invalid)
@@ -442,11 +595,17 @@ mod ffi {
         pub error: String,
         /// Outpoints selected by coin selection (empty if invalid)
         pub selected_outpoints: Vec<String>,
+        pub selected_values: Vec<u64>,
+        pub recipient_amounts: Vec<u64>,
+        pub sending_total: u64,
+        pub change: u64,
+        pub transaction_total: u64,
     }
 
     /// Result of a transaction operation (sign, broadcast).
     #[derive(Debug, Clone)]
     pub struct TxResult {
+        pub kind: BackendErrorKind,
         /// Whether the operation succeeded.
         pub is_ok: bool,
         /// Error message (empty if is_ok is true).
@@ -464,6 +623,19 @@ mod ffi {
         /// Compatibility with callers that used TxResult::value.
         pub value: String,
         pub save_error: String,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct MusigAttemptSnapshot {
+        pub is_ok: bool,
+        pub error: String,
+        pub save_error: String,
+        pub finalize_error: String,
+        pub psbt_v2_hex: String,
+        pub tx_hex: String,
+        pub record_id: String,
+        pub signers: Vec<String>,
+        pub reset_pending: bool,
     }
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -606,6 +778,7 @@ mod ffi {
     /// Result of a connection test.
     #[derive(Debug, Clone)]
     pub struct ConnectionResult {
+        pub kind: BackendErrorKind,
         /// Whether the connection succeeded.
         pub is_ok: bool,
         /// Error message (empty if is_ok is true).
@@ -645,6 +818,7 @@ mod ffi {
     /// Backend server information result.
     #[derive(Debug, Clone)]
     pub struct BackendInfo {
+        pub kind: BackendErrorKind,
         /// Whether the request succeeded.
         pub is_ok: bool,
         /// Error message (empty if is_ok is true).
@@ -832,6 +1006,8 @@ mod ffi {
         pub registered: bool,
         /// The key already gave its share for the PSBT's current MuSig2 round.
         pub musig_done: bool,
+        pub nonces_done: bool,
+        pub signatures_done: bool,
     }
 
     #[derive(Debug, Clone)]
@@ -1187,6 +1363,45 @@ mod ffi {
         Absolute,
     }
 
+    #[derive(Debug, Clone, Copy)]
+    pub enum PolicyDurationUnit {
+        Blocks,
+        Days,
+        Weeks,
+        Months,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum PolicyDraftError {
+        None,
+        Count,
+        Date,
+        Future,
+        Tip,
+        RelativeMax,
+        Bounds,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct PolicyDraft {
+        pub keys: Vec<String>,
+        pub mandatory: Vec<String>,
+        pub threshold: u32,
+        pub locktime: PolicyLocktime,
+        pub count: u32,
+        pub unit: PolicyDurationUnit,
+        pub date_timestamp: i64,
+        pub date_valid: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct PolicyDraftResult {
+        pub is_ok: bool,
+        pub error: String,
+        pub lock_error: PolicyDraftError,
+        pub path: PolicyPath,
+    }
+
     /// One key of a path, as the creator gathered it. The role key
     /// `[fp/87'/coin'/account'/R]xpub` is its role xpub, fetched at R 0 (Internal).
     #[derive(Debug, Clone)]
@@ -1357,6 +1572,55 @@ mod ffi {
         /// GUI-thread copy of one key's record and the manager's network, for the
         /// free hot-key worker functions to sign/reveal/derive from off-thread.
         type HotMaterial;
+        type FeedState;
+        type EndpointRetry;
+        fn new_endpoint_retry() -> Box<EndpointRetry>;
+        fn retry_connected(self: &mut EndpointRetry);
+        fn retry_stopped(self: &mut EndpointRetry);
+        fn retry_lost(self: &mut EndpointRetry, now_ms: i64) -> RetryDecision;
+        fn retry_due(self: &mut EndpointRetry) -> bool;
+        type SpEndpointChange;
+        type MusigEndpointChange;
+        fn sp_endpoint_change(
+            account: Box<Account>,
+            server: BackendServer,
+            url: String,
+            verify: bool,
+            test: bool,
+            connected: bool,
+        ) -> Box<SpEndpointChange>;
+        fn musig_endpoint_change(
+            account: Box<MusigAccount>,
+            url: String,
+            verify: bool,
+            test: bool,
+            connected: bool,
+        ) -> Box<MusigEndpointChange>;
+        fn endpoint_phase(self: &SpEndpointChange) -> EndpointPhase;
+        fn endpoint_result(self: &SpEndpointChange) -> EndpointResult;
+        fn prepare_endpoint(self: &mut SpEndpointChange);
+        fn finish_endpoint_after_drain(self: &mut SpEndpointChange);
+        fn endpoint_phase(self: &MusigEndpointChange) -> EndpointPhase;
+        fn endpoint_result(self: &MusigEndpointChange) -> EndpointResult;
+        fn prepare_endpoint(self: &mut MusigEndpointChange);
+        fn finish_endpoint_after_drain(self: &mut MusigEndpointChange);
+        fn take_sp_endpoint_account(change: Box<SpEndpointChange>) -> Box<Account>;
+        fn take_musig_endpoint_account(change: Box<MusigEndpointChange>) -> Box<MusigAccount>;
+        fn new_feed_state() -> Box<FeedState>;
+        fn add_feed(self: &mut FeedState, id: &str);
+        fn remove_feed(self: &mut FeedState, id: &str);
+        fn select_price(self: &mut FeedState, source: String, selected_currency: String);
+        fn set_currencies(self: &mut FeedState, id: &str, offered: Vec<String>);
+        fn set_price_quote(self: &mut FeedState, id: &str, code: &str, value: f64);
+        fn feed_source(self: &FeedState, id: &str) -> FeedSourceState;
+        fn price_selection(self: &FeedState) -> FeedPrice;
+        fn select_fees(self: &mut FeedState, preferences: RustFeePreferences) -> bool;
+        fn set_fee_capabilities(self: &mut FeedState, id: &str, has_default: bool, has_smart: bool);
+        fn set_default_fee(self: &mut FeedState, id: &str, value: f64);
+        fn set_smart_fees(self: &mut FeedState, id: &str, low: f64, medium: f64, fast: f64);
+        fn fee_selection(self: &FeedState) -> FeedSelection;
+        type KeyFilePreview;
+        type KeyFileCommit;
 
         /// A mnemonic sealed by `hot_seal`, committed by `KeysModule::commit_hot_key`.
         type SealedHotKey;
@@ -1523,6 +1787,7 @@ mod ffi {
 
         /// Every installed plugin's sidecar, as JSON text.
         fn plugin_bundles() -> Vec<String>;
+        fn plugin_metadata() -> Vec<PluginMetadata>;
 
         /// The library and catalogs of the installed plugin `plugin_id`.
         fn plugin_library(plugin_id: String) -> PluginLibraryResult;
@@ -1539,6 +1804,9 @@ mod ffi {
 
         /// The answers given to external plugin libraries, in the order they were given.
         fn app_plugin_access() -> Vec<PluginAccess>;
+        fn app_plugin_answers(plugin_id: String, hash: String) -> PluginAccess;
+        fn app_plugin_grants(hash: String) -> PluginGrantedAccess;
+        fn app_plugin_history(plugin_id: String) -> Vec<PluginAccess>;
 
         /// Stores the answers for `access.hash`, replacing earlier ones. An entry left
         /// with both grants unasked is dropped, so the host asks again.
@@ -1562,6 +1830,24 @@ mod ffi {
 
     extern "Rust" {
         /// Create a new config.
+        fn parse_btc_amount(text: &str) -> AmountParseResult;
+        fn validation_error_kind(result: &PsbtValidation) -> BackendErrorKind;
+        fn notification_error_kind(notification: &Notification) -> BackendErrorKind;
+        fn parse_fee_input(text: &str, rate: bool) -> FeeParseResult;
+        fn normalize_fee_rate(rate: f64) -> FeeParseResult;
+        fn send_amounts(inputs: &[u64], recipients: &[u64], fee: u64) -> SendAmounts;
+        fn policy_threshold(picked: u32, mandatory: u32, threshold: u32) -> u32;
+        fn policy_duration_blocks(count: u32, unit: PolicyDurationUnit) -> u64;
+        fn resolve_policy_draft(
+            draft: PolicyDraft,
+            network: Network,
+            has_tip: bool,
+            tip: u32,
+            now: i64,
+        ) -> PolicyDraftResult;
+        fn create_sp_account(request: SpCreationRequest) -> AccountCreationResult;
+        fn create_musig_account(request: MusigCreationRequest) -> AccountCreationResult;
+
         fn new_config(
             account_name: String,
             network: Network,
@@ -1577,6 +1863,7 @@ mod ffi {
 
         /// List all existing configs.
         fn list_configs() -> Vec<String>;
+        fn list_module_configs(plugin_id: &str) -> Vec<String>;
 
         /// Delete an account's data from disk.
         fn delete_config(account_name: String) -> bool;
@@ -1997,6 +2284,19 @@ mod ffi {
         /// cannot race a worker already in flight against the copy. Fails for an
         /// unknown key or a key without a secret.
         fn hot_material(self: &KeysModule, fingerprint: &str) -> Box<HotMaterial>;
+        fn key_file_preview(path: &str, network: Network) -> Box<KeyFilePreview>;
+        fn is_ok(self: &KeyFilePreview) -> bool;
+        fn get_error(self: &KeyFilePreview) -> String;
+        fn file_failure(self: &KeyFilePreview) -> KeyFileFailure;
+        fn file_network(self: &KeyFilePreview) -> Network;
+        fn file_fingerprint(self: &KeyFilePreview) -> String;
+        fn file_alias(self: &KeyFilePreview) -> String;
+        fn file_xpubs(self: &KeyFilePreview) -> Vec<KeyXpub>;
+        fn commit_key_file(preview: &KeyFilePreview, alias: &str) -> Box<KeyFileCommit>;
+        fn is_ok(self: &KeyFileCommit) -> bool;
+        fn get_error(self: &KeyFileCommit) -> String;
+        fn get_error_kind(self: &KeyFileCommit) -> BackendErrorKind;
+        fn apply_key_file(self: &mut KeysModule, committed: &KeyFileCommit) -> KeyOpResult;
         fn is_ok(self: &HotMaterial) -> bool;
         fn get_error(self: &HotMaterial) -> String;
 
@@ -2224,6 +2524,7 @@ mod ffi {
         fn bytes_v2_hex(self: &PsbtResult) -> String;
         fn saved_record_id(self: &PsbtResult) -> String;
         fn save_error(self: &PsbtResult) -> String;
+        fn get_error_kind(self: &PsbtResult) -> BackendErrorKind;
     }
 
     // ===== SyncEstimator Methods =====
@@ -2324,6 +2625,14 @@ mod ffi {
         fn delete_saved_psbt(self: &MusigAccount, id: &str) -> SavedPsbtMutation;
         fn retry_saved_psbts(self: &MusigAccount) -> SavedPsbtMutation;
         fn saved_psbt_error(self: &MusigAccount) -> String;
+        fn active_attempt(self: &MusigAccount) -> MusigAttemptSnapshot;
+        fn clear_active_attempt(self: &MusigAccount) -> bool;
+        fn accept_signed_progress(self: &MusigAccount, answer: &str) -> MusigAttemptSnapshot;
+        fn finalize_active_attempt(self: &MusigAccount) -> MusigAttemptSnapshot;
+        fn activate_saved_psbt(self: &MusigAccount, id: &str) -> SavedPsbtRestore;
+        fn reset_active_attempt(self: &MusigAccount) -> MusigAttemptSnapshot;
+        fn require_active_restart(self: &MusigAccount) -> MusigAttemptSnapshot;
+        fn active_signing_plan(self: &MusigAccount, devices: Vec<LiveDevice>) -> SigningPlan;
         /// TxResult value is the txid.
         fn broadcast_transaction(self: &MusigAccount, signed_tx_hex: String) -> TxResult;
         /// Blocking: call from a background thread.
@@ -2359,6 +2668,7 @@ pub fn notification_to_string(notif: &Notification) -> String {
 pub fn get_backend_info(blindbit_url: String) -> BackendInfo {
     match bwk_sp::account::backend_info(blindbit_url) {
         Ok((info, url)) => BackendInfo {
+            kind: BackendErrorKind::None,
             is_ok: true,
             error: String::new(),
             url,
@@ -2370,6 +2680,10 @@ pub fn get_backend_info(blindbit_url: String) -> BackendInfo {
             tweaks_cut_through_with_dust_filter: info.tweaks_cut_through_with_dust_filter,
         },
         Err(e) => BackendInfo {
+            kind: match &e {
+                bwk_sp::account::AccountError::Network(_) => BackendErrorKind::Network,
+                _ => BackendErrorKind::Backend,
+            },
             is_ok: false,
             error: e.to_string(),
             url: String::new(),
@@ -2564,7 +2878,7 @@ fn electrum_connect(
     port: u16,
     scheme: ElectrumScheme,
     verify_certificate: bool,
-) -> Result<bwk_sp::bwk::bwk_electrum::raw_client::Client, String> {
+) -> Result<bwk_sp::bwk::bwk_electrum::raw_client::Client, error::BackendFailure> {
     use std::time::Duration;
 
     let ssl = matches!(scheme, ElectrumScheme::Ssl);
@@ -2572,26 +2886,43 @@ fn electrum_connect(
         .read_timeout(Some(Duration::from_secs(5)))
         .write_timeout(Some(Duration::from_secs(5)))
         .certificate_check(config::certificate_check(verify_certificate))
-        .map_err(|e| format!("Invalid address: {e}"))?;
+        .map_err(|e| {
+            error::BackendFailure::new(
+                BackendErrorKind::InvalidInput,
+                format!("Invalid address: {e}"),
+            )
+        })?;
 
     client
         .try_connect(Some(Duration::from_secs(5)))
-        .map_err(|e| format!("Connection failed: {e}"))?;
+        .map_err(|e| {
+            error::BackendFailure::new(BackendErrorKind::Network, format!("Connection failed: {e}"))
+        })?;
 
     let request = bwk_sp::bwk::bwk_electrum::electrum::request::Request::version(
         "silent".to_string(),
         "1.4".to_string(),
     );
-    client
-        .try_send(&request)
-        .map_err(|e| format!("Failed to send version request: {e}"))?;
+    client.try_send(&request).map_err(|e| {
+        error::BackendFailure::new(
+            BackendErrorKind::Network,
+            format!("Failed to send version request: {e}"),
+        )
+    })?;
 
-    let response = client
-        .recv_str()
-        .map_err(|e| format!("No response from server: {e}"))?;
+    let response = client.recv_str().map_err(|e| {
+        error::BackendFailure::new(
+            BackendErrorKind::Network,
+            format!("No response from server: {e}"),
+        )
+    })?;
 
-    let response: serde_json::Value = serde_json::from_str(response.trim())
-        .map_err(|e| format!("Invalid Electrum version response: {e}"))?;
+    let response: serde_json::Value = serde_json::from_str(response.trim()).map_err(|e| {
+        error::BackendFailure::new(
+            BackendErrorKind::Electrum,
+            format!("Invalid Electrum version response: {e}"),
+        )
+    })?;
     if response.get("id") != Some(&serde_json::json!(request.id))
         || response.get("error").is_some_and(|error| !error.is_null())
         || !response
@@ -2601,7 +2932,10 @@ fn electrum_connect(
                 result.len() == 2 && result.iter().all(serde_json::Value::is_string)
             })
     {
-        return Err("Electrum server refused the version handshake".into());
+        return Err(error::BackendFailure::new(
+            BackendErrorKind::Electrum,
+            "Electrum server refused the version handshake",
+        ));
     }
     Ok(client)
 }
@@ -2650,7 +2984,8 @@ fn electrum_candidates(address: &str) -> Result<(String, u16, Vec<ElectrumScheme
 pub fn test_electrum(address: String, verify_certificate: bool) -> ffi::ConnectionResult {
     log::info!("test_electrum()");
 
-    let err_conn = |error: String| ffi::ConnectionResult {
+    let err_conn = |kind, error: String| ffi::ConnectionResult {
+        kind,
         is_ok: false,
         error,
         url: String::new(),
@@ -2658,23 +2993,30 @@ pub fn test_electrum(address: String, verify_certificate: bool) -> ffi::Connecti
 
     let (host, port, candidates) = match electrum_candidates(&address) {
         Ok(parsed) => parsed,
-        Err(e) => return err_conn(e),
+        Err(e) => return err_conn(BackendErrorKind::InvalidInput, e),
     };
 
-    let mut last_error = String::new();
+    let mut last_error = None;
     for candidate in candidates {
         match electrum_connect(&host, port, candidate, verify_certificate) {
             Ok(_) => {
                 return ffi::ConnectionResult {
+                    kind: BackendErrorKind::None,
                     is_ok: true,
                     error: String::new(),
                     url: electrum_url(&host, port, candidate),
                 }
             }
-            Err(e) => last_error = e,
+            Err(e) => last_error = Some(e),
         }
     }
-    err_conn(last_error)
+    match last_error {
+        Some(error) => err_conn(error.kind, error.message),
+        None => err_conn(
+            BackendErrorKind::InvalidInput,
+            "No Electrum transport candidates".into(),
+        ),
+    }
 }
 
 /// The height of the chain tip the Electrum server at `address` follows, from its
@@ -2695,7 +3037,7 @@ pub fn electrum_tip_height(address: String, verify_certificate: bool) -> ffi::El
         let mut client = match electrum_connect(&host, port, candidate, verify_certificate) {
             Ok(client) => client,
             Err(e) => {
-                last_error = e;
+                last_error = e.message;
                 continue;
             }
         };
@@ -2847,35 +3189,47 @@ fn failed_psbt_file(error: String) -> ffi::PsbtFileResult {
 pub use account::{new_account, Account, NotificationReceiver, Poll, PsbtResult};
 pub use app_state::{
     app_active_theme, app_enabled_plugins, app_fee_preferences, app_language, app_last_endpoint,
-    app_plugin_access, app_price_currency, app_price_source, app_qr_camera_contrast_level,
-    app_qr_display_levels, app_set_active_theme, app_set_fee_preferences, app_set_language,
-    app_set_last_endpoint, app_set_plugin_access, app_set_plugin_enabled, app_set_price_selection,
+    app_plugin_access, app_plugin_answers, app_plugin_grants, app_plugin_history,
+    app_price_currency, app_price_source, app_qr_camera_contrast_level, app_qr_display_levels,
+    app_set_active_theme, app_set_fee_preferences, app_set_language, app_set_last_endpoint,
+    app_set_plugin_access, app_set_plugin_enabled, app_set_price_selection,
     app_set_qr_camera_contrast_level, app_set_qr_display_levels,
 };
 pub use bbqr::{bbqr_frames, bbqr_scanner_new, bbqr_text_scanner_new, BbqrFrames, BbqrScanner};
 pub use camera::{camera_list, camera_open, CameraHandle};
 pub use config::{
-    config_from_file, delete_config, list_configs, new_config, segwit_descriptor_for, set_datadir,
-    taproot_descriptor_for, Config, CONFIG_FILE,
+    config_from_file, create_musig_account, create_sp_account, delete_config, list_configs,
+    list_module_configs, new_config, segwit_descriptor_for, set_datadir, taproot_descriptor_for,
+    Config, CONFIG_FILE,
 };
 pub use coordination::{
     coordination_accept, coordination_prepare, coordination_release, transaction_broadcast,
     transaction_finalize,
 };
+pub use endpoint::{
+    musig_endpoint_change, new_endpoint_retry, sp_endpoint_change, take_musig_endpoint_account,
+    take_sp_endpoint_account, EndpointRetry, MusigEndpointChange, SpEndpointChange,
+};
+pub use error::{notification_error_kind, validation_error_kind};
+pub use feed::{new_feed_state, FeedState};
 pub use ffi::{
-    BackendInfo, BackendServer, CameraFrameResult, CameraListResult, CoordinationResult,
-    EndpointResult, FingerprintsResult, KeyDescriptor, KeyDevice, KeyInfo, KeyInfoResult,
+    AccountCreationResult, AmountParseResult, BackendErrorKind, BackendInfo, BackendServer,
+    CameraFrameResult, CameraListResult, ConnectionResult, CoordinationResult, EndpointPhase,
+    EndpointResult, FeeParseResult, FeedPrice, FeedQuote, FeedSelection, FeedSourceState,
+    FingerprintsResult, KeyDescriptor, KeyDevice, KeyFileFailure, KeyInfo, KeyInfoResult,
     KeyOpResult, KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice, LogLevel, MnemonicResult,
-    MusigFinalizeResult, MusigRound, MusigSpendLeaf, Network, Notification, NotificationFlag,
-    Output, PolicyCompileResult, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath,
+    MusigAttemptSnapshot, MusigCreationRequest, MusigFinalizeResult, MusigRound, MusigSpendLeaf,
+    Network, Notification, NotificationFlag, Output, PluginGrantedAccess, PluginMetadata,
+    PluginMetadataField, PluginMetadataKind, PolicyCompileResult, PolicyDraft, PolicyDraftError,
+    PolicyDraftResult, PolicyDurationUnit, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath,
     PolicyReview, PolicyReviewKey, PolicyReviewPath, PolicySemantic, PolicySpec, PsbtFileResult,
     PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult, QrResponseKind,
-    RegtestDefaults, RustCoin, RustSelectedInput, RustSpendCoin, RustSpendLock, RustSpendVariant,
-    RustTx, RustTxDetails, RustTxIo, SavedPsbtAttempt, SavedPsbtEntry, SavedPsbtInput,
-    SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore,
-    SignResult, SigningCandidate, SigningPlan, SigningProgress, SigningStage, SpendAvailability,
-    SpendCoinStatus, SpendCoinsResult, SpendError, SpendLockKind, SpendMaturity,
-    TransactionSimulation, TransactionTemplate,
+    RegtestDefaults, RetryDecision, RustCoin, RustSelectedInput, RustSpendCoin, RustSpendLock,
+    RustSpendVariant, RustTx, RustTxDetails, RustTxIo, SavedPsbtAttempt, SavedPsbtEntry,
+    SavedPsbtInput, SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset,
+    SavedPsbtRestore, SendAmounts, SignResult, SigningCandidate, SigningPlan, SigningProgress,
+    SigningStage, SpCreationRequest, SpendAvailability, SpendCoinStatus, SpendCoinsResult,
+    SpendError, SpendLockKind, SpendMaturity, TransactionSimulation, TransactionTemplate,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{
@@ -2884,23 +3238,40 @@ pub use hwi_config::{
 };
 pub use keys::{
     bridge::{
-        hot_cached_nonces, hot_create_sessions, hot_reveal, hot_seal, hot_sign, hot_sp_descriptor,
-        hot_xpub, ledger_nonce_count, ledger_nonce_fetch, ledger_nonce_fetch_for_signing,
-        ledger_nonce_invalidate, ledger_nonce_limit, ledger_nonce_merge, ledger_nonce_plan,
-        ledger_nonce_refresh, ledger_nonce_restart, ledger_nonce_sign, merge_signed_psbt,
-        musig_session_count, musig_session_limit, musig_session_plan, musig_session_refresh,
-        musig_session_restart, new_keys_module, usb_merge_signed, usb_sign_payload, HotMaterial,
-        KeysModule, LedgerNonceFetch, QrResponse, SealedHotKey,
+        commit_key_file, hot_cached_nonces, hot_create_sessions, hot_reveal, hot_seal, hot_sign,
+        hot_sp_descriptor, hot_xpub, key_file_preview, ledger_nonce_count, ledger_nonce_fetch,
+        ledger_nonce_fetch_for_signing, ledger_nonce_invalidate, ledger_nonce_limit,
+        ledger_nonce_merge, ledger_nonce_plan, ledger_nonce_refresh, ledger_nonce_restart,
+        ledger_nonce_sign, merge_signed_psbt, musig_session_count, musig_session_limit,
+        musig_session_plan, musig_session_refresh, musig_session_restart, new_keys_module,
+        usb_merge_signed, usb_sign_payload, HotMaterial, KeyFileCommit, KeyFilePreview, KeysModule,
+        LedgerNonceFetch, QrResponse, SealedHotKey,
     },
     supports_silent_payments,
 };
+pub use money::{normalize_fee_rate, parse_btc_amount, parse_fee_input, send_amounts};
+
+impl Default for ffi::PluginMetadataKind {
+    fn default() -> Self {
+        Self::Text
+    }
+}
+
+impl Default for ffi::BackendErrorKind {
+    fn default() -> Self {
+        Self::Other
+    }
+}
 pub use musig::{
     musig_descriptor_fingerprints, musig_first_receive_address, new_musig_account,
     validate_musig_descriptor, MusigAccount, MUSIG_PLUGIN_ID,
 };
-pub use plugin_bundle::{plugin_bundles, plugin_install, plugin_library, plugin_remove};
+pub use plugin_bundle::{
+    plugin_bundles, plugin_install, plugin_library, plugin_metadata, plugin_remove,
+};
 pub use policy::{
-    bip87_account_path, compile_policy, preview_policy, renewable_height, review_policy,
+    bip87_account_path, compile_policy, policy_duration_blocks, policy_threshold, preview_policy,
+    renewable_height, resolve_policy_draft, review_policy,
 };
 pub use state_crypt::{
     plugin_state_load, plugin_state_save, state_clear_file, state_create_with_device,

@@ -14,17 +14,22 @@ use bitcoin::{
     Network, Psbt,
 };
 use bwk::bwk_sign::musig::{MusigRound, MusigStatus};
-use bwk_sp::bwk_sign::bwk_descriptor::{
-    descriptor::Descriptor, sp_descriptor::SpDescriptor, wallet::WalletDescriptorExt,
+use bwk_sp::bwk_sign::{
+    bwk_descriptor::{
+        descriptor::Descriptor, sp_descriptor::SpDescriptor, wallet::WalletDescriptorExt,
+    },
+    miniscript::DescriptorPublicKey,
 };
-use bwk_sp::bwk_sign::miniscript::DescriptorPublicKey;
 use zeroize::Zeroizing;
 
 use crate::keys::{
     crypto::{self, Password},
     error::Error,
     hot, ledger_nonces, network_name,
-    psbt::{inspect_bytes, musig_nonces_complete, parse_v2, PsbtArtifacts},
+    psbt::{
+        inspect_bytes, musig_completed_fingerprints, musig_nonces_complete,
+        musig_required_fingerprints, ordinary_signature_complete, parse_v2, PsbtArtifacts,
+    },
     record::{DescriptorEntry, DeviceRecord, KeyRecord, RouteKind, SecretEnvelope, XpubEntry},
     store::KeyStore,
     supports_musig, supports_silent_payments,
@@ -74,6 +79,7 @@ pub enum UnusableReason {
     NoHotSecret,
     /// The SP key has not completed the output scripts yet.
     SpOutputsPending,
+    UnsupportedMusig,
 }
 
 /// One fingerprint the PSBT requires, whether or not a key is registered for it and
@@ -94,6 +100,8 @@ pub struct SigningCandidate {
     pub unusable: Option<UnusableReason>,
     /// The key already gave its share for the PSBT's current MuSig2 round.
     pub musig_done: bool,
+    pub nonces_done: bool,
+    pub signatures_done: bool,
 }
 
 /// What the signer picker is built from for one PSBT.
@@ -230,42 +238,6 @@ fn split_deleted(
     (by_fingerprint(active), by_fingerprint(deleted))
 }
 
-/// `previous`, a removed record, taken up again by `added`: the new alias, routes and
-/// secret, every device and cached xpub of both (the cached ones kept, with their used
-/// flags), the descriptors it had registered.
-fn revive(mut previous: KeyRecord, added: KeyRecord) -> KeyRecord {
-    previous.deleted = false;
-    previous.alias = added.alias;
-    previous.routes = added.routes;
-    if added.secret.is_some() {
-        previous.secret = added.secret;
-    }
-    for device in added.devices {
-        if !previous
-            .devices
-            .iter()
-            .any(|known| known.same_device(&device))
-        {
-            previous.devices.push(device);
-        }
-    }
-    for xpub in added.xpubs {
-        if !previous.xpubs.iter().any(|known| known.path == xpub.path) {
-            previous.xpubs.push(xpub);
-        }
-    }
-    for descriptor in added.descriptors {
-        if !previous
-            .descriptors
-            .iter()
-            .any(|known| known.descriptor == descriptor.descriptor)
-        {
-            previous.descriptors.push(descriptor);
-        }
-    }
-    previous
-}
-
 /// Owns the in-memory view of every registered key on one network.
 pub struct KeyManager {
     network: Network,
@@ -278,6 +250,24 @@ pub struct KeyManager {
 }
 
 impl KeyManager {
+    pub(crate) fn import_portable(&mut self, record: KeyRecord) -> Result<KeyRecord, Error> {
+        let record = self.store.import_portable(record)?;
+        self.accept_imported(record.clone())?;
+        Ok(record)
+    }
+
+    pub(crate) fn accept_imported(&mut self, record: KeyRecord) -> Result<(), Error> {
+        if record.network != self.network {
+            return Err(Error::NetworkMismatch {
+                expected: self.network.to_string(),
+                found: record.network.to_string(),
+            });
+        }
+        self.deleted.remove(&record.fingerprint);
+        self.records.insert(record.fingerprint, record);
+        Ok(())
+    }
+
     fn requested_musig_policies(
         &self,
         real: &Psbt,
@@ -342,6 +332,11 @@ impl KeyManager {
         }
         if requested {
             candidate.musig_done = done;
+            if round1 {
+                candidate.nonces_done |= done;
+            } else {
+                candidate.signatures_done |= done;
+            }
             if check_cache && cached {
                 candidate.route = Some(RouteKind::Usb);
                 candidate.unusable = None;
@@ -471,6 +466,8 @@ impl KeyManager {
                     must_sign_first,
                     unusable: Some(UnusableReason::NotRegistered),
                     musig_done,
+                    nonces_done: false,
+                    signatures_done: false,
                 };
             }
         };
@@ -485,6 +482,8 @@ impl KeyManager {
                 must_sign_first: false,
                 unusable: Some(UnusableReason::SpOutputsPending),
                 musig_done,
+                nonces_done: false,
+                signatures_done: false,
             };
         }
 
@@ -511,6 +510,8 @@ impl KeyManager {
                     must_sign_first,
                     unusable: None,
                     musig_done,
+                    nonces_done: false,
+                    signatures_done: false,
                 }
             }
             None => SigningCandidate {
@@ -522,6 +523,8 @@ impl KeyManager {
                 must_sign_first,
                 unusable: Some(unusable_reason(record)),
                 musig_done,
+                nonces_done: false,
+                signatures_done: false,
             },
         }
     }
@@ -601,7 +604,7 @@ impl KeyManagerImpl for KeyManager {
         let fingerprint = record.fingerprint;
         // The same key removed before: taken up again, with what it held.
         if let Some(previous) = self.deleted.get(&fingerprint) {
-            let revived = revive(previous.clone(), record);
+            let revived = KeyRecord::revive(previous.clone(), record);
             self.store.save(&revived)?;
             self.deleted.remove(&fingerprint);
             self.records.insert(fingerprint, revived);
@@ -984,6 +987,9 @@ impl KeyManagerImpl for KeyManager {
         let psbt = parse_v2(psbt_bytes)?;
         if !artifacts.sp_outputs_pending {
             let missing_nonces = !musig_nonces_complete(&psbt)?;
+            let nonces = musig_completed_fingerprints(&psbt, true)?;
+            let signatures = musig_completed_fingerprints(&psbt, false)?;
+            let required = musig_required_fingerprints(&psbt)?;
             let real = psbt
                 .into_bitcoin_psbt()
                 .map_err(|e| Error::PsbtParse(e.to_string()))?;
@@ -993,7 +999,30 @@ impl KeyManagerImpl for KeyManager {
                     .values()
                     .any(|status| status.round == MusigRound::Nonces);
             for candidate in &mut plan.candidates {
+                candidate.nonces_done = nonces.contains(&candidate.fingerprint);
+                candidate.signatures_done = signatures.contains(&candidate.fingerprint)
+                    || ordinary_signature_complete(&real, candidate.fingerprint);
                 self.ledger_candidate(candidate, &real, &policies, round1)?;
+                candidate.musig_done |= candidate.signatures_done;
+                let cached = round1
+                    && candidate.route == Some(RouteKind::Usb)
+                    && candidate.device_id.is_empty();
+                let capable = match candidate.route {
+                    Some(RouteKind::Hot) => true,
+                    Some(RouteKind::Usb) => {
+                        cached
+                            || self
+                                .live_device_for(candidate.fingerprint)
+                                .is_some_and(|device| supports_musig(device.capabilities))
+                    }
+                    _ => self.can_musig(candidate.fingerprint),
+                };
+                if required.contains(&candidate.fingerprint)
+                    && candidate.unusable.is_none()
+                    && !capable
+                {
+                    candidate.unusable = Some(UnusableReason::UnsupportedMusig);
+                }
             }
         }
         Ok(plan)

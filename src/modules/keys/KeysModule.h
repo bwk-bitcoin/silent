@@ -193,6 +193,8 @@ public:
     [[nodiscard]] auto addKey(const QString &fingerprint, const QString &alias,
                               const QList<KeyRouteKind> &routes, const QList<PathXpub> &xpubs)
         -> KeyOpResult;
+    // Adopt an already-persisted import into any open handle, without I/O.
+    [[nodiscard]] auto applyKeyFile(Network network, const KeyFileCommit &committed) -> KeyOpResult;
     // Registers the key of a ready device: the key with `alias`, its USB route, the
     // xpubs the device gave and the device itself, or none of them.
     [[nodiscard]] auto addDeviceKey(const plugin::SignerEntry &entry, const QString &alias,
@@ -378,6 +380,9 @@ protected:
     enum class HotWorkKind { CreateSessions, PublishCached, Sign };
 
     struct HotWork {
+        HotWork(HotWorkKind work_kind, ReqId request_id) : kind(work_kind), req_id(request_id) {
+        }
+
         HotWorkKind kind;
         ReqId req_id;
         bool is_ok = false;

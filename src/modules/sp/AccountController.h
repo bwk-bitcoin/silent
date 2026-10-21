@@ -67,7 +67,7 @@ public:
 signals:
     void newAddress(rust::String addr);
     void waitingForBlocks(uint32_t tip_height);
-    void scanError(rust::String error);
+    void scanError(rust::String error, BackendErrorKind kind);
     void scannerStateChanged(bool running);
     void electrumConnected(QString address);
     void electrumDisconnected();
@@ -134,5 +134,4 @@ private:
     bool m_endpoint_busy = false;
     bool m_endpoint_connection_lost = false;
     bool m_endpoint_stop_requested = false;
-    bool m_resume_scanner = false;
 };

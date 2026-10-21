@@ -142,12 +142,6 @@ void MusigAccountWidget::initUI() {
     contentWidget->layout()->setSpacing(0);
 
     m_status_bar = new MusigStatusBar(m_controller, this);
-    connect(m_controller, &MusigAccountController::electrumConnected, m_status_bar,
-            &MusigStatusBar::onElectrumConnected, qontrol::UNIQUE);
-    connect(m_controller, &MusigAccountController::electrumDisconnected, m_status_bar,
-            &MusigStatusBar::onElectrumDisconnected, qontrol::UNIQUE);
-    connect(m_controller, &MusigAccountController::electrumUrlChanged, m_status_bar,
-            &MusigStatusBar::onReloadUrl, qontrol::UNIQUE);
 
     auto *mainCol = (new qontrol::Column)->push(contentWidget)->push(m_status_bar);
     mainCol->layout()->setContentsMargins(0, 0, 0, 0);

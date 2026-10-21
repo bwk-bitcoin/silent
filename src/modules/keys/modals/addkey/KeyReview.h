@@ -27,6 +27,9 @@ public:
     KeyReview(KeysModule *module, const QString &title);
     // Shows the key with `alias` in the alias field.
     void setKey(const QString &fingerprint, const QList<PathXpub> &xpubs, const QString &alias);
+    [[nodiscard]] auto alias() const -> QString;
+    void showError(const QString &message);
+    void setBusy(bool busy);
     // Adds the key shown, signing over `routes`. Shows why when the module refuses it.
     [[nodiscard]] auto add(const QList<KeyRouteKind> &routes) -> bool;
     // The title, with the key's fingerprint on its right.

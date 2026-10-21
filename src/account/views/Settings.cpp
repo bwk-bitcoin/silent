@@ -463,7 +463,7 @@ void Settings::onEndpointRequestFinished(uint64_t req_id, Endpoint endpoint,
         }
     }
     if (!result.is_ok) {
-        showError(*serverRow, mapBackendErrorSummary(toQString(result.error)));
+        showError(*serverRow, mapBackendErrorSummary(result.kind));
     }
     refreshRows();
     if (isVisible()) {

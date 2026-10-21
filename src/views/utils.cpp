@@ -55,32 +55,26 @@ auto coinsCount(uint64_t count) -> QString {
     return QCoreApplication::translate("view::utils", "%1 coins").arg(coinsStr);
 }
 
-auto mapBackendErrorSummary(const QString &raw_error) -> QString {
-    auto err = raw_error.trimmed().toLower();
-    if (err.contains("already spent") || err.contains("double-spend") || err.contains("spent")) {
+auto mapBackendErrorSummary(BackendErrorKind kind) -> QString {
+    switch (kind) {
+    case BackendErrorKind::InputConflict:
         return QCoreApplication::translate("view::utils", "Transaction input conflict detected.");
-    }
-    if (err.contains("address reuse") || err.contains("reuse")) {
+    case BackendErrorKind::AddressReuse:
         return QCoreApplication::translate("view::utils", "Address reuse detected.");
-    }
-    if (err.contains("timeout") || err.contains("dns") || err.contains("socket") ||
-        err.contains("connect") || err.contains("connection") || err.contains("network")) {
+    case BackendErrorKind::Network:
         return QCoreApplication::translate("view::utils",
                                            "Network connection failed. Check endpoint settings.");
-    }
-    if (err.contains("electrum")) {
+    case BackendErrorKind::Electrum:
         return QCoreApplication::translate("view::utils", "Electrum connection failed.");
-    }
-    if (err.contains("blindbit") || err.contains("backend")) {
+    case BackendErrorKind::Backend:
         return QCoreApplication::translate("view::utils", "Backend request failed.");
-    }
-    if (err.contains("sign") || err.contains("signature")) {
+    case BackendErrorKind::Signing:
         return QCoreApplication::translate("view::utils", "Failed to sign transaction.");
-    }
-    if (err.contains("broadcast") || err.contains("mempool")) {
+    case BackendErrorKind::Broadcast:
         return QCoreApplication::translate("view::utils", "Failed to broadcast transaction.");
+    default:
+        return QCoreApplication::translate("view::utils", "Operation failed.");
     }
-    return QCoreApplication::translate("view::utils", "Operation failed.");
 }
 
 auto formatBackendErrorDetails(const QString &raw_error) -> QString {

@@ -14,9 +14,14 @@ use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
-use crate::config::datadir;
-use crate::ffi::{PluginCatalog, PluginInstallResult, PluginLibraryResult};
-use crate::state_crypt::{self, SEALED_EXTENSION};
+use crate::{
+    config::datadir,
+    ffi::{
+        PluginCatalog, PluginInstallResult, PluginLibraryResult, PluginMetadata,
+        PluginMetadataField, PluginMetadataKind,
+    },
+    state_crypt::{self, SEALED_EXTENSION},
+};
 
 /// Where the sealed bundles live.
 pub const PLUGINS_DIR: &str = "plugins";
@@ -218,6 +223,15 @@ fn read_bundle(path: &Path) -> Result<Bundle, String> {
 /// Every installed plugin's sidecar, as JSON text. A bundle that does not open is
 /// skipped.
 pub fn list() -> Vec<String> {
+    let mut sidecars: Vec<_> = sidecars()
+        .into_iter()
+        .map(|sidecar| serde_json::Value::Object(sidecar).to_string())
+        .collect();
+    sidecars.sort();
+    sidecars
+}
+
+fn sidecars() -> Vec<serde_json::Map<String, serde_json::Value>> {
     let dir = datadir().join(PLUGINS_DIR);
     let Ok(entries) = fs::read_dir(&dir) else {
         return Vec::new();
@@ -235,13 +249,60 @@ pub fn list() -> Vec<String> {
                     log::error!("plugin bundle {} does not match its id", path.display());
                     continue;
                 }
-                sidecars.push(serde_json::Value::Object(bundle.sidecar).to_string());
+                sidecars.push(bundle.sidecar);
             }
             Err(e) => log::error!("plugin bundle: {e}"),
         }
     }
-    sidecars.sort();
     sidecars
+}
+
+pub fn plugin_metadata() -> Vec<PluginMetadata> {
+    let mut result = Vec::new();
+    for sidecar in sidecars() {
+        let Some(id) = sidecar_id(&sidecar) else {
+            continue;
+        };
+        let mut fields = Vec::new();
+        for (key, value) in sidecar {
+            if key == "id" {
+                continue;
+            }
+            let mut field = PluginMetadataField {
+                key,
+                ..Default::default()
+            };
+            match value {
+                serde_json::Value::String(value) => {
+                    field.kind = PluginMetadataKind::Text;
+                    field.text = value;
+                }
+                serde_json::Value::Number(value) => {
+                    let Some(number) = value.as_f64() else {
+                        continue;
+                    };
+                    field.kind = PluginMetadataKind::Number;
+                    field.number = number;
+                }
+                serde_json::Value::Bool(value) => {
+                    field.kind = PluginMetadataKind::Flag;
+                    field.flag = value;
+                }
+                serde_json::Value::Array(values) => {
+                    field.kind = PluginMetadataKind::Strings;
+                    field.items = values
+                        .into_iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect();
+                }
+                _ => continue,
+            }
+            fields.push(field);
+        }
+        result.push(PluginMetadata { id, fields });
+    }
+    result.sort_by(|a, b| a.id.cmp(&b.id));
+    result
 }
 
 /// The library and catalogs of the plugin `id`.

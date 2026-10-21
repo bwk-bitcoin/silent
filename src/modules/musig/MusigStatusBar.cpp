@@ -27,6 +27,10 @@ void MusigStatusBar::init() {
 void MusigStatusBar::doConnect() {
     connect(m_electrum_item, &catalog::StatusBarItem::toggled, this,
             &MusigStatusBar::onElectrumToggled, qontrol::UNIQUE);
+    connect(m_controller, &AccountBackend::endpointStateChanged, this,
+            &MusigStatusBar::onEndpointStateChanged, qontrol::UNIQUE);
+    connect(m_controller, &MusigAccountController::electrumUrlChanged, this,
+            &MusigStatusBar::onReloadUrl, qontrol::UNIQUE);
 }
 
 void MusigStatusBar::view() {
@@ -43,37 +47,42 @@ void MusigStatusBar::view() {
 
 // ===== Slots =====
 
-void MusigStatusBar::onElectrumConnected(const QString &address) {
-    m_electrum_item->setOn(true);
-    m_electrum_item->setLabel(TR("status-connected-electrum").arg(address));
-}
-
-void MusigStatusBar::onElectrumDisconnected() {
-    m_electrum_item->setOn(false);
-    if (m_electrum_url.isEmpty()) {
+void MusigStatusBar::onEndpointStateChanged(Endpoint endpoint) {
+    if (endpoint != Endpoint::Electrum) {
         return;
     }
-    m_electrum_item->setLabel(TR("status-electrum-disconnected"));
+    auto state = m_controller->electrumState();
+    m_electrum_item->setOn(state == MusigAccountController::ElectrumState::Connected ||
+                           state == MusigAccountController::ElectrumState::Connecting);
+    switch (state) {
+    case MusigAccountController::ElectrumState::Disconnected:
+        m_electrum_item->setLabel(m_electrum_url.isEmpty() ? TR("status-not-configured")
+                                                           : TR("status-electrum-disconnected"));
+        break;
+    case MusigAccountController::ElectrumState::Connecting:
+        m_electrum_item->setLabel(TR("status-connecting"));
+        break;
+    case MusigAccountController::ElectrumState::Connected:
+        m_electrum_item->setLabel(TR("status-connected-electrum").arg(m_electrum_url));
+        break;
+    case MusigAccountController::ElectrumState::Disconnecting:
+        m_electrum_item->setLabel(TR("status-disconnecting"));
+        break;
+    }
 }
 
 void MusigStatusBar::onElectrumToggled(bool checked) {
     if (checked) {
-        m_electrum_item->setLabel(TR("status-connecting"));
         m_controller->startElectrum();
     } else {
-        m_electrum_item->setLabel(TR("status-disconnecting"));
         m_controller->stopElectrum();
     }
+    onEndpointStateChanged(Endpoint::Electrum);
 }
 
 void MusigStatusBar::onReloadUrl() {
     m_electrum_url = m_controller->electrumUrl();
     // Nothing to connect to without a url: the switch stays off until one is set.
     m_electrum_item->setToggleEnabled(!m_electrum_url.isEmpty());
-    if (m_electrum_url.isEmpty()) {
-        m_electrum_item->setOn(false);
-        m_electrum_item->setLabel(TR("status-not-configured"));
-    } else {
-        m_electrum_item->setLabel(TR("status-connecting"));
-    }
+    onEndpointStateChanged(Endpoint::Electrum);
 }

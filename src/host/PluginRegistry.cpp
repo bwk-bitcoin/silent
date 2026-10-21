@@ -9,9 +9,6 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QLoggingCategory>
 #include <QSet>
 #include <QStringList>
@@ -37,39 +34,29 @@ private:
     QMap<QString, QString> m_meta;
 };
 
-QMap<QString, QString> parseSidecarMeta(const QByteArray &json) {
-    QJsonParseError parseError;
-    auto doc = QJsonDocument::fromJson(json, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        qWarning() << "Plugin sidecar parse failed:" << parseError.errorString();
-        return {};
-    }
-
-    QMap<QString, QString> meta;
-    auto object = doc.object();
-    for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
-        if (it.value().isString()) {
-            meta.insert(it.key(), it.value().toString());
-            continue;
-        }
-        if (it.value().isDouble()) {
-            meta.insert(it.key(), QString::number(it.value().toDouble()));
-            continue;
-        }
-        if (it.value().isBool()) {
-            meta.insert(it.key(),
-                        it.value().toBool() ? QStringLiteral("true") : QStringLiteral("false"));
-            continue;
-        }
-        if (it.value().isArray()) {
+QMap<QString, QString> sidecarMeta(const PluginMetadata &bundle) {
+    QMap<QString, QString> meta{
+        {QStringLiteral("id"), QString::fromStdString(std::string(bundle.id))}};
+    for (const auto &field : bundle.fields) {
+        auto key = QString::fromStdString(std::string(field.key));
+        switch (field.kind) {
+        case PluginMetadataKind::Text:
+            meta.insert(key, QString::fromStdString(std::string(field.text)));
+            break;
+        case PluginMetadataKind::Number:
+            meta.insert(key, QString::number(field.number));
+            break;
+        case PluginMetadataKind::Flag:
+            meta.insert(key, field.flag ? QStringLiteral("true") : QStringLiteral("false"));
+            break;
+        case PluginMetadataKind::Strings: {
             QStringList values;
-            auto array = it.value().toArray();
-            for (const auto &entry : array) {
-                if (entry.isString()) {
-                    values.append(entry.toString());
-                }
+            for (const auto &entry : field.items) {
+                values.append(QString::fromStdString(std::string(entry)));
             }
-            meta.insert(it.key(), values.join(','));
+            meta.insert(key, values.join(','));
+            break;
+        }
         }
     }
 
@@ -126,8 +113,8 @@ auto PluginRegistry::rescanDiscoveredPlugins() -> int {
     // Only the plugins sealed in the app state: nothing found loose in
     // ~/.silent/plugins/ is ever read (ws-plaude/silent#41).
     int found = 0;
-    for (const auto &sidecar : ::plugin_bundles()) {
-        auto meta = parseSidecarMeta(QByteArray::fromStdString(std::string(sidecar)));
+    for (const auto &bundle : ::plugin_metadata()) {
+        auto meta = sidecarMeta(bundle);
         QString pluginId = meta.value(QStringLiteral("id")).trimmed();
         if (pluginId.isEmpty()) {
             continue;

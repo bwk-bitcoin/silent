@@ -104,7 +104,7 @@ pub struct FeePreferencesInternal {
 
 fn default_fee_preferences() -> FeePreferencesInternal {
     FeePreferencesInternal {
-        tier: 1,
+        tier: crate::feed::DEFAULT_FEE_TIER,
         ..FeePreferencesInternal::default()
     }
 }
@@ -138,48 +138,47 @@ impl AppState {
     }
 
     pub fn load() -> Self {
-        let path = Self::path();
-        let content = match state_crypt::read_state(&path) {
-            Ok(Some(content)) => content,
-            Ok(None) => return Self::default(),
-            Err(e) => {
-                log::error!("AppState::load() {e}");
-                return Self::default();
-            }
-        };
-
-        match serde_json::from_str::<Self>(&content) {
-            Ok(mut state) => {
-                state.dedup_plugins();
-                if state.active_theme.is_empty() {
-                    state.active_theme = default_active_theme();
-                }
-                state
-            }
-            Err(e) => {
-                log::error!("AppState::load() failed to parse {}: {e}", path.display());
+        match Self::try_load() {
+            Ok(state) => state,
+            Err(error) => {
+                log::error!("AppState::load() {error}");
                 Self::default()
             }
         }
     }
 
+    fn try_load() -> Result<Self, String> {
+        let path = Self::path();
+        let content = match state_crypt::read_state(&path)? {
+            Some(content) => content,
+            None => return Ok(Self::default()),
+        };
+        let mut state: Self = serde_json::from_str(&content)
+            .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+        state.dedup_plugins();
+        if state.active_theme.is_empty() {
+            state.active_theme = default_active_theme();
+        }
+        Ok(state)
+    }
+
     pub fn save(&self) {
+        if let Err(error) = self.try_save() {
+            log::error!("AppState::save() {error}");
+        }
+    }
+
+    pub(crate) fn try_save(&self) -> Result<(), String> {
         let path = Self::path();
         if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
 
         let mut state = self.clone();
         state.dedup_plugins();
 
-        match serde_json::to_string_pretty(&state) {
-            Ok(content) => {
-                if let Err(e) = state_crypt::write_state(&path, &content) {
-                    log::error!("AppState::save() {e}");
-                }
-            }
-            Err(e) => log::error!("AppState::save() failed to serialize: {e}"),
-        }
+        let content = serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?;
+        state_crypt::write_state(&path, &content)
     }
 
     fn dedup_plugins(&mut self) {
@@ -244,7 +243,7 @@ pub fn app_fee_preferences() -> RustFeePreferences {
 }
 
 pub fn app_set_fee_preferences(preferences: RustFeePreferences) {
-    if preferences.mode > 2 || preferences.tier > 2 {
+    if !preferences.is_valid() {
         log::error!("invalid fee mode or tier");
         return;
     }
@@ -265,7 +264,7 @@ pub fn app_price_currency() -> String {
 pub fn app_set_price_selection(source: String, currency: String) {
     let mut state = AppState::load();
     state.price_source = source;
-    state.price_currency = currency;
+    state.price_currency = crate::feed::currency(&currency);
     state.save();
 }
 
@@ -337,6 +336,19 @@ pub fn app_set_last_endpoint(server: BackendServer, network: Network, url: Strin
     state.save();
 }
 
+pub(crate) fn remember_endpoints(
+    network: Network,
+    endpoints: &[(BackendServer, String)],
+) -> Result<(), String> {
+    let mut state = AppState::try_load()?;
+    for (server, url) in endpoints {
+        state
+            .endpoints
+            .insert(endpoint_key(*server, network), url.clone());
+    }
+    state.try_save()
+}
+
 pub fn app_plugin_access() -> Vec<PluginAccess> {
     AppState::load()
         .plugin_access
@@ -348,6 +360,36 @@ pub fn app_plugin_access() -> Vec<PluginAccess> {
             keys: access.keys.into(),
             state: access.state.into(),
         })
+        .collect()
+}
+
+pub fn app_plugin_answers(plugin_id: String, hash: String) -> PluginAccess {
+    let hash = hash.to_ascii_lowercase();
+    app_plugin_access()
+        .into_iter()
+        .find(|entry| entry.hash == hash)
+        .unwrap_or(PluginAccess {
+            plugin_id,
+            hash,
+            account: PluginGrant::Unasked,
+            keys: PluginGrant::Unasked,
+            state: PluginGrant::Unasked,
+        })
+}
+
+pub fn app_plugin_grants(hash: String) -> crate::ffi::PluginGrantedAccess {
+    let answer = app_plugin_answers(String::new(), hash);
+    crate::ffi::PluginGrantedAccess {
+        account: answer.account == PluginGrant::Allowed,
+        keys: answer.keys == PluginGrant::Allowed,
+        state: answer.state == PluginGrant::Allowed,
+    }
+}
+
+pub fn app_plugin_history(plugin_id: String) -> Vec<PluginAccess> {
+    app_plugin_access()
+        .into_iter()
+        .filter(|entry| entry.plugin_id == plugin_id)
         .collect()
 }
 
@@ -566,6 +608,24 @@ mod tests {
             assert!(app_plugin_access().is_empty());
             app_set_plugin_access(access("AA", PluginGrant::Allowed, PluginGrant::Unasked));
             app_set_plugin_access(access("bb", PluginGrant::Denied, PluginGrant::Denied));
+            let grants = app_plugin_grants("AA".into());
+            assert!(
+                grants.account && !grants.keys && !grants.state,
+                "grant evaluation is hash-specific and unasked is denied"
+            );
+            assert!(
+                !app_plugin_grants("new-library-hash".into()).account,
+                "upgraded library does not inherit grants"
+            );
+            assert_eq!(
+                app_plugin_history("example".into()).len(),
+                2,
+                "plugin history is filtered in Rust"
+            );
+            assert!(
+                app_plugin_history("other-plugin".into()).is_empty(),
+                "unrelated plugin history is empty"
+            );
             assert_eq!(
                 app_plugin_access(),
                 vec![

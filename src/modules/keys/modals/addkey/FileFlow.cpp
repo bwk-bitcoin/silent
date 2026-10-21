@@ -19,14 +19,10 @@
 
 #include <QDragEnterEvent>
 #include <QDropEvent>
-#include <QFile>
 #include <QFileDialog>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QLabel>
 #include <QMimeData>
-#include <QRegularExpression>
+#include <QThread>
 #include <QUrl>
 #include <optional>
 
@@ -39,50 +35,16 @@ using catalog::Label;
 using catalog::LabelRole;
 using catalog::LabelTone;
 
-namespace {
-
-constexpr int KEY_FILE_VERSION = 1;
-
-const QRegularExpression FINGERPRINT_RE(QStringLiteral(R"(^[0-9a-f]{8}$)"));
-
-auto networkFromFile(const QString &name) -> std::optional<Network> {
-    if (name == QStringLiteral("bitcoin")) {
-        return Network::Bitcoin;
-    }
-    if (name == QStringLiteral("testnet")) {
-        return Network::Testnet;
-    }
-    if (name == QStringLiteral("signet")) {
-        return Network::Signet;
-    }
-    if (name == QStringLiteral("regtest")) {
-        return Network::Regtest;
-    }
-    return std::nullopt;
-}
-
-auto routeFromFile(const QString &name) -> std::optional<KeyRouteKind> {
-    if (name == QStringLiteral("hot")) {
-        return KeyRouteKind::Hot;
-    }
-    if (name == QStringLiteral("usb")) {
-        return KeyRouteKind::Usb;
-    }
-    if (name == QStringLiteral("qr")) {
-        return KeyRouteKind::Qr;
-    }
-    if (name == QStringLiteral("sdcard")) {
-        return KeyRouteKind::SdCard;
-    }
-    return std::nullopt;
-}
-
-} // namespace
-
 FileFlow::FileFlow(KeysModule *module) : m_module(module) {
     init();
     doConnect();
     view();
+}
+
+FileFlow::~FileFlow() {
+    if (m_worker != nullptr) {
+        m_worker->wait();
+    }
 }
 
 void FileFlow::start() {
@@ -96,6 +58,8 @@ void FileFlow::init() {
 }
 
 void FileFlow::doConnect() {
+    connect(this, &FileFlow::previewReady, this, &FileFlow::onPreviewReady, qontrol::UNIQUE);
+    connect(this, &FileFlow::commitReady, this, &FileFlow::onCommitReady, qontrol::UNIQUE);
     connectDrop();
     connectReview();
 }
@@ -174,63 +138,21 @@ void FileFlow::dropEvent(QDropEvent *event) {
 // A key file as Silent writes it: version, network, fingerprint, alias, xpubs as
 // path and xpub pairs, routes. Device exports in their own formats are not read.
 void FileFlow::loadFile(const QString &path) {
+    if (m_worker != nullptr) {
+        return;
+    }
     m_read_error->setVisible(false);
     m_file_error->setVisible(false);
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        m_read_error->setVisible(true);
-        window()->adjustSize();
-        return;
-    }
-    QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-    if (!doc.isObject()) {
-        showFileError(TR("keys-file-invalid"));
-        return;
-    }
-    QJsonObject obj = doc.object();
-    if (obj.value(QStringLiteral("version")).toInt() > KEY_FILE_VERSION) {
-        showFileError(TR("keys-file-newer"));
-        return;
-    }
-    auto network = networkFromFile(obj.value(QStringLiteral("network")).toString());
-    if (!network.has_value()) {
-        showFileError(TR("keys-file-invalid"));
-        return;
-    }
-    if (network.value() != KeysModule::network()) {
-        showFileError(TR("keys-file-other-network")
-                          .arg(networkLabel(network.value()), networkLabel(KeysModule::network())));
-        return;
-    }
-    QString fingerprint = obj.value(QStringLiteral("fingerprint")).toString().trimmed().toLower();
-    if (fingerprint.isEmpty()) {
-        showFileError(TR("keys-file-no-fingerprint"));
-        return;
-    }
-    if (!FINGERPRINT_RE.match(fingerprint).hasMatch()) {
-        showFileError(TR("keys-file-invalid"));
-        return;
-    }
-    QList<KeyRouteKind> routes;
-    for (const auto &value : obj.value(QStringLiteral("routes")).toArray()) {
-        auto route = routeFromFile(value.toString());
-        if (!route.has_value()) {
-            showFileError(TR("keys-file-route").arg(value.toString()));
-            return;
-        }
-        routes.append(route.value());
-    }
-    QList<PathXpub> xpubs;
-    for (const auto &value : obj.value(QStringLiteral("xpubs")).toArray()) {
-        QJsonObject entry = value.toObject();
-        xpubs.append({.path = xpubPath(entry.value(QStringLiteral("path")).toString()),
-                      .xpub = entry.value(QStringLiteral("xpub")).toString()});
-    }
-
-    // A file names the routes the key had; an export without any came off an SD card.
-    m_routes = routes.isEmpty() ? QList<KeyRouteKind>{KeyRouteKind::SdCard} : routes;
-    m_review->setKey(fingerprint, xpubs, obj.value(QStringLiteral("alias")).toString());
-    showReview();
+    m_network = KeysModule::network();
+    m_preview = std::make_shared<std::optional<rust::Box<KeyFilePreview>>>();
+    auto preview = m_preview;
+    m_worker = QThread::create([this, preview, path = path.toStdString(), network = m_network] {
+        preview->emplace(::key_file_preview(path, network));
+        emit previewReady();
+    });
+    connect(m_worker, &QThread::finished, m_worker, &QThread::deleteLater, qontrol::UNIQUE);
+    setEnabled(false);
+    m_worker->start();
 }
 
 void FileFlow::showFileError(const QString &error) {
@@ -267,6 +189,9 @@ void FileFlow::hideReview() {
 // ===== Slots =====
 
 void FileFlow::onBackClicked() {
+    if (m_worker != nullptr) {
+        return;
+    }
     switch (m_view) {
     case View::Drop:
     case View::Review:
@@ -276,15 +201,76 @@ void FileFlow::onBackClicked() {
 }
 
 void FileFlow::onNextClicked() {
+    if (m_worker != nullptr) {
+        return;
+    }
     switch (m_view) {
     case View::Review:
-        if (m_review->add(m_routes)) {
-            emit added();
-        }
+        m_commit = std::make_shared<std::optional<rust::Box<KeyFileCommit>>>();
+        m_review->setBusy(true);
+        emit busyChanged(true);
+        m_worker = QThread::create([this, preview = m_preview, committed = m_commit,
+                                    alias = m_review->alias().toStdString()] {
+            committed->emplace(::commit_key_file(*preview->value(), alias));
+            emit commitReady();
+        });
+        connect(m_worker, &QThread::finished, m_worker, &QThread::deleteLater, qontrol::UNIQUE);
+        m_worker->start();
         return;
     case View::Drop:
         return;
     }
+}
+
+void FileFlow::onPreviewReady() {
+    m_worker->wait();
+    m_worker = nullptr;
+    setEnabled(true);
+    auto &preview = m_preview->value();
+    if (!preview->is_ok()) {
+        switch (preview->file_failure()) {
+        case KeyFileFailure::Read:
+            m_read_error->setVisible(true);
+            break;
+        case KeyFileFailure::Newer:
+            showFileError(TR("keys-file-newer"));
+            break;
+        case KeyFileFailure::Network:
+            showFileError(TR("keys-file-other-network")
+                              .arg(networkLabel(preview->file_network()), networkLabel(m_network)));
+            break;
+        default:
+            showFileError(TR("keys-file-invalid") + QStringLiteral("\n") +
+                          KeysModule::toQt(preview->get_error()));
+            break;
+        }
+        return;
+    }
+    QList<PathXpub> xpubs;
+    for (const auto &entry : preview->file_xpubs()) {
+        xpubs.append({.path = KeysModule::toQt(entry.path), .xpub = KeysModule::toQt(entry.xpub)});
+    }
+    m_review->setKey(KeysModule::toQt(preview->file_fingerprint()), xpubs,
+                     KeysModule::toQt(preview->file_alias()));
+    showReview();
+}
+
+void FileFlow::onCommitReady() {
+    m_worker->wait();
+    m_worker = nullptr;
+    m_review->setBusy(false);
+    emit busyChanged(false);
+    auto &committed = m_commit->value();
+    if (!committed->is_ok()) {
+        m_review->showError(TR("keys-add-failed").arg(KeysModule::toQt(committed->get_error())));
+        return;
+    }
+    auto applied = m_module->applyKeyFile(m_network, *committed);
+    if (!applied.is_ok) {
+        m_review->showError(TR("keys-add-failed").arg(KeysModule::toQt(applied.error)));
+        return;
+    }
+    emit added();
 }
 
 void FileFlow::onOpenFileClicked() {

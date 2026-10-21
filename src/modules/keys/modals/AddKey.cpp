@@ -41,6 +41,9 @@ AddKey::AddKey(KeysModule *module) : m_module(module) {
 }
 
 void AddKey::done(int result) {
+    if (m_busy) {
+        return;
+    }
     closeFlow();
     catalog::Modal::done(result);
 }
@@ -122,6 +125,7 @@ void AddKey::onModeClicked() {
     }
     connect(m_flow, &AddKeyFlow::viewChanged, this, &AddKey::onFlowViewChanged, qontrol::UNIQUE);
     connect(m_flow, &AddKeyFlow::back, this, &AddKey::onFlowBack, qontrol::UNIQUE);
+    connect(m_flow, &AddKeyFlow::busyChanged, this, &AddKey::onFlowBusy, qontrol::UNIQUE);
     connect(m_flow, &AddKeyFlow::added, this, &AddKey::accept, qontrol::UNIQUE);
     setPage(m_flow);
     m_flow->start();
@@ -132,8 +136,15 @@ void AddKey::onFlowViewChanged(const QString &title) {
 }
 
 void AddKey::onFlowBack() {
+    if (m_busy) {
+        return;
+    }
     showModes();
     closeFlow();
+}
+
+void AddKey::onFlowBusy(bool busy) {
+    m_busy = busy;
 }
 
 // ===== AddKeyFlow =====

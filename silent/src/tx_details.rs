@@ -384,13 +384,13 @@ pub fn test_and_save_endpoint(
     verify_certificate: bool,
 ) -> crate::ffi::EndpointResult {
     let result = (|| {
-        let mut config =
-            crate::config::Config::from_file(account_name).map_err(|e| e.to_string())?;
+        let mut config = crate::config::Config::from_file(account_name)
+            .map_err(|e| (crate::ffi::BackendErrorKind::Storage, e.to_string()))?;
         let url = match server {
             crate::ffi::BackendServer::Electrum => {
                 let tested = crate::test_electrum(url, verify_certificate);
                 if !tested.is_ok {
-                    return Err(tested.error);
+                    return Err((tested.kind, tested.error));
                 }
                 config.set_electrum_url(tested.url.clone());
                 config.set_verify_certificate(verify_certificate);
@@ -398,22 +398,32 @@ pub fn test_and_save_endpoint(
             }
             crate::ffi::BackendServer::Blindbit => {
                 if config.plugin_id == crate::musig::MUSIG_PLUGIN_ID {
-                    return Err("This account has no BlindBit endpoint".into());
+                    return Err((
+                        crate::ffi::BackendErrorKind::InvalidInput,
+                        "This account has no BlindBit endpoint".into(),
+                    ));
                 }
                 let tested = crate::get_backend_info(url);
                 if !tested.is_ok {
-                    return Err(tested.error);
+                    return Err((tested.kind, tested.error));
                 }
                 if tested.network != config.network {
-                    return Err("Backend network does not match the account".into());
+                    return Err((
+                        crate::ffi::BackendErrorKind::InvalidInput,
+                        "Backend network does not match the account".into(),
+                    ));
                 }
                 config.set_blindbit_url(tested.url.clone());
                 tested.url
             }
             _ => unreachable!("CXX enum type safety guarantees no other variants exist"),
         };
-        config.write_file()?;
+        config
+            .write_file()
+            .map_err(|e| (crate::ffi::BackendErrorKind::Storage, e))?;
         Ok(crate::ffi::EndpointResult {
+            connection_pending: false,
+            kind: crate::ffi::BackendErrorKind::None,
             is_ok: true,
             saved: true,
             error: String::new(),
@@ -423,7 +433,8 @@ pub fn test_and_save_endpoint(
     })();
     match result {
         Ok(result) => result,
-        Err(error) => crate::ffi::EndpointResult {
+        Err((kind, error)) => crate::ffi::EndpointResult {
+            kind,
             error,
             ..crate::ffi::EndpointResult::default()
         },

@@ -5,6 +5,16 @@
 
 namespace {
 
+auto mockRecipientAmount(const Output &output, uint64_t total, uint64_t target) -> uint64_t {
+    if (!output.max) {
+        return output.amount;
+    }
+    if (total <= target) {
+        return 0;
+    }
+    return total - target;
+}
+
 auto dummyCoin(const char *type, const char *outpoint, const char *label, uint64_t value,
                uint32_t height) -> RustCoin {
     RustCoin coin;
@@ -122,8 +132,9 @@ auto MockAccountController::simulateTx(TransactionTemplate tx) -> TransactionSim
     // Select only enough coins to cover the outputs plus the fee (a realistic
     // subset), so the coin table highlights the selected rows rather than every
     // row. A max send takes everything.
-    TransactionSimulation sim;
+    TransactionSimulation sim{};
     sim.is_valid = true;
+    sim.kind = BackendErrorKind::None;
     sim.fee = 1000;
     sim.weight = 500;
 
@@ -143,10 +154,18 @@ auto MockAccountController::simulateTx(TransactionTemplate tx) -> TransactionSim
             break;
         }
         total += coin.value;
+        sim.selected_values.push_back(coin.value);
         sim.selected_outpoints.push_back(std::move(coin.outpoint));
     }
     sim.input_total = total;
     sim.input_count = sim.selected_outpoints.size();
     sim.output_total = total > sim.fee ? total - sim.fee : 0;
+    for (const auto &output : tx.outputs) {
+        auto value = mockRecipientAmount(output, total, target);
+        sim.recipient_amounts.push_back(value);
+        sim.sending_total += value;
+    }
+    sim.transaction_total = sim.sending_total + sim.fee;
+    sim.change = total > sim.transaction_total ? total - sim.transaction_total : 0;
     return sim;
 }

@@ -162,6 +162,7 @@ namespace smoke {
 void pluginAbiSmoke();
 void spSigningSmoke(const QString &name);
 void musigResetSmoke();
+void boundarySmoke();
 } // namespace smoke
 
 auto main(int argc, char *argv[]) -> int {
@@ -238,6 +239,12 @@ auto main(int argc, char *argv[]) -> int {
     // Initialise the host singleton before the registry connects to its events.
     Host::get();
     AppController::init();
+    if (arguments.contains(QStringLiteral("--rust-boundary"))) {
+        Theme::init();
+        smoke::boundarySmoke();
+        std::fprintf(stdout, "Rust boundary smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
     if (arguments.contains(QStringLiteral("--musig-reset"))) {
         Theme::init();
         smoke::musigResetSmoke();

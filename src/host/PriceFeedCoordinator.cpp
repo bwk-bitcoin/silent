@@ -1,11 +1,12 @@
 #include "PriceFeedCoordinator.h"
 
 #include "interfaces/feed.h"
+#include <QDebug>
 #include <Qontrol>
 #include <algorithm>
-#include <cmath>
 #include <common.h>
-#include <iterator>
+#include <string>
+#include <utility>
 
 PriceFeedConnection::PriceFeedConnection(quint64 registration_id, IFeed *feed, QObject *parent)
     : QObject(parent),
@@ -53,18 +54,10 @@ void PriceFeedCoordinator::addSource(const QString &id, const QString &name, IFe
     }
     auto registrationId = ++m_next_registration_id;
     auto *connection = new PriceFeedConnection(registrationId, feed, this);
-    m_sources.insert(id, {.name = name,
-                          .feed = feed,
-                          .currencies = {},
-                          .rates = {},
-                          .registration_id = registrationId,
-                          .connection = connection,
-                          .has_default = false,
-                          .has_smart = false,
-                          .default_rate = {},
-                          .low = {},
-                          .medium = {},
-                          .fast = {}});
+    m_sources.insert(
+        id,
+        {.name = name, .feed = feed, .registration_id = registrationId, .connection = connection});
+    m_state->add_feed(rust::String(id.toStdString()));
     connect(connection, &PriceFeedConnection::currenciesReady, this,
             &PriceFeedCoordinator::onCurrencies, qontrol::UNIQUE);
     connect(connection, &PriceFeedConnection::conversionRateReady, this,
@@ -90,6 +83,7 @@ auto PriceFeedCoordinator::removeSource(const QString &id) -> std::unique_ptr<Pr
     auto previous = selected();
     auto previousFees = selectedFees();
     auto source = m_sources.take(id);
+    m_state->remove_feed(rust::String(id.toStdString()));
     auto connection = std::unique_ptr<PriceFeedConnection>(source.connection);
     connection->disconnectFeed();
     bool shared = false;
@@ -113,19 +107,23 @@ auto PriceFeedCoordinator::removeSource(const QString &id) -> std::unique_ptr<Pr
 
 void PriceFeedCoordinator::select(const QString &source, const QString &currency) {
     auto previous = selected();
-    m_selected_source = source;
-    m_selected_currency = currency;
-    // Plugin literals can live in an unloaded library's read-only storage.
-    m_selected_source.detach();
-    m_selected_currency.detach();
+    m_state->select_price(rust::String(source.toStdString()), rust::String(currency.toStdString()));
     notifySelected(previous);
 }
 
 auto PriceFeedCoordinator::sources() const -> QList<PriceSource> {
     QList<PriceSource> result;
     for (auto it = m_sources.cbegin(); it != m_sources.cend(); ++it) {
-        if (!it->currencies.empty()) {
-            result.append({.id = it.key(), .name = it->name, .currencies = it->currencies});
+        if (it->feed == nullptr) {
+            continue;
+        }
+        auto state = m_state->feed_source(rust::String(it.key().toStdString()));
+        QStringList currencies;
+        for (const auto &currency : state.currencies) {
+            currencies.append(QString::fromStdString(std::string(currency)));
+        }
+        if (!currencies.empty()) {
+            result.append({.id = it.key(), .name = it->name, .currencies = currencies});
         }
     }
     std::ranges::sort(result, {}, &PriceSource::id);
@@ -133,17 +131,19 @@ auto PriceFeedCoordinator::sources() const -> QList<PriceSource> {
 }
 
 auto PriceFeedCoordinator::selected() const -> SelectedPrice {
-    SelectedPrice result{
-        .source = m_selected_source, .currency = m_selected_currency, .rate = std::nullopt};
-    auto source = m_sources.constFind(m_selected_source);
-    if (source != m_sources.cend() && source->feed != nullptr &&
-        source->currencies.contains(m_selected_currency)) {
-        auto rate = source->rates.constFind(m_selected_currency);
-        if (rate != source->rates.cend()) {
-            result.rate = rate.value();
+    syncFeedLifetimes();
+    auto state = m_state->price_selection();
+    return {.source = QString::fromStdString(std::string(state.source)),
+            .currency = QString::fromStdString(std::string(state.currency)),
+            .rate = state.quote.available ? std::optional(state.quote.value) : std::nullopt};
+}
+
+void PriceFeedCoordinator::syncFeedLifetimes() const {
+    for (auto it = m_sources.cbegin(); it != m_sources.cend(); ++it) {
+        if (it->feed == nullptr) {
+            m_state->remove_feed(rust::String(it.key().toStdString()));
         }
     }
-    return result;
 }
 
 void PriceFeedCoordinator::notifySelected(const SelectedPrice &previous) {
@@ -163,13 +163,15 @@ void PriceFeedCoordinator::onCurrencies(quint64 registration_id, const QStringLi
     }
     auto feed = source->feed;
     auto previous = selected();
-    QStringList offered = currencies;
-    offered.removeAll(QString());
-    offered.removeDuplicates();
-    offered.sort();
-    source->currencies = offered;
-    for (auto it = source->rates.begin(); it != source->rates.end();) {
-        it = offered.contains(it.key()) ? std::next(it) : source->rates.erase(it);
+    auto id = source.key().toStdString();
+    rust::Vec<rust::String> values;
+    for (const auto &currency : currencies) {
+        values.push_back(rust::String(currency.toStdString()));
+    }
+    m_state->set_currencies(id, std::move(values));
+    QStringList offered;
+    for (const auto &currency : m_state->feed_source(id).currencies) {
+        offered.append(QString::fromStdString(std::string(currency)));
     }
     emit sourcesChanged();
     notifySelected(previous);
@@ -186,17 +188,12 @@ void PriceFeedCoordinator::onConversionRate(quint64 registration_id, const QStri
     auto source = std::ranges::find_if(m_sources, [registration_id](const Source &entry) {
         return entry.registration_id == registration_id;
     });
-    if (source == m_sources.end() || source->feed == nullptr ||
-        !source->currencies.contains(currency)) {
+    if (source == m_sources.end() || source->feed == nullptr) {
         return;
     }
     auto previous = selected();
-    if (std::isfinite(value) && value > 0) {
-        auto index = source->currencies.indexOf(currency);
-        source->rates.insert(source->currencies.at(index), value);
-    } else {
-        source->rates.remove(currency);
-    }
+    m_state->set_price_quote(rust::String(source.key().toStdString()),
+                             rust::String(currency.toStdString()), value);
     notifySelected(previous);
 }
 
@@ -204,10 +201,12 @@ void PriceFeedCoordinator::onFeedDestroyed([[maybe_unused]] QObject *feed) {
     // QPointer is already cleared when destroyed() arrives.
     bool changed = false;
     bool feesChanged = false;
+    auto preferences = selectedFees().preferences;
     for (auto it = m_sources.begin(); it != m_sources.end();) {
         if (it->feed == nullptr) {
-            feesChanged = feesChanged || it.key() == m_fee_preferences.default_source ||
-                          it.key() == m_fee_preferences.smart_source;
+            feesChanged = feesChanged || it.key() == preferences.default_source ||
+                          it.key() == preferences.smart_source;
+            m_state->remove_feed(rust::String(it.key().toStdString()));
             delete it->connection;
             it = m_sources.erase(it);
             changed = true;
@@ -241,9 +240,15 @@ void PriceFeedConnection::onSmartFees([[maybe_unused]] ReqId req_id, double low,
 
 void PriceFeedCoordinator::selectFees(const FeePreferences &preferences) {
     auto previous = selectedFees();
-    m_fee_preferences = preferences;
-    m_fee_preferences.default_source.detach();
-    m_fee_preferences.smart_source.detach();
+    RustFeePreferences stored;
+    stored.mode = static_cast<uint8_t>(preferences.mode);
+    stored.tier = static_cast<uint8_t>(preferences.tier);
+    stored.default_source = rust::String(preferences.default_source.toStdString());
+    stored.smart_source = rust::String(preferences.smart_source.toStdString());
+    if (!m_state->select_fees(stored)) {
+        qWarning() << "Invalid fee preferences";
+        return;
+    }
     if (previous != selectedFees()) {
         emit selectedFeesChanged();
     }
@@ -252,11 +257,12 @@ void PriceFeedCoordinator::selectFees(const FeePreferences &preferences) {
 auto PriceFeedCoordinator::feeSources() const -> QList<FeeSource> {
     QList<FeeSource> result;
     for (auto it = m_sources.cbegin(); it != m_sources.cend(); ++it) {
-        if (it->feed != nullptr && (it->has_default || it->has_smart)) {
+        auto state = m_state->feed_source(rust::String(it.key().toStdString()));
+        if (it->feed != nullptr && (state.has_default || state.has_smart)) {
             result.append({.id = it.key(),
                            .name = it->name,
-                           .has_default = it->has_default,
-                           .has_smart = it->has_smart});
+                           .has_default = state.has_default,
+                           .has_smart = state.has_smart});
         }
     }
     std::ranges::sort(result, {}, &FeeSource::id);
@@ -264,19 +270,19 @@ auto PriceFeedCoordinator::feeSources() const -> QList<FeeSource> {
 }
 
 auto PriceFeedCoordinator::selectedFees() const -> SelectedFees {
-    SelectedFees result{
-        .preferences = m_fee_preferences, .default_rate = {}, .low = {}, .medium = {}, .fast = {}};
-    auto source = m_sources.constFind(m_fee_preferences.default_source);
-    if (source != m_sources.cend() && source->feed != nullptr && source->has_default) {
-        result.default_rate = source->default_rate;
-    }
-    source = m_sources.constFind(m_fee_preferences.smart_source);
-    if (source != m_sources.cend() && source->feed != nullptr && source->has_smart) {
-        result.low = source->low;
-        result.medium = source->medium;
-        result.fast = source->fast;
-    }
-    return result;
+    syncFeedLifetimes();
+    auto state = m_state->fee_selection();
+    return {.preferences = {.mode = static_cast<FeeMode>(state.preferences.mode),
+                            .default_source = QString::fromStdString(
+                                std::string(state.preferences.default_source)),
+                            .smart_source =
+                                QString::fromStdString(std::string(state.preferences.smart_source)),
+                            .tier = static_cast<FeeTier>(state.preferences.tier)},
+            .default_rate = state.default_rate.available ? std::optional(state.default_rate.value)
+                                                         : std::nullopt,
+            .low = state.low.available ? std::optional(state.low.value) : std::nullopt,
+            .medium = state.medium.available ? std::optional(state.medium.value) : std::nullopt,
+            .fast = state.fast.available ? std::optional(state.fast.value) : std::nullopt};
 }
 
 void PriceFeedCoordinator::onFeeCapabilities(quint64 registration_id, bool has_default,
@@ -289,16 +295,7 @@ void PriceFeedCoordinator::onFeeCapabilities(quint64 registration_id, bool has_d
     }
     auto previous = selectedFees();
     auto feed = source->feed;
-    source->has_default = has_default;
-    source->has_smart = has_smart;
-    if (!has_default) {
-        source->default_rate.reset();
-    }
-    if (!has_smart) {
-        source->low.reset();
-        source->medium.reset();
-        source->fast.reset();
-    }
+    m_state->set_fee_capabilities(rust::String(source.key().toStdString()), has_default, has_smart);
     emit feeSourcesChanged();
     if (previous != selectedFees()) {
         emit selectedFeesChanged();
@@ -320,11 +317,11 @@ void PriceFeedCoordinator::onDefaultFee(quint64 registration_id, double rate) {
     auto source = std::ranges::find_if(m_sources, [registration_id](const Source &entry) {
         return entry.registration_id == registration_id;
     });
-    if (source == m_sources.end() || source->feed == nullptr || !source->has_default) {
+    if (source == m_sources.end() || source->feed == nullptr) {
         return;
     }
     auto previous = selectedFees();
-    source->default_rate = std::isfinite(rate) && rate > 0 ? std::optional(rate) : std::nullopt;
+    m_state->set_default_fee(rust::String(source.key().toStdString()), rate);
     if (previous != selectedFees()) {
         emit selectedFeesChanged();
     }
@@ -335,16 +332,11 @@ void PriceFeedCoordinator::onSmartFees(quint64 registration_id, double low, doub
     auto source = std::ranges::find_if(m_sources, [registration_id](const Source &entry) {
         return entry.registration_id == registration_id;
     });
-    if (source == m_sources.end() || source->feed == nullptr || !source->has_smart) {
+    if (source == m_sources.end() || source->feed == nullptr) {
         return;
     }
     auto previous = selectedFees();
-    auto valid = [](double rate) -> std::optional<double> {
-        return std::isfinite(rate) && rate > 0 ? std::optional(rate) : std::nullopt;
-    };
-    source->low = valid(low);
-    source->medium = valid(medium);
-    source->fast = valid(fast);
+    m_state->set_smart_fees(rust::String(source.key().toStdString()), low, medium, fast);
     if (previous != selectedFees()) {
         emit selectedFeesChanged();
     }

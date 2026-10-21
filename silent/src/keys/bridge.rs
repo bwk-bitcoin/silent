@@ -6,7 +6,7 @@
 //! and validating what the manager has no way to check on its own (an xpub or
 //! descriptor's own cryptographic identity).
 
-use std::{collections::BTreeSet, str::FromStr};
+use std::{collections::BTreeSet, path::Path, str::FromStr};
 
 use base64::{prelude::BASE64_STANDARD, Engine};
 use bitcoin::{
@@ -24,6 +24,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     config::{datadir, list_configs, Config},
+    error::BackendFailure,
     ffi,
     hwi::{parse_hmac, wallet_name},
     keys::{
@@ -31,8 +32,10 @@ use crate::{
         hot::{create_sessions, publish_cached, seal_mnemonic, sign_hot, sp_descriptor, xpub_at},
         ledger_nonces::{self, Fetch, SessionSource, Signing},
         manager::{descriptor_has_key, KeyManager, KeyManagerImpl, LiveDevice, SigningCandidate},
-        musig_sessions, psbt, qr,
-        record::{KeyRecord, RouteKind, SecretEnvelope},
+        musig_sessions,
+        portable::{self, PortableError},
+        psbt, qr,
+        record::{validate_xpub_chain, KeyRecord, RouteKind, SecretEnvelope, XpubEntry},
         store::KeyStore,
         Error, KEYS_DIR_NAME,
     },
@@ -44,6 +47,126 @@ pub struct KeysModule {
     inner: Option<KeyManager>,
     error: String,
     session: qr::QrSession,
+}
+
+pub struct KeyFilePreview {
+    record: Result<KeyRecord, PortableError>,
+}
+
+pub struct KeyFileCommit {
+    record: Result<KeyRecord, String>,
+    kind: ffi::BackendErrorKind,
+}
+
+pub fn key_file_preview(path: &str, network: ffi::Network) -> Box<KeyFilePreview> {
+    Box::new(KeyFilePreview {
+        record: portable::read(Path::new(path), network.into()),
+    })
+}
+
+impl KeyFilePreview {
+    pub fn is_ok(&self) -> bool {
+        self.record.is_ok()
+    }
+    pub fn get_error(&self) -> String {
+        self.record
+            .as_ref()
+            .err()
+            .map(ToString::to_string)
+            .unwrap_or_default()
+    }
+    pub fn file_failure(&self) -> ffi::KeyFileFailure {
+        match &self.record {
+            Ok(_) => ffi::KeyFileFailure::None,
+            Err(PortableError::Read(_)) => ffi::KeyFileFailure::Read,
+            Err(PortableError::Version(_)) => ffi::KeyFileFailure::Newer,
+            Err(PortableError::Network { .. }) => ffi::KeyFileFailure::Network,
+            Err(_) => ffi::KeyFileFailure::Invalid,
+        }
+    }
+    pub fn file_network(&self) -> ffi::Network {
+        match &self.record {
+            Ok(record) => record.network.into(),
+            Err(PortableError::Network { found, .. }) => (*found).into(),
+            Err(_) => ffi::Network::Regtest,
+        }
+    }
+    pub fn file_fingerprint(&self) -> String {
+        self.record
+            .as_ref()
+            .map(|r| r.fingerprint.to_string())
+            .unwrap_or_default()
+    }
+    pub fn file_alias(&self) -> String {
+        self.record
+            .as_ref()
+            .map(|r| r.alias.clone())
+            .unwrap_or_default()
+    }
+    pub fn file_xpubs(&self) -> Vec<ffi::KeyXpub> {
+        match &self.record {
+            Ok(record) => record
+                .xpubs
+                .iter()
+                .map(|entry| ffi::KeyXpub {
+                    fingerprint: record.fingerprint.to_string(),
+                    path: entry.path.to_string(),
+                    xpub: entry.xpub.to_string(),
+                    used: entry.used,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+}
+
+pub fn commit_key_file(preview: &KeyFilePreview, alias: &str) -> Box<KeyFileCommit> {
+    let record = (|| -> Result<KeyRecord, BackendFailure> {
+        let mut record = preview
+            .record
+            .as_ref()
+            .map_err(|error| {
+                BackendFailure::new(ffi::BackendErrorKind::InvalidInput, error.to_string())
+            })?
+            .clone();
+        record.alias = alias.trim().to_string();
+        portable::validate(&record)
+            .map_err(|e| BackendFailure::new(ffi::BackendErrorKind::InvalidInput, e.to_string()))?;
+        open_manager(record.network.into())
+            .map_err(|e| BackendFailure::new(ffi::BackendErrorKind::Storage, e))?
+            .import_portable(record)
+            .map_err(|e| {
+                let kind = match &e {
+                    Error::Io { .. } | Error::Parse { .. } | Error::State(_) => {
+                        ffi::BackendErrorKind::Storage
+                    }
+                    _ => ffi::BackendErrorKind::InvalidInput,
+                };
+                BackendFailure::new(kind, e.to_string())
+            })
+    })();
+    Box::new(match record {
+        Ok(record) => KeyFileCommit {
+            record: Ok(record),
+            kind: ffi::BackendErrorKind::None,
+        },
+        Err(error) => KeyFileCommit {
+            record: Err(error.message),
+            kind: error.kind,
+        },
+    })
+}
+
+impl KeyFileCommit {
+    pub fn get_error_kind(&self) -> ffi::BackendErrorKind {
+        self.kind
+    }
+    pub fn is_ok(&self) -> bool {
+        self.record.is_ok()
+    }
+    pub fn get_error(&self) -> String {
+        self.record.as_ref().err().cloned().unwrap_or_default()
+    }
 }
 
 pub fn new_keys_module(network: ffi::Network) -> Box<KeysModule> {
@@ -70,6 +193,18 @@ fn build_module(network: ffi::Network) -> KeysModule {
 }
 
 impl KeysModule {
+    pub fn apply_key_file(&mut self, committed: &KeyFileCommit) -> ffi::KeyOpResult {
+        let Some(manager) = self.inner.as_mut() else {
+            return failed_op(&self.error);
+        };
+        match &committed.record {
+            Ok(record) => match manager.accept_imported(record.clone()) {
+                Ok(()) => ok_op(),
+                Err(error) => failed_op(&error.to_string()),
+            },
+            Err(error) => failed_op(error),
+        }
+    }
     pub fn is_ok(&self) -> bool {
         self.inner.is_some()
     }
@@ -327,20 +462,14 @@ impl KeysModule {
         let Some(record) = manager.key(fp) else {
             return failed_op(&format!("key '{fingerprint}' is not registered"));
         };
-        for entry in &record.xpubs {
-            let chains = if is_direct_child(&entry.path, &deriv_path) {
-                xpub_value.parent_fingerprint == entry.xpub.fingerprint()
-            } else if is_direct_child(&deriv_path, &entry.path) {
-                entry.xpub.parent_fingerprint == xpub_value.fingerprint()
-            } else {
-                true
-            };
-            if !chains {
-                return failed_op(&format!(
-                    "xpub at '{path}' does not chain from the xpub already cached for key \
-                     '{fingerprint}': wrong device"
-                ));
-            }
+        let mut entries = record.xpubs.clone();
+        entries.push(XpubEntry {
+            path: deriv_path.clone(),
+            xpub: xpub_value,
+            used: false,
+        });
+        if let Err(error) = validate_xpub_chain(&entries) {
+            return failed_op(&error.to_string());
         }
 
         match manager.cache_xpub(fp, deriv_path, xpub_value) {
@@ -1491,12 +1620,6 @@ pub fn ledger_nonce_restart(
 }
 
 /// True when `child` is exactly one derivation step below `parent`.
-fn is_direct_child(parent: &DerivationPath, child: &DerivationPath) -> bool {
-    let parent = parent.as_ref();
-    let child = child.as_ref();
-    child.len() == parent.len() + 1 && &child[..parent.len()] == parent
-}
-
 /// The key origin's fingerprint, if any. Mirrors the per-variant match in
 /// `Descriptor::fingerprint()`, but is applied per-key via `for_any_key` instead
 /// of stopping at the first key that has an origin.
@@ -1675,6 +1798,8 @@ fn to_ffi_signing_candidate(candidate: &SigningCandidate) -> ffi::SigningCandida
         must_sign_first: candidate.must_sign_first,
         registered: candidate.registered,
         musig_done: candidate.musig_done,
+        nonces_done: candidate.nonces_done,
+        signatures_done: candidate.signatures_done,
     }
 }
 
@@ -1717,6 +1842,7 @@ impl From<ffi::KeyUnusableReason> for Option<crate::keys::manager::UnusableReaso
             ffi::KeyUnusableReason::DeviceNotConnected => Some(UnusableReason::DeviceNotConnected),
             ffi::KeyUnusableReason::NoHotSecret => Some(UnusableReason::NoHotSecret),
             ffi::KeyUnusableReason::SpOutputsPending => Some(UnusableReason::SpOutputsPending),
+            ffi::KeyUnusableReason::UnsupportedMusig => Some(UnusableReason::UnsupportedMusig),
             _ => unreachable!("CXX enum type safety guarantees no other variants exist"),
         }
     }
@@ -1732,6 +1858,7 @@ impl From<Option<crate::keys::manager::UnusableReason>> for ffi::KeyUnusableReas
             Some(UnusableReason::DeviceNotConnected) => ffi::KeyUnusableReason::DeviceNotConnected,
             Some(UnusableReason::NoHotSecret) => ffi::KeyUnusableReason::NoHotSecret,
             Some(UnusableReason::SpOutputsPending) => ffi::KeyUnusableReason::SpOutputsPending,
+            Some(UnusableReason::UnsupportedMusig) => ffi::KeyUnusableReason::UnsupportedMusig,
         }
     }
 }

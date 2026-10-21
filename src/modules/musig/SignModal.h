@@ -72,10 +72,7 @@ class SignModal final : public catalog::Modal {
     Q_OBJECT
 
 public:
-    // `signed_keys`: the spend path's keys whose signature is in, lowercased, kept by the
-    // Send step across the modal's openings. It outlives the modal.
-    explicit SignModal(MusigAccountController *controller,
-                       const QSet<QString> *signed_keys = nullptr);
+    explicit SignModal(MusigAccountController *controller);
 
 public slots:
     void onCosignerClicked();
@@ -86,7 +83,7 @@ public slots:
     void onSigningFailed(const QString &message, plugin::SignError kind);
     void onFinalizeFailed(const QString &message);
     void onBroadcastDone(const TxResult &result);
-    void onPlanReady();
+    void onPlanReady(uint64_t req_id, const SigningPlan &plan);
     void onDevicesChanged();
     void onRetryClicked();
     void onResetConfirmed();
@@ -136,9 +133,9 @@ private:
     // on a session past its nonces.
     bool m_partial = false;
     Failure m_failure = Failure::None;
-    const QSet<QString> *m_signed = nullptr;
     std::shared_ptr<SigningPlan> m_plan;
     QString m_plan_psbt;
+    uint64_t m_plan_req_id = 0;
     bool m_plan_loading = false;
     bool m_plan_ready = false;
     bool m_plan_dirty = false;

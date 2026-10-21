@@ -996,9 +996,7 @@ void KeysModule::createHotSessions(ReqId req_id, const QString &fingerprint,
         return;
     }
     auto material = rust()->hot_material(fingerprint.toStdString());
-    auto result = std::make_shared<HotWork>();
-    result->kind = HotWorkKind::CreateSessions;
-    result->req_id = req_id;
+    auto result = std::make_shared<HotWork>(HotWorkKind::CreateSessions, req_id);
     auto *thread = QThread::create([result, material = material.into_raw(), quantity,
                                     policy = descriptor.toStdString(),
                                     password = password.toStdString()]() mutable {
@@ -1023,9 +1021,7 @@ void KeysModule::publishHotCached(ReqId req_id, const QString &fingerprint,
         return;
     }
     auto material = rust()->hot_material(rust::String(fingerprint.toStdString()));
-    auto result = std::make_shared<HotWork>();
-    result->kind = HotWorkKind::PublishCached;
-    result->req_id = req_id;
+    auto result = std::make_shared<HotWork>(HotWorkKind::PublishCached, req_id);
     auto *thread =
         QThread::create([result, material = material.into_raw(), psbt = psbt_v2_hex.toStdString()] {
             auto box = rust::Box<HotMaterial>::from_raw(material);
@@ -1053,9 +1049,7 @@ void KeysModule::signHot(ReqId req_id, const QString &fingerprint, const QString
         emit hotSignFinished(req_id, false, QString(), toQt(material->get_error()), false, false);
         return;
     }
-    auto result = std::make_shared<HotWork>();
-    result->kind = HotWorkKind::Sign;
-    result->req_id = req_id;
+    auto result = std::make_shared<HotWork>(HotWorkKind::Sign, req_id);
     auto *thread =
         QThread::create([result, material = material.into_raw(), password = password.toStdString(),
                          psbt = psbt_v2_hex.toStdString()]() mutable {
@@ -1347,6 +1341,21 @@ auto KeysModule::addKey(const QString &fingerprint, const QString &alias,
                         const QList<KeyRouteKind> &routes, const QList<PathXpub> &xpubs)
     -> KeyOpResult {
     auto result = insertKey(fingerprint, alias, routes, xpubs);
+    if (result.is_ok) {
+        emit keysChanged();
+    }
+    return result;
+}
+
+auto KeysModule::applyKeyFile(Network network, const KeyFileCommit &committed) -> KeyOpResult {
+    if (!committed.is_ok()) {
+        return failedOp(toQt(committed.get_error()));
+    }
+    KeyOpResult result{.is_ok = true, .error = rust::String()};
+    auto handle = m_handles.find(network);
+    if (handle != m_handles.end()) {
+        result = handle->second->apply_key_file(committed);
+    }
     if (result.is_ok) {
         emit keysChanged();
     }

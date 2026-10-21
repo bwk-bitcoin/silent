@@ -11,6 +11,7 @@ pub mod hot;
 pub mod ledger_nonces;
 pub mod manager;
 pub mod musig_sessions;
+pub mod portable;
 pub mod psbt;
 pub mod qr;
 pub mod record;

@@ -2,27 +2,31 @@
 //!
 //! Wraps bwk-sp::Config with CXX-compatible interface for C++ bindings.
 
-use std::fs;
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::OnceLock;
+use std::{fs, path::PathBuf, str::FromStr, sync::OnceLock};
 
 use bitcoin::{
     bip32::{ChildNumber, Fingerprint, Xpub},
     secp256k1::Secp256k1,
     Network as BtcNetwork,
 };
-use bwk_sp::account::config::{Config as SpConfig, SubAccountConfig};
-use bwk_sp::bwk::bwk_electrum::raw_client::CertificateCheck;
-use bwk_sp::bwk_sign::bwk_descriptor::{
-    descriptor::{tr_path, wpkh_path},
-    sp_descriptor::SpDescriptor,
+use bwk_sp::{
+    account::config::{Config as SpConfig, SubAccountConfig},
+    bwk::bwk_electrum::raw_client::CertificateCheck,
+    bwk_sign::{
+        bwk_descriptor::{
+            descriptor::{tr_path, wpkh_path},
+            sp_descriptor::SpDescriptor,
+            wallet::WalletDescriptorExt,
+        },
+        miniscript::{Descriptor as MiniscriptDescriptor, DescriptorPublicKey, ForEachKey},
+    },
 };
-use bwk_sp::bwk_sign::miniscript::{Descriptor as MiniscriptDescriptor, DescriptorPublicKey};
 use serde::{Deserialize, Serialize};
 
-use crate::ffi::Network;
-use crate::state_crypt;
+use crate::{
+    ffi::{AccountCreationResult, BackendServer, MusigCreationRequest, Network, SpCreationRequest},
+    state_crypt,
+};
 
 /// An account's config, sealed in its directory.
 pub const CONFIG_FILE: &str = "config.bip138";
@@ -125,6 +129,7 @@ pub(crate) fn certificate_check(verify_certificate: bool) -> CertificateCheck {
 /// and bwk's taproot-activation floor never applies: it only lives in
 /// Config::sanitize, which the sp crate never calls.
 const MAINNET_BIRTHDAY_HEIGHT: u32 = 899_300;
+const DEFAULT_DUST_LIMIT: u64 = 546;
 
 /// Serde serialization helpers for Network.
 pub(crate) mod network_serde {
@@ -544,6 +549,182 @@ pub(crate) fn parse_electrum_url(url: &str) -> (Option<String>, Option<u16>) {
 
 // CXX FFI functions
 
+fn validate_creation(config: &Config) -> Result<(), String> {
+    if config.account_name.is_empty()
+        || config
+            .account_name
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(
+            "account name must be nonempty and contain no whitespace or control characters".into(),
+        );
+    }
+    match config.network {
+        Network::Bitcoin | Network::Testnet | Network::Signet | Network::Regtest => (),
+        _ => return Err("invalid account network".into()),
+    }
+    if !config.electrum_url.is_empty() {
+        let (host, port) = parse_electrum_url(&config.electrum_url);
+        if host.is_none() || port.is_none() {
+            return Err("invalid Electrum endpoint".into());
+        }
+    }
+    match config.plugin_id.as_str() {
+        "sp" => validate_sp_creation(config),
+        "musig" => validate_musig_creation(config),
+        _ => Err("unsupported account kind".into()),
+    }
+}
+
+fn validate_sp_creation(config: &Config) -> Result<(), String> {
+    let descriptor = SpDescriptor::from_str(&config.descriptor).map_err(|e| e.to_string())?;
+    if descriptor.network_kind() != bitcoin::NetworkKind::from(BtcNetwork::from(config.network)) {
+        return Err("SP descriptor network does not match account network".into());
+    }
+    let url = config
+        .blindbit_url
+        .parse::<ureq::http::Uri>()
+        .map_err(|e| e.to_string())?;
+    if !matches!(url.scheme_str(), Some("http" | "https")) || url.host().is_none() {
+        return Err("invalid BlindBit endpoint".into());
+    }
+    config.to_sp_config()?;
+    validate_sub_account(&config.segwit_descriptor, false, config.network)?;
+    validate_sub_account(&config.taproot_descriptor, true, config.network)
+}
+
+fn validate_sub_account(text: &str, taproot: bool, network: Network) -> Result<(), String> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    let descriptor =
+        MiniscriptDescriptor::<DescriptorPublicKey>::from_str(text).map_err(|e| e.to_string())?;
+    if !matches!(
+        (&descriptor, taproot),
+        (MiniscriptDescriptor::Wpkh(_), false) | (MiniscriptDescriptor::Tr(_), true)
+    ) {
+        return Err("sub-account descriptor has the wrong script type".into());
+    }
+    validate_descriptor_network(&descriptor, network)
+}
+
+fn validate_musig_creation(config: &Config) -> Result<(), String> {
+    let result = crate::musig::validate_musig_descriptor(config.descriptor.clone());
+    if !result.is_ok {
+        return Err(result.error);
+    }
+    let descriptor = bwk::bwk_descriptor::descriptor::Descriptor::from_str(&config.descriptor)
+        .map_err(|e| e.to_string())?;
+    let descriptor = descriptor
+        .as_miniscript()
+        .ok_or("not a policy descriptor")?;
+    let network = bitcoin::NetworkKind::from(BtcNetwork::from(config.network));
+    if !descriptor
+        .plain_keys()
+        .iter()
+        .all(|key| descriptor_key_network(key, network))
+    {
+        return Err("descriptor key network does not match account network".into());
+    }
+    config.to_musig_config()?;
+    Ok(())
+}
+
+fn validate_descriptor_network(
+    descriptor: &MiniscriptDescriptor<DescriptorPublicKey>,
+    network: Network,
+) -> Result<(), String> {
+    let network = bitcoin::NetworkKind::from(BtcNetwork::from(network));
+    let valid = descriptor.for_each_key(|key| descriptor_key_network(key, network));
+    if valid {
+        Ok(())
+    } else {
+        Err("descriptor key network does not match account network".into())
+    }
+}
+
+fn descriptor_key_network(key: &DescriptorPublicKey, network: bitcoin::NetworkKind) -> bool {
+    match key {
+        DescriptorPublicKey::Single(_) => true,
+        DescriptorPublicKey::XPub(key) => key.xkey.network == network,
+        DescriptorPublicKey::MultiXPub(key) => key.xkey.network == network,
+    }
+}
+
+fn persist_creation(config: Config) -> AccountCreationResult {
+    let create = || -> Result<(), String> {
+        validate_creation(&config)?;
+        let dir = config.data_dir.join(config.dir_name()?);
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        // Exclusive reservation prevents two creators overwriting the same account.
+        builder
+            .create(&dir)
+            .map_err(|e| format!("cannot create account: {e}"))?;
+        let error = config.save();
+        if !error.is_empty() {
+            // Only this operation's new directory is eligible for cleanup.
+            let temp = config.config_path().with_extension("tmp");
+            if temp.exists() {
+                fs::remove_file(temp).map_err(|e| format!("{error}; cleanup: {e}"))?;
+            }
+            fs::remove_dir(&dir).map_err(|e| format!("{error}; cleanup: {e}"))?;
+            return Err(error);
+        }
+        Ok(())
+    };
+    if let Err(error) = create() {
+        return AccountCreationResult {
+            error,
+            ..Default::default()
+        };
+    }
+    let mut endpoints = vec![(BackendServer::Electrum, config.electrum_url.clone())];
+    if config.plugin_id == "sp" {
+        endpoints.push((BackendServer::Blindbit, config.blindbit_url.clone()));
+    }
+    AccountCreationResult {
+        is_ok: true,
+        error: String::new(),
+        preference_error: crate::app_state::remember_endpoints(config.network, &endpoints)
+            .err()
+            .unwrap_or_default(),
+    }
+}
+
+pub fn create_sp_account(request: SpCreationRequest) -> AccountCreationResult {
+    let mut config = Config::new(
+        request.account_name,
+        request.network,
+        request.descriptor,
+        request.blindbit_url,
+        request.electrum_url,
+        Some(DEFAULT_DUST_LIMIT),
+    );
+    config.taproot_descriptor = request.taproot_descriptor;
+    config.segwit_descriptor = request.segwit_descriptor;
+    persist_creation(config)
+}
+
+pub fn create_musig_account(request: MusigCreationRequest) -> AccountCreationResult {
+    let mut config = Config::new(
+        request.account_name,
+        request.network,
+        request.descriptor,
+        String::new(),
+        request.electrum_url,
+        Some(DEFAULT_DUST_LIMIT),
+    );
+    config.plugin_id = crate::musig::MUSIG_PLUGIN_ID.into();
+    config.verify_certificate = request.verify_certificate;
+    persist_creation(config)
+}
+
 /// Create a new config.
 pub fn new_config(
     account_name: String,
@@ -658,6 +839,14 @@ pub fn config_from_file(account_name: String) -> Box<Config> {
 
 /// List all config directories.
 pub fn list_configs() -> Vec<String> {
+    discover_configs(None)
+}
+
+pub fn list_module_configs(plugin_id: &str) -> Vec<String> {
+    discover_configs(Some(plugin_id))
+}
+
+fn discover_configs(plugin_id: Option<&str>) -> Vec<String> {
     let path = datadir();
     let mut out = vec![];
     if let Ok(folders) = fs::read_dir(path) {
@@ -672,8 +861,9 @@ pub fn list_configs() -> Vec<String> {
                     let Ok(config) = serde_json::from_str::<Config>(&content) else {
                         continue;
                     };
-                    if Config::dir_name_for(&config.account_name).ok().as_deref()
-                        == entry.file_name().to_str()
+                    if plugin_id.is_none_or(|plugin_id| config.plugin_id == plugin_id)
+                        && Config::dir_name_for(&config.account_name).ok().as_deref()
+                            == entry.file_name().to_str()
                     {
                         out.push(config.account_name);
                     }

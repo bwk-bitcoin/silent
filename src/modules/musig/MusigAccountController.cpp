@@ -10,7 +10,9 @@
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
+#include "interfaces/signer.h"
 #include "metatypes.h"
+#include "modules/keys/KeysModule.h"
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigModule.h"
 #include "modules/musig/SavedPsbts.h"
@@ -195,7 +197,14 @@ auto MusigAccountController::verifiesCertificate() const -> bool {
 }
 
 auto MusigAccountController::isEndpointRunning([[maybe_unused]] Endpoint endpoint) const -> bool {
-    return m_electrum_running;
+    return m_electrum_state == ElectrumState::Connected;
+}
+
+auto MusigAccountController::electrumState() const -> ElectrumState {
+    if (m_endpoint_busy && !m_endpoint_test) {
+        return m_endpoint_connect ? ElectrumState::Connecting : ElectrumState::Disconnecting;
+    }
+    return m_electrum_state;
 }
 
 auto MusigAccountController::startEndpoint([[maybe_unused]] Endpoint endpoint) -> bool {
@@ -278,6 +287,28 @@ auto MusigAccountController::spendSigners() const -> QStringList {
     return m_spend_signers;
 }
 
+auto MusigAccountController::requestSigningPlan() -> uint64_t {
+    auto reqId = ++m_next_plan_id;
+    if (!m_account.has_value() || !m_account.value()->is_ok() || m_psbt_v2_hex.isEmpty() ||
+        m_endpoint_busy || m_stopping || m_stop_requested) {
+        return 0;
+    }
+    rust::Vec<LiveDevice> devices;
+    for (const auto &entry : Host::get()->signers()) {
+        if (entry.signer != nullptr && entry.signer->state() == plugin::SignerState::Ready) {
+            devices.push_back(keys::KeysModule::toLiveDevice(entry));
+        }
+    }
+    auto plan = std::make_shared<SigningPlan>();
+    auto *account = &*m_account.value();
+    enqueueStorage(
+        [account, plan, devices = std::move(devices)]() mutable {
+            *plan = account->active_signing_plan(std::move(devices));
+        },
+        [this, plan, reqId] { emit signingPlanReady(reqId, *plan); });
+    return reqId;
+}
+
 auto MusigAccountController::spendLeaves(const QStringList &outpoints) -> MusigSpendLeaves {
     if (!m_account.has_value()) {
         MusigSpendLeaves leaves;
@@ -299,10 +330,9 @@ void MusigAccountController::finalizeIfReady() {
     }
     m_finalizing = true;
     auto generation = m_signing_generation;
-    auto result = std::make_shared<MusigFinalizeResult>();
+    auto result = std::make_shared<MusigAttemptSnapshot>();
     auto *account = &*m_account.value();
-    enqueueStorage([account, result,
-                    psbt = m_psbt_v2_hex.toStdString()] { *result = account->finalize_psbt(psbt); },
+    enqueueStorage([account, result] { *result = account->finalize_active_attempt(); },
                    [this, result, generation] {
                        if (generation != m_signing_generation) {
                            return;
@@ -312,11 +342,15 @@ void MusigAccountController::finalizeIfReady() {
                            emit finalizeFailed(toQString(result->error));
                            return;
                        }
-                       m_psbt_v2_hex = toQString(result->psbt_v2_hex);
-                       m_tx_hex = toQString(result->tx_hex);
-                       setSaveWarning(toQString(result->save_error));
+                       applyAttempt(*result);
+                       if (!result->finalize_error.empty()) {
+                           emit finalizeFailed(toQString(result->finalize_error));
+                           return;
+                       }
                        emit savedPsbtsChanged();
-                       emit transactionReady(m_tx_hex);
+                       if (!m_tx_hex.isEmpty()) {
+                           emit transactionReady(m_tx_hex);
+                       }
                    });
 }
 
@@ -330,14 +364,11 @@ void MusigAccountController::restartRounds() {
     m_resetting = true;
     m_restart_generation = ++m_signing_generation;
     m_restart_source = m_psbt_v2_hex;
-    m_restart_result = std::make_shared<SavedPsbtReset>();
+    m_restart_result = std::make_shared<MusigAttemptSnapshot>();
     auto result = m_restart_result;
     auto *account = &*m_account.value();
-    enqueueStorage(
-        [account, result, id = m_saved_record_id.toStdString()] {
-            *result = account->reset_saved_psbt(id);
-        },
-        [this] { onRestartFinished(); });
+    enqueueStorage([account, result] { *result = account->reset_active_attempt(); },
+                   [this] { onRestartFinished(); });
     emit roundChanged(roundStatus());
 }
 
@@ -383,8 +414,12 @@ void MusigAccountController::handleNotification(Notification notif) {
         pollCoins();
         refreshActiveWarning();
         break;
+    case NotificationFlag::ElectrumStarted:
+        m_electrum_state = ElectrumState::Connecting;
+        emit endpointStateChanged(Endpoint::Electrum);
+        break;
     case NotificationFlag::ElectrumConnected:
-        m_electrum_running = true;
+        m_electrum_state = ElectrumState::Connected;
         m_reconnect->connected();
         emit electrumConnected(QString::fromStdString(std::string(notif.payload.c_str())));
         emit endpointStateChanged(Endpoint::Electrum);
@@ -392,13 +427,13 @@ void MusigAccountController::handleNotification(Notification notif) {
     case NotificationFlag::ElectrumError:
         qWarning() << "musig: electrum:"
                    << QString::fromStdString(std::string(notif.payload.c_str()));
-        m_electrum_running = false;
+        m_electrum_state = ElectrumState::Disconnected;
         m_reconnect->lost();
         emit electrumDisconnected();
         emit endpointStateChanged(Endpoint::Electrum);
         break;
     case NotificationFlag::ElectrumStopped:
-        m_electrum_running = false;
+        m_electrum_state = ElectrumState::Disconnected;
         m_reconnect->lost();
         emit electrumDisconnected();
         emit endpointStateChanged(Endpoint::Electrum);
@@ -423,13 +458,13 @@ auto MusigAccountController::setElectrumUrl(const QString &url) -> MusigElectrum
         qWarning() << "MusigAccountController: failed to save electrum url" << url;
         return result;
     }
+    m_electrum_state = result.started ? ElectrumState::Connecting : ElectrumState::Disconnected;
     emit electrumUrlChanged();
     if (!result.started) {
         // No listener runs on this url, so none reports its state.
-        m_electrum_running = false;
         emit electrumDisconnected();
-        emit endpointStateChanged(Endpoint::Electrum);
     }
+    emit endpointStateChanged(Endpoint::Electrum);
     return result;
 }
 
@@ -446,7 +481,9 @@ void MusigAccountController::stopElectrum() {
 void MusigAccountController::onElectrumReconnect() {
     if (m_account.has_value() && !m_stopping && !m_endpoint_busy) {
         qInfo() << "musig: electrum: reconnecting";
-        m_account.value()->start_electrum();
+        m_electrum_state = m_account.value()->start_electrum() ? ElectrumState::Connecting
+                                                               : ElectrumState::Disconnected;
+        emit endpointStateChanged(Endpoint::Electrum);
     }
 }
 
@@ -474,6 +511,8 @@ void MusigAccountController::stop() {
         return;
     }
     m_stopping = true;
+    m_electrum_state = ElectrumState::Disconnected;
+    emit endpointStateChanged(Endpoint::Electrum);
     cancelSigning();
     m_reconnect->stopped();
 
@@ -517,7 +556,7 @@ auto MusigAccountController::simulateTx(TransactionTemplate tx) -> TransactionSi
     if (m_account.has_value()) {
         return m_account.value()->simulate_transaction(std::move(tx));
     }
-    TransactionSimulation simulation;
+    TransactionSimulation simulation{};
     simulation.is_valid = false;
     simulation.error = rust::String(NOT_LOADED);
     return simulation;
@@ -528,33 +567,28 @@ void MusigAccountController::prepareTransaction(TransactionTemplate tx, MusigSpe
         emit prepareFailed(TR("send-no-account-loaded"));
         return;
     }
-    QStringList signers;
-    for (const auto &fingerprint : spend.fingerprints) {
-        signers.append(toQString(fingerprint));
-    }
     cancelSigning();
     emit sessionLoading();
     auto generation = m_signing_generation;
     auto result = std::make_shared<std::optional<rust::Box<PsbtResult>>>();
+    auto snapshot = std::make_shared<MusigAttemptSnapshot>();
     auto *account = &*m_account.value();
     enqueueStorage(
-        [account, result, tx = std::move(tx), spend = std::move(spend)] {
+        [account, result, snapshot, tx = std::move(tx), spend = std::move(spend)] {
             result->emplace(account->prepare_transaction(tx, spend));
+            *snapshot = account->active_attempt();
         },
-        [this, result, signers, generation] {
+        [this, result, snapshot, generation] {
             emit savedPsbtsChanged();
             if (generation != m_signing_generation) {
                 return;
             }
             auto &psbt = result->value();
             if (!psbt->is_ok()) {
-                emit prepareFailed(mapBackendErrorSummary(toQString(psbt->get_psbt_error())));
+                emit prepareFailed(mapBackendErrorSummary(psbt->get_error_kind()));
                 return;
             }
-            m_psbt_v2_hex = toQString(psbt->bytes_v2_hex());
-            m_saved_record_id = toQString(psbt->saved_record_id());
-            m_spend_signers = signers;
-            setSaveWarning(toQString(psbt->save_error()));
+            applyAttempt(*snapshot);
             emit prepared(m_psbt_v2_hex, toQString(psbt->get_txid_preview()));
             emit roundChanged(roundStatus());
         });
@@ -616,6 +650,7 @@ void MusigAccountController::signRoundOnDevice(const QString &fingerprint) {
 void MusigAccountController::retireSignRequests() {
     auto requests = m_sign_reqs.keys();
     m_sign_reqs.clear();
+    m_accepting_reqs.clear();
     if (!m_signing_keys.isNull()) {
         for (auto req : requests) {
             m_signing_keys->cancelRequest(req);
@@ -632,6 +667,16 @@ void MusigAccountController::clearSigning() {
     m_saved_record_id.clear();
     m_finalizing = false;
     retireSignRequests();
+    if (m_account.has_value()) {
+        auto *account = &*m_account.value();
+        enqueueStorage(
+            [account] {
+                if (!account->clear_active_attempt()) {
+                    qWarning() << "Failed to clear active signing attempt";
+                }
+            },
+            [] {});
+    }
 }
 
 void MusigAccountController::cancelSigning() {
@@ -667,31 +712,40 @@ void MusigAccountController::broadcast() {
 }
 
 void MusigAccountController::onKeysSigned(ReqId req_id, const QString &psbt_v2_hex) {
-    if (!m_sign_reqs.contains(req_id)) {
+    if (!m_sign_reqs.contains(req_id) || m_accepting_reqs.contains(req_id)) {
         return;
     }
-    auto fingerprint = m_sign_reqs.take(req_id);
-    // Signed on the PSBT as it was when asked: merged into the one gathered since.
-    auto current = m_psbt_v2_hex.toStdString();
-    auto answer = psbt_v2_hex.toStdString();
-    auto merged = ::merge_signed_psbt(rust::Str(current), rust::Str(answer));
-    if (!merged.is_ok) {
-        emit signingFailed(toQString(merged.error), plugin::SignError::Other);
-        return;
-    }
-    m_psbt_v2_hex = toQString(merged.psbt_v2_hex);
-    persistActivePsbt();
-    emit signerAnswered(fingerprint);
-    auto status = roundStatus();
-    if (!status.is_ok) {
-        emit signingFailed(toQString(status.error), plugin::SignError::Other);
-        return;
-    }
-    emit roundChanged(status);
-    // A single-key leaf signs in one call.
-    if (status.round == MusigRound::Ready || status.round == MusigRound::NotMusig) {
-        finalizeIfReady();
-    }
+    auto fingerprint = m_sign_reqs.value(req_id);
+    m_accepting_reqs.insert(req_id);
+    auto *account = &*m_account.value();
+    auto generation = m_signing_generation;
+    auto result = std::make_shared<MusigAttemptSnapshot>();
+    enqueueStorage(
+        [account, result, answer = psbt_v2_hex.toStdString()] {
+            *result = account->accept_signed_progress(answer);
+        },
+        [this, result, fingerprint, generation, req_id] {
+            emit savedPsbtsChanged();
+            if (generation != m_signing_generation) {
+                return;
+            }
+            m_sign_reqs.remove(req_id);
+            m_accepting_reqs.remove(req_id);
+            if (!result->is_ok) {
+                emit signingFailed(toQString(result->error), plugin::SignError::Other);
+                return;
+            }
+            applyAttempt(*result);
+            emit signerAnswered(fingerprint);
+            emit roundChanged(roundStatus());
+            if (!result->finalize_error.empty()) {
+                emit finalizeFailed(toQString(result->finalize_error));
+            }
+            if (!m_tx_hex.isEmpty()) {
+                retireSignRequests();
+                emit transactionReady(m_tx_hex);
+            }
+        });
 }
 
 void MusigAccountController::onKeysError(std::optional<ReqId> req_id, const QString &message,
@@ -704,6 +758,16 @@ void MusigAccountController::onKeysError(std::optional<ReqId> req_id, const QStr
         // Pending answers belong to a session that cannot safely resume.
         retireSignRequests();
         m_restart_pending = true;
+        auto *account = &*m_account.value();
+        auto generation = m_signing_generation;
+        auto snapshot = std::make_shared<MusigAttemptSnapshot>();
+        enqueueStorage([account, snapshot] { *snapshot = account->require_active_restart(); },
+                       [this, snapshot, generation] {
+                           if (generation == m_signing_generation && snapshot->is_ok) {
+                               applyAttempt(*snapshot);
+                               emit roundChanged(roundStatus());
+                           }
+                       });
         emit signingFailed(message, kind);
         emit roundChanged(roundStatus());
         return;
@@ -729,10 +793,7 @@ void MusigAccountController::onRestartFinished() {
         emit roundChanged(roundStatus());
         return;
     }
-    m_restart_pending = false;
-    m_psbt_v2_hex = toQString(m_restart_result->psbt_v2_hex);
-    m_tx_hex.clear();
-    setSaveWarning(toQString(m_restart_result->save_error));
+    applyAttempt(*m_restart_result);
     emit savedPsbtsChanged();
     emit signingReset();
     emit roundChanged(roundStatus());
@@ -836,7 +897,7 @@ void MusigAccountController::onStorageFinished() {
 
 void MusigAccountController::requestTxDetails(uint64_t req_id, const QString &txid) {
     requestAccountTxDetails(req_id, txid, m_account.has_value() ? &*m_account.value() : nullptr,
-                            m_electrum_running && !m_endpoint_busy);
+                            isEndpointRunning(Endpoint::Electrum) && !m_endpoint_busy);
 }
 
 void MusigAccountController::editTxLabel(uint64_t req_id, const QString &txid,
@@ -852,7 +913,7 @@ void MusigAccountController::editOutpointLabel(uint64_t req_id, const QString &o
 }
 
 void MusigAccountController::requestEndpointTip(uint64_t req_id, Endpoint endpoint) {
-    if (endpoint != Endpoint::Electrum || !m_account.has_value() || !m_electrum_running) {
+    if (endpoint != Endpoint::Electrum || !m_account.has_value() || !isEndpointRunning(endpoint)) {
         ElectrumTipResult result;
         result.is_ok = false;
         result.error = rust::String("Endpoint is disconnected or unsupported");
@@ -877,7 +938,8 @@ void MusigAccountController::changeEndpoint(uint64_t req_id, Endpoint endpoint, 
     if (endpoint != Endpoint::Electrum || m_endpoint_busy || m_stopping || m_stop_requested ||
         !m_account.has_value() || !m_sign_reqs.empty() || m_resetting || m_finalizing ||
         m_broadcast_pending) {
-        EndpointResult result;
+        EndpointResult result{};
+        result.kind = BackendErrorKind::Other;
         result.is_ok = false;
         result.error = rust::String("Account is unavailable or signing is in progress");
         emit endpointRequestFinished(req_id, endpoint, result);
@@ -891,6 +953,7 @@ void MusigAccountController::changeEndpoint(uint64_t req_id, Endpoint endpoint, 
     m_endpoint_verify = verify_certificate;
     m_endpoint_test = test;
     m_endpoint_connect = connected;
+    emit endpointStateChanged(Endpoint::Electrum);
     if (m_storage_queue.empty()) {
         startEndpointChange();
     }
@@ -912,27 +975,19 @@ void MusigAccountController::startEndpointChange() {
             worker->wait();
             worker->deleteLater();
         }
-        auto &acc = account->value();
-        if (test) {
-            *result = test_and_save_endpoint(acc->name(), BackendServer::Electrum,
-                                             rust::String(url), verify);
-            if (!result->is_ok) {
-                return;
+        auto change = ::musig_endpoint_change(std::move(account->value()), rust::String(url),
+                                              verify, test, connected);
+        change->prepare_endpoint();
+        if (change->endpoint_phase() == EndpointPhase::Draining) {
+            *replaced = true;
+            if (notif != nullptr) {
+                notif->wait();
+                notif->deleteLater();
             }
+            change->finish_endpoint_after_drain();
         }
-        *replaced = true;
-        auto saved = result->saved;
-        auto savedUrl = result->url;
-        acc->close_backend();
-        if (notif != nullptr) {
-            notif->wait();
-            notif->deleteLater();
-        }
-        *result = acc->reopen_backend(connected);
-        result->saved = saved;
-        if (saved) {
-            result->url = savedUrl;
-        }
+        *result = change->endpoint_result();
+        account->value() = ::take_musig_endpoint_account(std::move(change));
     });
     connect(thread, &QThread::finished, this, &MusigAccountController::onEndpointFinished,
             qontrol::UNIQUE);
@@ -946,38 +1001,38 @@ void MusigAccountController::onEndpointFinished() {
     if (*m_endpoint_replaced) {
         m_reconnect->stopped();
         m_notif_thread = nullptr;
-        m_electrum_running = false;
+        m_electrum_state = m_endpoint_result->connection_pending ? ElectrumState::Connecting
+                                                                 : ElectrumState::Disconnected;
         if (m_account.has_value() && m_account.value()->is_ok()) {
             listenNotifications();
         }
         emit electrumDisconnected();
-        emit endpointStateChanged(Endpoint::Electrum);
         emit electrumUrlChanged();
     } else if (m_endpoint_connection_lost) {
-        m_electrum_running = false;
+        m_electrum_state = ElectrumState::Disconnected;
         m_reconnect->lost();
         emit electrumDisconnected();
-        emit endpointStateChanged(Endpoint::Electrum);
     }
+    emit endpointStateChanged(Endpoint::Electrum);
     emit endpointRequestFinished(m_endpoint_req_id, m_endpoint, *m_endpoint_result);
+    if (!m_psbt_v2_hex.isEmpty()) {
+        emit roundChanged(roundStatus());
+    }
     if (m_stop_requested) {
         stop();
     }
 }
 
-void MusigAccountController::persistActivePsbt() {
-    if (!m_account.has_value() || m_saved_record_id.isEmpty()) {
-        return;
+void MusigAccountController::applyAttempt(const MusigAttemptSnapshot &snapshot) {
+    m_psbt_v2_hex = toQString(snapshot.psbt_v2_hex);
+    m_tx_hex = toQString(snapshot.tx_hex);
+    m_saved_record_id = toQString(snapshot.record_id);
+    m_restart_pending = snapshot.reset_pending;
+    m_spend_signers.clear();
+    for (const auto &fingerprint : snapshot.signers) {
+        m_spend_signers.append(toQString(fingerprint));
     }
-    auto *account = &*m_account.value();
-    auto result = std::make_shared<SavedPsbtMutation>();
-    enqueueStorage(
-        [account, result, id = m_saved_record_id.toStdString(),
-         psbt = m_psbt_v2_hex.toStdString()] { *result = account->update_saved_psbt(id, psbt); },
-        [this, result] {
-            setSaveWarning(toQString(result->is_ok ? result->save_error : result->error));
-            emit savedPsbtsChanged();
-        });
+    setSaveWarning(toQString(snapshot.save_error));
 }
 
 void MusigAccountController::listSavedPsbts(bool include_confirmed) {
@@ -1003,9 +1058,13 @@ void MusigAccountController::restoreSavedPsbt(const QString &id) {
     auto generation = m_signing_generation;
     auto *account = &*m_account.value();
     auto result = std::make_shared<SavedPsbtRestore>();
+    auto snapshot = std::make_shared<MusigAttemptSnapshot>();
     enqueueStorage(
-        [account, result, id = id.toStdString()] { *result = account->restore_saved_psbt(id); },
-        [this, result, generation] {
+        [account, result, snapshot, id = id.toStdString()] {
+            *result = account->activate_saved_psbt(id);
+            *snapshot = account->active_attempt();
+        },
+        [this, result, snapshot, generation] {
             if (generation != m_signing_generation) {
                 return;
             }
@@ -1015,20 +1074,13 @@ void MusigAccountController::restoreSavedPsbt(const QString &id) {
                 return;
             }
             auto &entry = result->entry;
-            m_saved_record_id = toQString(entry.record.id);
-            m_psbt_v2_hex = toQString(entry.record.current_psbt_v2_hex);
-            m_tx_hex = toQString(entry.record.finalized_tx_hex);
-            m_restart_pending = entry.record.reset_pending;
-            for (const auto &fingerprint : entry.record.spend.fingerprints) {
-                m_spend_signers.append(toQString(fingerprint));
-            }
-            setSaveWarning(toQString(result->save_error));
+            applyAttempt(*snapshot);
             emit savedPsbtRestored(entry);
             loadPanel("send");
             auto status = roundStatus();
             emit roundChanged(status);
-            if (m_tx_hex.isEmpty() && status.is_ok && status.round == MusigRound::Ready) {
-                finalizeIfReady();
+            if (!snapshot->finalize_error.empty()) {
+                emit finalizeFailed(toQString(snapshot->finalize_error));
             }
         });
 }

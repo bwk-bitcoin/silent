@@ -14,12 +14,14 @@ use std::path::{Path, PathBuf};
 use bitcoin::{bip32::Fingerprint, Network};
 use fs2::FileExt;
 
-use crate::keys::{
-    error::Error,
-    network_name,
-    record::{KeyRecord, RouteKind},
+use crate::{
+    keys::{
+        error::Error,
+        network_name,
+        record::{validate_xpub_chain, KeyRecord, RouteKind},
+    },
+    state_crypt,
 };
-use crate::state_crypt;
 
 const LOCK_FILE_NAME: &str = ".lock";
 const RECORD_EXTENSION: &str = state_crypt::SEALED_EXTENSION;
@@ -244,6 +246,45 @@ impl KeyStore {
                 return Err(Error::DuplicateKey(record.fingerprint));
             }
             self.save_locked(dir, record)
+        })
+    }
+
+    pub(crate) fn import_portable(&self, mut record: KeyRecord) -> Result<KeyRecord, Error> {
+        self.with_lock(|dir| {
+            if record.alias.trim().is_empty()
+                || self
+                    .list()?
+                    .iter()
+                    .any(|known| !known.deleted && known.alias == record.alias)
+            {
+                return Err(Error::InvalidAlias(
+                    "key alias must be nonempty and unused".into(),
+                ));
+            }
+            match self.load(record.fingerprint) {
+                Ok(previous) if !previous.deleted => {
+                    return Err(Error::DuplicateKey(record.fingerprint))
+                }
+                Ok(previous) => {
+                    for entry in &record.xpubs {
+                        if previous
+                            .xpubs
+                            .iter()
+                            .any(|known| known.path == entry.path && known.xpub != entry.xpub)
+                        {
+                            return Err(Error::InvalidXpub(
+                                "import conflicts with a previously stored xpub".into(),
+                            ));
+                        }
+                    }
+                    record = KeyRecord::revive(previous, record);
+                }
+                Err(Error::NotFound(_)) => (),
+                Err(error) => return Err(error),
+            }
+            validate_xpub_chain(&record.xpubs)?;
+            self.save_locked(dir, &record)?;
+            Ok(record)
         })
     }
 

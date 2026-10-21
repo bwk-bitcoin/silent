@@ -241,8 +241,8 @@ void PathEditor::readPath() {
     }
     auto picked = static_cast<int>(m_path.keys.size());
     auto mandatory = static_cast<int>(m_path.mandatory.size());
-    m_path.threshold = std::clamp(m_path.threshold, std::min(mandatory + 1, std::max(picked, 1)),
-                                  std::max(picked, 1));
+    m_path.threshold =
+        static_cast<int>(::policy_threshold(picked, mandatory, std::max(m_path.threshold, 0)));
     m_path.lock = static_cast<LockKind>(m_lock_combo->currentData().toInt());
     m_path.count = m_count_input->text().toInt();
     m_path.unit = static_cast<LockUnit>(m_unit_combo->currentData().toInt());
@@ -276,7 +276,7 @@ void PathEditor::refreshThresholds() {
     QSignalBlocker blocker(m_threshold_combo);
     m_threshold_combo->clear();
     auto picked = static_cast<int>(m_path.keys.size());
-    auto lowest = std::min(static_cast<int>(m_path.mandatory.size()) + 1, std::max(picked, 1));
+    auto lowest = static_cast<int>(::policy_threshold(picked, m_path.mandatory.size(), 0));
     for (int threshold = lowest; threshold <= picked; ++threshold) {
         auto label = threshold == picked ? TR("musig-path-all").arg(picked)
                                          : TR("musig-create-threshold").arg(threshold).arg(picked);

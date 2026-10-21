@@ -18,12 +18,15 @@ use bwk_sp::receiver::RecipientAddress;
 
 use crate::{
     config::Config,
+    error::BackendFailure,
     ffi::{
-        AddressVerifyInfo, CoinState, Notification, NotificationFlag, RustCoin, RustTx,
-        RustTxDetails, TransactionSimulation, TransactionTemplate, TxResult,
+        AddressVerifyInfo, BackendErrorKind, CoinState, Notification, NotificationFlag, RustCoin,
+        RustTx, RustTxDetails, TransactionSimulation, TransactionTemplate, TxResult,
     },
     tx_details::{details_result, TxSnapshot},
 };
+
+pub(crate) const MSATS_PER_SAT: u64 = 1000;
 
 /// Valid account state (created successfully).
 struct AccountInner {
@@ -117,17 +120,28 @@ impl Account {
         }
     }
 
+    pub(crate) fn endpoint_account_name(&self) -> Option<&str> {
+        self.inner
+            .as_ref()
+            .map(|inner| inner.name.as_str())
+            .or(self.closed_name.as_deref())
+    }
+
     /// Called after workers and the old notification receiver have drained.
     pub fn reopen_backend(&mut self, connect_electrum: bool) -> crate::ffi::EndpointResult {
         self.close_backend();
+        let mut failure_kind = BackendErrorKind::Other;
         let result = (|| {
             let name = self
                 .closed_name
                 .as_ref()
                 .ok_or("Account not initialized")?
                 .clone();
+            failure_kind = BackendErrorKind::Storage;
             let config = Config::from_file(name).map_err(|e| e.to_string())?;
+            failure_kind = BackendErrorKind::InvalidInput;
             config.to_sp_config()?;
+            failure_kind = BackendErrorKind::Other;
             let usable = matches!(
                 crate::config::parse_electrum_url(&config.electrum_url),
                 (Some(_), Some(_))
@@ -145,7 +159,14 @@ impl Account {
                 },
             );
             self.closed_name = None;
+            self.error.clear();
             Ok(crate::ffi::EndpointResult {
+                connection_pending: connect_electrum && usable && connection_error.is_none(),
+                kind: if connection_error.is_some() || (connect_electrum && !usable) {
+                    BackendErrorKind::Electrum
+                } else {
+                    BackendErrorKind::None
+                },
                 is_ok: (!connect_electrum || usable) && connection_error.is_none(),
                 saved: false,
                 url: config.electrum_url,
@@ -163,6 +184,7 @@ impl Account {
                 log::error!("reopen_backend: {error}");
                 self.error = error.clone();
                 crate::ffi::EndpointResult {
+                    kind: failure_kind,
                     error,
                     ..crate::ffi::EndpointResult::default()
                 }
@@ -220,6 +242,12 @@ impl Account {
                 .header_store()
                 .is_some_and(|headers| headers.running())
         }
+    }
+
+    pub(crate) fn scanner_running(&self) -> bool {
+        self.inner
+            .as_ref()
+            .is_some_and(|inner| inner.account.scanner_running())
     }
 
     /// Start the scanner in continuous mode.
@@ -779,73 +807,25 @@ impl Account {
 
     /// Simulate a transaction without actually creating it.
     pub fn simulate_transaction(&self, tx_template: TransactionTemplate) -> TransactionSimulation {
-        let err_sim = |error: String| TransactionSimulation {
-            is_valid: false,
-            fee: 0,
-            weight: 0,
-            input_total: 0,
-            output_total: 0,
-            input_count: 0,
+        let err_sim = |kind, error: String| TransactionSimulation {
+            kind,
             error,
-            selected_outpoints: Vec::new(),
+            ..Default::default()
         };
 
         let Some(inner) = &self.inner else {
-            return err_sim("Account not initialized".to_string());
+            return err_sim(
+                BackendErrorKind::Other,
+                "Account not initialized".to_string(),
+            );
         };
 
         let builder = match Self::build_tx_builder(inner, &tx_template) {
             Ok(b) => b,
-            Err(e) => return err_sim(e.to_string()),
+            Err(e) => return err_sim(BackendErrorKind::InvalidInput, e.to_string()),
         };
 
-        let result = builder.simulate();
-
-        if let Some(ref error) = result.error {
-            return err_sim(format!("{error:?}"));
-        }
-
-        let input_total: u64 = result
-            .tx_template
-            .inputs
-            .iter()
-            .map(|c| c.txout.value.to_sat())
-            .sum();
-        let fee = result.fees.map(|f| f.to_sat()).unwrap_or(0);
-        let output_total = input_total.saturating_sub(fee);
-        let input_count = result.tx_template.inputs.len() as u64;
-
-        // Estimate weight from fee and fee_rate
-        let weight = if tx_template.fee_rate > 0.0 {
-            let vbytes = (fee as f64 / tx_template.fee_rate).ceil() as u64;
-            vbytes * 4
-        } else {
-            0
-        };
-
-        let selected_outpoints: Vec<String> = result
-            .tx_template
-            .inputs
-            .iter()
-            .map(|c| c.outpoint.to_string())
-            .collect();
-
-        log::debug!(
-            "simulate_transaction: selected {} outpoints: {:?}",
-            selected_outpoints.len(),
-            selected_outpoints
-        );
-
-        TransactionSimulation {
-            is_valid: true,
-            fee,
-            weight,
-            input_total,
-            output_total,
-            input_count,
-            error: String::new(),
-            selected_outpoints,
-        }
+        crate::tx_preview::simulation_preview(builder.simulate(), tx_template.fee_rate)
     }
 
     /// Prepare a transaction for signing.
@@ -853,7 +833,10 @@ impl Account {
         let err_psbt = |e: String| Box::new(PsbtResult::failed(e));
 
         let Some(inner) = &self.inner else {
-            return err_psbt("Account not initialized".to_string());
+            return Box::new(PsbtResult::failed_kind(
+                BackendErrorKind::Other,
+                "Account not initialized".to_string(),
+            ));
         };
 
         let mut builder = match Self::build_tx_builder(inner, &tx_template) {
@@ -900,26 +883,17 @@ impl Account {
     /// Sign a prepared transaction.
     pub fn sign_transaction(&self, psbt_result: &PsbtResult) -> TxResult {
         if self.inner.is_none() {
-            return TxResult {
-                is_ok: false,
-                error: "Account not initialized".to_string(),
-                value: String::new(),
-            };
+            return TxResult::failed(BackendErrorKind::Other, "Account not initialized".into());
         };
 
         if let Err(e) = &psbt_result.inner {
-            return TxResult {
-                is_ok: false,
-                error: format!("Cannot sign invalid transaction: {e}"),
-                value: String::new(),
-            };
+            return TxResult::failed(
+                BackendErrorKind::InvalidInput,
+                format!("Cannot sign invalid transaction: {e}"),
+            );
         };
 
-        TxResult {
-            is_ok: false,
-            error: "External signer required".to_string(),
-            value: String::new(),
-        }
+        TxResult::failed(BackendErrorKind::Signing, "External signer required".into())
     }
 
     /// Broadcast a signed transaction to the network via Electrum.
@@ -929,32 +903,23 @@ impl Account {
         use bitcoin::Transaction;
 
         let Some(inner) = &self.inner else {
-            return TxResult {
-                is_ok: false,
-                error: "Account not initialized".to_string(),
-                value: String::new(),
-            };
+            return TxResult::failed(BackendErrorKind::Other, "Account not initialized".into());
         };
 
         let tx: Transaction = match deserialize_hex(&signed_tx_hex) {
             Ok(tx) => tx,
             Err(e) => {
-                return TxResult {
-                    is_ok: false,
-                    error: format!("Invalid transaction hex: {e}"),
-                    value: String::new(),
-                }
+                return TxResult::failed(
+                    BackendErrorKind::InvalidInput,
+                    format!("Invalid transaction hex: {e}"),
+                );
             }
         };
 
         let txid = tx.compute_txid();
 
         if let Err(e) = broadcast_via_electrum(&inner.electrum_url, inner.verify_certificate, &tx) {
-            return TxResult {
-                is_ok: false,
-                error: e,
-                value: String::new(),
-            };
+            return TxResult::failed(e.kind, e.message);
         }
 
         // Reflect the spend locally so spent SP coins drop from spendable at once
@@ -963,11 +928,7 @@ impl Account {
             log::warn!("record_unconfirmed_spend after broadcast failed: {e}");
         }
 
-        TxResult {
-            is_ok: true,
-            error: String::new(),
-            value: txid.to_string(),
-        }
+        TxResult::succeeded(txid.to_string())
     }
 
     /// Finalize a signed PSBT and return transaction hex.
@@ -976,61 +937,31 @@ impl Account {
         use bitcoin::consensus::encode::serialize_hex;
 
         let Some(inner) = &self.inner else {
-            return TxResult {
-                is_ok: false,
-                error: "Account not initialized".to_string(),
-                value: String::new(),
-            };
+            return TxResult::failed(BackendErrorKind::Other, "Account not initialized".into());
         };
 
         let psbt = match STANDARD.decode(signed_psbt_base64.trim()) {
             Ok(psbt) => psbt,
             Err(e) => {
-                return TxResult {
-                    is_ok: false,
-                    error: format!("Invalid PSBT base64: {e}"),
-                    value: String::new(),
-                }
+                return TxResult::failed(
+                    BackendErrorKind::InvalidInput,
+                    format!("Invalid PSBT base64: {e}"),
+                );
             }
         };
 
         match inner.account.finalize(&psbt) {
-            Ok(tx) => TxResult {
-                is_ok: true,
-                error: String::new(),
-                value: serialize_hex(&tx),
-            },
-            Err(e) => TxResult {
-                is_ok: false,
-                error: format!("Failed to finalize PSBT: {e}"),
-                value: String::new(),
-            },
+            Ok(tx) => TxResult::succeeded(serialize_hex(&tx)),
+            Err(e) => TxResult::failed(
+                BackendErrorKind::Signing,
+                format!("Failed to finalize PSBT: {e}"),
+            ),
         }
     }
 
     /// Sign and broadcast a transaction in one step.
     pub fn sign_and_broadcast(&self, psbt_result: &PsbtResult) -> TxResult {
-        if self.inner.is_none() {
-            return TxResult {
-                is_ok: false,
-                error: "Account not initialized".to_string(),
-                value: String::new(),
-            };
-        };
-
-        if let Err(e) = &psbt_result.inner {
-            return TxResult {
-                is_ok: false,
-                error: format!("Cannot sign invalid transaction: {e}"),
-                value: String::new(),
-            };
-        };
-
-        TxResult {
-            is_ok: false,
-            error: "External signer required".to_string(),
-            value: String::new(),
-        }
+        self.sign_transaction(psbt_result)
     }
     /// Validate a prepared transaction via Electrum before signing.
     /// Checks for output address reuse and already-spent inputs.
@@ -1466,30 +1397,53 @@ pub(crate) fn broadcast_via_electrum(
     electrum_url: &str,
     verify_certificate: bool,
     tx: &bitcoin::Transaction,
-) -> Result<(), String> {
+) -> Result<(), BackendFailure> {
     use bitcoin::consensus::encode::serialize_hex;
     use bwk_sp::bwk::bwk_electrum::electrum::{request::Request, response::Response};
     use std::collections::HashMap;
 
     if electrum_url.is_empty() {
-        return Err("Electrum server address not configured".to_string());
+        return Err(BackendFailure::new(
+            BackendErrorKind::InvalidInput,
+            "Electrum server address not configured",
+        ));
     }
 
     let (host, port, scheme) = bwk_sp::bwk::bwk_electrum::url::parse_electrum_url(electrum_url)
-        .map_err(|e| format!("Invalid electrum URL '{electrum_url}': {e}"))?;
-    let host = host.ok_or("Invalid electrum URL: missing host")?;
-    let port = port.ok_or("Invalid electrum URL: missing port")?;
+        .map_err(|e| {
+            BackendFailure::new(
+                BackendErrorKind::InvalidInput,
+                format!("Invalid electrum URL '{electrum_url}': {e}"),
+            )
+        })?;
+    let host = host.ok_or_else(|| {
+        BackendFailure::new(
+            BackendErrorKind::InvalidInput,
+            "Invalid electrum URL: missing host",
+        )
+    })?;
+    let port = port.ok_or_else(|| {
+        BackendFailure::new(
+            BackendErrorKind::InvalidInput,
+            "Invalid electrum URL: missing port",
+        )
+    })?;
 
     let ssl = matches!(scheme, bwk_sp::bwk::bwk_electrum::url::ElectrumScheme::Ssl);
     let mut client = bwk_sp::bwk::bwk_electrum::raw_client::Client::new_ssl_maybe(&host, port, ssl)
         .certificate_check(crate::config::certificate_check(verify_certificate))
-        .map_err(|e| format!("Invalid electrum URL '{electrum_url}': {e}"))?;
+        .map_err(|e| {
+            BackendFailure::new(
+                BackendErrorKind::InvalidInput,
+                format!("Invalid electrum URL '{electrum_url}': {e}"),
+            )
+        })?;
     client
         .try_connect(Some(Duration::from_secs(10)))
         .map_err(|e| {
             let msg = format!("Connection to {electrum_url} failed:\n{e}");
             log::error!("{msg}");
-            msg
+            BackendFailure::new(BackendErrorKind::Network, msg)
         })?;
 
     let raw_tx = serialize_hex(tx);
@@ -1497,7 +1451,7 @@ pub(crate) fn broadcast_via_electrum(
     client.try_send(&request).map_err(|e| {
         let msg = format!("Failed to send to {electrum_url}:\n{e}");
         log::error!("{msg}");
-        msg
+        BackendFailure::new(BackendErrorKind::Network, msg)
     })?;
 
     let req_id = request.id;
@@ -1507,7 +1461,7 @@ pub(crate) fn broadcast_via_electrum(
     let responses = client.recv(&index).map_err(|e| {
         let msg = format!("No response from {electrum_url}:\n{e}");
         log::error!("{msg}");
-        msg
+        BackendFailure::new(BackendErrorKind::Network, msg)
     })?;
 
     for r in responses {
@@ -1519,7 +1473,7 @@ pub(crate) fn broadcast_via_electrum(
                     e.error.message
                 );
                 log::error!("{msg}");
-                return Err(msg);
+                return Err(BackendFailure::new(BackendErrorKind::Broadcast, msg));
             }
             _ => {}
         }
@@ -1527,7 +1481,7 @@ pub(crate) fn broadcast_via_electrum(
 
     let msg = format!("Unexpected response from {electrum_url}");
     log::error!("{msg}");
-    Err(msg)
+    Err(BackendFailure::new(BackendErrorKind::Electrum, msg))
 }
 
 /// Convert unified bwk Notification to Silent FFI Notification.
@@ -1538,54 +1492,76 @@ pub(crate) fn convert_notification(notif: BwkNotification) -> Notification {
         BwkNotification::CoinUpdate | BwkNotification::HeaderStoreUpdated => Notification {
             flag: NotificationFlag::CoinUpdate,
             payload: String::new(),
+            current: 0,
+            end: 0,
         },
         // The coin store gained or lost a coin: the coins need a refresh.
         BwkNotification::CoinReceived { .. } | BwkNotification::CoinSpent { .. } => Notification {
             flag: NotificationFlag::CoinUpdate,
             payload: String::new(),
+            current: 0,
+            end: 0,
         },
         BwkNotification::PaymentHistoryUpdated => Notification {
             flag: NotificationFlag::PaymentUpdated,
             payload: String::new(),
+            current: 0,
+            end: 0,
         },
         // Nothing consumes header validation progress yet; it is carried across so the
         // UI can pick it up without another bridge change.
         BwkNotification::HeaderProgress(event) => Notification {
             flag: NotificationFlag::HeaderProgress,
             payload: format!("{event:?}"),
+            current: 0,
+            end: 0,
         },
         BwkNotification::ValidationFailed(failure) => Notification {
             flag: NotificationFlag::ElectrumError,
             payload: format!("{failure:?}"),
+            current: 0,
+            end: 0,
         },
         BwkNotification::Electrum(e) => convert_electrum_notification(e),
         BwkNotification::Signer(e) => Notification {
             flag: NotificationFlag::ElectrumError,
             payload: format!("{e:?}"),
+            current: 0,
+            end: 0,
         },
         BwkNotification::AddressTipChanged => Notification {
             flag: NotificationFlag::AddressTipChanged,
             payload: String::new(),
+            current: 0,
+            end: 0,
         },
         // The header store could not be restarted against its endpoint, so the
         // chain it promotes against stops advancing.
         BwkNotification::HeaderStoreRestart => Notification {
             flag: NotificationFlag::ElectrumError,
             payload: "Header store restart failed".to_string(),
+            current: 0,
+            end: 0,
         },
         // The merkle client ended, so confirmed entries stay unverified until
         // the header store is restarted.
         BwkNotification::MerkleFetchStopped => Notification {
             flag: NotificationFlag::ElectrumError,
             payload: "Merkle proof fetching stopped".to_string(),
+            current: 0,
+            end: 0,
         },
         BwkNotification::InvalidElectrumConfig => Notification {
             flag: NotificationFlag::ElectrumError,
             payload: "Invalid Electrum configuration".to_string(),
+            current: 0,
+            end: 0,
         },
         BwkNotification::InvalidLookAhead => Notification {
             flag: NotificationFlag::ElectrumError,
             payload: "Invalid look-ahead value".to_string(),
+            current: 0,
+            end: 0,
         },
     }
 }
@@ -1596,78 +1572,112 @@ fn convert_sp_notification(sp_notif: SpNotification) -> Notification {
         SpNotification::StartingScan => Notification {
             flag: NotificationFlag::StartingScan,
             payload: String::new(),
+            current: 0,
+            end: 0,
         },
         SpNotification::ScanStarted { start, end } => Notification {
             flag: NotificationFlag::ScanStarted,
-            payload: format!("{start},{end}"),
+            payload: String::new(),
+            current: start,
+            end,
         },
         SpNotification::FailStartScanning { message } => Notification {
             flag: NotificationFlag::FailStartScanning,
             payload: message,
+            current: 0,
+            end: 0,
         },
         SpNotification::FailScan { message } => Notification {
             flag: NotificationFlag::FailScan,
             payload: message,
+            current: 0,
+            end: 0,
         },
         SpNotification::StoppingScan => Notification {
             flag: NotificationFlag::StoppingScan,
             payload: String::new(),
+            current: 0,
+            end: 0,
         },
         SpNotification::ScanStopped { .. } => Notification {
             flag: NotificationFlag::ScanStopped,
             payload: String::new(),
+            current: 0,
+            end: 0,
         },
         SpNotification::ScanReceiveProgress { current, end }
         | SpNotification::ScanSpendProgress { current, end } => Notification {
             flag: NotificationFlag::ScanProgress,
-            payload: format!("{current},{end}"),
+            payload: String::new(),
+            current,
+            end,
         },
         SpNotification::ScanCompleted => Notification {
             flag: NotificationFlag::ScanCompleted,
             payload: String::new(),
+            current: 0,
+            end: 0,
         },
         SpNotification::NewOutput(outpoint) => Notification {
             flag: NotificationFlag::NewOutput,
             payload: outpoint.to_string(),
+            current: 0,
+            end: 0,
         },
         SpNotification::OutputSpent(outpoint) => Notification {
             flag: NotificationFlag::OutputSpent,
             payload: outpoint.to_string(),
+            current: 0,
+            end: 0,
         },
         // A sub-account's coin, as the SP ones above.
         SpNotification::SubAccountCoinReceived { outpoint, .. } => Notification {
             flag: NotificationFlag::NewOutput,
             payload: outpoint.to_string(),
+            current: 0,
+            end: 0,
         },
         SpNotification::SubAccountCoinSpent { outpoint, .. } => Notification {
             flag: NotificationFlag::OutputSpent,
             payload: outpoint.to_string(),
+            current: 0,
+            end: 0,
         },
         // Blocks were replaced from `fork_height`: the coins change.
         SpNotification::Reorg { fork_height } => Notification {
             flag: NotificationFlag::CoinUpdate,
-            payload: fork_height.to_string(),
+            payload: String::new(),
+            current: fork_height,
+            end: 0,
         },
         // Silent broadcasts through its own Electrum path, so these only arrive when
         // the account broadcasts on its own; both change local state.
         SpNotification::Broadcasted { txid } => Notification {
             flag: NotificationFlag::CoinUpdate,
             payload: txid.to_string(),
+            current: 0,
+            end: 0,
         },
         SpNotification::FailBroadcast { message } => Notification {
             flag: NotificationFlag::ElectrumError,
             payload: message,
+            current: 0,
+            end: 0,
         },
         SpNotification::WaitingForBlocks { tip_height } => Notification {
             flag: NotificationFlag::WaitingForBlocks,
-            payload: tip_height.to_string(),
+            payload: String::new(),
+            current: tip_height,
+            end: tip_height,
         },
         SpNotification::NewBlocksDetected {
             from_height,
             to_height,
         } => Notification {
             flag: NotificationFlag::NewBlocksDetected,
-            payload: format!("{from_height},{to_height}"),
+            payload: String::new(),
+            current: from_height,
+            end: to_height,
         },
     }
 }
@@ -1678,24 +1688,34 @@ fn convert_electrum_notification(notif: TxListenerNotif) -> Notification {
         TxListenerNotif::Started => Notification {
             flag: NotificationFlag::ElectrumStarted,
             payload: String::new(),
+            current: 0,
+            end: 0,
         },
         TxListenerNotif::Connected(url) => Notification {
             flag: NotificationFlag::ElectrumConnected,
             payload: url,
+            current: 0,
+            end: 0,
         },
         TxListenerNotif::Error(e) => Notification {
             flag: NotificationFlag::ElectrumError,
             payload: e.to_string(),
+            current: 0,
+            end: 0,
         },
         TxListenerNotif::Stopped => Notification {
             flag: NotificationFlag::ElectrumStopped,
             payload: String::new(),
+            current: 0,
+            end: 0,
         },
         // The connection dropped (a dead socket the keepalive caught, among others):
         // the listener exited, the account reconnects as on any loss.
         TxListenerNotif::Disconnected => Notification {
             flag: NotificationFlag::ElectrumStopped,
             payload: String::new(),
+            current: 0,
+            end: 0,
         },
     }
 }
@@ -1782,6 +1802,8 @@ impl Poll {
             notification: Notification {
                 flag: NotificationFlag::ScanStopped,
                 payload: String::new(),
+                current: 0,
+                end: 0,
             },
             error: String::new(),
         }
@@ -1794,6 +1816,8 @@ impl Poll {
             notification: Notification {
                 flag: NotificationFlag::FailScan,
                 payload: String::new(),
+                current: 0,
+                end: 0,
             },
             error: error.to_string(),
         }
@@ -1818,6 +1842,7 @@ impl Poll {
 /// PsbtResult wrapper for CXX.
 pub struct PsbtResult {
     inner: Result<PreparedPsbt, String>,
+    kind: BackendErrorKind,
     pub(crate) saved_record_id: String,
     pub(crate) save_error: String,
 }
@@ -1841,12 +1866,18 @@ impl PsbtResult {
             }),
             saved_record_id: String::new(),
             save_error: String::new(),
+            kind: BackendErrorKind::None,
         }
     }
 
     pub(crate) fn failed(error: String) -> Self {
+        Self::failed_kind(BackendErrorKind::InvalidInput, error)
+    }
+
+    pub(crate) fn failed_kind(kind: BackendErrorKind, error: String) -> Self {
         PsbtResult {
             inner: Err(error),
+            kind,
             saved_record_id: String::new(),
             save_error: String::new(),
         }
@@ -1879,6 +1910,10 @@ impl PsbtResult {
             Ok(_) => String::new(),
             Err(e) => e.clone(),
         }
+    }
+
+    pub fn get_error_kind(&self) -> crate::ffi::BackendErrorKind {
+        self.kind
     }
 
     /// Get transaction ID preview (only valid if is_ok()).
@@ -1939,7 +1974,6 @@ pub enum TemplateError {
 }
 
 pub(crate) fn fee_rate_msats(rate: f64, absolute_fee: u64) -> Result<u64, TemplateError> {
-    const MSATS_PER_SAT: u64 = 1000;
     if absolute_fee > 0 {
         // Keep the existing coin-selection estimate when the builder uses an absolute fee.
         return Ok(MSATS_PER_SAT);
@@ -1994,9 +2028,52 @@ mod tests {
         absolute::LockTime, hashes::Hash, opcodes::all::OP_RETURN, script::Builder, transaction,
         OutPoint, ScriptBuf, Sequence, Txid,
     };
-    use bwk_sp::bwk_tx::bwk_psbt::{Input as PsbtInput, Output as PsbtOutput, PsbtV2};
+    use bwk_sp::{
+        bwk::bwk_electrum::notification::SpNotification,
+        bwk_tx::bwk_psbt::{Input as PsbtInput, Output as PsbtOutput, PsbtV2},
+    };
 
-    use crate::account::{fee_rate_msats, inputs_to_check, outputs_to_check};
+    use crate::{
+        account::{convert_sp_notification, fee_rate_msats, inputs_to_check, outputs_to_check},
+        ffi::NotificationFlag,
+    };
+
+    #[test]
+    fn scanner_progress_crosses_the_bridge_as_numbers() {
+        for event in [
+            SpNotification::ScanReceiveProgress {
+                current: 123,
+                end: 456,
+            },
+            SpNotification::ScanSpendProgress {
+                current: 123,
+                end: 456,
+            },
+        ] {
+            let notification = convert_sp_notification(event);
+            assert_eq!(
+                notification.flag,
+                NotificationFlag::ScanProgress,
+                "progress event kind"
+            );
+            assert_eq!(
+                (notification.current, notification.end),
+                (123, 456),
+                "numeric progress"
+            );
+            assert!(
+                notification.payload.is_empty(),
+                "no comma-separated progress payload"
+            );
+        }
+        let notification =
+            convert_sp_notification(SpNotification::WaitingForBlocks { tip_height: 789 });
+        assert_eq!(notification.current, 789, "numeric waiting tip");
+        assert!(
+            notification.payload.is_empty(),
+            "no decimal-text waiting tip"
+        );
+    }
 
     #[test]
     fn fee_rate_conversion_preserves_sub_one_and_rejects_invalid_rates() {

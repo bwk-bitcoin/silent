@@ -478,6 +478,22 @@ pub fn musig_nonces_complete(psbt: &PsbtV2) -> Result<bool, Error> {
     Ok(true)
 }
 
+pub fn musig_required_fingerprints(psbt: &PsbtV2) -> Result<BTreeSet<Fingerprint>, Error> {
+    let mut required = BTreeSet::new();
+    for input in &psbt.inputs {
+        for participant in expected_participants(&input.psbt)?.keys() {
+            if let Some((_, (fingerprint, _))) = input
+                .psbt
+                .tap_key_origins
+                .get(&participant.x_only_public_key().0)
+            {
+                required.insert(*fingerprint);
+            }
+        }
+    }
+    Ok(required)
+}
+
 /// In round 1 drops every 0x1b and 0x1c; whether anything was dropped.
 pub fn strip_musig_round1(psbt: &mut PsbtV2) -> Result<bool, Error> {
     if musig_nonces_complete(psbt)? {
@@ -495,14 +511,20 @@ pub fn strip_musig_round1(psbt: &mut PsbtV2) -> Result<bool, Error> {
 /// 0x1b while some nonce is missing, else their 0x1c. A fingerprint is done when
 /// each of its participants has every entry its inputs expect.
 pub fn musig_done_fingerprints(psbt: &PsbtV2) -> Result<BTreeSet<Fingerprint>, Error> {
-    let nonces_complete = musig_nonces_complete(psbt)?;
+    musig_completed_fingerprints(psbt, !musig_nonces_complete(psbt)?)
+}
+
+pub fn musig_completed_fingerprints(
+    psbt: &PsbtV2,
+    nonces: bool,
+) -> Result<BTreeSet<Fingerprint>, Error> {
     let mut done: BTreeMap<Fingerprint, bool> = BTreeMap::new();
     for input in &psbt.inputs {
         let expected = expected_participants(&input.psbt)?;
-        let got = if nonces_complete {
-            partial_sig_counts(&input.psbt)?
-        } else {
+        let got = if nonces {
             pub_nonce_counts(&input.psbt)?
+        } else {
+            partial_sig_counts(&input.psbt)?
         };
         for (participant, count) in &expected {
             let x_only = participant.x_only_public_key().0;
@@ -518,6 +540,46 @@ pub fn musig_done_fingerprints(psbt: &PsbtV2) -> Result<BTreeSet<Fingerprint>, E
         .filter(|(_, done)| *done)
         .map(|(fingerprint, _)| fingerprint)
         .collect())
+}
+
+pub fn ordinary_signature_complete(psbt: &Psbt, fingerprint: Fingerprint) -> bool {
+    let mut required = false;
+    for input in &psbt.inputs {
+        let restricted = is_partial_tap_tree(input);
+        let origins: Vec<_> = input
+            .tap_key_origins
+            .iter()
+            .filter(|(_, (leaves, (origin, _)))| {
+                *origin == fingerprint && (!restricted || !leaves.is_empty())
+            })
+            .collect();
+        if origins.is_empty() {
+            continue;
+        }
+        required = true;
+        let finalized = input
+            .final_script_witness
+            .as_ref()
+            .is_some_and(|witness| !witness.is_empty())
+            || input
+                .final_script_sig
+                .as_ref()
+                .is_some_and(|script| !script.is_empty());
+        let complete = finalized
+            || origins.iter().any(|(key, (leaves, _))| {
+                if !leaves.is_empty() {
+                    leaves
+                        .iter()
+                        .any(|leaf| input.tap_script_sigs.contains_key(&(**key, *leaf)))
+                } else {
+                    input.tap_key_sig.is_some()
+                }
+            });
+        if !complete {
+            return false;
+        }
+    }
+    required
 }
 
 pub fn inspect_bytes(

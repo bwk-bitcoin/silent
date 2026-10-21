@@ -165,6 +165,27 @@ pub struct XpubEntry {
     pub used: bool,
 }
 
+pub(crate) fn validate_xpub_chain(entries: &[XpubEntry]) -> Result<(), Error> {
+    for parent in entries {
+        for child in entries {
+            if child.path.len() == parent.path.len() + 1
+                && child
+                    .path
+                    .into_iter()
+                    .take(parent.path.len())
+                    .eq(parent.path.into_iter())
+                && child.xpub.parent_fingerprint != parent.xpub.fingerprint()
+            {
+                return Err(Error::InvalidXpub(format!(
+                    "{} does not chain from {}: wrong device",
+                    child.path, parent.path
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A descriptor this key participates in. Presence in `KeyRecord::descriptors` is the
 /// registration: there is no separate `registered` flag to keep in sync.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -219,6 +240,39 @@ pub struct KeyRecord {
 }
 
 impl KeyRecord {
+    pub(crate) fn revive(mut previous: Self, added: Self) -> Self {
+        previous.deleted = false;
+        previous.alias = added.alias;
+        previous.routes = added.routes;
+        if added.secret.is_some() {
+            previous.secret = added.secret;
+        }
+        for device in added.devices {
+            if !previous
+                .devices
+                .iter()
+                .any(|known| known.same_device(&device))
+            {
+                previous.devices.push(device);
+            }
+        }
+        for xpub in added.xpubs {
+            if !previous.xpubs.iter().any(|known| known.path == xpub.path) {
+                previous.xpubs.push(xpub);
+            }
+        }
+        for descriptor in added.descriptors {
+            if !previous
+                .descriptors
+                .iter()
+                .any(|known| known.descriptor == descriptor.descriptor)
+            {
+                previous.descriptors.push(descriptor);
+            }
+        }
+        previous
+    }
+
     pub fn new(fingerprint: Fingerprint, network: Network, alias: String) -> Self {
         Self {
             version: KEY_RECORD_VERSION,

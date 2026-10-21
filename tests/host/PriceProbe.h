@@ -292,12 +292,27 @@ public:
         return nullptr;
     }
 
-    auto simulateTx([[maybe_unused]] TransactionTemplate tx) -> TransactionSimulation override {
+    auto simulateTx(TransactionTemplate tx) -> TransactionSimulation override {
         ++simulations;
         TransactionSimulation result{};
         result.is_valid = validSimulation;
         result.output_total = 9998000;
         result.fee = 2000;
+        uint64_t fixedTotal = 0;
+        for (const auto &output : tx.outputs) {
+            if (!output.max) {
+                fixedTotal += output.amount;
+            }
+        }
+        for (const auto &output : tx.outputs) {
+            auto value = output.max && result.output_total > fixedTotal
+                             ? result.output_total - fixedTotal
+                             : output.amount;
+            result.recipient_amounts.push_back(value);
+            result.sending_total += value;
+        }
+        result.transaction_total = result.sending_total + result.fee;
+        result.input_total = result.transaction_total;
         return result;
     }
 
@@ -309,22 +324,30 @@ public:
     void startWorker([[maybe_unused]] QThread *worker) override {
     }
 
-    void requestTxDetails(uint64_t, const QString &) override {
+    void requestTxDetails([[maybe_unused]] uint64_t req_id,
+                          [[maybe_unused]] const QString &txid) override {
     }
 
-    void editTxLabel(uint64_t, const QString &, const QString &) override {
+    void editTxLabel([[maybe_unused]] uint64_t req_id, [[maybe_unused]] const QString &txid,
+                     [[maybe_unused]] const QString &label) override {
     }
 
-    void editOutpointLabel(uint64_t, const QString &, const QString &) override {
+    void editOutpointLabel([[maybe_unused]] uint64_t req_id,
+                           [[maybe_unused]] const QString &outpoint,
+                           [[maybe_unused]] const QString &label) override {
     }
 
-    void requestEndpointTip(uint64_t, Endpoint) override {
+    void requestEndpointTip([[maybe_unused]] uint64_t req_id,
+                            [[maybe_unused]] Endpoint endpoint) override {
     }
 
-    void testAndSaveEndpoint(uint64_t, Endpoint, const QString &, bool) override {
+    void testAndSaveEndpoint([[maybe_unused]] uint64_t req_id, [[maybe_unused]] Endpoint endpoint,
+                             [[maybe_unused]] const QString &url,
+                             [[maybe_unused]] bool verify_certificate) override {
     }
 
-    void setEndpointConnected(uint64_t, Endpoint, bool) override {
+    void setEndpointConnected([[maybe_unused]] uint64_t req_id, [[maybe_unused]] Endpoint endpoint,
+                              [[maybe_unused]] bool connected) override {
     }
 
     void updateCoinLabel([[maybe_unused]] const QString &outpoint,

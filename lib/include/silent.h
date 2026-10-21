@@ -965,6 +965,10 @@ std::size_t align_of() {
 #define CXX_DEFAULT_VALUE(value)
 #endif
 
+enum class KeyFileFailure : ::std::uint8_t;
+enum class PluginMetadataKind : ::std::uint8_t;
+enum class BackendErrorKind : ::std::uint8_t;
+enum class EndpointPhase : ::std::uint8_t;
 enum class Network : ::std::uint8_t;
 enum class BackendServer : ::std::uint8_t;
 enum class LogLevel : ::std::uint8_t;
@@ -977,6 +981,20 @@ enum class KeyUnusableReason : ::std::uint8_t;
 enum class QrResponseKind : ::std::uint8_t;
 enum class MusigRound : ::std::uint8_t;
 enum class QrErrorKind : ::std::uint8_t;
+struct RetryDecision;
+struct FeedQuote;
+struct FeedPrice;
+struct FeedSelection;
+struct FeedSourceState;
+struct PluginMetadataField;
+struct PluginMetadata;
+struct PluginGrantedAccess;
+struct AmountParseResult;
+struct FeeParseResult;
+struct SendAmounts;
+struct SpCreationRequest;
+struct MusigCreationRequest;
+struct AccountCreationResult;
 struct RustFeePreferences;
 struct Notification;
 struct RustCoin;
@@ -1004,6 +1022,7 @@ struct TransactionTemplate;
 struct TransactionSimulation;
 struct TxResult;
 struct MusigFinalizeResult;
+struct MusigAttemptSnapshot;
 struct SavedPsbtAttempt;
 struct SavedPsbtReset;
 struct SavedPsbtRecord;
@@ -1066,6 +1085,10 @@ struct MusigReceiveAddress;
 enum class PolicyKeyType : ::std::uint8_t;
 enum class PolicySemantic : ::std::uint8_t;
 enum class PolicyLocktime : ::std::uint8_t;
+enum class PolicyDurationUnit : ::std::uint8_t;
+enum class PolicyDraftError : ::std::uint8_t;
+struct PolicyDraft;
+struct PolicyDraftResult;
 struct PolicyKey;
 struct PolicyPath;
 struct PolicySpec;
@@ -1085,12 +1108,65 @@ struct HwiPoll;
 struct KeysModule;
 struct QrResponse;
 struct HotMaterial;
+struct FeedState;
+struct EndpointRetry;
+struct SpEndpointChange;
+struct MusigEndpointChange;
+struct KeyFilePreview;
+struct KeyFileCommit;
 struct SealedHotKey;
 struct CameraHandle;
 struct BbqrFrames;
 struct BbqrScanner;
 struct MusigAccount;
 struct LedgerNonceFetch;
+
+#ifndef CXXBRIDGE1_ENUM_KeyFileFailure
+#define CXXBRIDGE1_ENUM_KeyFileFailure
+enum class KeyFileFailure : ::std::uint8_t {
+  None = 0,
+  Read = 1,
+  Newer = 2,
+  Network = 3,
+  Invalid = 4,
+};
+#endif // CXXBRIDGE1_ENUM_KeyFileFailure
+
+#ifndef CXXBRIDGE1_ENUM_PluginMetadataKind
+#define CXXBRIDGE1_ENUM_PluginMetadataKind
+enum class PluginMetadataKind : ::std::uint8_t {
+  Text = 0,
+  Number = 1,
+  Flag = 2,
+  Strings = 3,
+};
+#endif // CXXBRIDGE1_ENUM_PluginMetadataKind
+
+#ifndef CXXBRIDGE1_ENUM_BackendErrorKind
+#define CXXBRIDGE1_ENUM_BackendErrorKind
+enum class BackendErrorKind : ::std::uint8_t {
+  Other = 0,
+  None = 1,
+  InvalidInput = 2,
+  Storage = 3,
+  Network = 4,
+  Electrum = 5,
+  Backend = 6,
+  Signing = 7,
+  Broadcast = 8,
+  InputConflict = 9,
+  AddressReuse = 10,
+};
+#endif // CXXBRIDGE1_ENUM_BackendErrorKind
+
+#ifndef CXXBRIDGE1_ENUM_EndpointPhase
+#define CXXBRIDGE1_ENUM_EndpointPhase
+enum class EndpointPhase : ::std::uint8_t {
+  Ready = 0,
+  Draining = 1,
+  Complete = 2,
+};
+#endif // CXXBRIDGE1_ENUM_EndpointPhase
 
 #ifndef CXXBRIDGE1_ENUM_Network
 #define CXXBRIDGE1_ENUM_Network
@@ -1212,6 +1288,7 @@ enum class KeyUnusableReason : ::std::uint8_t {
   DeviceNotConnected = 3,
   NoHotSecret = 4,
   SpOutputsPending = 5,
+  UnsupportedMusig = 6,
 };
 #endif // CXXBRIDGE1_ENUM_KeyUnusableReason
 
@@ -1252,6 +1329,39 @@ enum class QrErrorKind : ::std::uint8_t {
 };
 #endif // CXXBRIDGE1_ENUM_QrErrorKind
 
+#ifndef CXXBRIDGE1_STRUCT_RetryDecision
+#define CXXBRIDGE1_STRUCT_RetryDecision
+struct RetryDecision final {
+  bool schedule CXX_DEFAULT_VALUE(false);
+  bool give_up CXX_DEFAULT_VALUE(false);
+  ::std::uint32_t losses CXX_DEFAULT_VALUE(0);
+  ::std::uint32_t delay_ms CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_RetryDecision
+
+#ifndef CXXBRIDGE1_STRUCT_FeedQuote
+#define CXXBRIDGE1_STRUCT_FeedQuote
+struct FeedQuote final {
+  bool available CXX_DEFAULT_VALUE(false);
+  double value CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_FeedQuote
+
+#ifndef CXXBRIDGE1_STRUCT_FeedPrice
+#define CXXBRIDGE1_STRUCT_FeedPrice
+struct FeedPrice final {
+  ::rust::String source;
+  ::rust::String currency;
+  ::FeedQuote quote;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_FeedPrice
+
 #ifndef CXXBRIDGE1_STRUCT_RustFeePreferences
 #define CXXBRIDGE1_STRUCT_RustFeePreferences
 // Global fee mode (Manual=0, Default=1, Smart=2) and tier (Low=0, Medium=1, Fast=2).
@@ -1265,12 +1375,147 @@ struct RustFeePreferences final {
 };
 #endif // CXXBRIDGE1_STRUCT_RustFeePreferences
 
+#ifndef CXXBRIDGE1_STRUCT_FeedSelection
+#define CXXBRIDGE1_STRUCT_FeedSelection
+struct FeedSelection final {
+  ::RustFeePreferences preferences;
+  ::FeedQuote default_rate;
+  ::FeedQuote low;
+  ::FeedQuote medium;
+  ::FeedQuote fast;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_FeedSelection
+
+#ifndef CXXBRIDGE1_STRUCT_FeedSourceState
+#define CXXBRIDGE1_STRUCT_FeedSourceState
+struct FeedSourceState final {
+  ::rust::Vec<::rust::String> currencies;
+  bool has_default CXX_DEFAULT_VALUE(false);
+  bool has_smart CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_FeedSourceState
+
+#ifndef CXXBRIDGE1_STRUCT_PluginMetadataField
+#define CXXBRIDGE1_STRUCT_PluginMetadataField
+struct PluginMetadataField final {
+  ::rust::String key;
+  ::PluginMetadataKind kind;
+  ::rust::String text;
+  double number CXX_DEFAULT_VALUE(0);
+  bool flag CXX_DEFAULT_VALUE(false);
+  ::rust::Vec<::rust::String> items;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PluginMetadataField
+
+#ifndef CXXBRIDGE1_STRUCT_PluginMetadata
+#define CXXBRIDGE1_STRUCT_PluginMetadata
+struct PluginMetadata final {
+  ::rust::String id;
+  ::rust::Vec<::PluginMetadataField> fields;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PluginMetadata
+
+#ifndef CXXBRIDGE1_STRUCT_PluginGrantedAccess
+#define CXXBRIDGE1_STRUCT_PluginGrantedAccess
+struct PluginGrantedAccess final {
+  bool account CXX_DEFAULT_VALUE(false);
+  bool keys CXX_DEFAULT_VALUE(false);
+  bool state CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PluginGrantedAccess
+
+#ifndef CXXBRIDGE1_STRUCT_AmountParseResult
+#define CXXBRIDGE1_STRUCT_AmountParseResult
+struct AmountParseResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::std::uint64_t sats CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_AmountParseResult
+
+#ifndef CXXBRIDGE1_STRUCT_FeeParseResult
+#define CXXBRIDGE1_STRUCT_FeeParseResult
+struct FeeParseResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::std::uint64_t fee CXX_DEFAULT_VALUE(0);
+  double fee_rate CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_FeeParseResult
+
+#ifndef CXXBRIDGE1_STRUCT_SendAmounts
+#define CXXBRIDGE1_STRUCT_SendAmounts
+struct SendAmounts final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::std::uint64_t input_total CXX_DEFAULT_VALUE(0);
+  ::std::uint64_t sending_total CXX_DEFAULT_VALUE(0);
+  ::std::uint64_t remaining CXX_DEFAULT_VALUE(0);
+  ::std::uint64_t change CXX_DEFAULT_VALUE(0);
+  ::std::uint64_t transaction_total CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SendAmounts
+
+#ifndef CXXBRIDGE1_STRUCT_SpCreationRequest
+#define CXXBRIDGE1_STRUCT_SpCreationRequest
+struct SpCreationRequest final {
+  ::rust::String account_name;
+  ::Network network;
+  ::rust::String descriptor;
+  ::rust::String taproot_descriptor;
+  ::rust::String segwit_descriptor;
+  ::rust::String blindbit_url;
+  ::rust::String electrum_url;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SpCreationRequest
+
+#ifndef CXXBRIDGE1_STRUCT_MusigCreationRequest
+#define CXXBRIDGE1_STRUCT_MusigCreationRequest
+struct MusigCreationRequest final {
+  ::rust::String account_name;
+  ::Network network;
+  ::rust::String descriptor;
+  ::rust::String electrum_url;
+  bool verify_certificate CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_MusigCreationRequest
+
+#ifndef CXXBRIDGE1_STRUCT_AccountCreationResult
+#define CXXBRIDGE1_STRUCT_AccountCreationResult
+struct AccountCreationResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::String preference_error;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_AccountCreationResult
+
 #ifndef CXXBRIDGE1_STRUCT_Notification
 #define CXXBRIDGE1_STRUCT_Notification
 // Notification from the account scanner.
 struct Notification final {
   ::NotificationFlag flag;
   ::rust::String payload;
+  ::std::uint32_t current CXX_DEFAULT_VALUE(0);
+  ::std::uint32_t end CXX_DEFAULT_VALUE(0);
 
   using IsRelocatable = ::std::true_type;
 };
@@ -1547,6 +1792,9 @@ struct RustTxDetails final {
 #ifndef CXXBRIDGE1_STRUCT_EndpointResult
 #define CXXBRIDGE1_STRUCT_EndpointResult
 struct EndpointResult final {
+  ::BackendErrorKind kind;
+  // Reopen succeeded; transport confirmation still arrives through notifications.
+  bool connection_pending CXX_DEFAULT_VALUE(false);
   bool is_ok CXX_DEFAULT_VALUE(false);
   bool saved CXX_DEFAULT_VALUE(false);
   ::rust::String error;
@@ -1595,6 +1843,7 @@ struct TransactionTemplate final {
 #define CXXBRIDGE1_STRUCT_TransactionSimulation
 // Result of transaction simulation.
 struct TransactionSimulation final {
+  ::BackendErrorKind kind;
   // Whether the transaction can be created with current funds
   bool is_valid CXX_DEFAULT_VALUE(false);
   // Estimated fee in satoshis (0 if invalid)
@@ -1611,6 +1860,11 @@ struct TransactionSimulation final {
   ::rust::String error;
   // Outpoints selected by coin selection (empty if invalid)
   ::rust::Vec<::rust::String> selected_outpoints;
+  ::rust::Vec<::std::uint64_t> selected_values;
+  ::rust::Vec<::std::uint64_t> recipient_amounts;
+  ::std::uint64_t sending_total CXX_DEFAULT_VALUE(0);
+  ::std::uint64_t change CXX_DEFAULT_VALUE(0);
+  ::std::uint64_t transaction_total CXX_DEFAULT_VALUE(0);
 
   using IsRelocatable = ::std::true_type;
 };
@@ -1620,6 +1874,7 @@ struct TransactionSimulation final {
 #define CXXBRIDGE1_STRUCT_TxResult
 // Result of a transaction operation (sign, broadcast).
 struct TxResult final {
+  ::BackendErrorKind kind;
   // Whether the operation succeeded.
   bool is_ok CXX_DEFAULT_VALUE(false);
   // Error message (empty if is_ok is true).
@@ -1645,6 +1900,23 @@ struct MusigFinalizeResult final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_MusigFinalizeResult
+
+#ifndef CXXBRIDGE1_STRUCT_MusigAttemptSnapshot
+#define CXXBRIDGE1_STRUCT_MusigAttemptSnapshot
+struct MusigAttemptSnapshot final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::String save_error;
+  ::rust::String finalize_error;
+  ::rust::String psbt_v2_hex;
+  ::rust::String tx_hex;
+  ::rust::String record_id;
+  ::rust::Vec<::rust::String> signers;
+  bool reset_pending CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_MusigAttemptSnapshot
 
 #ifndef CXXBRIDGE1_STRUCT_SavedPsbtAttempt
 #define CXXBRIDGE1_STRUCT_SavedPsbtAttempt
@@ -1859,6 +2131,7 @@ struct ElectrumTipResult final {
 #define CXXBRIDGE1_STRUCT_ConnectionResult
 // Result of a connection test.
 struct ConnectionResult final {
+  ::BackendErrorKind kind;
   // Whether the connection succeeded.
   bool is_ok CXX_DEFAULT_VALUE(false);
   // Error message (empty if is_ok is true).
@@ -1910,6 +2183,7 @@ struct PsbtValidation final {
 #define CXXBRIDGE1_STRUCT_BackendInfo
 // Backend server information result.
 struct BackendInfo final {
+  ::BackendErrorKind kind;
   // Whether the request succeeded.
   bool is_ok CXX_DEFAULT_VALUE(false);
   // Error message (empty if is_ok is true).
@@ -2145,6 +2419,8 @@ struct SigningCandidate final {
   bool registered CXX_DEFAULT_VALUE(false);
   // The key already gave its share for the PSBT's current MuSig2 round.
   bool musig_done CXX_DEFAULT_VALUE(false);
+  bool nonces_done CXX_DEFAULT_VALUE(false);
+  bool signatures_done CXX_DEFAULT_VALUE(false);
 
   using IsRelocatable = ::std::true_type;
 };
@@ -2606,6 +2882,73 @@ enum class PolicyLocktime : ::std::uint8_t {
 };
 #endif // CXXBRIDGE1_ENUM_PolicyLocktime
 
+#ifndef CXXBRIDGE1_ENUM_PolicyDurationUnit
+#define CXXBRIDGE1_ENUM_PolicyDurationUnit
+enum class PolicyDurationUnit : ::std::uint8_t {
+  Blocks = 0,
+  Days = 1,
+  Weeks = 2,
+  Months = 3,
+};
+#endif // CXXBRIDGE1_ENUM_PolicyDurationUnit
+
+#ifndef CXXBRIDGE1_ENUM_PolicyDraftError
+#define CXXBRIDGE1_ENUM_PolicyDraftError
+enum class PolicyDraftError : ::std::uint8_t {
+  None = 0,
+  Count = 1,
+  Date = 2,
+  Future = 3,
+  Tip = 4,
+  RelativeMax = 5,
+  Bounds = 6,
+};
+#endif // CXXBRIDGE1_ENUM_PolicyDraftError
+
+#ifndef CXXBRIDGE1_STRUCT_PolicyDraft
+#define CXXBRIDGE1_STRUCT_PolicyDraft
+struct PolicyDraft final {
+  ::rust::Vec<::rust::String> keys;
+  ::rust::Vec<::rust::String> mandatory;
+  ::std::uint32_t threshold CXX_DEFAULT_VALUE(0);
+  ::PolicyLocktime locktime;
+  ::std::uint32_t count CXX_DEFAULT_VALUE(0);
+  ::PolicyDurationUnit unit;
+  ::std::int64_t date_timestamp CXX_DEFAULT_VALUE(0);
+  bool date_valid CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PolicyDraft
+
+#ifndef CXXBRIDGE1_STRUCT_PolicyPath
+#define CXXBRIDGE1_STRUCT_PolicyPath
+struct PolicyPath final {
+  ::PolicySemantic semantic;
+  // Signers per spend: 1 for Single, m for Multi, mandatory plus cosigners
+  // for MultiMandatory.
+  ::std::uint32_t threshold CXX_DEFAULT_VALUE(0);
+  ::PolicyLocktime locktime;
+  // Blocks for Relative, height for the absolute kinds, 0 for None.
+  ::std::uint32_t locktime_value CXX_DEFAULT_VALUE(0);
+  ::rust::Vec<::PolicyKey> keys;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PolicyPath
+
+#ifndef CXXBRIDGE1_STRUCT_PolicyDraftResult
+#define CXXBRIDGE1_STRUCT_PolicyDraftResult
+struct PolicyDraftResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::PolicyDraftError lock_error;
+  ::PolicyPath path;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PolicyDraftResult
+
 #ifndef CXXBRIDGE1_STRUCT_PolicyKey
 #define CXXBRIDGE1_STRUCT_PolicyKey
 // One key of a path, as the creator gathered it. The role key
@@ -2623,22 +2966,6 @@ struct PolicyKey final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_PolicyKey
-
-#ifndef CXXBRIDGE1_STRUCT_PolicyPath
-#define CXXBRIDGE1_STRUCT_PolicyPath
-struct PolicyPath final {
-  ::PolicySemantic semantic;
-  // Signers per spend: 1 for Single, m for Multi, mandatory plus cosigners
-  // for MultiMandatory.
-  ::std::uint32_t threshold CXX_DEFAULT_VALUE(0);
-  ::PolicyLocktime locktime;
-  // Blocks for Relative, height for the absolute kinds, 0 for None.
-  ::std::uint32_t locktime_value CXX_DEFAULT_VALUE(0);
-  ::rust::Vec<::PolicyKey> keys;
-
-  using IsRelocatable = ::std::true_type;
-};
-#endif // CXXBRIDGE1_STRUCT_PolicyPath
 
 #ifndef CXXBRIDGE1_STRUCT_PolicySpec
 #define CXXBRIDGE1_STRUCT_PolicySpec
@@ -2978,6 +3305,7 @@ struct PsbtResult final : public ::rust::Opaque {
 
   ::rust::String saved_record_id() const noexcept;
   ::rust::String save_error() const noexcept;
+  ::BackendErrorKind get_error_kind() const noexcept;
   ~PsbtResult() = delete;
 
 private:
@@ -3199,6 +3527,8 @@ struct KeysModule final : public ::rust::Opaque {
   // unknown key or a key without a secret.
   ::rust::Box<::HotMaterial> hot_material(::rust::Str fingerprint) const noexcept;
 
+  ::KeyOpResult apply_key_file(::KeyFileCommit const &committed) noexcept;
+
   // Commits a key `hot_seal` built into the store, adding the Hot route in
   // the same update. Refuses a sealed key whose network does not match the
   // manager's.
@@ -3295,6 +3625,124 @@ private:
   };
 };
 #endif // CXXBRIDGE1_STRUCT_HotMaterial
+
+#ifndef CXXBRIDGE1_STRUCT_FeedState
+#define CXXBRIDGE1_STRUCT_FeedState
+struct FeedState final : public ::rust::Opaque {
+  void add_feed(::rust::Str id) noexcept;
+  void remove_feed(::rust::Str id) noexcept;
+  void select_price(::rust::String source, ::rust::String selected_currency) noexcept;
+  void set_currencies(::rust::Str id, ::rust::Vec<::rust::String> offered) noexcept;
+  void set_price_quote(::rust::Str id, ::rust::Str code, double value) noexcept;
+  ::FeedSourceState feed_source(::rust::Str id) const noexcept;
+  ::FeedPrice price_selection() const noexcept;
+  bool select_fees(::RustFeePreferences preferences) noexcept;
+  void set_fee_capabilities(::rust::Str id, bool has_default, bool has_smart) noexcept;
+  void set_default_fee(::rust::Str id, double value) noexcept;
+  void set_smart_fees(::rust::Str id, double low, double medium, double fast) noexcept;
+  ::FeedSelection fee_selection() const noexcept;
+  ~FeedState() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_FeedState
+
+#ifndef CXXBRIDGE1_STRUCT_EndpointRetry
+#define CXXBRIDGE1_STRUCT_EndpointRetry
+struct EndpointRetry final : public ::rust::Opaque {
+  void retry_connected() noexcept;
+  void retry_stopped() noexcept;
+  ::RetryDecision retry_lost(::std::int64_t now_ms) noexcept;
+  bool retry_due() noexcept;
+  ~EndpointRetry() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_EndpointRetry
+
+#ifndef CXXBRIDGE1_STRUCT_SpEndpointChange
+#define CXXBRIDGE1_STRUCT_SpEndpointChange
+struct SpEndpointChange final : public ::rust::Opaque {
+  ::EndpointPhase endpoint_phase() const noexcept;
+  ::EndpointResult endpoint_result() const noexcept;
+  void prepare_endpoint() noexcept;
+  void finish_endpoint_after_drain() noexcept;
+  ~SpEndpointChange() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_SpEndpointChange
+
+#ifndef CXXBRIDGE1_STRUCT_MusigEndpointChange
+#define CXXBRIDGE1_STRUCT_MusigEndpointChange
+struct MusigEndpointChange final : public ::rust::Opaque {
+  ::EndpointPhase endpoint_phase() const noexcept;
+  ::EndpointResult endpoint_result() const noexcept;
+  void prepare_endpoint() noexcept;
+  void finish_endpoint_after_drain() noexcept;
+  ~MusigEndpointChange() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_MusigEndpointChange
+
+#ifndef CXXBRIDGE1_STRUCT_KeyFilePreview
+#define CXXBRIDGE1_STRUCT_KeyFilePreview
+struct KeyFilePreview final : public ::rust::Opaque {
+  bool is_ok() const noexcept;
+  ::rust::String get_error() const noexcept;
+  ::KeyFileFailure file_failure() const noexcept;
+  ::Network file_network() const noexcept;
+  ::rust::String file_fingerprint() const noexcept;
+  ::rust::String file_alias() const noexcept;
+  ::rust::Vec<::KeyXpub> file_xpubs() const noexcept;
+  ~KeyFilePreview() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_KeyFilePreview
+
+#ifndef CXXBRIDGE1_STRUCT_KeyFileCommit
+#define CXXBRIDGE1_STRUCT_KeyFileCommit
+struct KeyFileCommit final : public ::rust::Opaque {
+  bool is_ok() const noexcept;
+  ::rust::String get_error() const noexcept;
+  ::BackendErrorKind get_error_kind() const noexcept;
+  ~KeyFileCommit() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_KeyFileCommit
 
 #ifndef CXXBRIDGE1_STRUCT_SealedHotKey
 #define CXXBRIDGE1_STRUCT_SealedHotKey
@@ -3453,6 +3901,14 @@ struct MusigAccount final : public ::rust::Opaque {
   ::SavedPsbtMutation delete_saved_psbt(::rust::Str id) const noexcept;
   ::SavedPsbtMutation retry_saved_psbts() const noexcept;
   ::rust::String saved_psbt_error() const noexcept;
+  ::MusigAttemptSnapshot active_attempt() const noexcept;
+  bool clear_active_attempt() const noexcept;
+  ::MusigAttemptSnapshot accept_signed_progress(::rust::Str answer) const noexcept;
+  ::MusigAttemptSnapshot finalize_active_attempt() const noexcept;
+  ::SavedPsbtRestore activate_saved_psbt(::rust::Str id) const noexcept;
+  ::MusigAttemptSnapshot reset_active_attempt() const noexcept;
+  ::MusigAttemptSnapshot require_active_restart() const noexcept;
+  ::SigningPlan active_signing_plan(::rust::Vec<::LiveDevice> devices) const noexcept;
 
   // TxResult value is the txid.
   ::TxResult broadcast_transaction(::rust::String signed_tx_hex) const noexcept;
@@ -3513,6 +3969,18 @@ private:
 
 // `Policy::from_descriptor` of BIP-390 text, key types read from R.
 ::PolicyReview review_policy(::rust::String descriptor) noexcept;
+
+::rust::Box<::EndpointRetry> new_endpoint_retry() noexcept;
+
+::rust::Box<::SpEndpointChange> sp_endpoint_change(::rust::Box<::Account> account, ::BackendServer server, ::rust::String url, bool verify, bool test, bool connected) noexcept;
+
+::rust::Box<::MusigEndpointChange> musig_endpoint_change(::rust::Box<::MusigAccount> account, ::rust::String url, bool verify, bool test, bool connected) noexcept;
+
+::rust::Box<::Account> take_sp_endpoint_account(::rust::Box<::SpEndpointChange> change) noexcept;
+
+::rust::Box<::MusigAccount> take_musig_endpoint_account(::rust::Box<::MusigEndpointChange> change) noexcept;
+
+::rust::Box<::FeedState> new_feed_state() noexcept;
 
 // Initialize logging with the specified level.
 // Call this once at application startup.
@@ -3652,6 +4120,8 @@ void state_lock() noexcept;
 // Every installed plugin's sidecar, as JSON text.
 ::rust::Vec<::rust::String> plugin_bundles() noexcept;
 
+::rust::Vec<::PluginMetadata> plugin_metadata() noexcept;
+
 // The library and catalogs of the installed plugin `plugin_id`.
 ::PluginLibraryResult plugin_library(::rust::String plugin_id) noexcept;
 
@@ -3668,6 +4138,12 @@ void state_lock() noexcept;
 // The answers given to external plugin libraries, in the order they were given.
 ::rust::Vec<::PluginAccess> app_plugin_access() noexcept;
 
+::PluginAccess app_plugin_answers(::rust::String plugin_id, ::rust::String hash) noexcept;
+
+::PluginGrantedAccess app_plugin_grants(::rust::String hash) noexcept;
+
+::rust::Vec<::PluginAccess> app_plugin_history(::rust::String plugin_id) noexcept;
+
 // Stores the answers for `access.hash`, replacing earlier ones. An entry left
 // with both grants unasked is dropped, so the host asks again.
 void app_set_plugin_access(::PluginAccess access) noexcept;
@@ -3683,6 +4159,28 @@ void app_set_plugin_access(::PluginAccess access) noexcept;
 ::DescriptorBackupResult save_descriptor_backup(::rust::Str descriptor, ::rust::Str path, bool store_common_paths) noexcept;
 
 // Create a new config.
+::AmountParseResult parse_btc_amount(::rust::Str text) noexcept;
+
+::BackendErrorKind validation_error_kind(::PsbtValidation const &result) noexcept;
+
+::BackendErrorKind notification_error_kind(::Notification const &notification) noexcept;
+
+::FeeParseResult parse_fee_input(::rust::Str text, bool rate) noexcept;
+
+::FeeParseResult normalize_fee_rate(double rate) noexcept;
+
+::SendAmounts send_amounts(::rust::Slice<::std::uint64_t const> inputs, ::rust::Slice<::std::uint64_t const> recipients, ::std::uint64_t fee) noexcept;
+
+::std::uint32_t policy_threshold(::std::uint32_t picked, ::std::uint32_t mandatory, ::std::uint32_t threshold) noexcept;
+
+::std::uint64_t policy_duration_blocks(::std::uint32_t count, ::PolicyDurationUnit unit) noexcept;
+
+::PolicyDraftResult resolve_policy_draft(::PolicyDraft draft, ::Network network, bool has_tip, ::std::uint32_t tip, ::std::int64_t now) noexcept;
+
+::AccountCreationResult create_sp_account(::SpCreationRequest request) noexcept;
+
+::AccountCreationResult create_musig_account(::MusigCreationRequest request) noexcept;
+
 ::rust::Box<::Config> new_config(::rust::String account_name, ::Network network, ::rust::String descriptor, ::rust::String blindbit_url, ::rust::String electrum_url, ::std::uint64_t dust_limit, ::rust::String plugin_id) noexcept;
 
 // Load config from file.
@@ -3690,6 +4188,8 @@ void app_set_plugin_access(::PluginAccess access) noexcept;
 
 // List all existing configs.
 ::rust::Vec<::rust::String> list_configs() noexcept;
+
+::rust::Vec<::rust::String> list_module_configs(::rust::Str plugin_id) noexcept;
 
 // Delete an account's data from disk.
 bool delete_config(::rust::String account_name) noexcept;
@@ -3731,6 +4231,10 @@ bool bip39_word_is_valid(::rust::Str word) noexcept;
 // Whether `mnemonic` is a BIP39 mnemonic: known words, a supported length
 // and a matching checksum. Any length BIP39 allows, so 15 words too.
 bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
+
+::rust::Box<::KeyFilePreview> key_file_preview(::rust::Str path, ::Network network) noexcept;
+
+::rust::Box<::KeyFileCommit> commit_key_file(::KeyFilePreview const &preview, ::rust::Str alias) noexcept;
 
 // Derives the fingerprint and seals `mnemonic` under `password` for
 // `network`, touching no `KeysModule` state. Blocks on Argon2id: call from

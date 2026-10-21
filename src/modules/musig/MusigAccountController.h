@@ -29,6 +29,8 @@ class MusigAccountController : public AccountBackend {
     Q_OBJECT
 
 public:
+    enum class ElectrumState { Disconnected, Connecting, Connected, Disconnecting };
+
     MusigAccountController(const QString &account, MusigAccountWidget *widget);
     ~MusigAccountController() override;
     void init(const QString &account);
@@ -70,6 +72,7 @@ public:
                              bool verify_certificate) override;
     void setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) override;
     auto electrumUrl() -> QString;
+    [[nodiscard]] auto electrumState() const -> ElectrumState;
     [[nodiscard]] auto roundStatus() const -> MusigRoundStatus;
     [[nodiscard]] auto psbtInFlight() const -> QString;
     // The finalized transaction hex, empty until the PSBT in flight is finalized.
@@ -81,6 +84,7 @@ public:
     // The fingerprints of the spend path the prepared transaction spends with, empty
     // with no transaction prepared.
     [[nodiscard]] auto spendSigners() const -> QStringList;
+    auto requestSigningPlan() -> uint64_t;
     // MusigAccount::spend_leaves for the selected coins.
     auto spendLeaves(const QStringList &outpoints) -> MusigSpendLeaves;
     [[nodiscard]] auto saveWarning() const -> QString;
@@ -92,6 +96,7 @@ public:
     void retrySavedPsbts();
 
 signals:
+    void signingPlanReady(uint64_t req_id, SigningPlan plan);
     void electrumConnected(QString address);
     void electrumDisconnected();
     // The Electrum URL was saved.
@@ -175,7 +180,7 @@ protected:
     void clearSigning();
     void enqueueStorage(std::function<void()> work, std::function<void()> done);
     void startStorage();
-    void persistActivePsbt();
+    void applyAttempt(const MusigAttemptSnapshot &snapshot);
     void setSaveWarning(const QString &message);
     void refreshActiveWarning();
     void completeSavedPsbtDeletion(const QString &id, const SavedPsbtMutation &result);
@@ -191,7 +196,7 @@ private:
     std::optional<rust::Box<MusigAccount>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;
     QList<QThread *> m_workers;
-    bool m_electrum_running = false;
+    ElectrumState m_electrum_state = ElectrumState::Disconnected;
     account::ElectrumReconnect *m_reconnect = new account::ElectrumReconnect(this);
     QString m_psbt_v2_hex;
     QString m_tx_hex;
@@ -214,9 +219,11 @@ private:
     // Sign requests in flight, each one key's, by request id. Answers are merged into
     // the PSBT as it is by then, so keys sign at once.
     QHash<ReqId, QString> m_sign_reqs;
+    QSet<ReqId> m_accepting_reqs;
+    uint64_t m_next_plan_id = 0;
     QPointer<IKeys> m_signing_keys;
     bool m_resetting = false;
-    std::shared_ptr<SavedPsbtReset> m_restart_result;
+    std::shared_ptr<MusigAttemptSnapshot> m_restart_result;
     QString m_restart_source;
     bool m_restart_pending = false;
     std::uint64_t m_signing_generation = 0;

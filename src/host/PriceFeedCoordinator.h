@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QPointer>
 #include <memory>
+#include <silent.h>
 
 class IFeed;
 
@@ -66,26 +67,17 @@ public slots:
 
 protected:
     void notifySelected(const SelectedPrice &previous);
+    void syncFeedLifetimes() const;
 
 private:
     struct Source {
         QString name;
         QPointer<IFeed> feed;
-        QStringList currencies;
-        QHash<QString, double> rates;
         quint64 registration_id = 0;
         PriceFeedConnection *connection = nullptr;
-        bool has_default = false;
-        bool has_smart = false;
-        std::optional<double> default_rate;
-        std::optional<double> low;
-        std::optional<double> medium;
-        std::optional<double> fast;
     };
 
     QHash<QString, Source> m_sources;
-    QString m_selected_source;
-    QString m_selected_currency;
     quint64 m_next_registration_id = 0;
-    FeePreferences m_fee_preferences;
+    mutable rust::Box<FeedState> m_state = new_feed_state();
 };

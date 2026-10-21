@@ -17,9 +17,145 @@ use bwk_bup::{
 };
 
 use crate::ffi::{
-    Network, PolicyCompileResult, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath,
-    PolicyReview, PolicyReviewKey, PolicyReviewPath, PolicySemantic, PolicySpec,
+    Network, PolicyCompileResult, PolicyDraft, PolicyDraftError, PolicyDraftResult,
+    PolicyDurationUnit, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicyReview,
+    PolicyReviewKey, PolicyReviewPath, PolicySemantic, PolicySpec,
 };
+
+const SECONDS_PER_BLOCK: u64 = 600;
+const BLOCKS_PER_DAY: u64 = 144;
+const BLOCKS_PER_WEEK: u64 = 1008;
+const BLOCKS_PER_MONTH: u64 = 4320;
+
+pub fn policy_threshold(picked: u32, mandatory: u32, threshold: u32) -> u32 {
+    let highest = picked.max(1);
+    threshold.clamp(mandatory.saturating_add(1).min(highest), highest)
+}
+
+pub fn policy_duration_blocks(count: u32, unit: PolicyDurationUnit) -> u64 {
+    let multiplier = match unit {
+        PolicyDurationUnit::Blocks => 1,
+        PolicyDurationUnit::Days => BLOCKS_PER_DAY,
+        PolicyDurationUnit::Weeks => BLOCKS_PER_WEEK,
+        PolicyDurationUnit::Months => BLOCKS_PER_MONTH,
+        // SAFETY: PolicyDurationUnit is the CXX enum with these four variants.
+        _ => unreachable!("CXX enum type safety guarantees no other variants exist"),
+    };
+    u64::from(count) * multiplier
+}
+
+fn draft_lock(draft: &PolicyDraft, tip: Option<u32>, now: i64) -> Result<u32, PolicyDraftError> {
+    let blocks = policy_duration_blocks(draft.count, draft.unit);
+    match draft.locktime {
+        PolicyLocktime::None => Ok(0),
+        PolicyLocktime::Relative | PolicyLocktime::AbsoluteRenewable if draft.count == 0 => {
+            Err(PolicyDraftError::Count)
+        }
+        PolicyLocktime::Relative => u16::try_from(blocks)
+            .map(u32::from)
+            .map_err(|_| PolicyDraftError::RelativeMax),
+        PolicyLocktime::AbsoluteRenewable => draft_height(blocks, tip, true),
+        PolicyLocktime::Absolute if !draft.date_valid => Err(PolicyDraftError::Date),
+        PolicyLocktime::Absolute => {
+            let seconds = draft
+                .date_timestamp
+                .checked_sub(now)
+                .ok_or(PolicyDraftError::Bounds)?;
+            if seconds <= 0 {
+                return Err(PolicyDraftError::Future);
+            }
+            let blocks = (seconds as u64).div_ceil(SECONDS_PER_BLOCK);
+            draft_height(blocks, tip, false)
+        }
+        _ => Err(PolicyDraftError::Bounds),
+    }
+}
+
+fn draft_height(blocks: u64, tip: Option<u32>, renewable: bool) -> Result<u32, PolicyDraftError> {
+    let tip = tip.ok_or(PolicyDraftError::Tip)?;
+    let height = u64::from(tip)
+        .checked_add(blocks)
+        .ok_or(PolicyDraftError::Bounds)?;
+    let height = u32::try_from(height).map_err(|_| PolicyDraftError::Bounds)?;
+    absolute_height(height).map_err(|_| PolicyDraftError::Bounds)?;
+    let height = if renewable {
+        renewable_height(height)
+    } else {
+        height
+    };
+    absolute_height(height).map_err(|_| PolicyDraftError::Bounds)?;
+    Ok(height)
+}
+
+pub fn resolve_policy_draft(
+    draft: PolicyDraft,
+    network: Network,
+    has_tip: bool,
+    tip: u32,
+    now: i64,
+) -> PolicyDraftResult {
+    let lock = draft_lock(&draft, has_tip.then_some(tip), now);
+    let lock_error = lock
+        .as_ref()
+        .err()
+        .copied()
+        .unwrap_or(PolicyDraftError::None);
+    let mandatory = draft.mandatory.len() as u32;
+    let picked = draft.keys.len() as u32;
+    let semantic = match (picked, mandatory) {
+        (1, _) => PolicySemantic::Single,
+        (_, 0) => PolicySemantic::Multi,
+        _ => PolicySemantic::MultiMandatory,
+    };
+    let account_path = bip87_account_path(network, 0);
+    let mut path = PolicyPath {
+        semantic,
+        threshold: policy_threshold(picked, mandatory, draft.threshold),
+        locktime: draft.locktime,
+        locktime_value: lock.unwrap_or(u32::MAX),
+        keys: draft
+            .keys
+            .iter()
+            .map(|fingerprint| PolicyKey {
+                fingerprint: fingerprint.clone(),
+                account_path: account_path.clone(),
+                role_xpub: String::new(),
+                key_type: PolicyKeyType::Internal,
+                mandatory: picked > 1 && draft.mandatory.contains(fingerprint),
+            })
+            .collect(),
+    };
+    let invalid_keys = draft.mandatory.iter().any(|key| !draft.keys.contains(key))
+        || draft
+            .mandatory
+            .iter()
+            .enumerate()
+            .any(|(i, key)| draft.mandatory[..i].contains(key))
+        || draft
+            .keys
+            .iter()
+            .enumerate()
+            .any(|(i, key)| draft.keys[..i].contains(key));
+    let error = if invalid_keys {
+        "invalid or duplicate policy keys".into()
+    } else if lock_error != PolicyDraftError::None {
+        format!("invalid policy lock: {lock_error:?}")
+    } else {
+        match to_path(&path, network.into(), true) {
+            Ok(_) => String::new(),
+            Err(error) => error,
+        }
+    };
+    if !error.is_empty() {
+        path.threshold = 0;
+    }
+    PolicyDraftResult {
+        is_ok: error.is_empty(),
+        error,
+        lock_error,
+        path,
+    }
+}
 
 /// Empty when `account` does not fit a hardened index, where bwk-bup would panic.
 pub fn bip87_account_path(network: Network, account: u32) -> String {

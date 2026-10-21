@@ -1,7 +1,10 @@
 #pragma once
 
 #include <QList>
+#include <QPointer>
 #include <QString>
+#include <memory>
+#include <optional>
 
 #include "modules/keys/modals/AddKey.h"
 
@@ -9,6 +12,7 @@
 
 class QDragEnterEvent;
 class QDropEvent;
+class QThread;
 
 namespace catalog {
 class Button;
@@ -33,11 +37,18 @@ class FileFlow final : public AddKeyFlow {
 
 public:
     explicit FileFlow(KeysModule *module);
+    ~FileFlow() override;
     void start() override;
+
+signals:
+    void previewReady();
+    void commitReady();
 
 public slots:
     void onBackClicked();
     void onNextClicked();
+    void onPreviewReady();
+    void onCommitReady();
     void onOpenFileClicked();
 
 protected:
@@ -76,7 +87,10 @@ private:
     catalog::ScrollArea *m_drop_body = nullptr;
 
     KeyReview *m_review = nullptr;
-    QList<KeyRouteKind> m_routes;
+    QPointer<QThread> m_worker;
+    Network m_network = Network::Regtest;
+    std::shared_ptr<std::optional<rust::Box<KeyFilePreview>>> m_preview;
+    std::shared_ptr<std::optional<rust::Box<KeyFileCommit>>> m_commit;
 };
 
 } // namespace keys::modal

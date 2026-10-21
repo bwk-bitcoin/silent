@@ -145,9 +145,9 @@ void StatusBar::onUpdateWaitingForBlocks(uint32_t tip_height) {
     m_blindbit_item->setLabel(TR("status-synced-watching").arg(tip_height));
 }
 
-void StatusBar::onUpdateScanError(rust::String error) {
+void StatusBar::onUpdateScanError(rust::String error, BackendErrorKind kind) {
     QString errorStr = QString::fromStdString(std::string(error.c_str()));
-    m_blindbit_item->setLabel(mapBackendErrorSummary(errorStr));
+    m_blindbit_item->setLabel(mapBackendErrorSummary(kind));
 }
 
 void StatusBar::onElectrumConnected(const QString &address) {

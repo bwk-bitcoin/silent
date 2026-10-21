@@ -4,6 +4,7 @@
 #include "theme/Palette.h"
 #include <cstdint>
 #include <qwidget.h>
+#include <silent.h>
 
 // Layout constants: aliases from design system
 const int MARGIN = resolve(Padding::XL);
@@ -31,5 +32,5 @@ void setScreenContent(QWidget *screen, QWidget *&main_widget, QWidget *content);
 auto frame(QWidget *widget) -> QWidget *;
 auto shortenOutpoint(const QString &outpoint) -> QString;
 auto coinsCount(uint64_t count) -> QString;
-auto mapBackendErrorSummary(const QString &raw_error) -> QString;
+auto mapBackendErrorSummary(BackendErrorKind kind) -> QString;
 auto formatBackendErrorDetails(const QString &raw_error) -> QString;

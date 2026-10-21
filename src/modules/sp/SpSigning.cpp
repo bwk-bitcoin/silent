@@ -183,7 +183,8 @@ void SpSigning::onSignClicked() {
     auto psbt = account.value()->prepare_transaction(m_tx.value());
     if (!psbt->is_ok()) {
         auto error = QString::fromStdString(std::string(psbt->get_psbt_error().c_str()));
-        auto text = mapBackendErrorSummary(error) + "\n\n" + formatBackendErrorDetails(error);
+        auto text = mapBackendErrorSummary(psbt->get_error_kind()) + "\n\n" +
+                    formatBackendErrorDetails(error);
         AppController::execModal(new catalog::MessageModal(TR("send-prepare-failed"), text));
         return;
     }
@@ -240,7 +241,8 @@ void SpSigning::onValidationResult(PsbtValidation result) {
     if (!result.is_ok) {
         // Connection/protocol error: warn but don't block
         auto error = QString::fromStdString(std::string(result.error.c_str()));
-        auto text = mapBackendErrorSummary(error) + "\n\n" + formatBackendErrorDetails(error);
+        auto text = mapBackendErrorSummary(::validation_error_kind(result)) + "\n\n" +
+                    formatBackendErrorDetails(error);
         AppController::execModal(new catalog::MessageModal(TR("send-validation-error"), text));
         // Fall through and let the user confirm the transaction anyway
     } else if (result.spent_input_count > 0) {
@@ -293,7 +295,8 @@ void SpSigning::onSignerError(std::optional<ReqId> req_id, const QString &messag
     }
 
     disconnectSigner();
-    TxResult result;
+    TxResult result{};
+    result.kind = BackendErrorKind::Signing;
     result.is_ok = false;
     result.error = rust::String(message.toStdString());
     result.value = rust::String();

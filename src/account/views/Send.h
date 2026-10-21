@@ -119,6 +119,8 @@ private:
     catalog::Label *m_max_label = nullptr;
     QWidget *m_widget = nullptr;
     std::optional<uint64_t> m_frozen_amount;
+    std::optional<uint64_t> m_parsed_amount;
+    QString m_parsed_text;
 };
 
 // Payments, coins and fee, the transaction they form, then the account's signing
@@ -173,6 +175,7 @@ protected:
     // widgets in place, so the transaction view tracks edits live without
     // rebuilding/re-parenting anything (no input focus loss).
     void updateTransactionFlow();
+    [[nodiscard]] auto editableAmounts() -> SendAmounts;
     auto txTemplate() -> std::optional<TransactionTemplate>;
     // The coins the transaction spends: the ones picked by hand, or the auto selection.
     [[nodiscard]] auto spentOutpoints() const -> QStringList;
@@ -215,6 +218,7 @@ private:
     catalog::Label *m_change_fiat = nullptr;
 
     catalog::Toggle *m_fee_toggle = nullptr;
+    FeeParseResult m_parsed_fee;
     catalog::ComboBox *m_fee_mode_picker = nullptr;
     catalog::ComboBox *m_fee_tier_picker = nullptr;
     FeeMode m_fee_mode = FeeMode::Manual;
@@ -246,6 +250,7 @@ private:
 
     catalog::Label *m_fee_estimate_label = nullptr;
     uint64_t m_estimated_fee = 0;
+    std::optional<TransactionSimulation> m_preview;
 
     QList<RustCoin> m_selected_coins{};
     QStringList m_auto_selected_outpoints;

@@ -2,8 +2,10 @@
 
 #include <QString>
 #include <QWidget>
+#include <cstdint>
 
 class MusigAccountController;
+enum class Endpoint : std::uint8_t;
 
 namespace catalog {
 class Separator;
@@ -18,8 +20,7 @@ public:
     explicit MusigStatusBar(MusigAccountController *controller, QWidget *parent = nullptr);
 
 public slots:
-    void onElectrumConnected(const QString &address);
-    void onElectrumDisconnected();
+    void onEndpointStateChanged(Endpoint endpoint);
     void onElectrumToggled(bool checked);
     void onReloadUrl();
 

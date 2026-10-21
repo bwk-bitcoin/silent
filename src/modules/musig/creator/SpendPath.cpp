@@ -10,14 +10,6 @@ namespace musig::modal {
 
 namespace {
 
-// The creator always uses BIP-87 account 0' (account choice is a later feature).
-constexpr std::uint32_t BIP87_ACCOUNT = 0;
-// An older() value is a 16-bit block count.
-constexpr std::uint32_t MAX_RELATIVE_BLOCKS = 65535;
-constexpr std::int64_t SECONDS_PER_BLOCK = 600;
-constexpr std::uint32_t BLOCKS_PER_DAY = 144;
-constexpr std::uint32_t BLOCKS_PER_WEEK = 1008;
-constexpr std::uint32_t BLOCKS_PER_MONTH = 4320;
 constexpr int BLOCKS_PER_HOUR = 6;
 constexpr int HOURS_SHOWN_AS_HOURS = 48;
 constexpr int DAYS_SHOWN_AS_DAYS = 60;
@@ -38,8 +30,7 @@ auto names(const QStringList &fingerprints, const QHash<QString, QString> &alias
 auto clampedThreshold(const SpendPath &path) -> int {
     auto picked = static_cast<int>(path.keys.size());
     auto mandatory = static_cast<int>(path.mandatory.size());
-    return std::clamp(path.threshold, std::min(mandatory + 1, std::max(picked, 1)),
-                      std::max(picked, 1));
+    return static_cast<int>(::policy_threshold(picked, mandatory, std::max(path.threshold, 0)));
 }
 
 // "30 days", "1 day".
@@ -71,21 +62,28 @@ auto blocksSpan(std::uint32_t blocks) -> QString {
     return TR("musig-span-months").arg(days / DAYS_PER_MONTH);
 }
 
-// The blocks from now to `date`, rounded up; 0 for a date not in the future.
-auto blocksUntil(const QDateTime &date) -> std::uint32_t {
-    auto seconds = QDateTime::currentDateTime().secsTo(date);
-    if (seconds <= 0) {
-        return 0;
+auto resolve(const SpendPath &path, Network network, std::optional<std::uint32_t> tip)
+    -> PolicyDraftResult {
+    PolicyDraft draft;
+    for (const auto &key : path.keys) {
+        draft.keys.push_back(rust::String(key.toStdString()));
     }
-    return static_cast<std::uint32_t>((seconds + SECONDS_PER_BLOCK - 1) / SECONDS_PER_BLOCK);
+    for (const auto &key : path.mandatory) {
+        draft.mandatory.push_back(rust::String(key.toStdString()));
+    }
+    draft.threshold = std::max(path.threshold, 0);
+    draft.locktime = static_cast<PolicyLocktime>(path.lock);
+    draft.count = std::max(path.count, 0);
+    draft.unit = static_cast<PolicyDurationUnit>(path.unit);
+    draft.date_timestamp = path.date.toSecsSinceEpoch();
+    draft.date_valid = path.date.isValid();
+    return ::resolve_policy_draft(draft, network, tip.has_value(), tip.value_or(0),
+                                  QDateTime::currentSecsSinceEpoch());
 }
 
 // The height `path` opens at, counted from `tip`: a renewable one on bwk-bup's grid.
 auto lockHeight(const SpendPath &path, std::uint32_t tip) -> std::uint32_t {
-    if (path.lock == LockKind::Date) {
-        return tip + blocksUntil(path.date);
-    }
-    return ::renewable_height(tip + unitBlocks(path.count, path.unit));
+    return resolve(path, Network::Regtest, tip).path.locktime_value;
 }
 
 } // namespace
@@ -95,97 +93,33 @@ auto pathTitle(const SpendPath &path, int index) -> QString {
     return name.isEmpty() ? TR("musig-create-path-title").arg(index + 1) : name;
 }
 
-auto unitBlocks(int count, LockUnit unit) -> std::uint32_t {
-    auto blocks = static_cast<std::uint32_t>(std::max(count, 0));
-    switch (unit) {
-    case LockUnit::Blocks:
-        return blocks;
-    case LockUnit::Days:
-        return blocks * BLOCKS_PER_DAY;
-    case LockUnit::Weeks:
-        return blocks * BLOCKS_PER_WEEK;
-    case LockUnit::Months:
-        return blocks * BLOCKS_PER_MONTH;
-    }
-    return blocks;
+auto unitBlocks(int count, LockUnit unit) -> std::uint64_t {
+    return ::policy_duration_blocks(std::max(count, 0), static_cast<PolicyDurationUnit>(unit));
 }
 
 auto lockReason(const SpendPath &path, std::optional<std::uint32_t> tip) -> QString {
-    switch (path.lock) {
-    case LockKind::None:
+    auto result = resolve(path, Network::Regtest, tip);
+    switch (result.lock_error) {
+    case PolicyDraftError::None:
         return {};
-    case LockKind::Relative:
-        if (path.count <= 0) {
-            return TR("musig-lock-reason-count");
-        }
-        if (unitBlocks(path.count, path.unit) > MAX_RELATIVE_BLOCKS) {
-            return TR("musig-lock-reason-relative-max");
-        }
-        return {};
-    case LockKind::AbsoluteRenewable:
-        if (path.count <= 0) {
-            return TR("musig-lock-reason-count");
-        }
-        break;
-    case LockKind::Date:
-        if (!path.date.isValid()) {
-            return TR("musig-lock-reason-date");
-        }
-        if (blocksUntil(path.date) == 0) {
-            return TR("musig-lock-reason-future");
-        }
-        break;
-    }
-    // A height is counted from the tip.
-    if (!tip.has_value()) {
+    case PolicyDraftError::Count:
+        return TR("musig-lock-reason-count");
+    case PolicyDraftError::Date:
+        return TR("musig-lock-reason-date");
+    case PolicyDraftError::Future:
+        return TR("musig-lock-reason-future");
+    case PolicyDraftError::RelativeMax:
+        return TR("musig-lock-reason-relative-max");
+    case PolicyDraftError::Tip:
         return TR("musig-lock-reason-tip");
+    default:
+        return QString::fromStdString(std::string(result.error));
     }
-    return {};
 }
 
 auto policyPath(const SpendPath &path, Network network, std::optional<std::uint32_t> tip)
     -> PolicyPath {
-    PolicyPath out;
-    auto picked = path.keys.size();
-    out.threshold = static_cast<std::uint32_t>(clampedThreshold(path));
-    if (picked == 1) {
-        out.semantic = PolicySemantic::Single;
-        out.threshold = 1;
-    } else if (path.mandatory.isEmpty()) {
-        out.semantic = PolicySemantic::Multi;
-    } else {
-        out.semantic = PolicySemantic::MultiMandatory;
-    }
-    switch (path.lock) {
-    case LockKind::None:
-        out.locktime = PolicyLocktime::None;
-        out.locktime_value = 0;
-        break;
-    case LockKind::Relative:
-        out.locktime = PolicyLocktime::Relative;
-        out.locktime_value = unitBlocks(path.count, path.unit);
-        break;
-    case LockKind::AbsoluteRenewable:
-        out.locktime = PolicyLocktime::AbsoluteRenewable;
-        out.locktime_value = lockHeight(path, tip.value_or(0));
-        break;
-    case LockKind::Date:
-        // A plain height: a date never renews.
-        out.locktime = PolicyLocktime::Absolute;
-        out.locktime_value = lockHeight(path, tip.value_or(0));
-        break;
-    }
-    auto accountPath = ::bip87_account_path(network, BIP87_ACCOUNT);
-    for (const auto &fingerprint : path.keys) {
-        PolicyKey key;
-        key.fingerprint = rust::String(fingerprint.toStdString());
-        key.account_path = accountPath;
-        key.key_type = PolicyKeyType::Internal;
-        key.mandatory =
-            out.semantic == PolicySemantic::MultiMandatory && path.mandatory.contains(fingerprint);
-        out.keys.push_back(key);
-    }
-    return out;
+    return resolve(path, network, tip).path;
 }
 
 auto signerWords(const SpendPath &path, const QHash<QString, QString> &aliases) -> QString {

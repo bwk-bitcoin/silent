@@ -8,6 +8,7 @@
 
 #include <QHash>
 #include <QList>
+#include <QPointer>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -15,6 +16,7 @@
 #include <optional>
 #include <silent.h>
 
+class QThread;
 class QWidget;
 
 namespace catalog {
@@ -64,17 +66,21 @@ public:
     enum class View : std::uint8_t { Paths, EditPath, Xpubs, Review, Register, Verify, Electrum };
 
     CreatePolicy();
+    ~CreatePolicy() override;
+    void reject() override;
     // A keys-module flow closes this window and runs in its place, then shows this
     // window again with the answer.
     auto exec() -> int override;
 
 signals:
+    void creationReady(AccountCreationResult result);
     void electrumTestReady(ConnectionResult result);
     void tipReady(Network network, ElectrumTipResult result);
 
 public slots:
     void onBackClicked();
     void onNextClicked();
+    void onCreationReady(const AccountCreationResult &result);
     void onNetworkChanged(int index);
     void onPathRowClicked();
     void onAddPathClicked();
@@ -223,6 +229,10 @@ protected:
     static void markFailed(catalog::SelectRow *row, const QString &why);
 
 private:
+    QPointer<QThread> m_creation_worker;
+    QList<QPointer<QThread>> m_endpoint_workers;
+    PolicyReview m_compiled_review;
+    QStringList m_review_names;
     View m_view = View::Paths;
     catalog::WizardSteps *m_steps = nullptr;
     catalog::Label *m_status_label = nullptr;

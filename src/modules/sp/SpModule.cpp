@@ -2,9 +2,9 @@
 
 #include "AppController.h"
 #include "SpInstance.h"
-#include "modals/CreateAccount.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
+#include "modals/CreateAccount.h"
 #include <QDebug>
 #include <QStringList>
 #include <common.h>
@@ -21,8 +21,8 @@ SpModule *gSpModule = nullptr;
 
 SpModule::SpModule() : IModule(nullptr) {
     gSpModule = this;
-    connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
-            &SpModule::onInstanceRemoved, qontrol::UNIQUE);
+    connect(Host::get()->events(), &HostEvents::instanceRemoved, this, &SpModule::onInstanceRemoved,
+            qontrol::UNIQUE);
 }
 
 SpModule::~SpModule() {
@@ -45,24 +45,20 @@ QMap<QString, QString> SpModule::meta() const {
 bool SpModule::isSpAccount(const QString &account_id) {
     auto config = ::config_from_file(rust::String(account_id.toStdString()));
     if (!config->is_ok()) {
-        qWarning() << "SpModule: skipping account" << account_id
-                   << "with invalid config:"
+        qWarning() << "SpModule: skipping account" << account_id << "with invalid config:"
                    << QString::fromStdString(std::string(config->get_error().c_str()));
         return false;
     }
-    return QString::fromStdString(std::string(config->get_plugin_id().c_str()))
-           == QString::fromLatin1(SP_PLUGIN_ID);
+    return QString::fromStdString(std::string(config->get_plugin_id().c_str())) ==
+           QString::fromLatin1(SP_PLUGIN_ID);
 }
 
 ReqId SpModule::list() {
     ReqId reqId = nextReqId();
     QList<QPair<QString, QString>> instances;
-    auto configs = ::list_configs();
+    auto configs = ::list_module_configs(SP_PLUGIN_ID);
     for (auto &name : configs) {
         QString accountId = QString::fromStdString(std::string(name.c_str()));
-        if (!isSpAccount(accountId)) {
-            continue;
-        }
         instances.append({accountId, accountId});
     }
 

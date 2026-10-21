@@ -34,6 +34,7 @@ public slots:
     void onModeClicked();
     void onFlowViewChanged(const QString &title);
     void onFlowBack();
+    void onFlowBusy(bool busy);
 
 protected:
     void init();
@@ -55,6 +56,7 @@ private:
     QWidget *m_modes_body = nullptr;
     // The flow of the mode picked, deleted once it goes back or the window closes.
     AddKeyFlow *m_flow = nullptr;
+    bool m_busy = false;
 };
 
 // One way to add a key, embedded in AddKey once its mode is picked: its views, their
@@ -68,6 +70,7 @@ public:
     virtual void start() = 0;
 
 signals:
+    void busyChanged(bool busy);
     // The window title of the view now shown; every view keeps AddKey's one width.
     void viewChanged(const QString &title);
     // Back left the flow: AddKey shows its mode list again.

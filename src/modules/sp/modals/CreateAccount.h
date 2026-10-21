@@ -3,6 +3,7 @@
 #include <optional>
 
 #include <QList>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 
@@ -11,6 +12,8 @@
 #include <interfaces/keys.h>
 #include <interfaces/types.h>
 #include <silent.h>
+
+class QThread;
 
 namespace catalog {
 class Button;
@@ -34,6 +37,8 @@ class CreateAccount : public catalog::Modal {
 
 public:
     CreateAccount();
+    ~CreateAccount() override;
+    void reject() override;
     // The descriptor fetch closes this window and runs the keys module's flow in its
     // place, then shows this window again with the answer.
     auto exec() -> int override;
@@ -41,8 +46,10 @@ public:
 signals:
     void backendInfoReady(BackendInfo info);
     void electrumTestReady(ConnectionResult result);
+    void creationReady(AccountCreationResult result);
 
 public slots:
+    void onCreationReady(const AccountCreationResult &result);
     void onCreate();
     void onNetworkChanged();
     void onKeyClicked();
@@ -92,6 +99,8 @@ protected:
     [[nodiscard]] auto subAccountPath(int purpose) const -> QString;
 
 private:
+    QPointer<QThread> m_creation_worker;
+    QList<QPointer<QThread>> m_endpoint_workers;
     catalog::Input *m_name_input = nullptr;
     catalog::ComboBox *m_network_combo = nullptr;
     qontrol::Column *m_keys_column = nullptr;

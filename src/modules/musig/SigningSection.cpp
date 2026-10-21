@@ -100,12 +100,6 @@ void SigningSection::doConnect() {
             &SigningSection::onSavedPsbtRestored, qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::sessionCleared, this,
             &SigningSection::onSessionCleared, qontrol::UNIQUE);
-    connect(m_controller, &MusigAccountController::roundChanged, this,
-            &SigningSection::onRoundChanged, qontrol::UNIQUE);
-    connect(m_controller, &MusigAccountController::signerAnswered, this,
-            &SigningSection::onSignerAnswered, qontrol::UNIQUE);
-    connect(m_controller, &MusigAccountController::signingReset, this,
-            &SigningSection::onSigningReset, qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::saveWarningChanged, this,
             &SigningSection::onSaveWarningChanged, qontrol::UNIQUE);
     connect(m_leaf_combo, &QComboBox::currentIndexChanged, this, &SigningSection::onSpendLeafChosen,
@@ -250,7 +244,7 @@ void SigningSection::updateSignState() {
 void SigningSection::openSignModal() {
     m_sent = false;
     // Returns once the modal has closed; onBroadcastDone() sets m_sent meanwhile.
-    AppController::execModal(new SignModal(m_controller, &m_signed));
+    AppController::execModal(new SignModal(m_controller));
     if (!m_sent) {
         return;
     }
@@ -263,7 +257,6 @@ void SigningSection::openSignModal() {
 void SigningSection::closeSession() {
     m_session = false;
     m_loading = false;
-    m_signed.clear();
     m_leaf_combo->setEnabled(true);
     emit lockedChanged(false);
     updateSignState();
@@ -360,7 +353,6 @@ void SigningSection::onPrepareFailed(const QString &message) {
 void SigningSection::onSessionLoading() {
     m_loading = true;
     m_session = true;
-    m_signed.clear();
     m_leaf_combo->setEnabled(false);
     emit lockedChanged(true);
     updateSignState();
@@ -397,12 +389,6 @@ void SigningSection::onSavedPsbtRestored(const SavedPsbtEntry &entry) {
         m_leaf_combo->setCurrentIndex(0);
     }
     m_leaf_combo->setEnabled(false);
-    // The record counts the signatures in, not whose: all of them is every key.
-    if (entry.signatures_known && entry.signatures_complete == entry.signatures_required) {
-        for (const auto &fingerprint : entry.record.spend.fingerprints) {
-            m_signed.insert(toQString(fingerprint).toLower());
-        }
-    }
     auto *send =
         qobject_cast<account::view::Send *>(m_controller->screen("send").value_or(nullptr));
     if (send != nullptr) {
@@ -410,30 +396,6 @@ void SigningSection::onSavedPsbtRestored(const SavedPsbtEntry &entry) {
     }
     emit lockedChanged(true);
     updateSignState();
-}
-
-void SigningSection::onRoundChanged(const MusigRoundStatus &status) {
-    // A finalized PSBT or a single-key path has no rounds: what is known stays.
-    if (!status.is_ok || status.cosigners.empty()) {
-        return;
-    }
-    m_signed.clear();
-    for (const auto &cosigner : status.cosigners) {
-        if (cosigner.expected > 0 && cosigner.partial_sigs >= cosigner.expected) {
-            m_signed.insert(toQString(cosigner.fingerprint).toLower());
-        }
-    }
-}
-
-void SigningSection::onSignerAnswered(const QString &fingerprint) {
-    // A single-key path has no rounds to say who signed: the key that answered did.
-    if (m_controller->roundStatus().round == MusigRound::NotMusig) {
-        m_signed.insert(fingerprint.toLower());
-    }
-}
-
-void SigningSection::onSigningReset() {
-    m_signed.clear();
 }
 
 void SigningSection::onSaveWarningChanged(const QString &message) {

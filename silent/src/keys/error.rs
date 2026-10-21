@@ -87,6 +87,10 @@ pub enum Error {
         cached: Box<Xpub>,
         found: Box<Xpub>,
     },
+    #[error("invalid xpub cache: {0}")]
+    InvalidXpub(String),
+    #[error("invalid key alias: {0}")]
+    InvalidAlias(String),
     #[error("key '{fingerprint}' has no xpub cached at '{path}'")]
     XpubNotCached {
         fingerprint: Fingerprint,

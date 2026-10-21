@@ -44,12 +44,9 @@ auto MusigModule::meta() const -> QMap<QString, QString> {
 auto MusigModule::list() -> ReqId {
     ReqId reqId = nextReqId();
     QList<QPair<QString, QString>> instances;
-    auto configs = ::list_configs();
+    auto configs = ::list_module_configs(MUSIG_PLUGIN_ID);
     for (auto &name : configs) {
         QString accountId = QString::fromStdString(std::string(name.c_str()));
-        if (!isMusigAccount(accountId)) {
-            continue;
-        }
         instances.append({accountId, accountId});
     }
     emit IModule::instances(reqId, instances);

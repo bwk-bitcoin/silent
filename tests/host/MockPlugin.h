@@ -29,8 +29,13 @@ class MockSigner final : public ISigner {
 public:
     MockSigner(QString id, bool implemented, QString fingerprint, plugin::SignerState state,
                QObject *parent = nullptr)
-        : ISigner(parent), m_id(std::move(id)), m_fingerprint(std::move(fingerprint)),
-          m_state(state), m_implemented(implemented) {}
+        : ISigner(parent),
+          m_id(std::move(id)),
+          m_fingerprint(std::move(fingerprint)),
+          m_state(state),
+          m_implemented(implemented) {
+    }
+
     ~MockSigner() override = default;
 
     [[nodiscard]] bool implemented() const override {
@@ -129,11 +134,17 @@ class MockInstance final : public QObject, public IInstance {
 
 public:
     explicit MockInstance(QString id, QObject *parent = nullptr)
-        : QObject(parent), m_id(std::move(id)) {}
+        : QObject(parent),
+          m_id(std::move(id)) {
+    }
+
     MockInstance(QString id, bool signer_implemented, QString fingerprint,
                  plugin::SignerState state, QObject *parent = nullptr)
-        : QObject(parent), m_id(std::move(id)),
-          m_signer(new MockSigner(m_id, signer_implemented, std::move(fingerprint), state, this)) {}
+        : QObject(parent),
+          m_id(std::move(id)),
+          m_signer(new MockSigner(m_id, signer_implemented, std::move(fingerprint), state, this)) {
+    }
+
     ~MockInstance() override = default;
 
     [[nodiscard]] QString id() const override {
@@ -185,7 +196,9 @@ class MockModule final : public IModule {
     Q_OBJECT
 
 public:
-    explicit MockModule(QObject *parent = nullptr) : IModule(parent) {}
+    explicit MockModule(QObject *parent = nullptr) : IModule(parent) {
+    }
+
     ~MockModule() override = default;
 
     [[nodiscard]] QMap<QString, QString> meta() const override {
@@ -209,16 +222,16 @@ public:
     // itself so the registry sees sender() == this module.
     void flush() {
         if (m_auto_start_req_id != 0) {
-            ReqId req_id = m_auto_start_req_id;
+            ReqId reqId = m_auto_start_req_id;
             m_auto_start_req_id = 0;
-            emit IModule::autoStart(req_id, QStringList{});
+            emit IModule::autoStart(reqId, QStringList{});
         }
         if (m_list_req_id != 0) {
-            ReqId req_id = m_list_req_id;
+            ReqId reqId = m_list_req_id;
             m_list_req_id = 0;
             QList<QPair<QString, QString>> instances;
             instances.append({QStringLiteral("inst-1"), QStringLiteral("Instance One")});
-            emit IModule::instances(req_id, instances);
+            emit IModule::instances(reqId, instances);
         }
     }
 
@@ -308,7 +321,9 @@ class MockSyncModule final : public IModule {
     Q_OBJECT
 
 public:
-    explicit MockSyncModule(QObject *parent = nullptr) : IModule(parent) {}
+    explicit MockSyncModule(QObject *parent = nullptr) : IModule(parent) {
+    }
+
     ~MockSyncModule() override = default;
 
     [[nodiscard]] QMap<QString, QString> meta() const override {
@@ -319,9 +334,9 @@ public:
     }
 
     auto list() -> ReqId override {
-        ReqId req_id = ++m_next_req_id;
-        emit IModule::instances(req_id, m_listed);
-        return req_id;
+        ReqId reqId = ++m_next_req_id;
+        emit IModule::instances(reqId, m_listed);
+        return reqId;
     }
 
     // Persists one more instance: the next list() answers it too.
@@ -330,9 +345,9 @@ public:
     }
 
     auto autoStart() -> ReqId override {
-        ReqId req_id = ++m_next_req_id;
-        emit IModule::autoStart(req_id, QStringList{QStringLiteral("sync-auto")});
-        return req_id;
+        ReqId reqId = ++m_next_req_id;
+        emit IModule::autoStart(reqId, QStringList{QStringLiteral("sync-auto")});
+        return reqId;
     }
 
     void startInstance(const QString &id) override {
@@ -360,7 +375,11 @@ class ThreadedCaller final : public QObject {
 
 public:
     ThreadedCaller(MockModule *module, MockInstance *instance, QObject *parent = nullptr)
-        : QObject(parent), m_module(module), m_instance(instance) {}
+        : QObject(parent),
+          m_module(module),
+          m_instance(instance) {
+    }
+
     ~ThreadedCaller() override = default;
 
     // Bumped once each call returns, so the GUI thread can tell "the worker has
@@ -371,6 +390,7 @@ public:
     }
 
 public slots:
+
     void registerFromThread() {
         Host::get()->registerInstance(m_instance->id(), m_instance, m_module);
         m_calls_done.ref();
@@ -402,7 +422,9 @@ class SignalSpy final : public QObject {
     Q_OBJECT
 
 public:
-    explicit SignalSpy(QObject *parent = nullptr) : QObject(parent) {}
+    explicit SignalSpy(QObject *parent = nullptr) : QObject(parent) {
+    }
+
     ~SignalSpy() override = default;
 
     [[nodiscard]] auto count() const -> int {
@@ -410,6 +432,7 @@ public:
     }
 
 public slots:
+
     // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
     void onSignal() {
         ++m_count;
@@ -426,7 +449,9 @@ class ErrorKindSpy final : public QObject {
     Q_OBJECT
 
 public:
-    explicit ErrorKindSpy(QObject *parent = nullptr) : QObject(parent) {}
+    explicit ErrorKindSpy(QObject *parent = nullptr) : QObject(parent) {
+    }
+
     ~ErrorKindSpy() override = default;
 
     [[nodiscard]] auto count() const -> int {
@@ -446,6 +471,7 @@ public:
     }
 
 public slots:
+
     void onError(std::optional<ReqId> req_id, const QString &message, plugin::SignError kind) {
         m_req_id = req_id;
         m_message = message;
@@ -473,8 +499,11 @@ class MockPlugin final : public QObject, public IPlugin {
 
 public:
     explicit MockPlugin(QObject *parent = nullptr)
-        : QObject(parent), m_module(new MockModule(this)),
-          m_other_module(new MockModule(this)) {}
+        : QObject(parent),
+          m_module(new MockModule(this)),
+          m_other_module(new MockModule(this)) {
+    }
+
     ~MockPlugin() override = default;
 
     [[nodiscard]] QMap<QString, QString> meta() const override {
@@ -510,7 +539,10 @@ class MockSyncPlugin final : public QObject, public IPlugin {
 
 public:
     explicit MockSyncPlugin(QObject *parent = nullptr)
-        : QObject(parent), m_module(new MockSyncModule(this)) {}
+        : QObject(parent),
+          m_module(new MockSyncModule(this)) {
+    }
+
     ~MockSyncPlugin() override = default;
 
     [[nodiscard]] QMap<QString, QString> meta() const override {

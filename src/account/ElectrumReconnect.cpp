@@ -12,49 +12,34 @@ namespace account {
 ElectrumReconnect::ElectrumReconnect(QObject *parent) : QObject(parent) {
     m_retry = new QTimer(this);
     m_retry->setSingleShot(true);
-    m_retry->setInterval(RETRY_DELAY_MS);
     connect(m_retry, &QTimer::timeout, this, &ElectrumReconnect::onRetry, qontrol::UNIQUE);
 }
 
 void ElectrumReconnect::connected() {
-    m_armed = true;
-    m_up = true;
-    m_retrying = false;
+    m_state->retry_connected();
 }
 
 void ElectrumReconnect::stopped() {
-    m_armed = false;
-    m_up = false;
-    m_retrying = false;
+    m_state->retry_stopped();
     m_retry->stop();
 }
 
 void ElectrumReconnect::lost() {
-    // Another notification of a loss already counted.
-    if (!m_armed || (!m_up && !m_retrying)) {
-        return;
-    }
-    m_up = false;
-    m_retrying = false;
-    auto now = QDateTime::currentMSecsSinceEpoch();
-    m_losses.removeIf([now](qint64 at) { return now - at > LOSS_WINDOW_MS; });
-    m_losses.append(now);
-    if (m_losses.size() > MAX_LOSSES) {
-        // Dropping again and again: left down until started again.
-        qWarning() << "electrum: disconnected" << m_losses.size()
+    auto decision = m_state->retry_lost(QDateTime::currentMSecsSinceEpoch());
+    if (decision.give_up) {
+        qWarning() << "electrum: disconnected" << decision.losses
                    << "times in the last minute, not reconnecting";
-        auto losses = static_cast<int>(m_losses.size());
-        m_losses.clear();
-        stopped();
-        emit gaveUp(losses);
+        m_retry->stop();
+        emit gaveUp(static_cast<int>(decision.losses));
         return;
     }
-    m_retry->start();
+    if (decision.schedule) {
+        m_retry->start(static_cast<int>(decision.delay_ms));
+    }
 }
 
 void ElectrumReconnect::onRetry() {
-    if (m_armed) {
-        m_retrying = true;
+    if (m_state->retry_due()) {
         emit reconnect();
     }
 }

@@ -27,7 +27,7 @@ fn a_dropped_plugin_is_sealed_and_only_its_bundle_is_read() {
     fs::create_dir_all(dir.join("i18n")).unwrap();
     fs::write(
         dir.join("example.json"),
-        r#"{"id":"example","name":"Example Plugin","version":"0.2.0"}"#,
+        r#"{"id":"example","name":"Example Plugin","version":"0.2.0","abi":4,"enabled":true,"modules":["a","b"]}"#,
     )
     .unwrap();
     let library_name = if cfg!(target_os = "windows") {
@@ -47,6 +47,26 @@ fn a_dropped_plugin_is_sealed_and_only_its_bundle_is_read() {
     let listed = plugin_bundle::list();
     assert_eq!(listed.len(), 1);
     assert!(listed[0].contains("\"Example Plugin\""));
+    let metadata = plugin_bundle::plugin_metadata();
+    assert_eq!(metadata.len(), 1, "one typed plugin bundle");
+    assert_eq!(metadata[0].id, "example", "verified bundle identity");
+    for (key, kind) in [
+        ("name", silent::PluginMetadataKind::Text),
+        ("abi", silent::PluginMetadataKind::Number),
+        ("enabled", silent::PluginMetadataKind::Flag),
+        ("modules", silent::PluginMetadataKind::Strings),
+    ] {
+        assert_eq!(
+            metadata[0]
+                .fields
+                .iter()
+                .find(|field| field.key == key)
+                .expect("typed metadata field")
+                .kind,
+            kind,
+            "metadata type for {key}"
+        );
+    }
     let opened = plugin_bundle::open("example").unwrap();
     assert_eq!(opened.library, b"\x7fELF library v1");
     assert_eq!(opened.library_name, library_name);

@@ -46,6 +46,35 @@ namespace account::view {
 
 namespace {
 
+auto moneyLocale(const QLineEdit &field) -> QLocale {
+    return field.validator() != nullptr ? field.validator()->locale() : field.locale();
+}
+
+auto localizedMoneyText(const QLineEdit &field, QString text) -> QString {
+    text.replace(QStringLiteral("."), moneyLocale(field).decimalPoint());
+    return text;
+}
+
+auto normalizedMoneyText(const QLineEdit &field) -> std::optional<QString> {
+    auto locale = moneyLocale(field);
+    bool validSyntax = false;
+    // Qt checks localized syntax only; Rust interprets the monetary value.
+    static_cast<void>(locale.toDouble(field.text(), &validSyntax));
+    if (!validSyntax) {
+        return std::nullopt;
+    }
+    auto text = field.text();
+    text.remove(locale.groupSeparator());
+    text.replace(locale.decimalPoint(), QStringLiteral("."));
+    for (auto &character : text) {
+        auto digit = character.digitValue();
+        if (digit >= 0) {
+            character = QChar(static_cast<char16_t>(u'0' + digit));
+        }
+    }
+    return text;
+}
+
 auto fiatAmount(uint64_t sats) -> QString {
     auto price = Host::get()->selectedPrice();
     if (!price.rate.has_value()) {
@@ -120,6 +149,9 @@ OutputW::OutputW(Send *screen, int id) {
     m_amount_input = new Input(InputRole::Mono);
     m_amount_input->setWidth(Size::S);
     m_amount_input->setPlaceholderText(TR("send-placeholder-amount"));
+    auto *btcValidator = new QDoubleValidator(0.00000001, 21000000.0, 8, m_amount_input);
+    btcValidator->setNotation(QDoubleValidator::StandardNotation);
+    m_amount_input->setValidator(btcValidator);
     m_amount_fiat_input = new Input(InputRole::Mono);
     m_amount_fiat_input->setWidth(Size::S);
     m_amount_fiat_input->setPlaceholderText(QStringLiteral("0.00"));
@@ -240,7 +272,11 @@ void OutputW::setMaxMode(bool max) {
 }
 
 void OutputW::setMaxAmount(uint64_t sats) {
-    m_amount_input->setText(toBitcoin(sats, false));
+    // Resolved MAX text is presentation, not another payment edit.
+    QSignalBlocker blocker(m_amount_input);
+    m_amount_input->setText(localizedMoneyText(*m_amount_input, toBitcoin(sats, false)));
+    updateAmountValidation();
+    syncFiatFromBtc();
 }
 
 void OutputW::setLabel(const QString &label) {
@@ -258,6 +294,7 @@ void Send::restoreSavedPsbt(const SavedPsbtEntry &entry) {
     // Lock before setting fields: textChanged must never simulate a restored PSBT.
     m_locked = true;
     m_restored = true;
+    m_preview.reset();
     m_fee_mode = FeeMode::Manual;
     m_fee_mode_picker->setCurrentIndex(static_cast<int>(m_fee_mode));
     for (auto *output : m_outputs) {
@@ -288,6 +325,7 @@ void Send::restoreSavedPsbt(const SavedPsbtEntry &entry) {
     m_fee_toggle->setChecked(false);
     onFeeToggled();
     m_fee_value_input->setText(QString::number(m_estimated_fee));
+    onUpdateFeeValidation();
     m_fee_estimate_label->setText(toBitcoin(m_estimated_fee));
     m_fee_estimate_label->setVisible(true);
     m_warning_label->setText(QString::fromStdString(std::string(entry.warning)));
@@ -603,7 +641,14 @@ void Send::updateTransactionFlow() {
     }
 
     QList<RustCoin> selectedCoins;
-    if (m_auto_coin_selection->isChecked()) {
+    if (m_preview.has_value()) {
+        for (std::size_t i = 0; i < m_preview->selected_outpoints.size(); ++i) {
+            RustCoin coin{};
+            coin.outpoint = m_preview->selected_outpoints.at(i);
+            coin.value = m_preview->selected_values.at(i);
+            selectedCoins.append(coin);
+        }
+    } else if (m_auto_coin_selection->isChecked()) {
         auto availableCoins = m_backend->getCoins();
         for (const auto &coin : availableCoins) {
             auto outpoint = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
@@ -615,10 +660,10 @@ void Send::updateTransactionFlow() {
         selectedCoins = m_selected_coins;
     }
 
-    uint64_t selectedTotal = 0;
+    auto amounts = editableAmounts();
+    auto selectedTotal = m_preview.has_value() ? m_preview->input_total : amounts.input_total;
     QList<catalog::TxFlow::InputItem> inputs;
     for (const auto &coin : selectedCoins) {
-        selectedTotal += coin.value;
         catalog::TxFlow::InputItem item;
         item.weight = static_cast<double>(coin.value) / SATS;
         item.title = TR("txflow-input-n").arg(inputs.size() + 1);
@@ -628,14 +673,16 @@ void Send::updateTransactionFlow() {
     }
 
     QList<catalog::TxFlow::OutputItem> outputs;
-    uint64_t sendingTotal = 0;
+    auto sendingTotal = m_preview.has_value() ? m_preview->sending_total : amounts.sending_total;
+    std::size_t recipientIndex = 0;
     for (auto *output : m_outputs) {
         auto amount = output->amount();
-        uint64_t value = amount.value_or(0);
+        uint64_t value = m_preview.has_value() ? m_preview->recipient_amounts.at(recipientIndex)
+                                               : amount.value_or(0);
+        ++recipientIndex;
         if (value == 0) {
             continue;
         }
-        sendingTotal += value;
         catalog::TxFlow::OutputItem item;
         item.kind = catalog::TxFlow::OutputKind::Recipient;
         item.weight = static_cast<double>(value) / SATS;
@@ -647,10 +694,8 @@ void Send::updateTransactionFlow() {
         outputs.append(item);
     }
 
-    uint64_t change = selectedTotal > sendingTotal + m_estimated_fee
-                          ? selectedTotal - sendingTotal - m_estimated_fee
-                          : 0;
-    uint64_t total = sendingTotal + m_estimated_fee;
+    auto change = m_preview.has_value() ? m_preview->change : amounts.change;
+    auto total = m_preview.has_value() ? m_preview->transaction_total : amounts.transaction_total;
 
     if (change > 0) {
         catalog::TxFlow::OutputItem item;
@@ -1098,39 +1143,41 @@ void Send::onUpdateSelectedCoinsFromSimulation() {
     }
 }
 
-void Send::onUpdateInputsTotal() {
-    qDebug() << "Send::onUpdateInputsTotal()";
-    // Calculate total selected based on mode
-    uint64_t totalSelected = 0;
-
+auto Send::editableAmounts() -> SendAmounts {
+    rust::Vec<uint64_t> inputs;
     if (m_auto_coin_selection->isChecked()) {
-        // In auto mode, calculate from auto-selected outpoints
         auto availableCoins = m_backend->getCoins();
         for (const auto &coin : availableCoins) {
             QString op = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
             if (m_auto_selected_outpoints.contains(op)) {
-                totalSelected += coin.value;
+                inputs.push_back(coin.value);
             }
         }
     } else {
-        // In manual mode, calculate from m_selected_coins
         for (const auto &coin : m_selected_coins) {
-            totalSelected += coin.value;
+            inputs.push_back(coin.value);
         }
     }
 
-    // Minimum required to cover the (non-max) outputs.
-    uint64_t minRequired = 0;
+    rust::Vec<uint64_t> recipients;
     for (auto *out : m_outputs) {
         if (!out->isMax()) {
             auto amt = out->amount();
             if (amt.has_value()) {
-                minRequired += amt.value();
+                recipients.push_back(amt.value());
             }
         }
     }
 
-    uint64_t remaining = minRequired > totalSelected ? minRequired - totalSelected : 0;
+    return ::send_amounts(rust::Slice<const uint64_t>(inputs.data(), inputs.size()),
+                          rust::Slice<const uint64_t>(recipients.data(), recipients.size()),
+                          m_estimated_fee);
+}
+
+void Send::onUpdateInputsTotal() {
+    auto amounts = editableAmounts();
+    auto totalSelected = m_preview.has_value() ? m_preview->input_total : amounts.input_total;
+    auto remaining = m_preview.has_value() ? 0 : amounts.remaining;
     m_inputs_min_value->setText(QString::number(static_cast<double>(remaining) / SATS, 'f', 8) +
                                 " BTC");
     m_inputs_total_value->setText(
@@ -1199,25 +1246,22 @@ auto OutputW::amount() -> std::optional<uint64_t> {
     if (m_frozen_amount.has_value()) {
         return m_frozen_amount;
     }
-    auto amountStr = m_amount_input->text();
-    bool ok = false;
-    auto amountBtc = amountStr.toDouble(&ok);
-    if (!ok) {
-        return std::nullopt;
+    if (m_parsed_text != m_amount_input->text()) {
+        updateAmountValidation();
     }
-    return static_cast<uint64_t>(amountBtc * SATS);
+    return m_parsed_amount;
 }
 
 void OutputW::syncFiatFromBtc() {
     auto price = Host::get()->selectedPrice();
     m_fiat_group->setVisible(price.rate.has_value());
     m_fiat_code->setText(price.currency);
-    bool ok = false;
-    double btc = m_amount_input->text().toDouble(&ok);
-    if (!ok || btc <= 0.0 || !price.rate.has_value()) {
+    auto sats = amount();
+    if (!sats.has_value() || !price.rate.has_value()) {
         m_amount_fiat_input->clear();
         return;
     }
+    double btc = static_cast<double>(sats.value()) / SATS;
     m_amount_fiat_input->setText(QString::number(btc * price.rate.value(), 'f', 2));
 }
 
@@ -1231,7 +1275,7 @@ void OutputW::syncBtcFromFiat() {
     auto btcText = ok && fiat > 0 ? QString::number(fiat / price.rate.value(), 'f', 8) : QString();
     // Update BTC once; onFiatEdited runs the transaction processing after conversion.
     QSignalBlocker blocker(m_amount_input);
-    m_amount_input->setText(btcText);
+    m_amount_input->setText(localizedMoneyText(*m_amount_input, btcText));
 }
 
 auto OutputW::amountInput() -> QWidget * {
@@ -1258,35 +1302,23 @@ void OutputW::updateAddressValidation() {
 
 void OutputW::updateAmountValidation() {
     QString text = m_amount_input->text();
-    if (text.isEmpty()) {
-        setValidationIndicator(m_amount_indicator, text, false);
-    } else {
-        bool ok = false;
-        double val = text.toDouble(&ok);
-        setValidationIndicator(m_amount_indicator, text, ok && val > 0);
-    }
+    m_parsed_text = text;
+    auto normalized = normalizedMoneyText(*m_amount_input);
+    auto parsed = normalized.has_value()
+                      ? ::parse_btc_amount(rust::String(normalized.value().toStdString()))
+                      : AmountParseResult{};
+    m_parsed_amount = parsed.is_ok ? std::optional<uint64_t>(parsed.sats) : std::nullopt;
+    setValidationIndicator(m_amount_indicator, text, parsed.is_ok);
 }
 
 auto Send::txTemplate() -> std::optional<TransactionTemplate> {
     qDebug() << "Send::txTemplate()";
     auto txTemplate = TransactionTemplate();
-    bool ok = false;
-
-    // Fee handling: toggle ON = sats/vb (rate), toggle OFF = sats (absolute)
-    auto feeValue = m_fee_value_input->text().toDouble(&ok);
-    if (!ok || feeValue <= 0) {
+    if (!m_parsed_fee.is_ok) {
         return std::nullopt;
     }
-
-    if (m_fee_toggle->isChecked()) {
-        // Fee rate mode (sats/vb)
-        txTemplate.fee_rate = feeValue;
-        txTemplate.fee = 0;
-    } else {
-        // Absolute fee mode (sats)
-        txTemplate.fee = static_cast<uint64_t>(feeValue);
-        txTemplate.fee_rate = 1.0; // Fallback, not used when fee > 0
-    }
+    txTemplate.fee_rate = m_parsed_fee.fee_rate;
+    txTemplate.fee = m_parsed_fee.fee;
 
     // Outputs
     for (auto *out : m_outputs) {
@@ -1332,13 +1364,12 @@ void Send::onUpdateOutputValidations() {
 void Send::onUpdateFeeValidation() {
     qDebug() << "Send::onUpdateFeeValidation()";
     QString text = m_fee_value_input->text();
-    if (text.isEmpty()) {
-        setValidationIndicator(m_fee_indicator, text, false);
-    } else {
-        bool ok = false;
-        double val = text.toDouble(&ok);
-        setValidationIndicator(m_fee_indicator, text, ok && val > 0);
-    }
+    auto normalized = normalizedMoneyText(*m_fee_value_input);
+    m_parsed_fee = normalized.has_value()
+                       ? ::parse_fee_input(rust::String(normalized.value().toStdString()),
+                                           m_fee_toggle->isChecked())
+                       : FeeParseResult{};
+    setValidationIndicator(m_fee_indicator, text, m_parsed_fee.is_ok);
 }
 
 void Send::onProcess() {
@@ -1347,6 +1378,8 @@ void Send::onProcess() {
     if (m_locked) {
         return;
     }
+    m_preview.reset();
+    m_estimated_fee = 0;
     for (auto *out : m_outputs) {
         if (sender() != out->fiatInput()) {
             out->syncFiatFromBtc();
@@ -1375,24 +1408,15 @@ void Send::onProcess() {
     if (simu.error.empty()) {
         if (simu.is_valid) {
             m_warning_label->setVisible(false);
+            m_preview = simu;
 
             // Fill in estimated max amount for MAX outputs
+            std::size_t recipientIndex = 0;
             for (auto *out : m_outputs) {
                 if (out->isMax()) {
-                    uint64_t nonMaxTotal = 0;
-                    for (auto *other : m_outputs) {
-                        if (!other->isMax()) {
-                            auto amt = other->amount();
-                            if (amt.has_value()) {
-                                nonMaxTotal += amt.value();
-                            }
-                        }
-                    }
-                    uint64_t maxAmount =
-                        simu.output_total > nonMaxTotal ? simu.output_total - nonMaxTotal : 0;
-                    out->setMaxAmount(maxAmount);
-                    break;
+                    out->setMaxAmount(simu.recipient_amounts.at(recipientIndex));
                 }
+                ++recipientIndex;
             }
 
             // Store auto-selected outpoints for display when auto mode is active
@@ -1411,7 +1435,7 @@ void Send::onProcess() {
             // The estimated fee, once the signing step can tell it (a Multikey account
             // needs its spend path).
             bool estimates = m_signing->estimatesFee();
-            m_estimated_fee = estimates ? simu.fee : 0;
+            m_estimated_fee = simu.fee;
             m_fee_estimate_label->setText(TR("send-fee-estimate").arg(toBitcoin(simu.fee)));
             m_fee_estimate_label->setVisible(estimates);
         } else {
@@ -1425,11 +1449,11 @@ void Send::onProcess() {
         m_signing->setTransaction(std::nullopt, {});
         m_estimated_fee = 0;
         m_fee_estimate_label->setVisible(false);
-        auto rawError = QString::fromStdString(std::string(simu.error.c_str()));
-        m_warning_label->setText(mapBackendErrorSummary(rawError));
+        m_warning_label->setText(mapBackendErrorSummary(simu.kind));
         m_warning_label->setVisible(true);
     }
 
+    onUpdateInputsTotal();
     // Reflect the updated inputs/outputs/fee in the graphical flow as the user types.
     updateTransactionFlow();
 }
@@ -1517,7 +1541,14 @@ void Send::onSelectedFeesChanged() {
         m_fee_mode_picker->setCurrentIndex(static_cast<int>(m_fee_mode));
     }
     m_fee_tier_picker->setVisible(m_fee_mode == FeeMode::Smart);
-    m_fee_value_input->setText(QString::number(rate.value_or(1.0), 'g', 15));
+    auto text = QString::number(rate.value_or(1.0), 'g', 15);
+    if (rate.has_value()) {
+        auto normalized = ::normalize_fee_rate(rate.value());
+        if (normalized.is_ok) {
+            text = QString::number(normalized.fee_rate, 'f', 3);
+        }
+    }
+    m_fee_value_input->setText(localizedMoneyText(*m_fee_value_input, text));
 }
 
 void Send::onFeeEdited() {

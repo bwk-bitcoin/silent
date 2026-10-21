@@ -81,6 +81,359 @@ fn encoded(psbt: &PsbtV2) -> String {
     hex::encode(psbt.serialize().expect("serialize PSBT v2"))
 }
 
+#[test]
+fn builder_previews_and_active_attempt_transitions_keep_unsaved_progress() {
+    let name = test_account_name();
+    let config = new_config(
+        name.clone(),
+        Network::Regtest,
+        descriptor(),
+        String::new(),
+        String::new(),
+        0,
+        MUSIG_PLUGIN_ID.into(),
+    );
+    assert!(config.save().is_empty(), "save isolated attempt account");
+    let mut bwk: BwkAccount =
+        BwkAccount::try_new(config.to_musig_config().expect("backend config")).expect("backend");
+    let receive = bwk.scanner_mut().new_recv_addr();
+    let funding = Transaction {
+        version: Version::TWO,
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint::new(Txid::from_byte_array([71; 32]), 0),
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(100_000),
+            script_pubkey: receive.script_pubkey(),
+        }],
+    };
+    bwk.scanner().record_unconfirmed_spend(&funding);
+    drop(bwk);
+    let mut account = new_musig_account(name.clone());
+    assert!(
+        account.is_ok(),
+        "open attempt account: {}",
+        account.get_error()
+    );
+    let outpoint = OutPoint::new(funding.compute_txid(), 0).to_string();
+    let template = TransactionTemplate {
+        outputs: vec![Output {
+            address: account.new_addr(),
+            amount: 40_000,
+            label: String::new(),
+            max: false,
+        }],
+        fee: 1000,
+        fee_rate: 0.0,
+        input_outpoints: vec![outpoint.clone()],
+    };
+    let preview = account.simulate_transaction(template.clone());
+    assert!(preview.is_valid, "builder preview: {}", preview.error);
+    assert_eq!(
+        preview.selected_outpoints,
+        vec![outpoint.clone()],
+        "selected input"
+    );
+    assert_eq!(
+        preview.selected_values,
+        vec![100_000],
+        "builder input value"
+    );
+    assert_eq!(
+        preview.recipient_amounts,
+        vec![40_000],
+        "resolved recipients"
+    );
+    assert_eq!(
+        (
+            preview.input_total,
+            preview.sending_total,
+            preview.change,
+            preview.fee,
+            preview.transaction_total
+        ),
+        (100_000, 40_000, 59_000, 1000, 41_000),
+        "balanced builder totals"
+    );
+    let mut max = template.clone();
+    max.outputs[0].max = true;
+    max.outputs[0].amount = 0;
+    let preview = account.simulate_transaction(max);
+    assert!(preview.is_valid, "MAX preview: {}", preview.error);
+    assert_eq!(
+        preview.recipient_amounts,
+        vec![99_000],
+        "builder resolved MAX"
+    );
+    assert_eq!(preview.change, 0, "MAX has no change");
+    assert_eq!(preview.transaction_total, 100_000, "MAX plus fee");
+
+    let leaves = account.spend_leaves(vec![outpoint]);
+    assert!(leaves.is_ok, "spend leaves: {}", leaves.error);
+    let prepared = account.prepare_transaction(template.clone(), leaves.leaves[0].clone());
+    assert!(prepared.is_ok(), "prepare: {}", prepared.get_psbt_error());
+    let snapshot = account.active_attempt();
+    assert!(snapshot.is_ok, "active attempt initialized");
+    assert_eq!(
+        snapshot.psbt_v2_hex,
+        prepared.bytes_v2_hex(),
+        "active prepared bytes"
+    );
+    let first_id = snapshot.record_id;
+    let parsed = Descriptor::from_str(&descriptor()).expect("descriptor");
+    let policy = parsed.as_miniscript().expect("policy");
+    let signers: Vec<_> = [1, 2, 3]
+        .into_iter()
+        .map(|seed| {
+            HotSigner::new_from_xpriv(
+                bitcoin::Network::Regtest,
+                Xpriv::new_master(bitcoin::Network::Regtest, &[seed; 32]).expect("signer master"),
+            )
+        })
+        .collect();
+    let mut first =
+        PsbtV2::deserialize(&hex::decode(prepared.bytes_v2_hex()).expect("hex")).expect("PSBT");
+    let mut second = first.clone();
+    signers[0].sign_v2(&mut first, policy).expect("first nonce");
+    signers[1]
+        .sign_v2(&mut second, policy)
+        .expect("concurrent second nonce");
+    let snapshot = account.accept_signed_progress(&encoded(&first));
+    assert!(
+        snapshot.is_ok && snapshot.tx_hex.is_empty(),
+        "first nonce accepted: {}",
+        snapshot.error
+    );
+
+    let path = config.account_dir().join("saved_psbts.json");
+    let previous = std::fs::read(&path).expect("persisted attempt");
+    let backup = path.with_extension("backup");
+    std::fs::rename(&path, &backup).expect("retain persisted attempt");
+    std::fs::create_dir(&path).expect("block save replacement");
+    let snapshot = account.accept_signed_progress(&encoded(&second));
+    assert!(
+        snapshot.is_ok,
+        "concurrent nonce merged despite save failure: {}",
+        snapshot.error
+    );
+    assert!(
+        !snapshot.save_error.is_empty(),
+        "save failure is distinct from merge success"
+    );
+    assert_eq!(
+        account.active_attempt().psbt_v2_hex,
+        snapshot.psbt_v2_hex,
+        "RAM progress retained"
+    );
+    assert_eq!(
+        account.round_status(&snapshot.psbt_v2_hex).round,
+        silent::MusigRound::PartialSigs,
+        "both nonces in RAM"
+    );
+    std::fs::remove_dir(&path).expect("remove test save blocker");
+    std::fs::rename(&backup, &path).expect("restore persisted file");
+    assert_eq!(
+        std::fs::read(&path).expect("old file"),
+        previous,
+        "failed replacement left disk unchanged"
+    );
+    assert!(
+        account.retry_saved_psbts().save_error.is_empty(),
+        "retry persists RAM progress"
+    );
+    let mut partial = PsbtV2::deserialize(&hex::decode(&snapshot.psbt_v2_hex).expect("nonce hex"))
+        .expect("nonce PSBT");
+    signers[0]
+        .sign_v2(&mut partial, policy)
+        .expect("first partial signature");
+    let snapshot = account.accept_signed_progress(&encoded(&partial));
+    assert!(
+        snapshot.is_ok && snapshot.tx_hex.is_empty(),
+        "one partial does not finalize: {}",
+        snapshot.error
+    );
+    let mut partial =
+        PsbtV2::deserialize(&hex::decode(&snapshot.psbt_v2_hex).expect("partial hex"))
+            .expect("partial PSBT");
+    signers[1]
+        .sign_v2(&mut partial, policy)
+        .expect("second partial signature");
+    std::fs::rename(&path, &backup).expect("retain pre-finalization file");
+    std::fs::create_dir(&path).expect("block finalization save");
+    let finalized = account.accept_signed_progress(&encoded(&partial));
+    assert!(
+        finalized.is_ok && finalized.finalize_error.is_empty(),
+        "complete MuSig finalizes: {} {}",
+        finalized.error,
+        finalized.finalize_error
+    );
+    assert!(
+        !finalized.tx_hex.is_empty(),
+        "complete MuSig produced a transaction"
+    );
+    assert!(
+        !finalized.save_error.is_empty(),
+        "finalization preserves a separate persistence failure"
+    );
+    assert_eq!(
+        account.active_attempt().tx_hex,
+        finalized.tx_hex,
+        "finalized transaction is retained in RAM after save failure"
+    );
+    std::fs::remove_dir(&path).expect("remove finalization save blocker");
+    std::fs::rename(&backup, &path).expect("restore pre-finalization file");
+    assert!(
+        account.retry_saved_psbts().save_error.is_empty(),
+        "retry persists finalized RAM progress"
+    );
+    assert!(
+        account.activate_saved_psbt(&first_id).is_ok,
+        "activate finalized MuSig"
+    );
+    assert_eq!(
+        account.active_attempt().tx_hex,
+        finalized.tx_hex,
+        "restore authoritative finalized transaction"
+    );
+
+    let mut reset_template = template.clone();
+    reset_template.outputs[0].amount = 41_000;
+    let prepared = account.prepare_transaction(reset_template, leaves.leaves[0].clone());
+    assert!(
+        prepared.is_ok(),
+        "prepare reset attempt: {}",
+        prepared.get_psbt_error()
+    );
+    let id = prepared.saved_record_id();
+    let mut first = PsbtV2::deserialize(&hex::decode(prepared.bytes_v2_hex()).expect("reset hex"))
+        .expect("reset PSBT");
+    signers[0]
+        .sign_v2(&mut first, policy)
+        .expect("nonce before reset");
+    assert!(
+        account.accept_signed_progress(&encoded(&first)).is_ok,
+        "nonce accepted before reset"
+    );
+    let reset = account.reset_active_attempt();
+    assert!(reset.is_ok, "reset active attempt: {}", reset.error);
+    assert!(
+        !account.accept_signed_progress(&encoded(&first)).is_ok,
+        "old attempt response refused"
+    );
+    assert_eq!(
+        account.active_attempt().psbt_v2_hex,
+        reset.psbt_v2_hex,
+        "refused response leaves current attempt unchanged"
+    );
+
+    assert!(account.clear_active_attempt(), "clear runtime attempt");
+    let restored = account.activate_saved_psbt(&id);
+    assert!(
+        restored.is_ok,
+        "activate restored attempt: {}",
+        restored.error
+    );
+    assert_eq!(
+        account.active_attempt().psbt_v2_hex,
+        reset.psbt_v2_hex,
+        "restored authoritative bytes"
+    );
+
+    // A single-key leaf uses actual Schnorr signatures, not modal-local history.
+    let prepared = account.prepare_transaction(template, leaves.leaves[1].clone());
+    assert!(
+        prepared.is_ok(),
+        "prepare ordinary leaf: {}",
+        prepared.get_psbt_error()
+    );
+    let mut ordinary =
+        PsbtV2::deserialize(&hex::decode(prepared.bytes_v2_hex()).expect("ordinary hex"))
+            .expect("ordinary PSBT");
+    let plan = account.active_signing_plan(Vec::new());
+    assert!(plan.is_ok, "active ordinary plan: {}", plan.error);
+    assert_eq!(
+        plan.candidates.len(),
+        1,
+        "only selected ordinary leaf signer"
+    );
+    let ordinary_fingerprint = plan.candidates[0].fingerprint.clone();
+    assert!(
+        !plan.candidates[0].signatures_done,
+        "ordinary signature not yet present"
+    );
+    signers[2]
+        .sign_v2(&mut ordinary, policy)
+        .expect("ordinary signature");
+    let restored_plan = silent::new_keys_module(Network::Regtest).signing_plan(&encoded(&ordinary));
+    assert!(
+        restored_plan.is_ok,
+        "restored ordinary plan: {}",
+        restored_plan.error
+    );
+    assert!(
+        restored_plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.fingerprint == ordinary_fingerprint)
+            .expect("ordinary signer in restored plan")
+            .signatures_done,
+        "ordinary signature restored from PSBT"
+    );
+    assert!(
+        account
+            .update_saved_psbt(&prepared.saved_record_id(), &encoded(&ordinary))
+            .is_ok,
+        "save ordinary signature for restoration"
+    );
+    assert!(
+        account
+            .activate_saved_psbt(&prepared.saved_record_id())
+            .is_ok,
+        "restore ordinary signature"
+    );
+    let snapshot = account.active_attempt();
+    assert!(
+        snapshot.is_ok && snapshot.finalize_error.is_empty(),
+        "ordinary accept/finalize: {} {}",
+        snapshot.error,
+        snapshot.finalize_error
+    );
+    assert!(
+        !snapshot.tx_hex.is_empty(),
+        "ordinary signature finalizes automatically"
+    );
+    assert!(
+        account.activate_saved_psbt(&snapshot.record_id).is_ok,
+        "restore finalized ordinary attempt"
+    );
+    assert_eq!(
+        account.active_attempt().tx_hex,
+        snapshot.tx_hex,
+        "finalized restoration snapshot"
+    );
+    let receiver = account.take_receiver();
+    let mut change = silent::musig_endpoint_change(account, String::new(), true, false, false);
+    change.prepare_endpoint();
+    assert_eq!(
+        change.endpoint_phase(),
+        silent::EndpointPhase::Draining,
+        "Rust owns account until Qt acknowledges receiver drain"
+    );
+    while receiver.recv().is_some() {}
+    change.finish_endpoint_after_drain();
+    assert!(change.endpoint_result().is_ok, "offline reopen completes");
+    let account = silent::take_musig_endpoint_account(change);
+    assert_eq!(
+        account.active_attempt().tx_hex,
+        snapshot.tx_hex,
+        "endpoint service preserves active attempt RAM"
+    );
+    drop(account);
+    common::cleanup_test_account(&name);
+}
+
 #[cfg(unix)]
 #[test]
 fn label_edits_report_failed_persistence_and_retry() {
@@ -575,16 +928,21 @@ fn successful_test_saves_then_sp_reopens_offline_without_another_connection() {
         );
         writeln!(stream, "{}", serde_json::json!({"jsonrpc":"2.0", "id":request["id"], "result":["test-electrum", "1.4"]})).expect("handshake response");
     });
-    let result = test_and_save_endpoint(
-        name.clone(),
+    let receiver = account.take_receiver();
+    let mut change = silent::sp_endpoint_change(
+        account,
         BackendServer::Electrum,
         format!("tcp://{endpoint}"),
         false,
+        true,
+        false,
     );
+    change.prepare_endpoint();
+    let result = change.endpoint_result();
     server.join().expect("test server completed");
     assert!(
-        result.is_ok && result.saved,
-        "passing test saves: {}",
+        !result.is_ok && result.saved && change.endpoint_phase() == silent::EndpointPhase::Draining,
+        "passing test saves but waits for receiver drain before completion: {}",
         result.error
     );
     let saved = config_from_file(name.clone());
@@ -597,11 +955,15 @@ fn successful_test_saves_then_sp_reopens_offline_without_another_connection() {
         !saved.get_verify_certificate(),
         "complete certificate policy saved"
     );
-    let receiver = account.take_receiver();
-    account.close_backend();
     while receiver.recv().is_some() {}
-    let reopened = account.reopen_backend(false);
+    change.finish_endpoint_after_drain();
+    let reopened = change.endpoint_result();
     assert!(reopened.is_ok, "SP offline reopen: {}", reopened.error);
+    assert!(
+        reopened.saved && !reopened.connection_pending,
+        "save outcome survives offline reopen without claiming a pending connection"
+    );
+    let account = silent::take_sp_endpoint_account(change);
     assert!(
         !account.electrum_running(),
         "offline SP reopen has no running Electrum connection"

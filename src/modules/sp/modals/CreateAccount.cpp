@@ -16,6 +16,7 @@
 #include "catalog/inputs/Input.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
+#include "metatypes.h"
 #include "modules/keys/KeysView.h"
 #include "modules/sp/SpModule.h"
 #include "theme/Icon.h"
@@ -82,6 +83,23 @@ CreateAccount::CreateAccount() {
     adjustSize();
 }
 
+CreateAccount::~CreateAccount() {
+    if (m_creation_worker != nullptr) {
+        m_creation_worker->wait();
+    }
+    for (const auto &worker : m_endpoint_workers) {
+        if (worker != nullptr) {
+            worker->wait();
+        }
+    }
+}
+
+void CreateAccount::reject() {
+    if (m_creation_worker == nullptr) {
+        catalog::Modal::reject();
+    }
+}
+
 void CreateAccount::init() {
     m_name_input = new catalog::Input;
     m_name_input->setWidth(Size::M);
@@ -116,6 +134,8 @@ void CreateAccount::init() {
 }
 
 void CreateAccount::doConnect() {
+    connect(this, &CreateAccount::creationReady, this, &CreateAccount::onCreationReady,
+            qontrol::UNIQUE);
     connect(m_name_input, &QLineEdit::textChanged, this, &CreateAccount::updateActions,
             qontrol::UNIQUE);
     connect(m_network_combo, &QComboBox::currentIndexChanged, this,
@@ -227,7 +247,8 @@ auto CreateAccount::disabledReason() const -> QString {
 
 void CreateAccount::updateActions() {
     QString reason = disabledReason();
-    m_create->setEnabled(reason.isEmpty() && m_register_req_id == 0);
+    m_create->setEnabled(reason.isEmpty() && m_register_req_id == 0 &&
+                         m_creation_worker == nullptr);
     m_actions->setReason(reason);
 }
 
@@ -543,22 +564,37 @@ void CreateAccount::onDescriptorRegistered(ReqId req_id) {
 }
 
 void CreateAccount::finishCreate() {
-    auto name = m_name_input->text().trimmed();
-    auto blindbitUrl = m_blindbit.input()->text().trimmed();
-    auto electrumUrl = m_electrum.input()->text().trimmed();
-    auto config = new_config(rust::String(name.toStdString()), network(),
-                             rust::String(m_descriptor.toStdString()),
-                             rust::String(blindbitUrl.toStdString()),
-                             rust::String(electrumUrl.toStdString()), 546, rust::String("sp"));
-    config->set_taproot_descriptor(rust::String(m_taproot_descriptor.toStdString()));
-    config->set_segwit_descriptor(rust::String(m_segwit_descriptor.toStdString()));
-    config->to_file();
-    // Prefilled for the next account of this network.
-    ::app_set_last_endpoint(BackendServer::Blindbit, network(),
-                            rust::String(blindbitUrl.toStdString()));
-    ::app_set_last_endpoint(BackendServer::Electrum, network(),
-                            rust::String(electrumUrl.toStdString()));
+    if (m_creation_worker != nullptr) {
+        return;
+    }
+    SpCreationRequest request;
+    request.account_name = rust::String(m_name_input->text().toStdString());
+    request.network = network();
+    request.descriptor = rust::String(m_descriptor.toStdString());
+    request.taproot_descriptor = rust::String(m_taproot_descriptor.toStdString());
+    request.segwit_descriptor = rust::String(m_segwit_descriptor.toStdString());
+    request.blindbit_url = rust::String(m_blindbit.input()->text().trimmed().toStdString());
+    request.electrum_url = rust::String(m_electrum.input()->text().trimmed().toStdString());
+    m_creation_worker =
+        QThread::create([this, request]() { emit creationReady(::create_sp_account(request)); });
+    connect(m_creation_worker, &QThread::finished, m_creation_worker, &QThread::deleteLater,
+            qontrol::UNIQUE);
+    setEnabled(false);
+    m_creation_worker->start();
+}
 
+void CreateAccount::onCreationReady(const AccountCreationResult &result) {
+    m_creation_worker->wait();
+    m_creation_worker = nullptr;
+    setEnabled(true);
+    updateActions();
+    if (!result.is_ok) {
+        showFetchError(QString::fromStdString(std::string(result.error)));
+        return;
+    }
+    if (!result.preference_error.empty()) {
+        qWarning() << QString::fromStdString(std::string(result.preference_error));
+    }
     Host::get()->refreshLauncher();
     accept();
 }
@@ -631,7 +667,8 @@ void CreateAccount::onTestBlindbit() {
         auto info = ::get_backend_info(rust::String(url));
         emit backendInfoReady(info);
     });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    m_endpoint_workers.append(thread);
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
     thread->start();
 }
 
@@ -641,8 +678,7 @@ void CreateAccount::onBackendInfoReady(const BackendInfo &info) {
         return;
     }
     if (!info.is_ok) {
-        auto rawError = QString::fromStdString(std::string(info.error));
-        m_blindbit.setState(catalog::EndpointRow::State::Failed, mapBackendErrorSummary(rawError));
+        m_blindbit.setState(catalog::EndpointRow::State::Failed, mapBackendErrorSummary(info.kind));
     } else if (info.network != network()) {
         m_blindbit.setState(
             catalog::EndpointRow::State::Failed,
@@ -667,7 +703,8 @@ void CreateAccount::onTestElectrum() {
         auto result = ::test_electrum(rust::String(address), true);
         emit electrumTestReady(result);
     });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    m_endpoint_workers.append(thread);
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
     thread->start();
 }
 
@@ -676,8 +713,8 @@ void CreateAccount::onElectrumTestReady(const ConnectionResult &result) {
         return;
     }
     if (!result.is_ok) {
-        auto rawError = QString::fromStdString(std::string(result.error));
-        m_electrum.setState(catalog::EndpointRow::State::Failed, mapBackendErrorSummary(rawError));
+        m_electrum.setState(catalog::EndpointRow::State::Failed,
+                            mapBackendErrorSummary(result.kind));
     } else {
         m_electrum.input()->setText(QString::fromStdString(std::string(result.url)));
         m_electrum.setState(catalog::EndpointRow::State::Ok);

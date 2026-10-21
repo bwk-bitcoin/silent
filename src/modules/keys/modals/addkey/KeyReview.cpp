@@ -58,6 +58,24 @@ auto KeyReview::add(const QList<KeyRouteKind> &routes) -> bool {
     return true;
 }
 
+auto KeyReview::alias() const -> QString {
+    return m_alias->text().trimmed();
+}
+
+void KeyReview::showError(const QString &message) {
+    m_error->setText(message);
+    m_error->setVisible(true);
+    window()->adjustSize();
+}
+
+void KeyReview::setBusy(bool busy) {
+    setEnabled(!busy);
+    m_actions->setEnabled(!busy);
+    if (!busy) {
+        onAliasEdited();
+    }
+}
+
 auto KeyReview::header() const -> QWidget * {
     return m_header;
 }

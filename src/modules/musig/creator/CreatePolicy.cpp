@@ -22,6 +22,7 @@
 #include "catalog/panels/receive/ChunkedAddress.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
+#include "metatypes.h"
 #include "modules/keys/KeysView.h"
 #include "modules/musig/MusigModule.h"
 #include "modules/musig/creator/MusigCreatorModule.h"
@@ -50,8 +51,6 @@ constexpr std::array<Network, 4> NETWORKS = {Network::Regtest, Network::Signet, 
 
 // exec() result of a window closed to run a keys-module flow in its place.
 constexpr int FLOW_RESULT = QDialog::Accepted + 1;
-
-constexpr std::uint64_t DUST_LIMIT = 546;
 
 const char *const K_INDEX = "pathIndex";
 const char *const K_FINGERPRINT = "fingerprint";
@@ -110,13 +109,41 @@ auto keyRow(const KeyEntry &entry, QWidget *status, bool clickable) -> catalog::
 
 // The paths in words, as Review shows them: one card per path, its signers, its
 // timelock, and its keys with the mandatory ones marked.
-auto policyCard(const SpendPath &path, int index, const QHash<QString, QString> &names,
-                std::optional<std::uint32_t> tip) -> QWidget * {
+auto policyCard(const PolicyReviewPath &resolved, const QString &name, int index,
+                const QHash<QString, QString> &names) -> QWidget * {
+    SpendPath path;
+    path.name = name;
+    path.threshold = static_cast<int>(resolved.threshold);
+    for (const auto &key : resolved.keys) {
+        auto fingerprint = QString::fromStdString(std::string(key.fingerprint));
+        path.keys.append(fingerprint);
+        if (key.mandatory) {
+            path.mandatory.append(fingerprint);
+        }
+    }
     auto *title = new catalog::Label(
         TR("musig-review-path").arg(pathTitle(path, index), signerWords(path, names)),
         catalog::LabelRole::Subheading);
     title->setWordWrap(true);
-    auto *lock = new catalog::Label(lockLine(path, tip), catalog::LabelRole::Caption);
+    QString lockText;
+    switch (resolved.locktime) {
+    case PolicyLocktime::None:
+        lockText = TR("musig-locktime-none");
+        break;
+    case PolicyLocktime::Relative:
+        lockText = TR("musig-lock-line-relative")
+                       .arg(resolved.locktime_value == 1
+                                ? TR("musig-count-block")
+                                : TR("musig-count-blocks").arg(resolved.locktime_value));
+        break;
+    case PolicyLocktime::AbsoluteRenewable:
+        lockText = TR("musig-lock-line-renewable").arg(resolved.locktime_value);
+        break;
+    case PolicyLocktime::Absolute:
+        lockText = TR("musig-lock-hint-height").arg(resolved.locktime_value);
+        break;
+    }
+    auto *lock = new catalog::Label(lockText, catalog::LabelRole::Caption);
     lock->setTone(catalog::LabelTone::Secondary);
     auto *content = (new qontrol::Column)->spacing(resolve(Spacing::XXS))->push(title)->push(lock);
     for (const auto &fingerprint : path.keys) {
@@ -136,6 +163,34 @@ auto policyCard(const SpendPath &path, int index, const QHash<QString, QString> 
     return card;
 }
 
+auto reviewNames(const PolicyReview &review, const PolicySpec &spec, const QList<SpendPath> &drafts)
+    -> QStringList {
+    QStringList names;
+    for (const auto &path : review.paths) {
+        QString name;
+        for (std::size_t i = 0; i < spec.paths.size(); ++i) {
+            const auto &source = spec.paths.at(i);
+            if (source.semantic != path.semantic || source.threshold != path.threshold ||
+                source.locktime != path.locktime || source.locktime_value != path.locktime_value ||
+                source.keys.size() != path.keys.size()) {
+                continue;
+            }
+            bool sameKeys = std::ranges::all_of(source.keys, [&path](const PolicyKey &key) {
+                return std::ranges::any_of(path.keys, [&key](const PolicyReviewKey &review_key) {
+                    return key.fingerprint == review_key.fingerprint &&
+                           key.mandatory == review_key.mandatory;
+                });
+            });
+            if (sameKeys) {
+                name = drafts.at(static_cast<qsizetype>(i)).name;
+                break;
+            }
+        }
+        names.append(name);
+    }
+    return names;
+}
+
 } // namespace
 
 CreatePolicy::CreatePolicy() {
@@ -145,6 +200,23 @@ CreatePolicy::CreatePolicy() {
     applyNetworkDefaults();
     fetchTip();
     showPaths();
+}
+
+CreatePolicy::~CreatePolicy() {
+    if (m_creation_worker != nullptr) {
+        m_creation_worker->wait();
+    }
+    for (const auto &worker : m_endpoint_workers) {
+        if (worker != nullptr) {
+            worker->wait();
+        }
+    }
+}
+
+void CreatePolicy::reject() {
+    if (m_creation_worker == nullptr) {
+        catalog::Modal::reject();
+    }
 }
 
 auto CreatePolicy::exec() -> int {
@@ -171,6 +243,8 @@ void CreatePolicy::init() {
 }
 
 void CreatePolicy::doConnect() {
+    connect(this, &CreatePolicy::creationReady, this, &CreatePolicy::onCreationReady,
+            qontrol::UNIQUE);
     connect(this, &CreatePolicy::tipReady, this, &CreatePolicy::onTipReady, qontrol::UNIQUE);
     for (auto *actions : {m_edit_actions, m_xpubs_actions, m_review_actions, m_register_actions,
                           m_verify_actions, m_electrum_actions}) {
@@ -509,8 +583,10 @@ void CreatePolicy::showReview() {
     catalog::clearRows(m_review_cards);
     m_review_cards->spacing(resolve(Spacing::S));
     auto names = keyNames();
-    for (int i = 0; i < m_paths.size(); ++i) {
-        auto *card = policyCard(m_paths.at(i), i, names, m_tip);
+    for (std::size_t i = 0; i < m_compiled_review.paths.size(); ++i) {
+        auto *card =
+            policyCard(m_compiled_review.paths.at(i),
+                       m_review_names.value(static_cast<qsizetype>(i)), static_cast<int>(i), names);
         m_review_cards->push(card);
         card->show();
     }
@@ -835,24 +911,21 @@ auto CreatePolicy::electrumAddress() const -> QString {
 }
 
 void CreatePolicy::install() {
-    auto name = m_name_input->text().trimmed();
-    if (accountExists(name)) {
-        showStatus(TR("create-account-reason-exists").arg(name), catalog::LabelTone::Error);
+    if (m_creation_worker != nullptr) {
         return;
     }
-    auto electrumUrl = m_electrum.input()->text().trimmed();
-    auto config = new_config(rust::String(name.toStdString()), network(),
-                             rust::String(m_descriptor.toStdString()), rust::String(),
-                             rust::String(electrumUrl.toStdString()), DUST_LIMIT,
-                             rust::String(MUSIG_PLUGIN_ID));
-    // Only an SSL server presents a certificate to check.
-    config->set_verify_certificate(!m_ssl_toggle->isChecked() || m_verify_toggle->isChecked());
-    config->to_file();
-    // Prefilled for the next account of this network.
-    ::app_set_last_endpoint(BackendServer::Electrum, network(),
-                            rust::String(electrumUrl.toStdString()));
-    Host::get()->refreshLauncher();
-    accept();
+    MusigCreationRequest request;
+    request.account_name = rust::String(m_name_input->text().toStdString());
+    request.network = network();
+    request.descriptor = rust::String(m_descriptor.toStdString());
+    request.electrum_url = rust::String(m_electrum.input()->text().trimmed().toStdString());
+    request.verify_certificate = !m_ssl_toggle->isChecked() || m_verify_toggle->isChecked();
+    m_creation_worker =
+        QThread::create([this, request]() { emit creationReady(::create_musig_account(request)); });
+    connect(m_creation_worker, &QThread::finished, m_creation_worker, &QThread::deleteLater,
+            qontrol::UNIQUE);
+    setEnabled(false);
+    m_creation_worker->start();
 }
 
 // ===== Shared =====
@@ -916,7 +989,8 @@ void CreatePolicy::fetchTip() {
         auto result = ::electrum_tip_height(rust::String(address), true);
         emit tipReady(net, result);
     });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    m_endpoint_workers.append(thread);
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
     thread->start();
 }
 
@@ -966,6 +1040,8 @@ void CreatePolicy::compilePolicy() {
         showStatus(QString::fromStdString(std::string(review.error)), catalog::LabelTone::Error);
         return;
     }
+    m_compiled_review = review;
+    m_review_names = reviewNames(review, policy, m_paths);
     // Another descriptor: its backup, registrations and checks start over.
     if (descriptor != m_descriptor) {
         m_descriptor = descriptor;
@@ -1345,7 +1421,8 @@ void CreatePolicy::onTestElectrum() {
         auto result = ::test_electrum(rust::String(address), verify);
         emit electrumTestReady(result);
     });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    m_endpoint_workers.append(thread);
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
     thread->start();
 }
 
@@ -1355,8 +1432,8 @@ void CreatePolicy::onElectrumTestReady(const ConnectionResult &result) {
         return;
     }
     if (!result.is_ok) {
-        auto rawError = QString::fromStdString(std::string(result.error));
-        m_electrum.setState(catalog::EndpointRow::State::Failed, mapBackendErrorSummary(rawError));
+        m_electrum.setState(catalog::EndpointRow::State::Failed,
+                            mapBackendErrorSummary(result.kind));
     } else {
         auto url = QString::fromStdString(std::string(result.url));
         m_electrum.input()->setText(url);
@@ -1491,6 +1568,21 @@ void CreatePolicy::refreshKeyRows() {
     case View::Electrum:
         break;
     }
+}
+
+void CreatePolicy::onCreationReady(const AccountCreationResult &result) {
+    m_creation_worker->wait();
+    m_creation_worker = nullptr;
+    setEnabled(true);
+    if (!result.is_ok) {
+        showStatus(QString::fromStdString(std::string(result.error)), catalog::LabelTone::Error);
+        return;
+    }
+    if (!result.preference_error.empty()) {
+        qWarning() << QString::fromStdString(std::string(result.preference_error));
+    }
+    Host::get()->refreshLauncher();
+    accept();
 }
 
 } // namespace musig::modal

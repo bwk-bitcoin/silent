@@ -122,22 +122,8 @@ auto AccountController::handleNotification(Notification notif) -> void {
 
     switch (flag) {
     case NotificationFlag::ScanProgress: {
-        auto payload = QString::fromStdString(std::string(notif.payload.c_str()));
-        auto parts = payload.split(",");
-        if (parts.size() == 2) {
-            bool ok1 = false;
-            bool ok2 = false;
-            uint32_t height = parts[0].toUInt(&ok1);
-            uint32_t tip = parts[1].toUInt(&ok2);
-            if (ok1 && ok2) {
-                m_estimator->update(height, tip);
-                emit scanProgress(height, tip);
-            } else {
-                emit scanProgress(0, 0);
-            }
-        } else {
-            emit scanProgress(0, 0);
-        }
+        m_estimator->update(notif.current, notif.end);
+        emit scanProgress(notif.current, notif.end);
         break;
     }
     case NotificationFlag::NewOutput:
@@ -145,10 +131,10 @@ auto AccountController::handleNotification(Notification notif) -> void {
         pollCoins();
         break;
     case NotificationFlag::FailStartScanning:
-        emit scanError(notif.payload);
+        emit scanError(notif.payload, ::notification_error_kind(notif));
         break;
     case NotificationFlag::FailScan:
-        emit scanError(notif.payload);
+        emit scanError(notif.payload, ::notification_error_kind(notif));
         break;
     case NotificationFlag::StartingScan:
         m_scanner_running = true;
@@ -172,12 +158,7 @@ auto AccountController::handleNotification(Notification notif) -> void {
         emit endpointStateChanged(Endpoint::Blindbit);
         break;
     case NotificationFlag::WaitingForBlocks: {
-        auto payload = QString::fromStdString(std::string(notif.payload.c_str()));
-        bool ok = false;
-        uint32_t tipHeight = payload.toUInt(&ok);
-        if (ok) {
-            emit waitingForBlocks(tipHeight);
-        }
+        emit waitingForBlocks(notif.current);
         break;
     }
     case NotificationFlag::NewBlocksDetected:
@@ -201,7 +182,7 @@ auto AccountController::handleNotification(Notification notif) -> void {
     }
     case NotificationFlag::ElectrumError:
         m_reconnect->lost();
-        emit scanError(notif.payload);
+        emit scanError(notif.payload, ::notification_error_kind(notif));
         break;
     case NotificationFlag::ElectrumStopped:
         m_electrum_connected_count--;
@@ -272,7 +253,7 @@ auto AccountController::simulateTx(TransactionTemplate tx) -> TransactionSimulat
     }
     qDebug() << "AccountController::simulateTx() m_account is None!";
     // Return empty/invalid simulation
-    TransactionSimulation sim;
+    TransactionSimulation sim{};
     sim.is_valid = false;
     sim.error = rust::String("Account not initialized");
     return sim;
@@ -598,7 +579,8 @@ void AccountController::setEndpointConnected(uint64_t req_id, Endpoint endpoint,
 void AccountController::changeEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
                                        bool verify_certificate, bool test, bool connected) {
     if (m_endpoint_busy || m_stopping || !m_account.has_value()) {
-        EndpointResult result;
+        EndpointResult result{};
+        result.kind = BackendErrorKind::Other;
         result.is_ok = false;
         result.error = rust::String("Account is not available");
         emit endpointRequestFinished(req_id, endpoint, result);
@@ -608,51 +590,36 @@ void AccountController::changeEndpoint(uint64_t req_id, Endpoint endpoint, const
     m_endpoint_connection_lost = false;
     m_endpoint_req_id = req_id;
     m_endpoint = endpoint;
-    m_resume_scanner = endpoint == Endpoint::Blindbit ? connected : m_scanner_running;
-    auto connectElectrum =
-        endpoint == Endpoint::Electrum ? connected : isEndpointRunning(Endpoint::Electrum);
     m_endpoint_account = std::make_shared<std::optional<rust::Box<Account>>>(std::move(m_account));
     m_account.reset();
     m_endpoint_result = std::make_shared<EndpointResult>();
     m_endpoint_replaced = std::make_shared<bool>(false);
     auto workers = std::move(m_workers);
     m_workers.clear();
-    auto *thread = QThread::create([account = m_endpoint_account, result = m_endpoint_result,
-                                    replaced = m_endpoint_replaced, workers, notif = m_notif_thread,
-                                    endpoint, url = url.toStdString(), verify_certificate, test,
-                                    connectElectrum, resumeScanner = m_resume_scanner] {
-        for (auto *worker : workers) {
-            worker->wait();
-            worker->deleteLater();
-        }
-        auto &acc = account->value();
-        if (test) {
-            *result = test_and_save_endpoint(
-                acc->name(),
-                endpoint == Endpoint::Electrum ? BackendServer::Electrum : BackendServer::Blindbit,
-                rust::String(url), verify_certificate);
-            if (!result->is_ok) {
-                return;
+    auto *thread =
+        QThread::create([account = m_endpoint_account, result = m_endpoint_result,
+                         replaced = m_endpoint_replaced, workers, notif = m_notif_thread, endpoint,
+                         url = url.toStdString(), verify_certificate, test, connected] {
+            for (auto *worker : workers) {
+                worker->wait();
+                worker->deleteLater();
             }
-        }
-        *replaced = true;
-        auto saved = result->saved;
-        auto savedUrl = result->url;
-        acc->close_backend();
-        if (notif != nullptr) {
-            notif->wait();
-            notif->deleteLater();
-        }
-        *result = acc->reopen_backend(connectElectrum);
-        result->saved = saved;
-        if (saved) {
-            result->url = savedUrl;
-        }
-        if (acc->is_ok() && resumeScanner && !acc->start_scanner()) {
-            result->is_ok = false;
-            result->error = rust::String("Backend reopened but scanner could not start");
-        }
-    });
+            auto change = ::sp_endpoint_change(
+                std::move(account->value()),
+                endpoint == Endpoint::Electrum ? BackendServer::Electrum : BackendServer::Blindbit,
+                rust::String(url), verify_certificate, test, connected);
+            change->prepare_endpoint();
+            if (change->endpoint_phase() == EndpointPhase::Draining) {
+                *replaced = true;
+                if (notif != nullptr) {
+                    notif->wait();
+                    notif->deleteLater();
+                }
+                change->finish_endpoint_after_drain();
+            }
+            *result = change->endpoint_result();
+            account->value() = ::take_sp_endpoint_account(std::move(change));
+        });
     connect(thread, &QThread::finished, this, &AccountController::onEndpointFinished,
             qontrol::UNIQUE);
     startWorker(thread);

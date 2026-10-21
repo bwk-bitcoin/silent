@@ -20,7 +20,7 @@ public slots:
     void onUpdateConnectionState(bool connected);
     void onUpdateScanProgress(uint32_t height, uint32_t tip);
     void onUpdateWaitingForBlocks(uint32_t tip_height);
-    void onUpdateScanError(rust::String error);
+    void onUpdateScanError(rust::String error, BackendErrorKind kind);
     void onElectrumConnected(const QString &address);
     void onElectrumDisconnected();
     void onReloadUrl();

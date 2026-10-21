@@ -10,7 +10,7 @@ inline auto selectedInputs(const QList<plugin::SelectedInput> &inputs)
     -> rust::Vec<RustSelectedInput> {
     rust::Vec<RustSelectedInput> out;
     for (const auto &selected : inputs) {
-        auto &variant = selected.variant;
+        const auto &variant = selected.variant;
         RustSpendVariant path;
         path.path_id = variant.pathId.toStdString();
         path.keychain = variant.keychain;
@@ -20,8 +20,10 @@ inline auto selectedInputs(const QList<plugin::SelectedInput> &inputs)
         path.descriptor = variant.descriptor.toStdString();
         path.sp_spend_key = variant.spSpendKey.toStdString();
         path.satisfaction_wu = variant.satisfactionWu;
-        path.absolute_lock = {variant.absoluteLock.kind, variant.absoluteLock.value};
-        path.relative_lock = {variant.relativeLock.kind, variant.relativeLock.value};
+        path.absolute_lock = {.kind = variant.absoluteLock.kind,
+                              .value = variant.absoluteLock.value};
+        path.relative_lock = {.kind = variant.relativeLock.kind,
+                              .value = variant.relativeLock.value};
         path.maturity = variant.maturity;
         path.availability = variant.availability;
         for (const auto &key : variant.requiredKeys) {
@@ -30,7 +32,9 @@ inline auto selectedInputs(const QList<plugin::SelectedInput> &inputs)
         for (const auto &preimage : variant.requiredPreimages) {
             path.required_preimages.push_back(preimage.toStdString());
         }
-        out.push_back({selected.inputIndex, selected.network, std::move(path)});
+        out.push_back({.input_index = selected.inputIndex,
+                       .network = selected.network,
+                       .variant = std::move(path)});
     }
     return out;
 }
@@ -64,8 +68,10 @@ inline auto spendingCoin(const RustSpendCoin &coin) -> plugin::Coin {
             path.requiredPreimages.append(QString::fromStdString(std::string(preimage)));
         }
         path.satisfactionWu = variant.satisfaction_wu;
-        path.absoluteLock = {variant.absolute_lock.kind, variant.absolute_lock.value};
-        path.relativeLock = {variant.relative_lock.kind, variant.relative_lock.value};
+        path.absoluteLock = {.kind = variant.absolute_lock.kind,
+                             .value = variant.absolute_lock.value};
+        path.relativeLock = {.kind = variant.relative_lock.kind,
+                             .value = variant.relative_lock.value};
         path.maturity = variant.maturity;
         path.availability = variant.availability;
         out.variants.append(path);

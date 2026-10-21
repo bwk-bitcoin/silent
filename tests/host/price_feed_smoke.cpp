@@ -4,6 +4,7 @@
 #include "account/views/Send.h"
 #include "catalog/containers/Tabs.h"
 #include "catalog/display/Label.h"
+#include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/Input.h"
 #include "catalog/panels/send/TxFlow.h"
 #include "host/Host.h"
@@ -19,6 +20,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDebug>
+#include <QDoubleValidator>
 #include <QElapsedTimer>
 #include <QEvent>
 #include <QKeyEvent>
@@ -52,6 +54,10 @@ namespace {
 class PriceSend final : public account::view::Send {
 public:
     using Send::Send;
+
+    auto parsedTransaction() -> std::optional<TransactionTemplate> {
+        return txTemplate();
+    }
 
     auto transaction() -> std::optional<TransactionTemplate> {
         auto tx = txTemplate();
@@ -90,6 +96,48 @@ auto feeToggle(account::view::Send &send) -> QCheckBox * {
         }
     }
     qFatal("fee rate/absolute toggle missing");
+}
+
+void monetaryBoundaryPresentation() {
+    PriceBackend backend;
+    PriceSend send(&backend);
+    auto *btc = input(send, TR("send-placeholder-amount"));
+    auto marks = btc->parentWidget()->findChildren<catalog::ValidationMark *>();
+    require(marks.size() == 1, "amount has one validation mark");
+    auto *mark = marks.first();
+    btc->setText(QStringLiteral("0.00000003"));
+    require(send.transaction()->outputs[0].amount == 3, "Qt submits exactly three sats");
+    require(mark->state() == catalog::ValidationMark::State::Valid,
+            "exact amount validates visually");
+    for (const auto &text : {QStringLiteral("."), QStringLiteral("-1"),
+                             QStringLiteral("0.000000001"), QStringLiteral("21000000.00000001")}) {
+        btc->setText(text);
+        require(!send.parsedTransaction().has_value(), "invalid or incomplete BTC cannot submit");
+        require(mark->state() == catalog::ValidationMark::State::Invalid,
+                "invalid amount is marked");
+    }
+    btc->clear();
+    require(mark->state() == catalog::ValidationMark::State::None, "empty amount clears its mark");
+    auto *validator = const_cast<QValidator *>(btc->validator());
+    validator->setLocale(QLocale(QLocale::French));
+    btc->setText(QStringLiteral("0,00000003"));
+    require(send.transaction()->outputs[0].amount == 3,
+            "localized decimal submits the same exact sats");
+    validator->setLocale(QLocale(QLocale::English, QLocale::UnitedStates));
+    btc->setText(QStringLiteral("1,234.00000003"));
+    require(send.transaction()->outputs[0].amount == 123400000003ULL,
+            "localized grouping is normalized without floating point amount conversion");
+    auto *fee = send.findChild<QLineEdit *>(QStringLiteral("fee-value"));
+    require(fee != nullptr, "fee field exists");
+    fee->setText(QStringLiteral("0.001"));
+    require(send.transaction()->fee_rate == 0.001, "Qt submits one millisat per vbyte");
+    fee->setText(QStringLiteral("0.0001"));
+    require(!send.parsedTransaction().has_value(), "sub-millisat fee cannot submit");
+    feeToggle(send)->setChecked(false);
+    fee->setText(QStringLiteral("1234"));
+    require(send.transaction()->fee == 1234, "Qt submits an integer absolute fee");
+    fee->setText(QStringLiteral("1234.5"));
+    require(!send.parsedTransaction().has_value(), "fractional absolute fee cannot submit");
 }
 
 auto hasLabel(QWidget &widget, const QString &text) -> bool {
@@ -424,6 +472,10 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     mode->setCurrentIndex(1);
     emit mode->activated(1);
     require(send.transaction()->fee_rate == 0.5, "per-send Default uses its independent provider");
+    emit first.defaultFeeRate(3, 0.1234567);
+    require(send.transaction()->fee_rate == 0.123 && host->selectedFees().default_rate == 0.1234567,
+            "Send normalizes provider precision through Rust without changing the cached quote");
+    emit first.defaultFeeRate(3, 0.5);
     auto *absolute = feeToggle(send);
     absolute->click();
     edit(value, QStringLiteral("1234"));
@@ -712,6 +764,7 @@ auto priceFeedSmoke() -> bool {
     Theme::init();
     priceSourceGeometry(host, firstId,
                         QStringLiteral("[\"price.plugin\",\"price.module\",\"price-two\"]"));
+    monetaryBoundaryPresentation();
     {
         modal::AppSettings settings;
         QComboBox *sourcePicker = nullptr;

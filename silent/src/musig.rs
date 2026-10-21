@@ -28,13 +28,16 @@ use crate::{
     },
     config::{parse_electrum_url, Config},
     ffi::{
-        AddressVerifyInfo, CoinState, MusigCosignerStatus, MusigDescriptorResult,
-        MusigElectrumUrlResult, MusigFinalizeResult, MusigReceiveAddress, MusigRound,
-        MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, PsbtValidation, RustCoin,
-        RustTx, RustTxDetails, SavedPsbtEntry, SavedPsbtList, SavedPsbtMutation, SavedPsbtReset,
-        SavedPsbtRestore, TransactionSimulation, TransactionTemplate, TxResult,
+        AddressVerifyInfo, CoinState, MusigAttemptSnapshot, MusigCosignerStatus,
+        MusigDescriptorResult, MusigElectrumUrlResult, MusigFinalizeResult, MusigReceiveAddress,
+        MusigRound, MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, PsbtValidation,
+        RustCoin, RustTx, RustTxDetails, SavedPsbtEntry, SavedPsbtList, SavedPsbtMutation,
+        SavedPsbtReset, SavedPsbtRestore, TransactionSimulation, TransactionTemplate, TxResult,
     },
-    keys::bridge::musig_session_restart,
+    keys::{
+        bridge::{merge_signed_psbt, musig_session_restart},
+        psbt::ordinary_signature_complete,
+    },
     saved_psbt::{apply_chain_state, frozen_entry, mutation_error, SavedPsbtStore},
     tx_details::{details_result, TxSnapshot},
 };
@@ -46,6 +49,7 @@ pub struct MusigAccount {
     error: String,
     closed_saved_psbts: Option<Mutex<SavedPsbtStore>>,
     closed_name: Option<String>,
+    active: Mutex<Option<MusigAttemptSnapshot>>,
 }
 
 struct MusigAccountInner {
@@ -77,6 +81,7 @@ pub fn new_musig_account(account_name: String) -> Box<MusigAccount> {
                 error,
                 closed_saved_psbts: None,
                 closed_name: None,
+                active: Mutex::new(None),
             });
         }
     };
@@ -86,6 +91,7 @@ pub fn new_musig_account(account_name: String) -> Box<MusigAccount> {
             error: String::new(),
             closed_saved_psbts: None,
             closed_name: None,
+            active: Mutex::new(None),
         }),
         Err(e) => {
             let error = format!("Failed to create account: {e}");
@@ -95,6 +101,7 @@ pub fn new_musig_account(account_name: String) -> Box<MusigAccount> {
                 error,
                 closed_saved_psbts: None,
                 closed_name: None,
+                active: Mutex::new(None),
             })
         }
     }
@@ -202,13 +209,24 @@ impl MusigAccount {
         }
     }
 
+    pub(crate) fn endpoint_account_name(&self) -> Option<&str> {
+        self.inner
+            .as_ref()
+            .map(|inner| inner.config.account_name.as_str())
+            .or(self.closed_name.as_deref())
+    }
+
     /// Called after workers and the old notification receiver have drained.
     pub fn reopen_backend(&mut self, connect_electrum: bool) -> crate::ffi::EndpointResult {
         self.close_backend();
+        let mut failure_kind = crate::ffi::BackendErrorKind::Other;
         let result = (|| {
             let name = self.closed_name.as_ref().ok_or(NOT_INITIALIZED)?.clone();
+            failure_kind = crate::ffi::BackendErrorKind::Storage;
             let config = Config::from_file(name).map_err(|e| e.to_string())?;
+            failure_kind = crate::ffi::BackendErrorKind::InvalidInput;
             config.to_musig_config()?;
+            failure_kind = crate::ffi::BackendErrorKind::Other;
             let usable = matches!(parse_electrum_url(&config.electrum_url), (Some(_), Some(_)));
             let mut connection_error = None;
             let mut inner =
@@ -227,7 +245,14 @@ impl MusigAccount {
                 .ok_or("Saved PSBT state missing during reopen")?;
             self.inner = Some(inner);
             self.closed_name = None;
+            self.error.clear();
             Ok(crate::ffi::EndpointResult {
+                connection_pending: connect_electrum && usable && connection_error.is_none(),
+                kind: if connection_error.is_some() || (connect_electrum && !usable) {
+                    crate::ffi::BackendErrorKind::Electrum
+                } else {
+                    crate::ffi::BackendErrorKind::None
+                },
                 is_ok: (!connect_electrum || usable) && connection_error.is_none(),
                 saved: false,
                 url: config.electrum_url,
@@ -245,6 +270,7 @@ impl MusigAccount {
                 log::error!("reopen_backend: {error}");
                 self.error = error.clone();
                 crate::ffi::EndpointResult {
+                    kind: failure_kind,
                     error,
                     ..crate::ffi::EndpointResult::default()
                 }
@@ -682,66 +708,25 @@ impl MusigAccount {
 
     /// Simulate a transaction without actually creating it.
     pub fn simulate_transaction(&self, tx_template: TransactionTemplate) -> TransactionSimulation {
-        let err_sim = |error: String| TransactionSimulation {
-            is_valid: false,
-            fee: 0,
-            weight: 0,
-            input_total: 0,
-            output_total: 0,
-            input_count: 0,
+        let err_sim = |kind, error: String| TransactionSimulation {
+            kind,
             error,
-            selected_outpoints: Vec::new(),
+            ..Default::default()
         };
 
         let Some(inner) = &self.inner else {
-            return err_sim(NOT_INITIALIZED.to_string());
+            return err_sim(
+                crate::ffi::BackendErrorKind::Other,
+                NOT_INITIALIZED.to_string(),
+            );
         };
 
         let builder = match Self::build_tx_builder(inner, &tx_template) {
             Ok(b) => b,
-            Err(e) => return err_sim(e.to_string()),
+            Err(e) => return err_sim(crate::ffi::BackendErrorKind::InvalidInput, e.to_string()),
         };
 
-        let result = builder.simulate();
-        if let Some(ref error) = result.error {
-            return err_sim(format!("{error:?}"));
-        }
-
-        let input_total: u64 = result
-            .tx_template
-            .inputs
-            .iter()
-            .map(|c| c.txout.value.to_sat())
-            .sum();
-        let fee = result.fees.map(|f| f.to_sat()).unwrap_or(0);
-        let output_total = input_total.saturating_sub(fee);
-        let input_count = result.tx_template.inputs.len() as u64;
-
-        // Estimate weight from fee and fee_rate
-        let weight = if tx_template.fee_rate > 0.0 {
-            let vbytes = (fee as f64 / tx_template.fee_rate).ceil() as u64;
-            vbytes * 4
-        } else {
-            0
-        };
-
-        let selected_outpoints: Vec<String> = result
-            .tx_template
-            .inputs
-            .iter()
-            .map(|c| c.outpoint.to_string())
-            .collect();
-
-        TransactionSimulation {
-            is_valid: true,
-            fee,
-            weight,
-            input_total,
-            output_total,
-            input_count,
-            error: String::new(),
-            selected_outpoints,
-        }
+        crate::tx_preview::simulation_preview(builder.simulate(), tx_template.fee_rate)
     }
 
     /// Every spend path for the coins `outpoints`: the key path first (left out when the
@@ -783,9 +768,16 @@ impl MusigAccount {
             log::error!("prepare_transaction: {error}");
             Box::new(PsbtResult::failed(error))
         };
+        let mut active = match self.active.lock() {
+            Ok(active) => active,
+            Err(error) => return failed(format!("Active attempt lock failed: {error}")),
+        };
 
         let Some(inner) = &self.inner else {
-            return failed(NOT_INITIALIZED.to_string());
+            return Box::new(PsbtResult::failed_kind(
+                crate::ffi::BackendErrorKind::Other,
+                NOT_INITIALIZED.to_string(),
+            ));
         };
 
         let mut builder = match Self::build_tx_builder(inner, &tx_template) {
@@ -805,6 +797,21 @@ impl MusigAccount {
                 Err(e) => return failed(format!("Invalid leaf hash '{}': {e}", spend.leaf_hash)),
             }
         };
+        let outpoints: Vec<_> = psbt
+            .unsigned_tx
+            .input
+            .iter()
+            .map(|input| input.previous_output)
+            .collect();
+        let spend = match inner.account.spend_leaves(&outpoints) {
+            Ok(leaves) => match leaves.into_iter().find(|leaf| leaf.path == path) {
+                Some(leaf) => spend_leaf(leaf),
+                None => {
+                    return failed("Selected spend path is not available for these inputs".into())
+                }
+            },
+            Err(error) => return failed(format!("Cannot resolve selected spend path: {error}")),
+        };
         if let Err(e) = inner.account.restrict_spend_path(&mut psbt, path) {
             return failed(format!("Failed to restrict the spend path: {e}"));
         }
@@ -819,9 +826,10 @@ impl MusigAccount {
         };
         let txid = psbt.unsigned_tx.compute_txid().to_string();
         let mut result = PsbtResult::prepared(psbt.serialize(), bytes_v2.clone(), txid);
+        let signers = spend.fingerprints.clone();
         match self
             .saved_store()
-            .and_then(|mut store| store.create(tx_template, spend, hex::encode(bytes_v2)))
+            .and_then(|mut store| store.create(tx_template, spend, hex::encode(&bytes_v2)))
         {
             Ok(saved) => {
                 result.saved_record_id = saved.record_id;
@@ -831,6 +839,15 @@ impl MusigAccount {
                 result.save_error = format!("Prepared transaction is not persisted: {error}")
             }
         }
+        let snapshot = MusigAttemptSnapshot {
+            is_ok: true,
+            psbt_v2_hex: hex::encode(bytes_v2),
+            signers,
+            record_id: result.saved_record_id.clone(),
+            save_error: result.save_error.clone(),
+            ..Default::default()
+        };
+        *active = Some(snapshot);
         Box::new(result)
     }
 
@@ -916,18 +933,26 @@ impl MusigAccount {
     /// Broadcast a signed transaction via Electrum; the value is the txid.
     pub fn broadcast_transaction(&self, signed_tx_hex: String) -> TxResult {
         let Some(inner) = &self.inner else {
-            return tx_error(NOT_INITIALIZED.to_string());
+            return TxResult::failed(
+                crate::ffi::BackendErrorKind::Other,
+                NOT_INITIALIZED.to_string(),
+            );
         };
         let tx: bitcoin::Transaction = match deserialize_hex(&signed_tx_hex) {
             Ok(tx) => tx,
-            Err(e) => return tx_error(format!("Invalid transaction hex: {e}")),
+            Err(e) => {
+                return TxResult::failed(
+                    crate::ffi::BackendErrorKind::InvalidInput,
+                    format!("Invalid transaction hex: {e}"),
+                )
+            }
         };
         if let Err(e) = broadcast_via_electrum(
             &inner.config.electrum_url,
             inner.config.verify_certificate,
             &tx,
         ) {
-            return tx_error(e);
+            return TxResult::failed(e.kind, e.message);
         }
         // Reflect the spend locally so the spent coins drop from spendable at once.
         inner.account.scanner().record_unconfirmed_spend(&tx);
@@ -941,6 +966,7 @@ impl MusigAccount {
         }
         TxResult {
             is_ok: true,
+            kind: crate::ffi::BackendErrorKind::None,
             error: String::new(),
             value: tx.compute_txid().to_string(),
         }
@@ -1002,18 +1028,8 @@ impl MusigAccount {
                 {
                     return cosigner.expected > 0 && cosigner.partial_sigs == cosigner.expected;
                 }
-                psbt.inputs.iter().all(|input| {
-                    input.tap_key_origins.iter().any(|(key, (_, (origin, _)))| {
-                        origin.to_string().eq_ignore_ascii_case(fingerprint)
-                            && if record.spend.key_path {
-                                input.tap_key_sig.is_some()
-                            } else {
-                                input.tap_script_sigs.keys().any(|(signed_key, leaf)| {
-                                    signed_key == key && leaf.to_string() == record.spend.leaf_hash
-                                })
-                            }
-                    })
-                })
+                bitcoin::bip32::Fingerprint::from_str(fingerprint)
+                    .is_ok_and(|fp| ordinary_signature_complete(&psbt, fp))
             })
             .count() as u32;
         apply_chain_state(&mut entry, &inner.account.scanner().tx_history());
@@ -1160,6 +1176,231 @@ impl MusigAccount {
             Err(error) => error,
         }
     }
+
+    pub fn active_attempt(&self) -> MusigAttemptSnapshot {
+        match self.active.lock() {
+            Ok(active) => active
+                .clone()
+                .unwrap_or_else(|| attempt_error("No active attempt".into())),
+            Err(error) => attempt_error(format!("Active attempt lock failed: {error}")),
+        }
+    }
+
+    pub fn active_signing_plan(
+        &self,
+        devices: Vec<crate::ffi::LiveDevice>,
+    ) -> crate::ffi::SigningPlan {
+        let snapshot = self.active_attempt();
+        if !snapshot.is_ok || snapshot.reset_pending {
+            return crate::ffi::SigningPlan {
+                is_ok: false,
+                error: if snapshot.is_ok {
+                    "Active attempt requires reset".into()
+                } else {
+                    snapshot.error
+                },
+                candidates: Vec::new(),
+                sp_outputs_pending: false,
+            };
+        }
+        let mut plan =
+            crate::keys::bridge::musig_session_plan(self.network(), &snapshot.psbt_v2_hex, devices);
+        plan.candidates.retain(|candidate| {
+            snapshot
+                .signers
+                .iter()
+                .any(|signer| signer.eq_ignore_ascii_case(&candidate.fingerprint))
+        });
+        plan
+    }
+
+    pub fn clear_active_attempt(&self) -> bool {
+        match self.active.lock() {
+            Ok(mut active) => {
+                *active = None;
+                true
+            }
+            Err(error) => {
+                log::error!("Active attempt lock failed: {error}");
+                false
+            }
+        }
+    }
+
+    pub fn accept_signed_progress(&self, answer: &str) -> MusigAttemptSnapshot {
+        let mut guard = match self.active.lock() {
+            Ok(guard) => guard,
+            Err(error) => return attempt_error(format!("Active attempt lock failed: {error}")),
+        };
+        let Some(active) = guard.as_mut() else {
+            return attempt_error("No active attempt".into());
+        };
+        if active.reset_pending {
+            return attempt_error("Active attempt cannot accept signing progress".into());
+        }
+        let merged = merge_signed_psbt(&active.psbt_v2_hex, answer);
+        if !merged.is_ok {
+            return attempt_error(merged.error);
+        }
+        if !active.tx_hex.is_empty() {
+            return active.clone();
+        }
+        if !active.record_id.is_empty() {
+            let saved = self.update_saved_psbt(&active.record_id, &merged.psbt_v2_hex);
+            if !saved.is_ok {
+                return attempt_error(saved.error);
+            }
+            active.save_error = saved.save_error;
+        }
+        active.psbt_v2_hex = merged.psbt_v2_hex;
+        self.advance_attempt(active);
+        active.clone()
+    }
+
+    fn advance_attempt(&self, active: &mut MusigAttemptSnapshot) {
+        active.finalize_error.clear();
+        if active.reset_pending || !active.tx_hex.is_empty() {
+            return;
+        }
+        let status = self.round_status(&active.psbt_v2_hex);
+        if !status.is_ok {
+            active.error = status.error;
+            active.is_ok = false;
+            return;
+        }
+        let readiness = match status.round {
+            MusigRound::Ready => Ok(true),
+            MusigRound::NotMusig => self.ordinary_transaction_ready(&active.psbt_v2_hex),
+            _ => Ok(false),
+        };
+        let ready = match readiness {
+            Ok(ready) => ready,
+            Err(error) => {
+                active.finalize_error = error;
+                return;
+            }
+        };
+        if !ready {
+            return;
+        }
+        let finalized = self.finalize_psbt(&active.psbt_v2_hex);
+        if !finalized.is_ok {
+            active.finalize_error = finalized.error;
+            return;
+        }
+        active.psbt_v2_hex = finalized.psbt_v2_hex;
+        active.tx_hex = finalized.tx_hex;
+        if !active.record_id.is_empty() || !finalized.save_error.is_empty() {
+            active.save_error = finalized.save_error;
+        }
+    }
+
+    fn ordinary_transaction_ready(&self, psbt_v2_hex: &str) -> Result<bool, String> {
+        let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+        let mut psbt = decode_psbt(psbt_v2_hex)?;
+        // Trial finalization is pure; candidate progress does not imply policy satisfaction.
+        match inner.account.finalize(&mut psbt) {
+            Ok(_) => Ok(true),
+            Err(bwk::account::Error::Finalize(_)) => Ok(false),
+            Err(error) => Err(format!("Failed to check transaction satisfaction: {error}")),
+        }
+    }
+
+    pub fn finalize_active_attempt(&self) -> MusigAttemptSnapshot {
+        let mut guard = match self.active.lock() {
+            Ok(guard) => guard,
+            Err(error) => return attempt_error(format!("Active attempt lock failed: {error}")),
+        };
+        let Some(active) = guard.as_mut() else {
+            return attempt_error("No active attempt".into());
+        };
+        self.advance_attempt(active);
+        active.clone()
+    }
+
+    pub fn activate_saved_psbt(&self, id: &str) -> SavedPsbtRestore {
+        let mut active = match self.active.lock() {
+            Ok(active) => active,
+            Err(error) => {
+                return SavedPsbtRestore {
+                    error: format!("Active attempt lock failed: {error}"),
+                    ..Default::default()
+                }
+            }
+        };
+        let mut restored = self.restore_saved_psbt(id);
+        if !restored.is_ok {
+            return restored;
+        }
+        let record = &restored.entry.record;
+        let mut snapshot = MusigAttemptSnapshot {
+            is_ok: true,
+            psbt_v2_hex: record.current_psbt_v2_hex.clone(),
+            tx_hex: record.finalized_tx_hex.clone(),
+            record_id: record.id.clone(),
+            signers: record.spend.fingerprints.clone(),
+            reset_pending: record.reset_pending,
+            save_error: restored.save_error.clone(),
+            ..Default::default()
+        };
+        self.advance_attempt(&mut snapshot);
+        restored.is_ok = snapshot.is_ok;
+        restored.error = snapshot.error.clone();
+        restored.entry.record.current_psbt_v2_hex = snapshot.psbt_v2_hex.clone();
+        restored.entry.record.finalized_tx_hex = snapshot.tx_hex.clone();
+        restored.save_error = snapshot.save_error.clone();
+        *active = Some(snapshot);
+        restored
+    }
+
+    pub fn reset_active_attempt(&self) -> MusigAttemptSnapshot {
+        let mut guard = match self.active.lock() {
+            Ok(guard) => guard,
+            Err(error) => return attempt_error(format!("Active attempt lock failed: {error}")),
+        };
+        let Some(active) = guard.as_mut() else {
+            return attempt_error("No active attempt".into());
+        };
+        let reset = self.reset_saved_psbt(&active.record_id);
+        if !reset.is_ok {
+            active.reset_pending |= reset.reset_pending;
+            if !reset.save_error.is_empty() {
+                active.save_error = reset.save_error;
+            }
+            let mut failure = active.clone();
+            failure.is_ok = false;
+            failure.error = reset.error;
+            return failure;
+        }
+        active.reset_pending = reset.reset_pending;
+        active.save_error = reset.save_error;
+        active.psbt_v2_hex = reset.psbt_v2_hex;
+        active.tx_hex.clear();
+        active.finalize_error.clear();
+        active.clone()
+    }
+
+    pub fn require_active_restart(&self) -> MusigAttemptSnapshot {
+        match self.active.lock() {
+            Ok(mut guard) => match guard.as_mut() {
+                Some(active) => {
+                    if active.tx_hex.is_empty() {
+                        active.reset_pending = true;
+                    }
+                    active.clone()
+                }
+                None => attempt_error("No active attempt".into()),
+            },
+            Err(error) => attempt_error(format!("Active attempt lock failed: {error}")),
+        }
+    }
+}
+
+fn attempt_error(error: String) -> MusigAttemptSnapshot {
+    MusigAttemptSnapshot {
+        error,
+        ..Default::default()
+    }
 }
 
 /// A recipient as a bitcoin address of `network`; a silent payment address is refused.
@@ -1215,10 +1456,338 @@ pub(crate) fn decode_psbt(psbt_v2_hex: &str) -> Result<bitcoin::Psbt, String> {
         .map_err(|e| format!("Invalid PSBT: {e:?}"))
 }
 
-fn tx_error(error: String) -> TxResult {
-    TxResult {
-        is_ok: false,
-        error,
-        value: String::new(),
+#[cfg(test)]
+mod tests {
+    use std::{str::FromStr, sync::Mutex};
+
+    use bitcoin::{
+        absolute::LockTime,
+        bip32::{ChildNumber, DerivationPath, Xpriv, Xpub},
+        consensus::encode::deserialize_hex,
+        ecdsa,
+        hashes::Hash,
+        secp256k1::{Message, Secp256k1},
+        sighash::{EcdsaSighashType, SighashCache},
+        transaction::Version,
+        Amount, OutPoint, Psbt, PublicKey, Transaction, TxIn, TxOut, Txid,
+    };
+    use bwk::{
+        account::Account as BwkAccount, bwk_descriptor::descriptor::Descriptor,
+        bwk_sign::hot_signer::HotSigner, bwk_tx::bwk_psbt::PsbtV2,
+    };
+    use temp_dir::TempDir;
+
+    use crate::{
+        config::Config,
+        ffi::{MusigAttemptSnapshot, Network, Output, TransactionTemplate},
+        musig::MusigAccount,
+        state_crypt,
+    };
+
+    struct UnsavedAttempt {
+        _directory: TempDir,
+        account: MusigAccount,
+        descriptor: Descriptor,
+        signer: HotSigner,
+        psbt: PsbtV2,
+    }
+
+    fn offline_account(config: Config) -> MusigAccount {
+        MusigAccount {
+            inner: Some(MusigAccount::new_inner_connected(config, false).expect("account")),
+            error: String::new(),
+            closed_saved_psbts: None,
+            closed_name: None,
+            active: Mutex::new(None),
+        }
+    }
+
+    fn unsaved_attempt() -> UnsavedAttempt {
+        state_crypt::unlock_for_tests();
+        let directory = TempDir::new().expect("isolated no-record account");
+        let secp = Secp256k1::new();
+        let master = Xpriv::new_master(bitcoin::Network::Regtest, &[73; 32]).expect("master");
+        let descriptor = format!(
+            "tr([{}]{}/<0;1>/*)",
+            master.fingerprint(&secp),
+            Xpub::from_priv(&secp, &master)
+        );
+        let mut config = Config::new(
+            format!("no_record_{}", std::process::id()),
+            Network::Regtest,
+            descriptor.clone(),
+            String::new(),
+            String::new(),
+            None,
+        );
+        config.plugin_id = "musig".into();
+        config.data_dir = directory.path().to_path_buf();
+        let mut backend: BwkAccount =
+            BwkAccount::try_new(config.to_musig_config().expect("config")).expect("backend");
+        let receive = backend.scanner_mut().new_recv_addr();
+        let funding = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::new(Txid::from_byte_array([74; 32]), 0),
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: receive.script_pubkey(),
+            }],
+        };
+        backend.scanner().record_unconfirmed_spend(&funding);
+        drop(backend);
+        let mut account = offline_account(config);
+        let outpoint = OutPoint::new(funding.compute_txid(), 0).to_string();
+        let leaves = account.spend_leaves(vec![outpoint.clone()]);
+        assert!(leaves.is_ok, "spend paths: {}", leaves.error);
+        let recipient = account.new_addr();
+        let prepared = account.prepare_transaction(
+            TransactionTemplate {
+                outputs: vec![Output {
+                    address: recipient,
+                    amount: 40_000,
+                    max: false,
+                    label: String::new(),
+                }],
+                fee: 1000,
+                fee_rate: 0.0,
+                input_outpoints: vec![outpoint],
+            },
+            leaves.leaves[0].clone(),
+        );
+        assert!(
+            prepared.is_ok(),
+            "prepared bytes: {}",
+            prepared.get_psbt_error()
+        );
+        {
+            let mut guard = account.active.lock().expect("active lock");
+            let active = guard.as_mut().expect("prepared active attempt");
+            active.record_id.clear();
+            active.save_error = "Prepared transaction is not persisted".into();
+        }
+        let parsed = Descriptor::from_str(&descriptor).expect("descriptor");
+        let psbt =
+            PsbtV2::deserialize(&hex::decode(prepared.bytes_v2_hex()).expect("hex")).expect("PSBT");
+        UnsavedAttempt {
+            _directory: directory,
+            account,
+            descriptor: parsed,
+            signer: HotSigner::new_from_xpriv(bitcoin::Network::Regtest, master),
+            psbt,
+        }
+    }
+
+    #[test]
+    fn active_attempt_without_record_id_retains_signed_transaction() {
+        let mut fixture = unsaved_attempt();
+        fixture
+            .signer
+            .sign_v2(
+                &mut fixture.psbt,
+                fixture.descriptor.as_miniscript().expect("policy"),
+            )
+            .expect("ordinary signature");
+        let snapshot = fixture
+            .account
+            .accept_signed_progress(&hex::encode(fixture.psbt.serialize().expect("signed PSBT")));
+        assert!(
+            snapshot.is_ok,
+            "unsaved progress accepted: {}",
+            snapshot.error
+        );
+        assert!(
+            snapshot.record_id.is_empty(),
+            "no fabricated saved record identity"
+        );
+        assert!(!snapshot.tx_hex.is_empty(), "unsaved progress can finalize");
+        assert!(
+            !snapshot.save_error.is_empty(),
+            "unsaved finalized progress carries a warning"
+        );
+        assert_eq!(
+            fixture.account.active_attempt().tx_hex,
+            snapshot.tx_hex,
+            "usable transaction remains in RAM"
+        );
+    }
+
+    #[test]
+    fn failed_reset_without_record_id_keeps_required_restart_fence() {
+        let mut fixture = unsaved_attempt();
+        fixture
+            .signer
+            .sign_v2(
+                &mut fixture.psbt,
+                fixture.descriptor.as_miniscript().expect("policy"),
+            )
+            .expect("real signature for the prepared transaction");
+        let answer = hex::encode(fixture.psbt.serialize().expect("signed PSBT"));
+        let required = fixture.account.require_active_restart();
+        assert!(
+            required.reset_pending && required.record_id.is_empty(),
+            "restart required for an unsaved attempt"
+        );
+        let failed = fixture.account.reset_active_attempt();
+        assert!(
+            !failed.is_ok && failed.reset_pending,
+            "failed reset without identity retains the fence: {}",
+            failed.error
+        );
+        let current = fixture.account.active_attempt();
+        assert!(
+            current.reset_pending,
+            "authoritative Rust fence remains set"
+        );
+        assert_eq!(
+            current.save_error, required.save_error,
+            "failed reset cannot erase the unsaved-progress warning"
+        );
+        let plan = fixture.account.active_signing_plan(Vec::new());
+        assert!(!plan.is_ok, "Rust signing plan refuses the fenced attempt");
+        assert_eq!(
+            plan.error, "Active attempt requires reset",
+            "plan refusal is independent of Qt"
+        );
+        let refused = fixture.account.accept_signed_progress(&answer);
+        assert!(
+            !refused.is_ok,
+            "valid signed bytes cannot bypass the restart fence"
+        );
+        assert_eq!(
+            refused.error, "Active attempt cannot accept signing progress",
+            "acceptance is fenced before merge"
+        );
+        assert_eq!(
+            fixture.account.active_attempt().psbt_v2_hex,
+            required.psbt_v2_hex,
+            "fenced attempt retains its original progress"
+        );
+        assert!(
+            fixture.account.active_attempt().tx_hex.is_empty(),
+            "fenced progress was not finalized"
+        );
+    }
+
+    #[test]
+    fn ordinary_p2pkh_readiness_uses_a_real_signed_psbt() {
+        state_crypt::unlock_for_tests();
+        let directory = TempDir::new().expect("isolated P2PKH account");
+        let secp = Secp256k1::new();
+        let master = Xpriv::new_master(bitcoin::Network::Regtest, &[211; 32]).expect("master");
+        let fingerprint = master.fingerprint(&secp);
+        let descriptor = format!(
+            "pkh([{fingerprint}]{}/<0;1>/*)",
+            Xpub::from_priv(&secp, &master)
+        );
+        assert!(
+            crate::musig::validate_musig_descriptor(descriptor.clone()).is_ok,
+            "P2PKH descriptor is accepted"
+        );
+        let mut config = Config::new(
+            format!("p2pkh_{}", std::process::id()),
+            Network::Regtest,
+            descriptor,
+            String::new(),
+            String::new(),
+            None,
+        );
+        config.plugin_id = "musig".into();
+        config.data_dir = directory.path().to_path_buf();
+        let account = offline_account(config);
+        let child = ChildNumber::from_normal_idx(0).expect("normal child");
+        let path = DerivationPath::from(vec![child, child]);
+        let key = master.derive_priv(&secp, &path).expect("spending key");
+        let public = PublicKey::new(key.private_key.public_key(&secp));
+        let output = TxOut {
+            value: Amount::from_sat(100_000),
+            script_pubkey: bitcoin::ScriptBuf::new_p2pkh(&public.pubkey_hash()),
+        };
+        let funding = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::new(Txid::from_byte_array([212; 32]), 0),
+                ..Default::default()
+            }],
+            output: vec![output.clone()],
+        };
+        let transaction = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::new(funding.compute_txid(), 0),
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(99_000),
+                script_pubkey: output.script_pubkey.clone(),
+            }],
+        };
+        // bwk's builder rejects P2PKH inputs; provide a real legacy PSBT with its funding transaction.
+        let mut psbt = Psbt::from_unsigned_tx(transaction).expect("legacy PSBT");
+        psbt.inputs[0].non_witness_utxo = Some(funding);
+        psbt.inputs[0].witness_utxo = Some(output.clone());
+        psbt.inputs[0]
+            .bip32_derivation
+            .insert(public.inner, (fingerprint, path));
+        crate::keys::ledger_nonces::start_attempt(&mut psbt).expect("attempt identity");
+        let prepared = hex::encode(
+            PsbtV2::from_bitcoin_psbt(psbt.clone())
+                .expect("PSBT v2")
+                .serialize()
+                .expect("prepared bytes"),
+        );
+        *account.active.lock().expect("active lock") = Some(MusigAttemptSnapshot {
+            is_ok: true,
+            psbt_v2_hex: prepared,
+            signers: vec![fingerprint.to_string()],
+            save_error: "Prepared transaction is not persisted".into(),
+            ..Default::default()
+        });
+        assert!(
+            account.finalize_active_attempt().tx_hex.is_empty(),
+            "unsigned legacy policy is not ready"
+        );
+        let hash = SighashCache::new(&psbt.unsigned_tx)
+            .legacy_signature_hash(0, &output.script_pubkey, EcdsaSighashType::All.to_u32())
+            .expect("legacy sighash");
+        let message = Message::from_digest(hash.to_byte_array());
+        let signature = secp.sign_ecdsa(&message, &key.private_key);
+        secp.verify_ecdsa(&message, &signature, &public.inner)
+            .expect("real ECDSA signature");
+        psbt.inputs[0].partial_sigs.insert(
+            public,
+            ecdsa::Signature {
+                signature,
+                sighash_type: EcdsaSighashType::All,
+            },
+        );
+        let answer = hex::encode(
+            PsbtV2::from_bitcoin_psbt(psbt)
+                .expect("signed v2")
+                .serialize()
+                .expect("signed bytes"),
+        );
+        let accepted = account.accept_signed_progress(&answer);
+        assert!(
+            accepted.is_ok && accepted.finalize_error.is_empty(),
+            "legacy satisfaction: {} {}",
+            accepted.error,
+            accepted.finalize_error
+        );
+        assert!(
+            !accepted.tx_hex.is_empty(),
+            "accepted P2PKH signature finalizes without taproot progress fields"
+        );
+        let finalized: Transaction =
+            deserialize_hex(&accepted.tx_hex).expect("finalized legacy transaction");
+        assert!(
+            !finalized.input[0].script_sig.is_empty() && finalized.input[0].witness.is_empty(),
+            "actual P2PKH scriptSig satisfaction"
+        );
     }
 }

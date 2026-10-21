@@ -37,7 +37,7 @@ struct SpendPath {
 // The name the user gave `path`, else "Spend Path `index` + 1".
 [[nodiscard]] auto pathTitle(const SpendPath &path, int index) -> QString;
 // The blocks `count` units make.
-[[nodiscard]] auto unitBlocks(int count, LockUnit unit) -> std::uint32_t;
+[[nodiscard]] auto unitBlocks(int count, LockUnit unit) -> std::uint64_t;
 // Why the timelock of `path` cannot be compiled, empty when it can. A height needs the
 // chain `tip`.
 [[nodiscard]] auto lockReason(const SpendPath &path, std::optional<std::uint32_t> tip) -> QString;
