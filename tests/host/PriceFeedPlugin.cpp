@@ -1,12 +1,22 @@
 #include "interfaces/feed.h"
+#include "interfaces/module.h"
 #include <thread>
 
 // Keep fixture-only metatypes and literals local so dlclose actually unmaps them.
-class Q_DECL_HIDDEN PriceFeedPlugin final : public IFeed {
+class Q_DECL_HIDDEN PriceFeedPlugin final : public IFeed, public IPlugin {
     Q_OBJECT
-    Q_PLUGIN_METADATA(IID "dev.silent.tests.PriceFeed/1.0")
+    Q_PLUGIN_METADATA(IID SILENT_IPlugin_IID)
+    Q_INTERFACES(IPlugin)
 
 public:
+    [[nodiscard]] auto meta() const -> QMap<QString, QString> override {
+        return {};
+    }
+
+    [[nodiscard]] auto modules() const -> QList<IModule *> override {
+        return {};
+    }
+
     [[nodiscard]] auto implemented() const -> bool override {
         return true;
     }
