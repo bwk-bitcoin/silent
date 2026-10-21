@@ -4,6 +4,7 @@
 
 #include <QEvent>
 #include <QList>
+#include <QObject>
 #include <QString>
 #include <QWidget>
 #include <Qontrol>
@@ -12,97 +13,111 @@
 
 namespace catalog {
 class Button;
-class ComboBox;
 class FieldNote;
 class Input;
 class Label;
+class Toggle;
 } // namespace catalog
 
 class QTimer;
 
 namespace account::view {
 
-// One row per server the account syncs from, each tested before Save; the network
-// when the account lets it change; the BlindBit server's info when it has one; then
-// what the account adds below.
+class BackendInfoReply : public QObject {
+    Q_OBJECT
+
+signals:
+    void ready(uint64_t req_id, BackendInfo info);
+};
+
+// One row per server the account syncs from: a passing Test saves the server and
+// leaves it disconnected, Connect waits for a saved server. BlindBit's capabilities
+// under its row, then what the account adds below.
 class Settings : public qontrol::Screen {
     Q_OBJECT
 
 public:
     explicit Settings(AccountBackend *backend);
 
-signals:
-    void backendInfoReady(BackendInfo info);
-    void electrumTestReady(ConnectionResult result);
-    void electrumHeightReady(ElectrumTipResult result);
-
 public slots:
-    void onSaveClicked();
+    void onTestClicked();
     void onConnectClicked();
     void onDisconnectClicked();
-    void onTestClicked();
     void onUrlEdited();
+    void onSslToggled(bool checked);
+    void onVerifyToggled(bool checked);
     void onEndpointStateChanged(Endpoint endpoint);
-    void onScanProgress(uint32_t height, uint32_t tip);
-    void onBackendInfoReady(const BackendInfo &info);
-    void onElectrumTestReady(const ConnectionResult &result);
-    void onElectrumHeightReady(const ElectrumTipResult &result);
-    // Asks the connected Electrum server its tip, "--" when not connected.
-    void refreshElectrumHeight();
+    void onEndpointRequestFinished(uint64_t req_id, Endpoint endpoint,
+                                   const EndpointResult &result);
+    void onEndpointTipReady(uint64_t req_id, Endpoint endpoint, const ElectrumTipResult &result);
+    void onBackendInfoReady(uint64_t req_id, const BackendInfo &info);
+    void onHeightTimeout();
 
 protected:
-    enum class TestState : std::uint8_t { Untested, Testing, Ok };
-
-    struct EndpointRow {
+    struct ServerRow {
         Endpoint endpoint = Endpoint::Electrum;
+        catalog::Label *label = nullptr;
         catalog::Input *url = nullptr;
-        // The Test button cycles Test, Testing… and ✓ Test.
+        // "Height N" while connected, empty otherwise.
+        catalog::Label *height = nullptr;
         catalog::Button *test = nullptr;
         catalog::Button *testing = nullptr;
-        catalog::Button *test_ok = nullptr;
-        // The reason the last test failed, under the field.
-        catalog::FieldNote *note = nullptr;
         catalog::Button *connect = nullptr;
         catalog::Button *disconnect = nullptr;
-        bool verified = false;
+        // Why the last test, connect or disconnect failed.
+        catalog::FieldNote *note = nullptr;
+        // Electrum only.
+        catalog::Toggle *ssl = nullptr;
+        catalog::Toggle *verify = nullptr;
+        // The Verify Certificate choice, kept while SSL is off.
+        bool verify_wanted = true;
+        QString saved_url;
+        bool saved_verify = true;
+        // The test, connect or disconnect in flight, 0 when none.
+        uint64_t action_req = 0;
+        bool testing_req = false;
+        uint64_t tip_req = 0;
     };
 
     void init() override;
     void doConnect() override;
     void view() override;
     void changeEvent(QEvent *event) override;
-    // The Electrum height is refreshed while the screen shows.
+    // The heights are refreshed while the screen shows.
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
     void retranslateUi();
-    // The row `widget` (its input or one of its buttons) belongs to, nullptr when none.
-    [[nodiscard]] auto rowOf(const QObject *widget) -> EndpointRow *;
-    [[nodiscard]] auto row(Endpoint endpoint) -> EndpointRow *;
+    [[nodiscard]] static auto viewRow(const ServerRow &row) -> QWidget *;
+    // The row `widget` (its input, toggles or buttons) belongs to, nullptr when none.
+    [[nodiscard]] auto rowOf(const QObject *widget) -> ServerRow *;
+    [[nodiscard]] auto row(Endpoint endpoint) -> ServerRow *;
     [[nodiscard]] static auto label(Endpoint endpoint) -> QString;
     [[nodiscard]] static auto networkName(Network network) -> QString;
-    [[nodiscard]] auto selectedNetwork() const -> Network;
-    static void showTestState(const EndpointRow &row, TestState state);
-    static void showTestError(const EndpointRow &row, const QString &error);
-    // Tests `row`'s url on a worker; the answer comes back as backendInfoReady or
-    // electrumTestReady.
-    void testEndpoint(const EndpointRow &row);
-    void clearBackendInfo();
-    void updateButtons();
+    // What Test would save: the input, its scheme set by SSL when it states one.
+    [[nodiscard]] static auto candidateUrl(const ServerRow &row) -> QString;
+    [[nodiscard]] static auto candidateVerify(const ServerRow &row) -> bool;
+    // The input or the transport differs from the saved server.
+    [[nodiscard]] static auto isDirty(const ServerRow &row) -> bool;
+    [[nodiscard]] auto isBusy() const -> bool;
+    // Reads the saved server back from the account.
+    void loadSaved(ServerRow &row);
+    // Puts the saved server in the input and the toggles.
+    static void showSaved(ServerRow &row);
+    static void showError(const ServerRow &row, const QString &error);
+    void refreshRows();
+    void refreshRow(const ServerRow &row);
+    void requestHeight(ServerRow &row);
+    void requestCapabilities();
+    void startAction(ServerRow &row, bool test);
 
 private:
     AccountBackend *m_backend = nullptr;
     QWidget *m_main_widget = nullptr;
-    QList<EndpointRow> m_endpoints;
-    catalog::ComboBox *m_network_selector = nullptr;
-    catalog::Label *m_info_network_label = nullptr;
-    catalog::Label *m_info_height_label = nullptr;
+    QList<ServerRow> m_rows;
     catalog::Label *m_capabilities = nullptr;
-    // The block height of the account's Electrum server, "--" when not connected.
-    catalog::Label *m_electrum_height_label = nullptr;
+    uint64_t m_info_req = 0;
     QTimer *m_height_timer = nullptr;
-    catalog::Button *m_save_btn = nullptr;
     QWidget *m_extras = nullptr;
-    uint32_t m_current_height = 0;
 };
 
 } // namespace account::view

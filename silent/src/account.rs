@@ -16,10 +16,13 @@ use bwk_sp::bwk_sign::bwk_descriptor::wallet::WalletDescriptor;
 use bwk_sp::bwk_sign::miniscript::Descriptor as MiniscriptDescriptor;
 use bwk_sp::receiver::RecipientAddress;
 
-use crate::config::Config;
-use crate::ffi::{
-    AddressVerifyInfo, CoinState, Notification, NotificationFlag, RustCoin, RustTx,
-    TransactionSimulation, TransactionTemplate, TxResult,
+use crate::{
+    config::Config,
+    ffi::{
+        AddressVerifyInfo, CoinState, Notification, NotificationFlag, RustCoin, RustTx,
+        RustTxDetails, TransactionSimulation, TransactionTemplate, TxResult,
+    },
+    tx_details::{details_result, TxSnapshot},
 };
 
 /// Valid account state (created successfully).
@@ -38,6 +41,7 @@ struct AccountInner {
 pub struct Account {
     inner: Option<AccountInner>,
     error: String,
+    closed_name: Option<String>,
 }
 
 /// The script of a sub-account, read off its descriptor.
@@ -64,11 +68,16 @@ impl Account {
         Ok(Account {
             inner: Some(inner),
             error: String::new(),
+            closed_name: None,
         })
     }
 
     /// Create a new AccountInner from config.
     fn new_inner(config: Config) -> Result<AccountInner, String> {
+        Self::new_inner_connected(config, true)
+    }
+
+    fn new_inner_connected(config: Config, connect: bool) -> Result<AccountInner, String> {
         let network = match config.network {
             crate::ffi::Network::Regtest => bitcoin::Network::Regtest,
             crate::ffi::Network::Signet => bitcoin::Network::Signet,
@@ -77,7 +86,11 @@ impl Account {
             _ => unreachable!("CXX enum type safety guarantees no other variants exist"),
         };
 
-        let sp_config = config.to_sp_config()?;
+        let mut runtime = config.clone();
+        if !connect {
+            runtime.electrum_url.clear();
+        }
+        let sp_config = runtime.to_sp_config()?;
         let mut account = SpAccount::new(sp_config).map_err(|e| e.to_string())?;
         let receiver = account.receiver();
 
@@ -89,6 +102,72 @@ impl Account {
             electrum_url: config.electrum_url.clone(),
             verify_certificate: config.verify_certificate,
         })
+    }
+
+    /// Header workers can outlive account drop; drain the taken receiver before reopening.
+    pub fn close_backend(&mut self) {
+        if let Some(mut old) = self.inner.take() {
+            self.closed_name = Some(old.name);
+            old.account.stop_scanner();
+            old.account.stop_electrum();
+            drop(old.account);
+            if let Some(receiver) = old.receiver {
+                while receiver.recv().is_ok() {}
+            }
+        }
+    }
+
+    /// Called after workers and the old notification receiver have drained.
+    pub fn reopen_backend(&mut self, connect_electrum: bool) -> crate::ffi::EndpointResult {
+        self.close_backend();
+        let result = (|| {
+            let name = self
+                .closed_name
+                .as_ref()
+                .ok_or("Account not initialized")?
+                .clone();
+            let config = Config::from_file(name).map_err(|e| e.to_string())?;
+            config.to_sp_config()?;
+            let usable = matches!(
+                crate::config::parse_electrum_url(&config.electrum_url),
+                (Some(_), Some(_))
+            );
+            let mut connection_error = None;
+            self.inner = Some(
+                match Self::new_inner_connected(config.clone(), connect_electrum && usable) {
+                    Ok(inner) => inner,
+                    Err(error) if connect_electrum && usable => {
+                        connection_error =
+                            Some(format!("Cannot connect; backend reopened offline: {error}"));
+                        Self::new_inner_connected(config.clone(), false)?
+                    }
+                    Err(error) => return Err(error),
+                },
+            );
+            self.closed_name = None;
+            Ok(crate::ffi::EndpointResult {
+                is_ok: (!connect_electrum || usable) && connection_error.is_none(),
+                saved: false,
+                url: config.electrum_url,
+                verify_certificate: config.verify_certificate,
+                error: if connect_electrum && !usable {
+                    "No usable saved Electrum endpoint".into()
+                } else {
+                    connection_error.unwrap_or_default()
+                },
+            })
+        })();
+        match result {
+            Ok(result) => result,
+            Err(error) => {
+                log::error!("reopen_backend: {error}");
+                self.error = error.clone();
+                crate::ffi::EndpointResult {
+                    error,
+                    ..crate::ffi::EndpointResult::default()
+                }
+            }
+        }
     }
 
     /// The account's network, Regtest when it failed to load: check `is_ok()` first.
@@ -107,6 +186,40 @@ impl Account {
     /// Get error message (empty if is_ok).
     pub fn get_error(&self) -> String {
         self.error.clone()
+    }
+
+    pub fn electrum_url(&self) -> String {
+        self.inner
+            .as_ref()
+            .map(|inner| inner.electrum_url.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn blindbit_url(&self) -> String {
+        self.inner
+            .as_ref()
+            .map(|inner| inner.account.blindbit_url().to_string())
+            .unwrap_or_default()
+    }
+
+    pub fn verify_certificate(&self) -> bool {
+        self.inner
+            .as_ref()
+            .is_none_or(|inner| inner.verify_certificate)
+    }
+
+    pub fn electrum_running(&self) -> bool {
+        let Some(inner) = &self.inner else {
+            return false;
+        };
+        if inner.account.scanners().next().is_some() {
+            inner.account.scanners().all(|scanner| scanner.online())
+        } else {
+            inner
+                .account
+                .header_store()
+                .is_some_and(|headers| headers.running())
+        }
     }
 
     /// Start the scanner in continuous mode.
@@ -151,10 +264,13 @@ impl Account {
             }
         };
 
-        let (host, port) = crate::config::parse_electrum_url(&config.electrum_url);
-        inner.account.set_electrum_settings(host, port);
-        inner.electrum_url = config.electrum_url;
-        inner.verify_certificate = config.verify_certificate;
+        if config.electrum_url != inner.electrum_url
+            || config.verify_certificate != inner.verify_certificate
+            || inner.account.get_config().endpoint().url().is_none()
+        {
+            log::error!("start_electrum: endpoint changed, reopen the backend first");
+            return false;
+        }
         inner.account.start_electrum();
         true
     }
@@ -291,6 +407,7 @@ impl Account {
             .scanners()
             .map(|scanner| SubAccountScript::of(&scanner.descriptor()))
             .collect();
+        let history = inner.account.payment_history();
         inner
             .account
             .all_coins()
@@ -311,6 +428,11 @@ impl Account {
                     outpoint: format!("{}:{}", coin.outpoint.txid, coin.outpoint.vout),
                     value: coin.amount.to_sat(),
                     height: coin.height.unwrap_or(0),
+                    timestamp: history
+                        .iter()
+                        .find(|payment| payment.txid == coin.outpoint.txid.to_string())
+                        .and_then(|payment| payment.timestamp)
+                        .unwrap_or(0),
                     label: coin.label.unwrap_or_default(),
                     spent: !coin.spendable,
                     account_type,
@@ -385,39 +507,124 @@ impl Account {
     }
 
     /// Update the label for a coin.
-    pub fn update_coin_label(&mut self, outpoint: String, label: String) -> bool {
-        let Some(inner) = &mut self.inner else {
-            return false;
-        };
-        // Parse outpoint from "txid:vout" format
-        let parts: Vec<&str> = outpoint.split(':').collect();
-        if parts.len() != 2 {
-            log::error!("Invalid outpoint format, expected 'txid:vout'");
-            return false;
-        }
+    pub fn update_coin_label(
+        &self,
+        outpoint: String,
+        label: String,
+    ) -> crate::ffi::LabelEditResult {
+        self.edit_coin_label(&outpoint, label).into()
+    }
 
-        let Ok(txid) = parts[0].parse::<bitcoin::Txid>() else {
-            log::error!("Invalid txid: {}", parts[0]);
-            return false;
-        };
-        let Ok(vout) = parts[1].parse::<u32>() else {
-            log::error!("Invalid vout: {}", parts[1]);
-            return false;
-        };
-
-        let outpoint = bitcoin::OutPoint { txid, vout };
-        inner.account.update_coin_label(outpoint, label);
-        true
+    fn edit_coin_label(&self, outpoint: &str, label: String) -> Result<(), String> {
+        let inner = self.inner.as_ref().ok_or("Account not initialized")?;
+        let outpoint = parse_outpoint(outpoint).map_err(|e| e.to_string())?;
+        inner
+            .account
+            .try_update_coin_label(outpoint, label)
+            .map_err(|e| format!("Label is not saved: {e}. Edit it again to retry."))
     }
 
     /// Get payment history (SP + sub-accounts), newest first.
     pub fn payment_history(&self) -> Vec<RustTx> {
-        let Some(inner) = &self.inner else {
-            return vec![];
-        };
+        match self.tx_snapshot() {
+            Ok(snapshot) => snapshot.history,
+            Err(error) => {
+                log::error!("payment_history: {error}");
+                Vec::new()
+            }
+        }
+    }
 
-        // Already aggregated over SP and sub-accounts by bwk.
-        rust_txs(inner.account.payment_history())
+    pub fn tx_details(&self, txid: &str, allow_network: bool) -> RustTxDetails {
+        details_result(self.tx_snapshot().and_then(|snapshot| {
+            let inner = self.inner.as_ref().ok_or("Account not initialized")?;
+            let mut details = snapshot.details(
+                txid,
+                &inner.electrum_url,
+                inner.verify_certificate,
+                allow_network,
+            )?;
+            for scanner in inner.account.scanners() {
+                crate::tx_details::apply_scanner_labels(&mut details, scanner)?;
+            }
+            for io in details.inputs.iter_mut().chain(details.outputs.iter_mut()) {
+                let outpoint = parse_outpoint(&io.outpoint).map_err(|e| e.to_string())?;
+                if let Some(label) = inner.account.get_coin_label(&outpoint) {
+                    io.label = label;
+                }
+            }
+            Ok(details)
+        }))
+    }
+
+    fn tx_snapshot(&self) -> Result<TxSnapshot, String> {
+        let inner = self.inner.as_ref().ok_or("Account not initialized")?;
+        let mut snapshot = TxSnapshot::new(
+            inner.network,
+            rust_txs(inner.account.payment_history()),
+            inner
+                .account
+                .header_store()
+                .and_then(|headers| headers.tip()),
+        );
+        for entry in inner.account.tx_history() {
+            if let Some(summary) = snapshot
+                .history
+                .iter_mut()
+                .find(|summary| summary.txid == entry.txid.to_string())
+            {
+                summary.fee = entry.fee.unwrap_or(0);
+                summary.fee_known = entry.fee.is_some();
+            }
+            if let Some(tx) = entry.tx {
+                snapshot.transactions.insert(entry.txid, tx);
+            }
+        }
+        for scanner in inner.account.scanners() {
+            snapshot.add_scanner(scanner);
+        }
+        for (outpoint, coin) in inner.account.coins() {
+            let output = bitcoin::TxOut {
+                value: coin.amount(),
+                script_pubkey: coin.script().clone(),
+            };
+            snapshot.owned_scripts.insert(output.script_pubkey.clone());
+            snapshot.prevouts.insert(outpoint, output);
+        }
+        for (outpoint, _) in inner.account.all_coins() {
+            if let Some(output) = snapshot
+                .transactions
+                .get(&outpoint.txid)
+                .and_then(|tx| tx.output.get(outpoint.vout as usize))
+            {
+                snapshot.owned_scripts.insert(output.script_pubkey.clone());
+                snapshot.prevouts.insert(outpoint, output.clone());
+            }
+        }
+        snapshot.update_history_fees();
+        Ok(snapshot)
+    }
+
+    pub fn update_tx_label(&self, txid: String, label: String) -> crate::ffi::LabelEditResult {
+        self.edit_tx_label(&txid, label).into()
+    }
+
+    fn edit_tx_label(&self, txid: &str, label: String) -> Result<(), String> {
+        let inner = self.inner.as_ref().ok_or("Account not initialized")?;
+        let txid = txid.parse::<bitcoin::Txid>().map_err(|e| e.to_string())?;
+        let mut result = inner
+            .account
+            .try_update_tx_label(txid, label.clone())
+            .map_err(|e| format!("Label is not saved: {e}. Edit it again to retry."));
+        for scanner in inner.account.scanners() {
+            let edited = crate::tx_details::edit_scanner_label(
+                scanner,
+                bwk::bwk_electrum::label_store::LabelKey::Transaction(txid),
+                label.clone(),
+            );
+            result = result.and(edited);
+        }
+        result
     }
 
     /// Get the account SP descriptor.
@@ -876,14 +1083,28 @@ pub(crate) fn rust_txs(payments: Vec<Payment>) -> Vec<RustTx> {
         .map(|payment| {
             let direction = match payment.payment_type {
                 PaymentType::Receive => "incoming",
-                PaymentType::Send | PaymentType::ToSelf => "outgoing",
+                PaymentType::Send => "outgoing",
+                PaymentType::ToSelf => "self",
             };
             RustTx {
                 txid: payment.txid,
                 direction: direction.to_string(),
                 amount: payment.amount,
+                amount_known: true,
                 fee: 0,
+                fee_known: false,
                 height: payment.height.unwrap_or(0) as u32,
+                timestamp: payment.timestamp.unwrap_or(0),
+                label: payment.label,
+                status: match payment.status {
+                    bwk::bwk_electrum::coin_store::PaymentStatus::Unconfirmed => "unconfirmed",
+                    bwk::bwk_electrum::coin_store::PaymentStatus::ConfirmedUnverified => {
+                        "confirmed-unverified"
+                    }
+                    bwk::bwk_electrum::coin_store::PaymentStatus::Verified => "verified",
+                    bwk::bwk_electrum::coin_store::PaymentStatus::VerifyFailed => "verify-failed",
+                }
+                .into(),
             }
         })
         .collect();
@@ -1488,18 +1709,27 @@ pub fn new_account(account_name: String) -> Box<Account> {
         Err(e) => {
             let error = format!("failed to load config: {e}");
             log::error!("{error}");
-            return Box::new(Account { inner: None, error });
+            return Box::new(Account {
+                inner: None,
+                error,
+                closed_name: None,
+            });
         }
     };
     match Account::new_inner(config) {
         Ok(inner) => Box::new(Account {
             inner: Some(inner),
             error: String::new(),
+            closed_name: None,
         }),
         Err(e) => {
             let error = format!("Failed to create account: {e}");
             log::error!("{error}");
-            Box::new(Account { inner: None, error })
+            Box::new(Account {
+                inner: None,
+                error,
+                closed_name: None,
+            })
         }
     }
 }

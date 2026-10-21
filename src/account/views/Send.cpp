@@ -20,7 +20,6 @@
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "theme/Palette.h"
-#include "theme/Theme.h"
 #include "views/modals/ScanAddress.h"
 #include "views/utils.h"
 #include <QApplication>
@@ -30,7 +29,6 @@
 #include <QDoubleValidator>
 #include <QIntValidator>
 #include <QLocale>
-#include <QPainter>
 #include <QResizeEvent>
 #include <QSignalBlocker>
 #include <Qontrol>
@@ -47,40 +45,6 @@
 namespace account::view {
 
 namespace {
-
-const int LEGEND_SWATCH = 8;        // legend color swatch size (design 8x8)
-const int LEGEND_SWATCH_RADIUS = 2; // legend swatch corner radius
-
-// Tiny colored swatch painted in a TxFlow output kind color; resolves the
-// palette at paint time so it tracks theme changes.
-class LegendSwatch : public QWidget {
-public:
-    explicit LegendSwatch(catalog::TxFlow::OutputKind kind, QWidget *parent = nullptr)
-        : QWidget(parent),
-          m_kind(kind) {
-        setFixedSize(LEGEND_SWATCH, LEGEND_SWATCH);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *event) override {
-        Q_UNUSED(event);
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        const auto &p = Theme::get()->palette();
-        QColor fill = p.txWarning;
-        if (m_kind == catalog::TxFlow::OutputKind::Change) {
-            fill = p.txSelf;
-        } else if (m_kind == catalog::TxFlow::OutputKind::Fee) {
-            fill = p.error;
-        }
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(fill);
-        painter.drawRoundedRect(rect(), LEGEND_SWATCH_RADIUS, LEGEND_SWATCH_RADIUS);
-    }
-
-private:
-    catalog::TxFlow::OutputKind m_kind;
-};
 
 auto fiatAmount(uint64_t sats) -> QString {
     auto price = Host::get()->selectedPrice();
@@ -212,13 +176,12 @@ OutputW::OutputW(Send *screen, int id) {
                           ->push(maxGroup)
                           ->pushSpacer();
 
+    // The scan button takes its width from the address, which grows to fill the row.
     auto *addressRow = (new qontrol::Row)
                            ->spacing(resolve(Spacing::XS))
+                           ->push(m_scan_btn)
                            ->push(m_address_input, 1)
-                           ->push(m_address_indicator)
-                           ->push(m_scan_btn);
-    // The scan button takes its width from the address: the description input ends
-    // where the button does.
+                           ->push(m_address_indicator);
 
     auto *fields = (new catalog::FieldGroup(catalog::FieldGroup::Labels::Payment))
                        ->addField(TR("send-address"), addressRow)
@@ -635,7 +598,7 @@ auto Send::outputsView() -> QWidget * {
 }
 
 void Send::updateTransactionFlow() {
-    if (m_tx_flow == nullptr) {
+    if (m_flow_card == nullptr) {
         return;
     }
 
@@ -708,13 +671,8 @@ void Send::updateTransactionFlow() {
         outputs.append(item);
     }
 
-    m_tx_flow->setInputs(inputs);
-    m_tx_flow->setOutputs(outputs);
-
-    m_flow_inputs_eyebrow->setText(TR("txflow-inputs-count").arg(inputs.size()));
-    m_flow_outputs_eyebrow->setText(TR("txflow-outputs-count").arg(outputs.size()));
-    m_legend_change->setVisible(change > 0);
-    m_legend_fee->setVisible(m_estimated_fee > 0 && selectedTotal > 0);
+    m_flow_card->setInputs(inputs);
+    m_flow_card->setOutputs(outputs);
 
     m_sending_btc->setText(sendingTotal > 0 ? toBitcoin(sendingTotal) : QString("--"));
     m_sending_fiat->setText(sendingTotal > 0 ? fiatAmount(sendingTotal) : QString());
@@ -736,52 +694,16 @@ void Send::updateTransactionFlow() {
 }
 
 auto Send::transactionView() -> QWidget * {
-    m_tx_flow = new catalog::TxFlow;
+    m_flow_card = new catalog::TxFlowCard;
 
-    // Eyebrow counts (left/right) + center legend, all updated in place by
-    // updateTransactionFlow(); the change/fee swatches toggle visibility.
-    m_flow_inputs_eyebrow = new Label(LabelRole::Caption);
-    m_flow_outputs_eyebrow = new Label(LabelRole::Caption);
-    m_flow_outputs_eyebrow->setAlignment(Qt::AlignRight);
-
-    auto *legendRecipient = (new qontrol::Row)
-                                ->push(new LegendSwatch(catalog::TxFlow::OutputKind::Recipient))
-                                ->pushSpacer(resolve(Spacing::XS))
-                                ->push(new Label(TR("txflow-recipient"), LabelRole::Caption));
-    m_legend_change = (new qontrol::Row)
-                          ->push(new LegendSwatch(catalog::TxFlow::OutputKind::Change))
-                          ->pushSpacer(resolve(Spacing::XS))
-                          ->push(new Label(TR("txflow-change"), LabelRole::Caption));
-    m_legend_fee = (new qontrol::Row)
-                       ->push(new LegendSwatch(catalog::TxFlow::OutputKind::Fee))
-                       ->pushSpacer(resolve(Spacing::XS))
-                       ->push(new Label(TR("txflow-fee"), LabelRole::Caption));
-    auto *legend = (new qontrol::Row)
-                       ->push(legendRecipient)
-                       ->pushSpacer(resolve(Spacing::S))
-                       ->push(m_legend_change)
-                       ->pushSpacer(resolve(Spacing::S))
-                       ->push(m_legend_fee);
-    auto *flowFooter = (new qontrol::Row)
-                           ->push(m_flow_inputs_eyebrow)
-                           ->pushSpacer()
-                           ->push(legend)
-                           ->pushSpacer()
-                           ->push(m_flow_outputs_eyebrow);
-
-    auto *flowColumn =
-        (new qontrol::Column)->push(m_tx_flow)->pushSpacer(resolve(Spacing::XS))->push(flowFooter);
-    m_flow_card = new catalog::Card(catalog::Card::Role::Inset);
-    m_flow_card->setPad(catalog::Card::Pad::S);
-    m_flow_card->setContent(flowColumn);
-
-    // Transaction summary as a grid so the BTC and fiat values line up in two
+    // Transaction summary as a grid so the fiat and BTC values line up in two
     // right-aligned columns. The change row is always present and toggled by
     // updateTransactionFlow() so live updates never restructure the layout.
     auto *summary = new qontrol::Grid;
     summary->spacing(resolve(Spacing::M), resolve(Spacing::XS));
     // Full width: label on the left, the two value columns pushed to the right by
-    // a stretch in the middle. Columns 2 (BTC) and 3 (fiat) auto-align across rows.
+    // a stretch in the middle. Columns 2 (fiat, muted) and 3 (BTC) auto-align across
+    // rows.
     summary->columnStretch(1, 1);
     int sr = 0;
     summary->push(new catalog::Separator, sr++, 0, 1, 4);
@@ -791,16 +713,18 @@ auto Send::transactionView() -> QWidget * {
     m_sending_btc->setAlignment(Qt::AlignRight);
     m_sending_fiat = new Label(QString(), LabelRole::Mono);
     m_sending_fiat->setAlignment(Qt::AlignRight);
-    summary->push(m_sending_btc, sr, 2);
-    summary->push(m_sending_fiat, sr++, 3);
+    m_sending_fiat->setTone(catalog::LabelTone::Muted);
+    summary->push(m_sending_fiat, sr, 2);
+    summary->push(m_sending_btc, sr++, 3);
 
     summary->push(new Label(TR("send-summary-fee"), LabelRole::InfoLabel), sr, 0);
     m_fee_btc = new Label("--", LabelRole::Mono);
     m_fee_btc->setAlignment(Qt::AlignRight);
     m_fee_fiat = new Label(QString(), LabelRole::Mono);
     m_fee_fiat->setAlignment(Qt::AlignRight);
-    summary->push(m_fee_btc, sr, 2);
-    summary->push(m_fee_fiat, sr++, 3);
+    m_fee_fiat->setTone(catalog::LabelTone::Muted);
+    summary->push(m_fee_fiat, sr, 2);
+    summary->push(m_fee_btc, sr++, 3);
 
     m_change_label = new Label(TR("send-summary-change"), LabelRole::InfoLabel);
     summary->push(m_change_label, sr, 0);
@@ -808,8 +732,9 @@ auto Send::transactionView() -> QWidget * {
     m_change_btc->setAlignment(Qt::AlignRight);
     m_change_fiat = new Label(QString(), LabelRole::Mono);
     m_change_fiat->setAlignment(Qt::AlignRight);
-    summary->push(m_change_btc, sr, 2);
-    summary->push(m_change_fiat, sr++, 3);
+    m_change_fiat->setTone(catalog::LabelTone::Muted);
+    summary->push(m_change_fiat, sr, 2);
+    summary->push(m_change_btc, sr++, 3);
 
     summary->push(new catalog::Separator, sr++, 0, 1, 4);
 
@@ -819,9 +744,10 @@ auto Send::transactionView() -> QWidget * {
     m_total_btc->setScale(1.2);
     m_total_fiat = new Label(QString(), LabelRole::Mono);
     m_total_fiat->setAlignment(Qt::AlignRight);
+    m_total_fiat->setTone(catalog::LabelTone::Muted);
     m_total_fiat->setScale(1.2);
-    summary->push(m_total_btc, sr, 2);
-    summary->push(m_total_fiat, sr, 3);
+    summary->push(m_total_fiat, sr, 2);
+    summary->push(m_total_btc, sr, 3);
 
     auto *warningRow = (new qontrol::Row)->push(m_warning_label)->pushSpacer();
     auto *actionRow = (new qontrol::Row)
@@ -846,15 +772,21 @@ auto Send::transactionView() -> QWidget * {
     auto *title = new Label(TR("send-transaction-title"), LabelRole::Eyebrow);
     title->setMinimumHeight(metric::BUTTON_MIN_HEIGHT);
     auto *col = new qontrol::Column;
-    col->push(title)
-        ->pushSpacer(resolve(Spacing::S))
-        ->push(m_flow_card)
-        ->pushStretch(1) // expanding gap: drops the summary block to the column bottom
-        ->push(summary)
-        ->push(actionRow) // total send sits right on top of the fee + button row
-        ->pushSpacer(resolve(Spacing::S))
+    col->push(title)->pushSpacer(resolve(Spacing::S));
+    if (!m_stacked) {
+        // Side by side: the diagram on top, the summary and buttons at the bottom.
+        col->push(m_flow_card)->pushStretch(1);
+    }
+    col->push(summary)
+        ->pushSpacer(resolve(Spacing::M))
+        ->push(actionRow)
+        ->pushSpacer(resolve(Spacing::M))
         ->push(m_signing)
         ->push(warningRow);
+    if (m_stacked) {
+        // One column: the summary and buttons first, the diagram last.
+        col->pushSpacer(resolve(Spacing::M))->push(m_flow_card);
+    }
 
     applyLocked();
     updateTransactionFlow(); // populate the flow + summary with the current state

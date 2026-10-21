@@ -8,16 +8,26 @@
 
 namespace catalog {
 
+namespace {
+
+// Widgets.jsx Tooltip: 500 11px, padding 5px 9px, 8px above its anchor.
+constexpr int TIP_FONT_PX = 11;
+constexpr int TIP_PAD_H = 9;
+constexpr int TIP_PAD_V = 5;
+constexpr int TIP_GAP = 8;
+
+} // namespace
+
+// A tooltip window of its own, so no container (a table cell, a scroll area) clips it.
 Tooltip::Tooltip(const QString &text, QWidget *parent) : QLabel(text, parent) {
     setProperty("class", "tooltip");
     setWindowFlags(Qt::ToolTip);
-    setContentsMargins(resolve(Padding::S), resolve(Spacing::XS), resolve(Padding::S),
-                       resolve(Spacing::XS));
+    setContentsMargins(TIP_PAD_H, TIP_PAD_V, TIP_PAD_H, TIP_PAD_V);
 
     const auto &fp = Theme::get()->fontPalette().caption;
     auto f = font();
     f.setFamily(fp.family);
-    f.setPointSize(fp.size);
+    f.setPixelSize(TIP_FONT_PX);
     f.setWeight(QFont::Medium);
     setFont(f);
 
@@ -35,7 +45,10 @@ auto Tooltip::eventFilter(QObject *watched, QEvent *event) -> bool {
     }
 
     if (event->type() == QEvent::Enter) {
-        move(widget->mapToGlobal(QPoint(0, widget->height() + resolve(Spacing::XS))));
+        // Centered above the widget.
+        adjustSize();
+        QPoint anchor = widget->mapToGlobal(QPoint(widget->width() / 2, 0));
+        move(anchor.x() - (width() / 2), anchor.y() - TIP_GAP - height());
         show();
     }
     if (event->type() == QEvent::Leave) {

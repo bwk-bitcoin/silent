@@ -4,6 +4,7 @@
 #include "catalog/Variants.h"
 #include "catalog/containers/ScrollArea.h"
 #include "catalog/containers/Separator.h"
+#include "catalog/display/Badge.h"
 #include "catalog/display/Label.h"
 #include "catalog/inputs/Checkbox.h"
 #include "catalog/inputs/Input.h"
@@ -256,21 +257,24 @@ auto Table::buildHeader() -> QWidget * {
     auto *header = new qontrol::Row;
     header->setProperty("class", "table-header");
     // Inset as the body's rows are by the scroll area's gutters, so the columns line up.
-    int inset = resolve(Padding::S) + ScrollArea::insetH();
-    header->margins(inset, 0, inset, metric::TABLE_CELL_PAD)->spacing(resolve(Spacing::S));
+    int inset = ScrollArea::insetH();
+    header->margins(inset, 0, inset, metric::TABLE_CELL_PAD);
 
     if (m_selection_enabled) {
         auto *spacer = new QWidget(header);
-        // Match the Checkbox sizeHint (box + its 1px side margins) so the data
-        // cells that follow line up with the header columns.
-        spacer->setFixedWidth(metric::CHECKBOX_BOX + 2);
+        // Match the checkbox cell (its padding, the box and its 1px side margins) so
+        // the data cells that follow line up with the header columns.
+        spacer->setFixedWidth(resolve(Padding::S) + metric::CHECKBOX_BOX + 2);
         header->push(spacer);
     }
 
-    for (const auto &column : m_columns) {
+    for (int i = 0; i < m_columns.size(); ++i) {
+        const auto &column = m_columns[i];
         // Wrap each header label in a cell exactly like a body cell so grow
         // columns expand identically and the header tracks the column content.
         auto *cell = new qontrol::Row;
+        int pad = cellPadding(i);
+        cell->margins(pad, 0, pad, 0);
         auto *label = new Label(column.title, LabelRole::InfoLabel, cell);
         // Header alignment is independent of content alignment (default left).
         label->setAlignment(column.headerAlignment | Qt::AlignVCenter);
@@ -295,14 +299,15 @@ auto Table::buildRow(int index) -> QWidget * {
 
     // Vertical room comes from the row's min-height plus centering, not padding, so
     // a tall cell (e.g. the 30px edit button) fits inside the fixed row height
-    // instead of growing it: history and coins rows stay the same height.
-    rowWidget->margins(resolve(Padding::S), 0, resolve(Padding::S), 0)
-        ->spacing(resolve(Spacing::S));
+    // instead of growing it: history and coins rows stay the same height. Each cell
+    // pads its own sides, as the design's cells do.
+    rowWidget->margins(0, 0, 0, 0)->spacing(0);
 
     if (m_selection_enabled) {
         auto *checkbox = new Checkbox(CheckboxRole::Default, rowWidget);
         checkbox->setProperty("rowId", m_rows[index].id);
         checkbox->setChecked(m_selected_ids.contains(m_rows[index].id));
+        rowWidget->pushSpacer(resolve(Padding::S));
         rowWidget->push(checkbox);
         connect(checkbox, &Checkbox::toggled, this, &Table::onSelectionToggled, qontrol::UNIQUE);
     }
@@ -326,7 +331,8 @@ auto Table::buildCell(const Row &row, int column, int row_index) -> QWidget * {
     }
 
     auto *cell = new qontrol::Row;
-    cell->spacing(resolve(Spacing::XS));
+    int pad = cellPadding(column);
+    cell->margins(pad, 0, pad, 0)->spacing(resolve(Spacing::XS));
 
     if (editing) {
         auto *input = new Input(text, InputRole::Table, cell);
@@ -397,14 +403,26 @@ auto Table::buildCell(const Row &row, int column, int row_index) -> QWidget * {
 auto Table::buildWidgetCell(const Row &row, int column) -> QWidget * {
     auto *cell = new qontrol::Row;
     const auto &spec = m_columns[column];
+    int pad = cellPadding(column);
+    cell->margins(pad, 0, pad, 0);
     if (spec.width != width::NONE) {
-        cell->setFixedWidth(spec.width);
+        // The column width is the content's: the cell padding comes on top.
+        cell->setFixedWidth(spec.width + (2 * pad));
     }
     QWidget *content = column < row.widgets.size() ? row.widgets[column].data() : nullptr;
     if (content == nullptr) {
         return cell;
     }
-    if (spec.grow) {
+    // A pill in a table row is one step smaller than elsewhere.
+    if (auto *badge = qobject_cast<Badge *>(content)) {
+        badge->setDense(true);
+    }
+    for (auto *badge : content->findChildren<Badge *>()) {
+        badge->setDense(true);
+    }
+    if (spec.icon) {
+        cell->push(content, 1, Qt::AlignCenter);
+    } else if (spec.grow) {
         content->setMinimumWidth(0);
         // Wrapped text takes the whole column to wrap in; anything else keeps its size.
         if (content->hasHeightForWidth()) {
@@ -416,6 +434,10 @@ auto Table::buildWidgetCell(const Row &row, int column) -> QWidget * {
         cell->push(content, 0, spec.alignment | Qt::AlignVCenter);
     }
     return cell;
+}
+
+auto Table::cellPadding(int column) const -> int {
+    return m_columns[column].icon ? resolve(Spacing::XS) : resolve(Padding::S);
 }
 
 void Table::finishEdit(bool commit) {

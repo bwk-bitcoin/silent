@@ -493,6 +493,14 @@ auto btnEditLabelRow() -> Button * {
                  .width = BtnWidth::Icon});
 }
 
+auto btnDeleteRow() -> Button * {
+    return make({.role = ButtonRole::InlineIcon,
+                 .icon = icon::trash,
+                 .iconSize = 15,
+                 .tooltip = TR("common-delete"),
+                 .width = BtnWidth::Icon});
+}
+
 auto btnMoveDown() -> Button * {
     return make({.role = ButtonRole::InlineIcon,
                  .icon = icon::arrowDown,
@@ -790,8 +798,34 @@ auto pillPluginUnloading() -> Badge * {
     return makePill(Badge::Role::Off, TR("pill-unloading"), PillWidth::L);
 }
 
+auto pillTxUnconfirmed() -> Badge * {
+    return makePill(Badge::Role::Warning, TR("pill-unconfirmed"), PillWidth::Auto);
+}
+
+auto pillPsbtSigning() -> Badge * {
+    return makePill(Badge::Role::Warning, TR("pill-psbt-signing"), PillWidth::L);
+}
+
+auto pillPsbtReady() -> Badge * {
+    return makePill(Badge::Role::Success, TR("pill-ready"), PillWidth::L);
+}
+
+auto pillPsbtUnconfirmed() -> Badge * {
+    return makePill(Badge::Role::Off, TR("pill-unconfirmed"), PillWidth::L);
+}
+
+auto pillPsbtConfirmed() -> Badge * {
+    auto *pill = makePill(Badge::Role::Success, TR("pill-confirmed"), PillWidth::L);
+    pill->setIcon(icon::check(IconColor::Success));
+    return pill;
+}
+
+auto pillPsbtDeprecated() -> Badge * {
+    return makePill(Badge::Role::Error, TR("pill-deprecated"), PillWidth::L);
+}
+
 auto pillNetwork(const QString &network) -> Badge * {
-    return makePill(Badge::Role::Neutral, network, PillWidth::Auto);
+    return makePill(Badge::Role::Neutral, network, PillWidth::M);
 }
 
 } // namespace catalog

@@ -995,6 +995,10 @@ struct RustSelectedInput;
 struct CoordinationResult;
 struct CoinState;
 struct RustTx;
+struct RustTxIo;
+struct LabelEditResult;
+struct RustTxDetails;
+struct EndpointResult;
 struct Output;
 struct TransactionTemplate;
 struct TransactionSimulation;
@@ -1279,6 +1283,8 @@ struct RustCoin final {
   ::rust::String outpoint;
   ::std::uint64_t value CXX_DEFAULT_VALUE(0);
   ::std::uint32_t height CXX_DEFAULT_VALUE(0);
+  // Confirming block time, zero until known.
+  ::std::uint64_t timestamp CXX_DEFAULT_VALUE(0);
   ::rust::String label;
   bool spent CXX_DEFAULT_VALUE(false);
   ::rust::String account_type;
@@ -1471,12 +1477,85 @@ struct RustTx final {
   ::rust::String txid;
   ::rust::String direction;
   ::std::uint64_t amount CXX_DEFAULT_VALUE(0);
+  bool amount_known CXX_DEFAULT_VALUE(false);
   ::std::uint64_t fee CXX_DEFAULT_VALUE(0);
+  bool fee_known CXX_DEFAULT_VALUE(false);
   ::std::uint32_t height CXX_DEFAULT_VALUE(0);
+  ::std::uint64_t timestamp CXX_DEFAULT_VALUE(0);
+  ::rust::String label;
+  ::rust::String status;
 
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_RustTx
+
+#ifndef CXXBRIDGE1_STRUCT_RustTxIo
+#define CXXBRIDGE1_STRUCT_RustTxIo
+struct RustTxIo final {
+  ::std::uint32_t index CXX_DEFAULT_VALUE(0);
+  ::rust::String outpoint;
+  ::std::uint64_t value CXX_DEFAULT_VALUE(0);
+  bool value_known CXX_DEFAULT_VALUE(false);
+  ::rust::String address;
+  ::rust::String script;
+  bool is_mine CXX_DEFAULT_VALUE(false);
+  bool ownership_known CXX_DEFAULT_VALUE(false);
+  ::rust::String label;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_RustTxIo
+
+#ifndef CXXBRIDGE1_STRUCT_LabelEditResult
+#define CXXBRIDGE1_STRUCT_LabelEditResult
+struct LabelEditResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_LabelEditResult
+
+#ifndef CXXBRIDGE1_STRUCT_RustTxDetails
+#define CXXBRIDGE1_STRUCT_RustTxDetails
+struct RustTxDetails final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  // Missing prevouts or an offline lookup do not invalidate known transaction data.
+  ::rust::String warning;
+  ::RustTx tx;
+  ::Network network;
+  ::std::int32_t version CXX_DEFAULT_VALUE(0);
+  ::std::uint32_t lock_time CXX_DEFAULT_VALUE(0);
+  ::std::uint64_t weight CXX_DEFAULT_VALUE(0);
+  ::std::uint64_t vsize CXX_DEFAULT_VALUE(0);
+  ::rust::Vec<::RustTxIo> inputs;
+  ::rust::Vec<::RustTxIo> outputs;
+  ::std::uint64_t input_total CXX_DEFAULT_VALUE(0);
+  bool input_total_known CXX_DEFAULT_VALUE(false);
+  ::std::uint64_t output_total CXX_DEFAULT_VALUE(0);
+  ::std::uint64_t fee CXX_DEFAULT_VALUE(0);
+  bool fee_known CXX_DEFAULT_VALUE(false);
+  double fee_rate CXX_DEFAULT_VALUE(0);
+  ::std::uint32_t chain_tip CXX_DEFAULT_VALUE(0);
+  bool chain_tip_known CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_RustTxDetails
+
+#ifndef CXXBRIDGE1_STRUCT_EndpointResult
+#define CXXBRIDGE1_STRUCT_EndpointResult
+struct EndpointResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  bool saved CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::String url;
+  bool verify_certificate CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_EndpointResult
 
 #ifndef CXXBRIDGE1_STRUCT_Output
 #define CXXBRIDGE1_STRUCT_Output
@@ -1660,6 +1739,9 @@ struct SavedPsbtEntry final {
   bool in_history CXX_DEFAULT_VALUE(false);
   ::rust::Vec<::rust::String> conflicting_txids;
   ::rust::String warning;
+  ::std::uint32_t signatures_complete CXX_DEFAULT_VALUE(0);
+  ::std::uint32_t signatures_required CXX_DEFAULT_VALUE(0);
+  bool signatures_known CXX_DEFAULT_VALUE(false);
 
   using IsRelocatable = ::std::true_type;
 };
@@ -2426,7 +2508,7 @@ struct MusigDescriptorResult final {
 struct MusigElectrumUrlResult final {
   // The url was written to the config.
   bool saved CXX_DEFAULT_VALUE(false);
-  // The listener started on it: false for an empty or unparsable url.
+  // Kept for existing callers. Saving never starts a listener.
   bool started CXX_DEFAULT_VALUE(false);
 
   using IsRelocatable = ::std::true_type;
@@ -2651,6 +2733,9 @@ struct Config final : public ::rust::Opaque {
   // Save config to file.
   void to_file() const noexcept;
 
+  // Empty on success, otherwise the write error.
+  ::rust::String save() const noexcept;
+
   // Get SP descriptor.
   ::rust::String get_descriptor() const noexcept;
 
@@ -2762,6 +2847,11 @@ struct Account final : public ::rust::Opaque {
   // The account's network (Regtest when it failed to load).
   ::Network network() const noexcept;
 
+  ::rust::String electrum_url() const noexcept;
+  ::rust::String blindbit_url() const noexcept;
+  bool verify_certificate() const noexcept;
+  bool electrum_running() const noexcept;
+
   // Whether the account has a segwit (wpkh) sub-account.
   bool has_segwit() const noexcept;
 
@@ -2783,10 +2873,15 @@ struct Account final : public ::rust::Opaque {
   ::CoinState spendable_coins() const noexcept;
 
   // Update a coin's label.
-  bool update_coin_label(::rust::String outpoint, ::rust::String label) noexcept;
+  ::LabelEditResult update_coin_label(::rust::String outpoint, ::rust::String label) const noexcept;
 
   // Get payment history.
   ::rust::Vec<::RustTx> payment_history() const noexcept;
+
+  ::EndpointResult reopen_backend(bool connect_electrum) noexcept;
+  void close_backend() noexcept;
+  ::RustTxDetails tx_details(::rust::Str txid, bool allow_network) const noexcept;
+  ::LabelEditResult update_tx_label(::rust::String txid, ::rust::String label) const noexcept;
 
   // Get the account SP descriptor.
   ::rust::String descriptor() const noexcept;
@@ -3317,7 +3412,7 @@ struct MusigAccount final : public ::rust::Opaque {
   // Whether the Electrum server's TLS certificate is checked.
   bool verify_certificate() const noexcept;
 
-  // Saves the endpoint to the config and restarts the listener.
+  // Saves the endpoint and stops the listener. Reopen explicitly to connect.
   ::MusigElectrumUrlResult set_electrum_url(::rust::String url) noexcept;
 
   ::rust::Box<::Poll> try_recv() noexcept;
@@ -3327,8 +3422,12 @@ struct MusigAccount final : public ::rust::Opaque {
   ::rust::Vec<::RustCoin> coins() const noexcept;
   ::SpendCoinsResult spending_coins() const noexcept;
   ::CoinState spendable_coins() const noexcept;
-  bool update_coin_label(::rust::String outpoint, ::rust::String label) noexcept;
+  ::LabelEditResult update_coin_label(::rust::String outpoint, ::rust::String label) const noexcept;
   ::rust::Vec<::RustTx> payment_history() const noexcept;
+  ::RustTxDetails tx_details(::rust::Str txid, bool allow_network) const noexcept;
+  ::LabelEditResult update_tx_label(::rust::String txid, ::rust::String label) const noexcept;
+  ::EndpointResult reopen_backend(bool connect_electrum) noexcept;
+  void close_backend() noexcept;
   ::AddressVerifyInfo address_verify_info(::rust::Str address) const noexcept;
   ::TransactionSimulation simulate_transaction(::TransactionTemplate tx_template) const noexcept;
 
@@ -3456,6 +3555,9 @@ bool validate_sp_descriptor(::rust::String descriptor) noexcept;
 // Test Electrum server connectivity.
 // Blocking call - attempts TCP connect and server.version handshake.
 ::ConnectionResult test_electrum(::rust::String address, bool verify_certificate) noexcept;
+
+// Test, then persist the complete endpoint. Does not start a wallet listener.
+::EndpointResult test_and_save_endpoint(::rust::String account_name, ::BackendServer server, ::rust::String url, bool verify_certificate) noexcept;
 
 // The height of the chain tip the Electrum server at `address` follows.
 // Blocking: call it off the GUI thread.

@@ -1,5 +1,6 @@
 #include "TxFlow.h"
 
+#include "catalog/display/Amount.h"
 #include "catalog/display/Label.h"
 #include "i18n/Tr.h"
 #include "theme/Palette.h"
@@ -9,43 +10,47 @@
 
 #include <QEvent>
 #include <QFont>
+#include <QFontMetricsF>
 #include <QGraphicsDropShadowEffect>
+#include <QHideEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
 #include <Qontrol>
+#include <common.h>
 
 namespace catalog {
 
 namespace {
 
-// Virtual canvas: TxFlow.jsx uses a 300x188 viewBox. Width maps to a fraction of
-// the widget width (GRAPH_WIDTH_FRAC); height is a fixed value (taller than 188).
-constexpr double CANVAS_W = 300.0; // virtual width (design viewBox is 300x188)
-constexpr int CANVAS_H = 250;      // rendered height (taller than the design's 188)
-constexpr double PAD_Y = 14.0;     // vertical padding (padY)
+// TxFlow.jsx: a 300 wide canvas, drawn at 1:1 and centered, scaled down only when the
+// widget is narrower. Detail mode draws on the widget's own width.
+constexpr double CANVAS_W = 300.0;
+constexpr int CANVAS_H = 188;
+constexpr int DETAIL_CANVAS_H = 220;
+constexpr double PAD_Y = 14.0;
 
-// Virtual X anchors (TxFlow.jsx).
-constexpr double X_IN_STUB = 4.0;             // xInStub
-constexpr double X_FLOW_L = 24.0;             // xFlowL
-constexpr double X_TRUNK_L = CANVAS_W * 0.44; // xTrunkL
-constexpr double X_TRUNK_R = CANVAS_W * 0.56; // xTrunkR
-constexpr double X_FLOW_R = CANVAS_W - 24.0;  // xFlowR
-constexpr double X_OUT_STUB = CANVAS_W - 4.0; // xOutStub
+constexpr double X_IN_STUB = 4.0;      // xInStub
+constexpr double FLOW_INSET = 24.0;    // xFlowL, and xFlowR from the right edge
+constexpr double DETAIL_INSET = 30.0;  // wider caps holding each band's index
+constexpr double TRUNK_L_FRAC = 0.44;  // xTrunkL
+constexpr double TRUNK_R_FRAC = 0.56;  // xTrunkR
+constexpr double OUT_STUB_INSET = 4.0; // xOutStub from the right edge
 
 constexpr double TRUNK_FRAC = 0.84; // trunk height fraction of usable height
 constexpr double NODE_GAP = 9.0;    // gap between node bands
 constexpr double BAND_MIN = 5.0;    // minimum band thickness (min)
 constexpr double CAP_INSET = 2.0;   // cap rect inset from flow column
 constexpr double CAP_RADIUS = 2.0;  // cap rounded-rect radius (rx)
-constexpr double LABEL_INSET = 8.0; // label right inset from xFlowR
+constexpr double LABEL_INSET = 8.0; // label inset from the flow column
 
-// The drawn diagram occupies this fraction of the widget width, centered.
-constexpr double GRAPH_WIDTH_FRAC = 0.7;
-
-constexpr int LABEL_FONT_PX = 9;    // on-ribbon label font size
-constexpr int LABEL_SPACING = 106;  // letter spacing percentage
+constexpr int KIND_FONT_PX = 9;           // output kind labels
+constexpr double KIND_TRACKING_PX = 0.54; // design 0.06em at 9px
+constexpr double KIND_BASELINE = 3.0;     // text baseline below the band middle
+constexpr int DETAIL_FONT_PX = 11;        // detail indexes and ids
+constexpr double DETAIL_BASELINE = 4.0;   // text baseline below the band middle
+constexpr double DETAIL_CAP_PADDING = 2.0;
 constexpr int LABEL_MAX_CHARS = 10; // recipient label truncation
 
 constexpr double RIBBON_HOVER_ALPHA = 0.98;
@@ -57,55 +62,38 @@ constexpr double RIBBON_OUT_ALPHA = 0.62;
 
 constexpr int CARD_WIDTH = 196;
 constexpr int CARD_OFFSET = 14; // cursor-to-card offset
-constexpr int CARD_MARGIN = 4;  // clamp margin to widget edges
+constexpr int CARD_MARGIN = 4;  // clamp margin to the diagram and window edges
 constexpr int CARD_RADIUS = 8;
 constexpr int CARD_PAD_H = 11;
 constexpr int CARD_PAD_V = 9;
-constexpr int CARD_SPACING = 3;
 constexpr int CARD_BLUR = 24;
 constexpr int CARD_SHADOW_DY = 8;
 constexpr int CARD_SHADOW_ALPHA = 89;
-constexpr int CARD_TITLE_PX = 12;
+constexpr int CARD_TITLE_PX = 13;
 constexpr int CARD_FIAT_PX = 13;
 constexpr int CARD_ADDR_PX = 11;
 constexpr int ADDR_FULL = 30; // addr length above which to shorten
-constexpr int ADDR_HEAD = 8;  // leading chars kept
-constexpr int ADDR_TAIL = 8;  // trailing chars kept
+constexpr int ADDR_HEAD = 26; // leading chars kept
+constexpr int ADDR_TAIL = 4;  // trailing chars kept
 
-// Empty-state placeholder geometry (centered preview), all relative to the
-// canvas center (cx, cy).
-constexpr double EMPTY_ALPHA = 0.4;
+// TxFlowEmpty: a 116x60 sketch above a muted line of text at most 200 wide.
+constexpr int EMPTY_ART_W = 116;
+constexpr int EMPTY_ART_H = 60;
+constexpr int EMPTY_GAP = 10;
+constexpr int EMPTY_TEXT_W = 200;
+constexpr int EMPTY_TEXT_PX = 13;
+constexpr double EMPTY_STUB_ALPHA = 0.4;
+constexpr double EMPTY_TRUNK_ALPHA = 0.55;
 constexpr double EMPTY_DASH_ALPHA = 0.3;
-constexpr double EMPTY_TRUNK_ALPHA = 0.55; // muted trunk fill alpha
+constexpr double EMPTY_DASH_WIDTH = 1.5;
+constexpr double EMPTY_DASH = 3.0;
 
-constexpr double EMPTY_STUB_X = -58.0;     // left stubs x offset from center
-constexpr double EMPTY_STUB_W = 9.0;       // side stub width
-constexpr double EMPTY_STUB_H = 13.0;      // input stub height
-constexpr double EMPTY_STUB_TOP_Y = -20.0; // top input stub y offset
-constexpr double EMPTY_STUB_BOT_Y = 7.0;   // bottom input stub y offset
-
-constexpr double EMPTY_TRUNK_X = -7.0;  // trunk x offset from center
-constexpr double EMPTY_TRUNK_Y = -12.0; // trunk top y offset
-constexpr double EMPTY_TRUNK_W = 14.0;  // trunk width
-constexpr double EMPTY_TRUNK_H = 24.0;  // trunk height
-
-constexpr double EMPTY_OUT_X = 46.0;  // right stub x offset from center
-constexpr double EMPTY_OUT_Y = -10.0; // right stub top y offset
-constexpr double EMPTY_OUT_H = 20.0;  // right stub height
-
-constexpr double EMPTY_DASH_WIDTH = 1.5; // dashed connector pen width
-constexpr double EMPTY_DASH_ON = 3.0;    // dash pattern: on length
-constexpr double EMPTY_DASH_OFF = 3.0;   // dash pattern: off length
-
-constexpr double EMPTY_CONN_IN_X = -49.0;  // input connector start x offset
-constexpr double EMPTY_CONN_TOP_Y0 = -8.0; // top connector start y offset
-constexpr double EMPTY_CONN_TOP_Y1 = -4.0; // top connector end y offset
-constexpr double EMPTY_CONN_BOT_Y0 = 14.0; // bottom connector start y offset
-constexpr double EMPTY_CONN_BOT_Y1 = 8.0;  // bottom connector end y offset
-constexpr double EMPTY_CONN_OUT_X0 = 7.0;  // output connector start x offset
-constexpr double EMPTY_CONN_OUT_X1 = 46.0; // output connector end x offset
-
-constexpr double EMPTY_TEXT_TOP = 24.0; // body text top offset below center
+constexpr int FOOTER_PAD_H = 6; // design footer padding 6px 6px 2px
+constexpr int FOOTER_PAD_BOTTOM = 2;
+constexpr int FOOTER_EYEBROW_PX = 10;
+constexpr int LEGEND_GAP = 12;
+constexpr int LEGEND_SWATCH = 8;
+constexpr double LEGEND_SWATCH_RADIUS = 2.0;
 
 struct Band {
     double top = 0.0;
@@ -114,7 +102,8 @@ struct Band {
 
 // Proportional band layout: reserve BAND_MIN per band so tiny amounts stay
 // visible, then share leftover space proportionally to weight.
-auto txBands(const QList<double> &weights, double top, double bottom, double gap) -> QList<Band> {
+auto txBands(const QList<double> &weights, double top, double bottom, double gap,
+             double minimum = BAND_MIN) -> QList<Band> {
     double total = 0.0;
     for (double w : weights) {
         total += w;
@@ -124,7 +113,7 @@ auto txBands(const QList<double> &weights, double top, double bottom, double gap
     }
     int n = static_cast<int>(weights.size());
     double avail = (bottom - top) - gap * std::max(0, n - 1);
-    double per = n > 0 ? std::min(BAND_MIN, avail / n) : avail;
+    double per = n > 0 ? std::min(minimum, avail / n) : avail;
     double leftover = std::max(0.0, avail - per * n);
     QList<Band> bands;
     double y = top;
@@ -147,16 +136,22 @@ auto ribbonPath(double x0, double a0, double a1, double x1, double b0, double b1
     return path;
 }
 
-// Horizontal mapping from the virtual canvas to device pixels: the diagram is
-// scaled to GRAPH_WIDTH_FRAC of the widget width and centered.
-struct GraphX {
-    double scale = 1.0;
-    double offset = 0.0;
+// The x anchors of the diagram on a canvas `w` wide.
+struct Columns {
+    double flowL = 0.0;
+    double trunkL = 0.0;
+    double trunkR = 0.0;
+    double flowR = 0.0;
+    double outStub = 0.0;
 };
 
-auto graphX(int widget_width) -> GraphX {
-    double drawW = widget_width * GRAPH_WIDTH_FRAC;
-    return {.scale = drawW / CANVAS_W, .offset = (widget_width - drawW) / 2.0};
+auto columns(double w, bool detail) -> Columns {
+    double inset = detail ? DETAIL_INSET : FLOW_INSET;
+    return {.flowL = inset,
+            .trunkL = w * TRUNK_L_FRAC,
+            .trunkR = w * TRUNK_R_FRAC,
+            .flowR = w - inset,
+            .outStub = w - OUT_STUB_INSET};
 }
 
 auto kindFill(const Palette &p, TxFlow::OutputKind kind) -> QColor {
@@ -203,15 +198,92 @@ auto txMidAddr(const QString &s) -> QString {
     return s;
 }
 
+enum class Anchor { Start, Middle, End };
+
+// Draws `text` on `baseline` anchored at `x` as SVG text-anchor does.
+void drawAnchored(QPainter &painter, double x, double baseline, Anchor anchor,
+                  const QString &text) {
+    double advance = QFontMetricsF(painter.font()).horizontalAdvance(text);
+    double left = x;
+    switch (anchor) {
+    case Anchor::Start:
+        break;
+    case Anchor::Middle:
+        left = x - advance / 2.0;
+        break;
+    case Anchor::End:
+        left = x - advance;
+        break;
+    }
+    painter.drawText(QPointF(left, baseline), text);
+}
+
+auto monoFont(int px, double tracking_px = 0.0) -> QFont {
+    QFont f(font::MONO);
+    f.setPixelSize(px);
+    f.setWeight(font::DEMIBOLD);
+    if (tracking_px > 0.0) {
+        f.setLetterSpacing(QFont::AbsoluteSpacing, tracking_px);
+    }
+    return f;
+}
+
+auto footerEyebrow(QWidget *parent) -> Label * {
+    auto *label = new Label(LabelRole::Eyebrow, parent);
+    auto eyebrowFont = label->font();
+    eyebrowFont.setPixelSize(FOOTER_EYEBROW_PX);
+    eyebrowFont.setWeight(font::DEMIBOLD);
+    label->setFont(eyebrowFont);
+    return label;
+}
+
+auto countText(qsizetype count, const QString &one, const QString &many) -> QString {
+    return count == 1 ? one : many.arg(count);
+}
+
+// Tiny rounded square in a band color; resolves the palette at paint time so it
+// tracks theme changes.
+class LegendSwatch : public QWidget {
+public:
+    LegendSwatch(TxLegend::Swatch swatch, QWidget *parent) : QWidget(parent), m_swatch(swatch) {
+        setFixedSize(LEGEND_SWATCH, LEGEND_SWATCH);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override {
+        Q_UNUSED(event);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const auto &p = Theme::get()->palette();
+        QColor fill = p.txSelf;
+        switch (m_swatch) {
+        case TxLegend::Swatch::Self:
+            break;
+        case TxLegend::Swatch::Recipient:
+            fill = p.warning;
+            break;
+        case TxLegend::Swatch::Fee:
+            fill = p.error;
+            break;
+        }
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(fill);
+        painter.drawRoundedRect(rect(), LEGEND_SWATCH_RADIUS, LEGEND_SWATCH_RADIUS);
+    }
+
+private:
+    TxLegend::Swatch m_swatch;
+};
+
 } // namespace
 
 // Floating detail card shown on hover; transparent to the mouse so it never
 // steals hover events from the ribbons underneath.
-class TxFlowCard : public QWidget {
+class TxFlowHoverCard : public QWidget {
     Q_OBJECT
 
 public:
-    explicit TxFlowCard(QWidget *parent = nullptr) : QWidget(parent) {
+    explicit TxFlowHoverCard(QWidget *parent = nullptr) : QWidget(parent) {
         setAttribute(Qt::WA_TransparentForMouseEvents);
         setFixedWidth(CARD_WIDTH);
 
@@ -222,19 +294,19 @@ public:
         m_title->setFont(titleFont);
 
         m_fiat = new Label(LabelRole::Mono);
+        m_fiat->setTone(LabelTone::Secondary);
         QFont fiatFont = m_fiat->font();
         fiatFont.setPixelSize(CARD_FIAT_PX);
         m_fiat->setFont(fiatFont);
 
         m_addr = new Label(LabelRole::Mono);
+        m_addr->setTone(LabelTone::Muted);
         QFont addrFont = m_addr->font();
         addrFont.setPixelSize(CARD_ADDR_PX);
         m_addr->setFont(addrFont);
-        m_addr->setWordWrap(true);
 
         (new qontrol::Column)
             ->margins(CARD_PAD_H, CARD_PAD_V, CARD_PAD_H, CARD_PAD_V)
-            ->spacing(CARD_SPACING)
             ->push(m_title)
             ->push(m_fiat)
             ->push(m_addr)
@@ -251,7 +323,7 @@ public:
         m_title->setText(title);
         m_fiat->setText(fiat);
         m_fiat->setVisible(!fiat.isEmpty());
-        m_addr->setText(txMidAddr(addr));
+        m_addr->setTextWrapAnywhere(txMidAddr(addr));
         m_addr->setVisible(!addr.isEmpty());
         adjustSize();
     }
@@ -262,7 +334,7 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
         const auto &p = Theme::get()->palette();
-        QRectF box = rect().adjusted(0.5, 0.5, -0.5, -0.5);
+        QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
         painter.setBrush(p.surface);
         painter.setPen(QPen(p.border, 1));
         painter.drawRoundedRect(box, CARD_RADIUS, CARD_RADIUS);
@@ -277,11 +349,13 @@ private:
 TxFlow::TxFlow(QWidget *parent) : QWidget(parent) {
     setProperty("class", "tx-flow");
     setMouseTracking(true);
-    // Fixed-height diagram (like the design's fixed viewBox height); pin it so a
-    // constrained column (single-column layout) cannot collapse it to nothing.
-    setFixedHeight(CANVAS_H);
-    m_card = new TxFlowCard(this);
+    // Fixed-height diagram (the design's fixed height); pin it so a constrained
+    // column (single-column layout) cannot collapse it to nothing.
+    setFixedHeight(canvasHeight());
+    m_card = new TxFlowHoverCard(this);
     m_card->hide();
+    connect(AmountDisplay::get(), &AmountDisplay::changed, this, &TxFlow::onAmountModeChanged,
+            qontrol::UNIQUE);
 }
 
 TxFlow::~TxFlow() {
@@ -291,30 +365,65 @@ TxFlow::~TxFlow() {
 }
 
 void TxFlow::setInputs(const QList<InputItem> &inputs) {
-    m_inputs.clear();
-    for (const auto &item : inputs) {
-        if (item.weight > 0.0) {
-            m_inputs.append(item);
-        }
-    }
-    m_hover_index = -1;
-    m_card->hide();
-    update();
+    m_given_inputs = inputs;
+    applyItems();
 }
 
 void TxFlow::setOutputs(const QList<OutputItem> &outputs) {
+    m_given_outputs = outputs;
+    applyItems();
+}
+
+void TxFlow::setDetail(bool detail) {
+    m_detail = detail;
+    setFixedHeight(canvasHeight());
+    applyItems();
+}
+
+void TxFlow::applyItems() {
+    m_inputs.clear();
+    for (const auto &item : m_given_inputs) {
+        if (m_detail || item.weight > 0.0) {
+            m_inputs.append(item);
+        }
+    }
     m_outputs.clear();
-    for (const auto &item : outputs) {
-        if (item.weight > 0.0) {
+    for (const auto &item : m_given_outputs) {
+        if (m_detail || item.weight > 0.0) {
             m_outputs.append(item);
         }
     }
+    clearHover();
+}
+
+auto TxFlow::inputs() const -> const QList<InputItem> & {
+    return m_inputs;
+}
+
+auto TxFlow::outputs() const -> const QList<OutputItem> & {
+    return m_outputs;
+}
+
+void TxFlow::clearHover() {
     m_hover_index = -1;
     m_card->hide();
     update();
 }
 
-void TxFlow::recomputeGeometry() {
+auto TxFlow::canvasHeight() const -> int {
+    return m_detail ? DETAIL_CANVAS_H : CANVAS_H;
+}
+
+auto TxFlow::canvasMap() const -> CanvasMap {
+    double canvasW = m_detail ? std::max(1, width()) : CANVAS_W;
+    double scale = std::min(1.0, width() / canvasW);
+    return {.width = canvasW,
+            .scale = scale,
+            .dx = (width() - canvasW * scale) / 2.0,
+            .dy = (height() - canvasHeight() * scale) / 2.0};
+}
+
+void TxFlow::recomputeGeometry(double canvas_width) {
     m_input_ribbons.clear();
     m_output_ribbons.clear();
     m_input_caps.clear();
@@ -323,9 +432,11 @@ void TxFlow::recomputeGeometry() {
         return;
     }
 
-    double trunkH = (CANVAS_H - 2.0 * PAD_Y) * TRUNK_FRAC;
-    double trunkTop = (CANVAS_H - trunkH) / 2.0;
-    double trunkBot = trunkTop + trunkH;
+    Columns x = columns(canvas_width, m_detail);
+    double h = canvasHeight();
+    double trunkH = (h - 2.0 * PAD_Y) * TRUNK_FRAC;
+    m_trunk_top = (h - trunkH) / 2.0;
+    m_trunk_bot = m_trunk_top + trunkH;
 
     QList<double> inW;
     for (const auto &item : m_inputs) {
@@ -336,22 +447,23 @@ void TxFlow::recomputeGeometry() {
         outW.append(item.weight);
     }
 
-    auto inNode = txBands(inW, PAD_Y, CANVAS_H - PAD_Y, NODE_GAP);
-    auto inTrunk = txBands(inW, trunkTop, trunkBot, 0.0);
-    auto outNode = txBands(outW, PAD_Y, CANVAS_H - PAD_Y, NODE_GAP);
-    auto outTrunk = txBands(outW, trunkTop, trunkBot, 0.0);
+    double nodeMinimum = m_detail ? DETAIL_FONT_PX + 2 * DETAIL_CAP_PADDING : BAND_MIN;
+    auto inNode = txBands(inW, PAD_Y, h - PAD_Y, NODE_GAP, nodeMinimum);
+    auto inTrunk = txBands(inW, m_trunk_top, m_trunk_bot, 0.0);
+    auto outNode = txBands(outW, PAD_Y, h - PAD_Y, NODE_GAP, nodeMinimum);
+    auto outTrunk = txBands(outW, m_trunk_top, m_trunk_bot, 0.0);
 
     for (int i = 0; i < m_inputs.size(); ++i) {
-        m_input_ribbons.append(ribbonPath(X_FLOW_L, inNode[i].top, inNode[i].bot, X_TRUNK_L,
+        m_input_ribbons.append(ribbonPath(x.flowL, inNode[i].top, inNode[i].bot, x.trunkL,
                                           inTrunk[i].top, inTrunk[i].bot));
-        m_input_caps.append(QRectF(X_IN_STUB, inNode[i].top, X_FLOW_L - X_IN_STUB - CAP_INSET,
+        m_input_caps.append(QRectF(X_IN_STUB, inNode[i].top, x.flowL - X_IN_STUB - CAP_INSET,
                                    inNode[i].bot - inNode[i].top));
     }
     for (int j = 0; j < m_outputs.size(); ++j) {
-        m_output_ribbons.append(ribbonPath(X_TRUNK_R, outTrunk[j].top, outTrunk[j].bot, X_FLOW_R,
+        m_output_ribbons.append(ribbonPath(x.trunkR, outTrunk[j].top, outTrunk[j].bot, x.flowR,
                                            outNode[j].top, outNode[j].bot));
-        m_output_caps.append(QRectF(X_FLOW_R + CAP_INSET, outNode[j].top,
-                                    X_OUT_STUB - X_FLOW_R - CAP_INSET,
+        m_output_caps.append(QRectF(x.flowR + CAP_INSET, outNode[j].top,
+                                    x.outStub - x.flowR - CAP_INSET,
                                     outNode[j].bot - outNode[j].top));
     }
 }
@@ -360,90 +472,43 @@ void TxFlow::paintEvent(QPaintEvent *event) {
     Q_UNUSED(event);
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    const auto &p = Theme::get()->palette();
 
     if (m_inputs.isEmpty() || m_outputs.isEmpty()) {
         m_card->hide();
-        // Centered placeholder: muted stubs, trunk, dashed connectors, body text.
-        double cx = width() / 2.0;
-        double cy = CANVAS_H / 2.0;
-        QColor muted = p.textMuted;
-        muted.setAlphaF(EMPTY_ALPHA);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(muted);
-        painter.drawRoundedRect(
-            QRectF(cx + EMPTY_STUB_X, cy + EMPTY_STUB_TOP_Y, EMPTY_STUB_W, EMPTY_STUB_H),
-            CAP_RADIUS, CAP_RADIUS);
-        painter.drawRoundedRect(
-            QRectF(cx + EMPTY_STUB_X, cy + EMPTY_STUB_BOT_Y, EMPTY_STUB_W, EMPTY_STUB_H),
-            CAP_RADIUS, CAP_RADIUS);
-        QColor trunk = p.textMuted;
-        trunk.setAlphaF(EMPTY_TRUNK_ALPHA);
-        painter.setBrush(trunk);
-        painter.drawRoundedRect(
-            QRectF(cx + EMPTY_TRUNK_X, cy + EMPTY_TRUNK_Y, EMPTY_TRUNK_W, EMPTY_TRUNK_H),
-            CAP_RADIUS, CAP_RADIUS);
-        painter.setBrush(muted);
-        painter.drawRoundedRect(
-            QRectF(cx + EMPTY_OUT_X, cy + EMPTY_OUT_Y, EMPTY_STUB_W, EMPTY_OUT_H), CAP_RADIUS,
-            CAP_RADIUS);
-        QColor dash = p.textMuted;
-        dash.setAlphaF(EMPTY_DASH_ALPHA);
-        QPen dashPen(dash, EMPTY_DASH_WIDTH);
-        dashPen.setStyle(Qt::CustomDashLine);
-        dashPen.setDashPattern({EMPTY_DASH_ON, EMPTY_DASH_OFF});
-        painter.setPen(dashPen);
-        painter.setBrush(Qt::NoBrush);
-        painter.drawLine(QPointF(cx + EMPTY_CONN_IN_X, cy + EMPTY_CONN_TOP_Y0),
-                         QPointF(cx + EMPTY_TRUNK_X, cy + EMPTY_CONN_TOP_Y1));
-        painter.drawLine(QPointF(cx + EMPTY_CONN_IN_X, cy + EMPTY_CONN_BOT_Y0),
-                         QPointF(cx + EMPTY_TRUNK_X, cy + EMPTY_CONN_BOT_Y1));
-        painter.drawLine(QPointF(cx + EMPTY_CONN_OUT_X0, cy), QPointF(cx + EMPTY_CONN_OUT_X1, cy));
-        painter.setPen(p.textMuted);
-        painter.drawText(QRectF(0, cy + EMPTY_TEXT_TOP, width(), CANVAS_H / 2.0 - EMPTY_TEXT_TOP),
-                         Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, TR("txflow-empty"));
+        // The payment prompt belongs to Send: a transaction summary has no empty state.
+        if (!m_detail) {
+            paintEmpty(painter);
+        }
         return;
     }
 
-    recomputeGeometry();
+    CanvasMap map = canvasMap();
+    recomputeGeometry(map.width);
+    Columns x = columns(map.width, m_detail);
+    const auto &p = Theme::get()->palette();
 
-    GraphX gx = graphX(width());
-    double trunkH = (CANVAS_H - 2.0 * PAD_Y) * TRUNK_FRAC;
-    double trunkTop = (CANVAS_H - trunkH) / 2.0;
-
-    // Geometry is drawn in the centered, scaled virtual space; text is drawn
-    // afterwards in device space so glyphs are not horizontally stretched.
-    painter.save();
-    painter.translate(gx.offset, 0.0);
-    painter.scale(gx.scale, 1.0);
+    painter.translate(map.dx, map.dy);
+    painter.scale(map.scale, map.scale);
     painter.setPen(Qt::NoPen);
 
-    // (1) input ribbons
     for (int i = 0; i < m_input_ribbons.size(); ++i) {
-        QColor fill = p.txSelf;
         bool hot = m_hover_is_input && m_hover_index == i;
-        fill.setAlphaF(hot ? RIBBON_HOVER_ALPHA
-                           : RIBBON_IN_BASE + RIBBON_IN_STEP * (i % RIBBON_ALPHA_CYCLE));
-        painter.setBrush(fill);
+        double alpha =
+            hot ? RIBBON_HOVER_ALPHA : RIBBON_IN_BASE + RIBBON_IN_STEP * (i % RIBBON_ALPHA_CYCLE);
+        painter.setBrush(withAlpha(p.txSelf, alpha));
         painter.drawPath(m_input_ribbons[i]);
     }
 
-    // (2) trunk
-    QColor trunkFill = p.txSelf;
-    trunkFill.setAlphaF(TRUNK_ALPHA);
-    painter.setBrush(trunkFill);
-    painter.drawRect(QRectF(X_TRUNK_L, trunkTop, X_TRUNK_R - X_TRUNK_L, trunkH));
+    painter.setBrush(withAlpha(p.txSelf, TRUNK_ALPHA));
+    painter.drawRect(QRectF(x.trunkL, m_trunk_top, x.trunkR - x.trunkL, m_trunk_bot - m_trunk_top));
 
-    // (3) output ribbons
     for (int j = 0; j < m_output_ribbons.size(); ++j) {
-        QColor fill = kindFill(p, m_outputs[j].kind);
         bool hot = !m_hover_is_input && m_hover_index == j;
-        fill.setAlphaF(hot ? RIBBON_HOVER_ALPHA : RIBBON_OUT_ALPHA);
-        painter.setBrush(fill);
+        painter.setBrush(
+            withAlpha(kindFill(p, m_outputs[j].kind), hot ? RIBBON_HOVER_ALPHA : RIBBON_OUT_ALPHA));
         painter.drawPath(m_output_ribbons[j]);
     }
 
-    // (4) caps
     painter.setBrush(p.txSelf);
     for (const auto &cap : m_input_caps) {
         painter.drawRoundedRect(cap, CAP_RADIUS, CAP_RADIUS);
@@ -453,31 +518,96 @@ void TxFlow::paintEvent(QPaintEvent *event) {
         painter.drawRoundedRect(m_output_caps[j], CAP_RADIUS, CAP_RADIUS);
     }
 
-    painter.restore();
+    paintLabels(painter, map.width);
+}
 
-    // (5) on-ribbon output labels in device space, right-anchored at scaled X.
-    QFont labelFont(font::MONO, LABEL_FONT_PX);
-    labelFont.setWeight(font::DEMIBOLD);
-    labelFont.setLetterSpacing(QFont::PercentageSpacing, LABEL_SPACING);
-    painter.setFont(labelFont);
-    double anchorX = gx.offset + (X_FLOW_R - LABEL_INSET) * gx.scale;
+void TxFlow::paintLabels(QPainter &painter, double canvas_width) {
+    const auto &p = Theme::get()->palette();
+    Columns x = columns(canvas_width, m_detail);
+
+    if (!m_detail) {
+        painter.setFont(monoFont(KIND_FONT_PX, KIND_TRACKING_PX));
+        for (int j = 0; j < m_outputs.size(); ++j) {
+            painter.setPen(kindLabelColor(p, m_outputs[j].kind));
+            drawAnchored(painter, x.flowR - LABEL_INSET,
+                         m_output_caps[j].center().y() + KIND_BASELINE, Anchor::End,
+                         kindLabelText(m_outputs[j]));
+        }
+        return;
+    }
+
+    painter.setFont(monoFont(DETAIL_FONT_PX));
+    for (int i = 0; i < m_inputs.size(); ++i) {
+        double baseline = m_input_caps[i].center().y() + DETAIL_BASELINE;
+        painter.setPen(p.txSelfLabel);
+        drawAnchored(painter, x.flowL + LABEL_INSET, baseline, Anchor::Start, m_inputs[i].ref);
+        painter.setPen(p.bg);
+        drawAnchored(painter, m_input_caps[i].center().x(), baseline, Anchor::Middle,
+                     m_inputs[i].index);
+    }
     for (int j = 0; j < m_outputs.size(); ++j) {
-        double mid = m_output_caps[j].center().y();
-        painter.setPen(kindLabelColor(p, m_outputs[j].kind));
-        QRectF box(0, mid - LABEL_FONT_PX, anchorX, 2.0 * LABEL_FONT_PX);
-        painter.drawText(box, Qt::AlignRight | Qt::AlignVCenter, kindLabelText(m_outputs[j]));
+        const auto &item = m_outputs[j];
+        double baseline = m_output_caps[j].center().y() + DETAIL_BASELINE;
+        bool fee = item.kind == OutputKind::Fee;
+        painter.setPen(kindLabelColor(p, item.kind));
+        drawAnchored(painter, x.flowR - LABEL_INSET, baseline, Anchor::End,
+                     fee ? TR("txflow-legend-fee") : item.ref);
+        if (!fee) {
+            painter.setPen(item.kind == OutputKind::Change ? p.bg : p.text);
+            drawAnchored(painter, m_output_caps[j].center().x(), baseline, Anchor::Middle,
+                         item.index);
+        }
     }
 }
 
+void TxFlow::paintEmpty(QPainter &painter) {
+    const auto &p = Theme::get()->palette();
+    QFont textFont = font();
+    textFont.setPixelSize(EMPTY_TEXT_PX);
+    QRect textRect = QFontMetrics(textFont).boundingRect(QRect(0, 0, EMPTY_TEXT_W, height()),
+                                                         Qt::AlignHCenter | Qt::TextWordWrap,
+                                                         TR("txflow-empty"));
+    int top = (height() - (EMPTY_ART_H + EMPTY_GAP + textRect.height())) / 2;
+
+    painter.save();
+    painter.translate((width() - EMPTY_ART_W) / 2.0, top);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(withAlpha(p.textMuted, EMPTY_STUB_ALPHA));
+    painter.drawRoundedRect(QRectF(3, 14, 9, 13), CAP_RADIUS, CAP_RADIUS);
+    painter.drawRoundedRect(QRectF(3, 33, 9, 13), CAP_RADIUS, CAP_RADIUS);
+    painter.drawRoundedRect(QRectF(104, 20, 9, 20), CAP_RADIUS, CAP_RADIUS);
+    painter.setBrush(withAlpha(p.textMuted, EMPTY_TRUNK_ALPHA));
+    painter.drawRoundedRect(QRectF(51, 18, 14, 24), CAP_RADIUS, CAP_RADIUS);
+
+    QPen dash(withAlpha(p.textMuted, EMPTY_DASH_ALPHA), EMPTY_DASH_WIDTH);
+    // Qt counts dash lengths in pen widths.
+    dash.setDashPattern({EMPTY_DASH / EMPTY_DASH_WIDTH, EMPTY_DASH / EMPTY_DASH_WIDTH});
+    painter.setPen(dash);
+    painter.setBrush(Qt::NoBrush);
+    QPainterPath connectors;
+    connectors.moveTo(12, 20);
+    connectors.cubicTo(32, 20, 32, 24, 51, 24);
+    connectors.moveTo(12, 40);
+    connectors.cubicTo(32, 40, 32, 36, 51, 36);
+    connectors.moveTo(65, 30);
+    connectors.lineTo(104, 30);
+    painter.drawPath(connectors);
+    painter.restore();
+
+    painter.setFont(textFont);
+    painter.setPen(p.textMuted);
+    painter.drawText(QRect((width() - EMPTY_TEXT_W) / 2, top + EMPTY_ART_H + EMPTY_GAP,
+                           EMPTY_TEXT_W, textRect.height()),
+                     Qt::AlignHCenter | Qt::TextWordWrap, TR("txflow-empty"));
+}
+
 auto TxFlow::sizeHint() const -> QSize {
-    return {static_cast<int>(CANVAS_W), CANVAS_H};
+    return {static_cast<int>(CANVAS_W), canvasHeight()};
 }
 
 auto TxFlow::hitTest(const QPointF &pos) const -> HoverHit {
-    GraphX gx = graphX(width());
-    double vx = (pos.x() - gx.offset) / gx.scale;
-    double vy = pos.y();
-    QPointF vpos(vx, vy);
+    CanvasMap map = canvasMap();
+    QPointF vpos((pos.x() - map.dx) / map.scale, (pos.y() - map.dy) / map.scale);
 
     for (int i = 0; i < m_input_ribbons.size(); ++i) {
         if (m_input_ribbons[i].contains(vpos) || m_input_caps[i].contains(vpos)) {
@@ -492,23 +622,31 @@ auto TxFlow::hitTest(const QPointF &pos) const -> HoverHit {
     return {};
 }
 
-void TxFlow::positionCard(QMouseEvent *event) {
-    // Float the card over the whole window so it is not clipped by the diagram and
-    // can extend past the graph card when tall. Reparent to the top level once.
+void TxFlow::positionCard(const QPointF &pos) {
+    // Float the card over the whole window, so no container (the card around the
+    // diagram, a scroll area, a table) clips it. Reparent to the top level once.
     QWidget *top = window();
     if (m_card->parentWidget() != top) {
         m_card->setParent(top);
     }
-    QPoint cursor = mapTo(top, event->position().toPoint());
-    int cardL = cursor.x() + CARD_OFFSET;
-    if (cardL + CARD_WIDTH > top->width()) {
-        cardL = cursor.x() - CARD_OFFSET - CARD_WIDTH;
+    // TxFlow.jsx: right of the cursor, or left when it would leave the diagram, kept
+    // within the diagram's width.
+    int x = static_cast<int>(pos.x());
+    int cardL = x + CARD_OFFSET;
+    if (cardL + CARD_WIDTH > width()) {
+        cardL = x - CARD_OFFSET - CARD_WIDTH;
     }
-    cardL = std::clamp(cardL, CARD_MARGIN,
-                       std::max(CARD_MARGIN, top->width() - CARD_WIDTH - CARD_MARGIN));
-    int cardT = std::clamp(cursor.y() - CARD_OFFSET, CARD_MARGIN,
-                           std::max(CARD_MARGIN, top->height() - m_card->height() - CARD_MARGIN));
-    m_card->move(cardL, cardT);
+    cardL =
+        std::clamp(cardL, CARD_MARGIN, std::max(CARD_MARGIN, width() - CARD_WIDTH - CARD_MARGIN));
+    int cardT = std::max(CARD_MARGIN, static_cast<int>(pos.y()) - CARD_OFFSET);
+
+    // Then within the window, so the card is never cut at its edges.
+    QPoint corner = mapTo(top, QPoint(cardL, cardT));
+    int left = std::clamp(corner.x(), CARD_MARGIN,
+                          std::max(CARD_MARGIN, top->width() - CARD_WIDTH - CARD_MARGIN));
+    int topY = std::clamp(corner.y(), CARD_MARGIN,
+                          std::max(CARD_MARGIN, top->height() - m_card->height() - CARD_MARGIN));
+    m_card->move(left, topY);
     m_card->raise();
     m_card->show();
 }
@@ -522,34 +660,151 @@ void TxFlow::mouseMoveEvent(QMouseEvent *event) {
 
     if (hit.index < 0) {
         if (m_hover_index >= 0) {
-            m_hover_index = -1;
-            m_card->hide();
-            update();
+            clearHover();
         }
         return;
     }
 
     m_hover_index = hit.index;
     m_hover_is_input = hit.is_input;
-    if (hit.is_input) {
-        const auto &item = m_inputs[hit.index];
-        m_card->setData(item.title, item.fiat, item.addr);
-    } else {
-        const auto &item = m_outputs[hit.index];
-        m_card->setData(item.title, item.fiat, item.addr);
-    }
+    updateCard();
     update();
 
-    positionCard(event);
+    positionCard(event->position());
+}
+
+void TxFlow::updateCard() {
+    if (m_hover_index < 0) {
+        return;
+    }
+    if (m_hover_is_input) {
+        const auto &item = m_inputs[m_hover_index];
+        m_card->setData(item.title, cardValue(item.value_known, item.fiat), item.addr);
+    } else {
+        const auto &item = m_outputs[m_hover_index];
+        m_card->setData(item.title, cardValue(item.value_known, item.fiat), item.addr);
+    }
+}
+
+auto TxFlow::cardValue(bool value_known, const QString &fiat) const -> QString {
+    if (!value_known) {
+        return TR("tx-unknown");
+    }
+    // Send keeps its amounts fixed; the summary follows the app-wide hidden mode.
+    if (m_detail && AmountDisplay::get()->mode() == AmountMode::Hidden) {
+        return {};
+    }
+    return fiat;
 }
 
 void TxFlow::leaveEvent(QEvent *event) {
     if (m_hover_index >= 0) {
-        m_hover_index = -1;
-        m_card->hide();
-        update();
+        clearHover();
     }
     QWidget::leaveEvent(event);
+}
+
+void TxFlow::hideEvent(QHideEvent *event) {
+    // The card lives on the window: hide it with the diagram (a page or modal switch).
+    m_hover_index = -1;
+    m_card->hide();
+    QWidget::hideEvent(event);
+}
+
+void TxFlow::onAmountModeChanged() {
+    updateCard();
+}
+
+TxLegend::TxLegend(Swatch swatch, const QString &text, QWidget *parent) : QWidget(parent) {
+    m_text = new Label(text, LabelRole::Body, this);
+    (new qontrol::Row)
+        ->spacing(resolve(Spacing::XS))
+        ->push(new LegendSwatch(swatch, this), 0, Qt::AlignVCenter)
+        ->push(m_text, 0, Qt::AlignVCenter)
+        ->into(this);
+}
+
+void TxLegend::setText(const QString &text) {
+    m_text->setText(text);
+}
+
+auto TxLegend::swatchFor(TxFlow::OutputKind kind) -> Swatch {
+    switch (kind) {
+    case TxFlow::OutputKind::Recipient:
+        return Swatch::Recipient;
+    case TxFlow::OutputKind::Change:
+        return Swatch::Self;
+    case TxFlow::OutputKind::Fee:
+        return Swatch::Fee;
+    }
+    return Swatch::Recipient;
+}
+
+TxFlowCard::TxFlowCard(QWidget *parent) : Card(Role::Inset, parent) {
+    setPad(Pad::S);
+    m_flow = new TxFlow(this);
+
+    m_inputs_count = footerEyebrow(this);
+    m_outputs_count = footerEyebrow(this);
+    m_recipient = new TxLegend(TxLegend::Swatch::Recipient, TR("txflow-legend-recipient"), this);
+    m_change = new TxLegend(TxLegend::Swatch::Self, TR("txflow-legend-change"), this);
+    m_fee = new TxLegend(TxLegend::Swatch::Fee, TR("txflow-legend-fee"), this);
+    auto *legend =
+        (new qontrol::Row)->spacing(LEGEND_GAP)->push(m_recipient)->push(m_change)->push(m_fee);
+    m_footer = (new qontrol::Row)
+                   ->margins(FOOTER_PAD_H, FOOTER_PAD_H, FOOTER_PAD_H, FOOTER_PAD_BOTTOM)
+                   ->push(m_inputs_count, 0, Qt::AlignVCenter)
+                   ->pushSpacer()
+                   ->push(legend, 0, Qt::AlignVCenter)
+                   ->pushSpacer()
+                   ->push(m_outputs_count, 0, Qt::AlignVCenter);
+
+    auto *column = (new qontrol::Column)->push(m_flow)->push(m_footer);
+    setContent(column);
+    updateFooter();
+}
+
+void TxFlowCard::setInputs(const QList<TxFlow::InputItem> &inputs) {
+    m_flow->setInputs(inputs);
+    updateFooter();
+}
+
+void TxFlowCard::setOutputs(const QList<TxFlow::OutputItem> &outputs) {
+    m_flow->setOutputs(outputs);
+    updateFooter();
+}
+
+void TxFlowCard::setDetail(bool detail) {
+    m_flow->setDetail(detail);
+    updateFooter();
+}
+
+void TxFlowCard::updateFooter() {
+    const auto &inputs = m_flow->inputs();
+    const auto &outputs = m_flow->outputs();
+    // The footer describes a drawn flow: none while the diagram shows its empty state.
+    m_footer->setVisible(!inputs.isEmpty() && !outputs.isEmpty());
+    m_inputs_count->setText(
+        countText(inputs.size(), TR("txflow-input-count-one"), TR("txflow-inputs-count")));
+    m_outputs_count->setText(
+        countText(outputs.size(), TR("txflow-output-count-one"), TR("txflow-outputs-count")));
+
+    m_recipient->setVisible(false);
+    m_change->setVisible(false);
+    m_fee->setVisible(false);
+    for (const auto &output : outputs) {
+        switch (output.kind) {
+        case TxFlow::OutputKind::Recipient:
+            m_recipient->setVisible(true);
+            break;
+        case TxFlow::OutputKind::Change:
+            m_change->setVisible(true);
+            break;
+        case TxFlow::OutputKind::Fee:
+            m_fee->setVisible(true);
+            break;
+        }
+    }
 }
 
 } // namespace catalog

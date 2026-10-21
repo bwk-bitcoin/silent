@@ -23,7 +23,8 @@ auto margin(QWidget *widget) -> QWidget *;
 auto margin(QWidget *widget, int margin) -> QWidget *;
 // Wraps `widget` in a silent-design DashboardLayout. `two_column` marks a screen
 // that can split side by side (Send); single-column screens leave it false.
-auto dashboard(const QString &title, QWidget *widget, bool two_column = false) -> QWidget *;
+auto dashboard(const QString &title, QWidget *widget, bool two_column = false,
+               QWidget *title_right = nullptr) -> QWidget *;
 // Swap a screen's content widget under a stable outer layout: deletes the old
 // `main_widget` (and its whole subtree) and installs `content` in its place.
 void setScreenContent(QWidget *screen, QWidget *&main_widget, QWidget *content);

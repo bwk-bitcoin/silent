@@ -9,6 +9,8 @@
 #include "host/Host.h"
 #include "host/PluginRegistry.h"
 #include "i18n/Tr.h"
+#include "modules/musig/MusigAccountController.h"
+#include "modules/musig/MusigAccountWidget.h"
 #include "theme/Theme.h"
 #include "views/modals/AppSettings.h"
 #include <QAbstractItemView>
@@ -17,15 +19,19 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDebug>
+#include <QElapsedTimer>
+#include <QEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPixmap>
+#include <QPointer>
 #include <QStyle>
 #include <QStyleOptionComboBox>
 #include <QVariant>
 #include <Qontrol>
 #include <algorithm>
+#include <chrono>
 #include <common.h>
 #include <limits>
 #include <string>
@@ -77,24 +83,49 @@ void edit(QLineEdit *field, const QString &text) {
     QApplication::sendEvent(field, &event);
 }
 
+auto feeToggle(account::view::Send &send) -> QCheckBox * {
+    for (auto *toggle : send.findChildren<QCheckBox *>()) {
+        if (!toggle->property("outputId").isValid() && toggle->text().isEmpty()) {
+            return toggle;
+        }
+    }
+    qFatal("fee rate/absolute toggle missing");
+}
+
 auto hasLabel(QWidget &widget, const QString &text) -> bool {
     return std::ranges::any_of(widget.findChildren<catalog::Label *>(), [&text](auto *label) {
         return label->text() == text && !label->isHidden();
     });
 }
 
-void hover(account::view::Send &send, double x, double y, const QString &title,
+class FlowProbe : public catalog::TxFlow {
+public:
+    static auto hoverPoint(catalog::TxFlow &flow, bool is_input, int index) -> QPointF {
+        for (int y = 0; y < flow.height(); ++y) {
+            for (int x = 0; x < flow.width(); ++x) {
+                QPointF point(x, y);
+                auto hit = (flow.*&FlowProbe::hitTest)(point);
+                if (hit.index == index && hit.is_input == is_input) {
+                    return point;
+                }
+            }
+        }
+        qFatal("transaction flow band missing: input=%d index=%d", static_cast<int>(is_input),
+               index);
+    }
+};
+
+void hover(account::view::Send &send, bool is_input, int index, const QString &title,
            const QString &fiat) {
     auto *flow = send.findChild<catalog::TxFlow *>();
     require(flow != nullptr, "real transaction flow exists");
     auto rendered = flow->grab();
     require(!rendered.isNull(), "flow paints its current geometry offscreen");
-    // TxFlow's 300-wide canvas occupies the middle 70% of its widget; y is unscaled.
-    QPointF point(flow->width() * (0.15 + x * 0.7 / 300), y);
+    auto point = FlowProbe::hoverPoint(*flow, is_input, index);
     QMouseEvent event(QEvent::MouseMove, point, point, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(flow, &event);
     if (!hasLabel(send, title)) {
-        qFatal("hover card missing '%s' at %.0f,%.0f", qPrintable(title), x, y);
+        qFatal("hover card missing '%s' at %.0f,%.0f", qPrintable(title), point.x(), point.y());
     }
     require(fiat.isEmpty() || hasLabel(send, fiat), "hover card uses cached selected fiat");
     if (fiat.isEmpty()) {
@@ -149,6 +180,90 @@ void registrationReuse(HostImpl *host, PriceModule *module) {
     host->removeInstance(instance.id(), module);
 }
 
+void accountWidgetLifetime(HostImpl *host, PriceModule *module) {
+    auto descriptor = QStringLiteral("tr(musig("
+                                     "tpubDEGU7K8ab62XbG1bKoCnHDtUx44DxVKyAQVS96EN1EUVTQRW2KnFEvTtm"
+                                     "nUJSonudSK8HcXTexf56Kir1JzoQAzFRHfvNLEcqV7KxUHZVYa,"
+                                     "tpubDDzMtUDKwjvTehAmAfwYiBGzUFDcF8AyEaJf78JhQam5knvsGTgqF7Vvh"
+                                     "uuDZLYityND66FG88sS3q28Yi5Ysumvx5DfMgdm6nc6zntvpHM"
+                                     ")/<0;1>/*)");
+    auto preferences = host->selectedFees().preferences;
+    for (auto visit : {false, true}) {
+        PriceFeed feed;
+        feed.offered.clear();
+        feed.has_default = true;
+        feed.default_rate = 7.0;
+        PriceInstance instance;
+        instance.instanceId = QStringLiteral("account-lifetime-feed");
+        instance.provider = &feed;
+        host->registerInstance(instance.id(), &instance, module);
+        host->selectFees(
+            {.mode = FeeMode::Default, .default_source = host->feeSources().first().id});
+        auto name = QStringLiteral("smoke-account-lifetime-%1").arg(static_cast<int>(visit));
+        auto config = ::new_config(rust::String(name.toStdString()), Network::Testnet,
+                                   rust::String(descriptor.toStdString()), rust::String(""),
+                                   rust::String(""), 546, rust::String("musig"));
+        require(config->save().empty(), "save isolated Testnet lifetime account");
+        auto *widget = new MusigAccountWidget(name);
+        QPointer<MusigAccountController> controller = widget->controller();
+        require(controller->getAccount().has_value() && controller->getAccount().value()->is_ok(),
+                "real Testnet lifetime backend opens");
+        QList<QPointer<qontrol::Screen>> screens;
+        for (const auto *key : {"history", "coins", "receive", "send", "psbt", "settings"}) {
+            screens.append(controller->screen(QString::fromLatin1(key)).value());
+            if (visit) {
+                controller->loadPanel(QString::fromLatin1(key));
+            }
+        }
+        auto panels =
+            controller->findChildren<qontrol::Panel *>(QString(), Qt::FindDirectChildrenOnly);
+        require(panels.size() == screens.size(), "controller owns every panel wrapper");
+        QList<QPointer<qontrol::Panel>> panelObservers;
+        for (auto *panel : panels) {
+            panelObservers.append(panel);
+        }
+        auto *send = controller->screen(QStringLiteral("send")).value();
+        auto *mode = send->findChild<QComboBox *>(QStringLiteral("fee-mode"));
+        auto *value = send->findChild<QLineEdit *>(QStringLiteral("fee-value"));
+        require(mode->currentIndex() == static_cast<int>(FeeMode::Default) &&
+                    value->text().toDouble() == 7.0,
+                "real fresh Testnet Send uses configured Default at actual 7 sat/vB");
+        PriceEvents events;
+        for (const auto &screen : screens) {
+            events.account_views.append(screen.data());
+        }
+        QObject::connect(controller, &MusigAccountController::stopped, &events,
+                         &PriceEvents::onAccountStopped, qontrol::UNIQUE);
+        QObject::connect(controller, &QObject::destroyed, &events, &PriceEvents::onAccountDestroyed,
+                         qontrol::UNIQUE);
+        controller->requestTxDetails(1, QString(64, QLatin1Char('f')));
+        controller->stop();
+        QElapsedTimer deadline;
+        deadline.start();
+        while (!events.account_stopped && deadline.elapsed() < 30000) {
+            QApplication::processEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        require(events.account_stopped, "account shutdown drains the real details worker");
+        delete widget;
+        require(controller.isNull(), "account widget destroys its backend");
+        require(events.screens_destroyed, "all account views are destroyed before their backend");
+        for (const auto &screen : screens) {
+            require(screen.isNull(), "visited and unvisited screens die with their backend");
+        }
+        for (const auto &panel : panelObservers) {
+            require(panel.isNull(), "panel wrappers die with their backend");
+        }
+        emit feed.defaultFeeRate(3, 9.0);
+        host->removeInstance(instance.id(), module);
+        QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QApplication::processEvents();
+        require(host->feeSources().isEmpty(), "feed removal after widget destruction is safe");
+        require(::delete_config(rust::String(name.toStdString())), "remove lifetime test account");
+    }
+    host->selectFees(preferences);
+}
+
 void feeRecommendations(HostImpl *host, PriceModule *module) {
     host->selectFees({});
     PriceFeed first;
@@ -194,8 +309,59 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
         networkBackend.selected_network = network;
         PriceSend networkSend(&networkBackend);
         input(networkSend, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
-        require(networkSend.transaction()->fee_rate == 0.5,
-                "every network uses the same global fee preference");
+        auto *networkMode = networkSend.findChild<QComboBox *>(QStringLiteral("fee-mode"));
+        auto *networkTier = networkSend.findChild<QComboBox *>(QStringLiteral("fee-tier"));
+        auto *networkValue = networkSend.findChild<QLineEdit *>(QStringLiteral("fee-value"));
+        require(networkSend.transaction()->fee_rate == 0.5 &&
+                    networkMode->currentIndex() == static_cast<int>(FeeMode::Smart),
+                "all networks start with the selected global recommendation");
+        edit(networkValue, QStringLiteral("0.125"));
+        for (auto feeMode : {FeeMode::Default, FeeMode::Smart}) {
+            auto index = static_cast<int>(feeMode);
+            networkMode->setCurrentIndex(index);
+            emit networkMode->activated(index);
+            require(networkSend.transaction()->fee_rate == 0.5 &&
+                        networkMode->currentIndex() == index,
+                    "Default and Smart apply on every network");
+        }
+        {
+            emit first.defaultFeeRate(3, 4);
+            emit second.smartFeeRates(4, 5, 6, 7);
+            networkTier->setCurrentIndex(static_cast<int>(FeeTier::Fast));
+            emit networkTier->activated(static_cast<int>(FeeTier::Fast));
+            require(networkSend.transaction()->fee_rate == 7 &&
+                        networkMode->currentIndex() == static_cast<int>(FeeMode::Smart),
+                    "every network follows selected-feed pushes and tier changes");
+            feeToggle(networkSend)->click();
+            edit(networkValue, QStringLiteral("1234"));
+            for (auto feeMode : {FeeMode::Default, FeeMode::Smart}) {
+                auto index = static_cast<int>(feeMode);
+                networkMode->setCurrentIndex(index);
+                emit networkMode->activated(index);
+                require(networkSend.transaction()->fee_rate ==
+                                (feeMode == FeeMode::Default ? 4 : 7) &&
+                            networkMode->currentIndex() == index,
+                        "every network can replace a manual absolute fee with a recommendation");
+            }
+            emit first.defaultFeeRate(3, 0.5);
+            emit second.smartFeeRates(4, 0.25, 0.5, 0.75);
+        }
+        require(host->selectedFees().preferences == fees.preferences,
+                "account fee choices never edit global fee preferences");
+    }
+    {
+        auto preferences = fees.preferences;
+        preferences.mode = FeeMode::Default;
+        host->selectFees(preferences);
+        PriceBackend testnetBackend;
+        testnetBackend.selected_network = Network::Testnet;
+        PriceSend testnetSend(&testnetBackend);
+        input(testnetSend, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
+        auto *mode = testnetSend.findChild<QComboBox *>(QStringLiteral("fee-mode"));
+        require(mode->currentIndex() == static_cast<int>(FeeMode::Default) &&
+                    testnetSend.transaction()->fee_rate == 0.5,
+                "fresh Testnet Send uses configured Default and its actual selected-feed rate");
+        host->selectFees(fees.preferences);
     }
     {
         modal::AppSettings settings;
@@ -215,6 +381,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
         require(defaultPickers == 1 && smartPickers == 1, "separate capability-specific settings");
     }
     PriceBackend backend;
+    backend.selected_network = Network::Bitcoin;
     PriceSend send(&backend);
     input(send, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
     auto *mode = send.findChild<QComboBox *>(QStringLiteral("fee-mode"));
@@ -257,13 +424,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     mode->setCurrentIndex(1);
     emit mode->activated(1);
     require(send.transaction()->fee_rate == 0.5, "per-send Default uses its independent provider");
-    QCheckBox *absolute = nullptr;
-    for (auto *toggle : send.findChildren<QCheckBox *>()) {
-        if (!toggle->property("outputId").isValid() && toggle->text().isEmpty()) {
-            absolute = toggle;
-        }
-    }
-    require(absolute != nullptr, "fee rate/absolute toggle exists");
+    auto *absolute = feeToggle(send);
     absolute->click();
     edit(value, QStringLiteral("1234"));
     emit first.defaultFeeRate(9, 9);
@@ -278,6 +439,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     emit second.smartFeeRates(8, 0.25, 0.5, 0.75);
     require(send.transaction()->fee_rate == 1, "recovery never resumes this manual transaction");
     PriceBackend freshBackend;
+    freshBackend.selected_network = Network::Bitcoin;
     PriceSend fresh(&freshBackend);
     input(fresh, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
     require(fresh.transaction()->fee_rate == 0.5,
@@ -303,6 +465,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
                 host->selectedFees().preferences.smart_source == secondId,
             "source loss withdraws cache without selecting another provider");
     PriceBackend missingBackend;
+    missingBackend.selected_network = Network::Bitcoin;
     PriceSend missing(&missingBackend);
     input(missing, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
     require(missing.transaction()->fee_rate == 1, "missing selected source starts Manual at 1");
@@ -330,6 +493,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
                       .tier = FeeTier::Low});
     require(host->selectedFees().default_rate == 0.5, "Default source recovers independently");
     PriceBackend defaultBackend;
+    defaultBackend.selected_network = Network::Bitcoin;
     PriceSend defaultSend(&defaultBackend);
     input(defaultSend, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
     require(defaultSend.transaction()->fee_rate == 0.5, "new Default Send reads cached source");
@@ -675,15 +839,15 @@ auto priceFeedSmoke() -> bool {
         require(backend.simulations == simulations, "restored PSBT never resimulates on price");
         require(send.transaction()->outputs[0].amount == 3000000 && send.transaction()->fee == 2000,
                 "restored template retains its exact frozen payment and absolute fee");
-        hover(send, 12, 125, TR("txflow-input-n").arg(1), QStringLiteral("~ 5000.00 EUR"));
-        hover(send, 286, 45, TR("txflow-output-n").arg(1), QStringLiteral("~ 1500.00 EUR"));
-        hover(send, 286, 150, TR("txflow-change-title"), QStringLiteral("~ 3499.00 EUR"));
-        hover(send, 286, 233, TR("txflow-fee-title"), QStringLiteral("~ 1.00 EUR"));
+        hover(send, true, 0, TR("txflow-input-n").arg(1), QStringLiteral("~ 5000.00 EUR"));
+        hover(send, false, 0, TR("txflow-output-n").arg(1), QStringLiteral("~ 1500.00 EUR"));
+        hover(send, false, 1, TR("txflow-change-title"), QStringLiteral("~ 3499.00 EUR"));
+        hover(send, false, 2, TR("txflow-fee-title"), QStringLiteral("~ 1.00 EUR"));
         first.publish(QStringLiteral("EUR"), 0);
-        hover(send, 12, 125, TR("txflow-input-n").arg(1), {});
-        hover(send, 286, 45, TR("txflow-output-n").arg(1), {});
-        hover(send, 286, 150, TR("txflow-change-title"), {});
-        hover(send, 286, 233, TR("txflow-fee-title"), {});
+        hover(send, true, 0, TR("txflow-input-n").arg(1), {});
+        hover(send, false, 0, TR("txflow-output-n").arg(1), {});
+        hover(send, false, 1, TR("txflow-change-title"), {});
+        hover(send, false, 2, TR("txflow-fee-title"), {});
     }
 
     std::thread queuedPush([&first]() { first.publish(QStringLiteral("EUR"), 12345); });
@@ -767,6 +931,7 @@ auto priceFeedSmoke() -> bool {
             "event processing never polls providers");
     registrationReuse(host, &plugin.module);
     feeRecommendations(host, &plugin.module);
+    accountWidgetLifetime(host, &plugin.module);
 #ifdef SILENT_PRICE_FEED_FIXTURE
     libraryUnload(host, &plugin.module);
 #endif

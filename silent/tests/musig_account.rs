@@ -291,7 +291,10 @@ fn musig_account_without_electrum_url_stays_offline() {
 
     let parsable = account.set_electrum_url(UNREACHABLE_ELECTRUM_URL.to_string());
     assert!(parsable.saved, "a parsable electrum url is saved");
-    assert!(parsable.started, "a parsable electrum url should start");
+    assert!(
+        !parsable.started,
+        "saving a parsable endpoint must not connect"
+    );
     let cleared = account.set_electrum_url(String::new());
     assert!(cleared.saved, "the cleared url is saved");
     assert!(

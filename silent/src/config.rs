@@ -198,6 +198,16 @@ impl Config {
         }
     }
 
+    pub fn save(&self) -> String {
+        match self.write_file() {
+            Ok(()) => String::new(),
+            Err(error) => {
+                log::error!("Config::save() {error}");
+                error
+            }
+        }
+    }
+
     /// Save Config to file, reporting a failed write.
     pub(crate) fn write_file(&self) -> Result<(), String> {
         let path = self.config_path();

@@ -3,20 +3,25 @@
 #include "catalog/containers/Modal.h"
 #include "interfaces/types.h"
 
+#include <QHash>
+#include <QList>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <cstdint>
 #include <memory>
 #include <silent.h>
 
 class MusigAccountController;
 class QEvent;
+struct KeyEntry;
 
 namespace catalog {
 class Button;
 class Label;
 class ModalActions;
 class Notice;
+class SelectRow;
 class WizardSteps;
 } // namespace catalog
 
@@ -61,19 +66,22 @@ private:
 // device signs in place, its row "On Device…" until the device answers; any other
 // route runs its own window over this modal, which stays under it. A round cannot go back (a
 // nonce is spent), so there is no Back; closing keeps the session, Sign on the Send
-// panel opens it again.
+// panel opens it again. Finalized, it lists the spend path's keys with the signatures
+// known to be in, and Broadcast.
 class SignModal final : public catalog::Modal {
     Q_OBJECT
 
 public:
-    explicit SignModal(MusigAccountController *controller);
+    // `signed_keys`: the spend path's keys whose signature is in, lowercased, kept by the
+    // Send step across the modal's openings. It outlives the modal.
+    explicit SignModal(MusigAccountController *controller,
+                       const QSet<QString> *signed_keys = nullptr);
 
 public slots:
     void onCosignerClicked();
     void onContinueClicked();
     void onBroadcastClicked();
     void onRoundChanged(const MusigRoundStatus &status);
-    void onSignerAnswered(const QString &fingerprint);
     void onTransactionReady(const QString &tx_hex);
     void onSigningFailed(const QString &message, plugin::SignError kind);
     void onFinalizeFailed(const QString &message);
@@ -99,6 +107,15 @@ protected:
     void requestPlan();
     // The same from `status`.
     void render(const MusigRoundStatus &status);
+    void renderFinalized();
+    [[nodiscard]] auto keyEntries() const -> QHash<QString, KeyEntry>;
+    // The wallet's keys the spend path `signers` does not use, greyed out.
+    [[nodiscard]] auto otherRows(const QStringList &signers,
+                                 const QHash<QString, KeyEntry> &entries) const
+        -> QList<catalog::SelectRow *>;
+    // Connected devices whose key is not one of the wallet's, greyed out.
+    [[nodiscard]] auto strangerRows(const QHash<QString, KeyEntry> &entries) const
+        -> QList<catalog::SelectRow *>;
     void showFailure(Failure failure, const QString &text);
     [[nodiscard]] auto failureTitle() const -> QString;
     // Whether the key `fingerprint` signs on its connected USB device.
@@ -119,8 +136,7 @@ private:
     // on a session past its nonces.
     bool m_partial = false;
     Failure m_failure = Failure::None;
-    // The keys of a single-key path that signed, lowercased.
-    QSet<QString> m_signed;
+    const QSet<QString> *m_signed = nullptr;
     std::shared_ptr<SigningPlan> m_plan;
     QString m_plan_psbt;
     bool m_plan_loading = false;

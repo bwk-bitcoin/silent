@@ -21,14 +21,14 @@ public:
     static constexpr int MIN_CONTENT_WIDTH = 760;
 
     DashboardLayout(const QString &title, QWidget *content, bool two_column = false,
-                    QWidget *parent = nullptr);
+                    QWidget *parent = nullptr, QWidget *title_right = nullptr);
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
 
-private:
     void applyMetrics();
 
+private:
     bool m_two_column;
     QWidget *m_block = nullptr;
     qontrol::Row *m_centered_row = nullptr;

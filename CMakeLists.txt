@@ -94,6 +94,10 @@ set(SILENT_APP_SOURCES
     src/catalog/inputs/DateTimeInput.cpp
     src/catalog/display/Display.h
     src/catalog/display/Display.cpp
+    src/catalog/display/Amount.h
+    src/catalog/display/Amount.cpp
+    src/catalog/display/TxIndicators.h
+    src/catalog/display/TxIndicators.cpp
     src/AppController.h
     src/AppController.cpp
     src/i18n/I18nManager.h
@@ -250,12 +254,16 @@ set(SILENT_APP_SOURCES
     src/views/DashboardLayout.h
     src/views/DashboardLayout.cpp
     src/account/AccountBackend.h
+    src/account/Equality.h
+    src/account/RequestId.h
     src/account/ElectrumReconnect.h
     src/account/ElectrumReconnect.cpp
     src/account/views/Coins.h
     src/account/views/Coins.cpp
     src/account/views/History.h
     src/account/views/History.cpp
+    src/account/views/TransactionDetails.h
+    src/account/views/TransactionDetails.cpp
     src/account/views/Receive.h
     src/account/views/Receive.cpp
     src/account/views/Settings.h
@@ -338,6 +346,8 @@ set(SILENT_APP_SOURCES
     src/catalog/form/FieldNote.cpp
     src/catalog/form/EndpointRow.h
     src/catalog/form/EndpointRow.cpp
+    src/catalog/form/LabelCell.h
+    src/catalog/form/LabelCell.cpp
     src/catalog/form/WordInputGrid.h
     src/catalog/form/WordInputGrid.cpp
     src/catalog/BalanceHeader.h
@@ -397,6 +407,10 @@ set(SILENT_APP_SOURCES
     src/catalog/panels/send/TxFlow.cpp
     src/catalog/panels/home/HistoryTable.h
     src/catalog/panels/home/HistoryTable.cpp
+    src/catalog/panels/home/CoinsTable.h
+    src/catalog/panels/home/CoinsTable.cpp
+    src/catalog/panels/home/RowClickTable.h
+    src/catalog/panels/home/RowClickTable.cpp
 )
 
 # The mock controller is dev-only UI scaffolding. It is excluded from the build

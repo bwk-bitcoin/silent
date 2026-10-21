@@ -88,6 +88,8 @@ auto btnVerifyOnDevice() -> Button *;
 auto btnDismissNotice() -> Button *;
 auto btnEditLabel() -> Button *;
 auto btnEditLabelRow() -> Button *;
+// A saved PSBT list row's delete.
+auto btnDeleteRow() -> Button *;
 auto btnMoveDown() -> Button *;
 auto btnMoveUp() -> Button *;
 auto btnRemovePayment() -> Button *;
@@ -160,6 +162,15 @@ auto pillAddrUnchecked() -> Badge *;
 auto pillAddrMismatch() -> Badge *;
 auto pillAddrNoScreen() -> Badge *;
 auto pillPluginUnloading() -> Badge *;
+// History and Coins date column: a transaction or coin not yet in a block.
+auto pillTxUnconfirmed() -> Badge *;
+// The Multikey PSBT list: one per saved transaction.
+auto pillPsbtSigning() -> Badge *;
+auto pillPsbtReady() -> Badge *;
+auto pillPsbtUnconfirmed() -> Badge *;
+auto pillPsbtConfirmed() -> Badge *;
+// An input was spent by another transaction: the PSBT can no longer confirm.
+auto pillPsbtDeprecated() -> Badge *;
 
 auto pillNetwork(const QString &network) -> Badge *;
 

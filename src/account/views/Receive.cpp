@@ -38,19 +38,26 @@ void Receive::init() {
         } else {
             section.row->setLabelVisible(true);
         }
-        section.fold = new catalog::FoldSection(title(kind));
-        // The first section opens, the others start folded.
-        section.fold->setExpanded(m_sections.isEmpty());
-        section.fold->setContent(section.row);
         m_sections.append(section);
+    }
+    // A single kind of address (Multikey Wallet) shows its row without a heading.
+    if (m_sections.size() > 1) {
+        for (auto &section : m_sections) {
+            section.fold = new catalog::FoldSection(title(section.kind));
+            // The first section opens, the others start folded.
+            section.fold->setExpanded(&section == &m_sections.first());
+            section.fold->setContent(section.row);
+        }
     }
     retranslateUi();
 }
 
 void Receive::doConnect() {
     for (const auto &section : m_sections) {
-        connect(section.fold, &catalog::FoldSection::toggled, this, &Receive::onSectionToggled,
-                qontrol::UNIQUE);
+        if (section.fold != nullptr) {
+            connect(section.fold, &catalog::FoldSection::toggled, this, &Receive::onSectionToggled,
+                    qontrol::UNIQUE);
+        }
         connect(section.row, &catalog::AddressRow::generateRequested, this,
                 &Receive::onGenerateRequested, qontrol::UNIQUE);
         connect(section.row, &catalog::AddressRow::historyRequested, this,
@@ -74,7 +81,11 @@ void Receive::view() {
                 ->pushSpacer(resolve(Spacing::S));
         }
         first = false;
-        col->push(section.fold);
+        if (section.fold != nullptr) {
+            col->push(section.fold);
+        } else {
+            col->push(section.row);
+        }
     }
     col->pushSpacer();
 
@@ -91,9 +102,8 @@ void Receive::changeEvent(QEvent *event) {
 
 void Receive::retranslateUi() {
     for (const auto &section : m_sections) {
-        section.fold->setTitle(title(section.kind));
-        if (section.kind != AddressKind::SilentPayment) {
-            section.row->setPlaceholderText(TR("receive-not-generated"));
+        if (section.fold != nullptr) {
+            section.fold->setTitle(title(section.kind));
         }
         section.row->setVerifyNote(verifyUnavailableNote());
     }
@@ -166,9 +176,10 @@ void Receive::showAddressHistory(Section *section) {
         }
 
         m_history_verify_address.clear();
-        auto *historyModal =
-            new modal::AddressHistoryModal(awaitingTitle(section->kind), entries,
-                                           verifyUnavailableNote().isEmpty(), m_verify_error);
+        auto historyTitle =
+            m_sections.size() == 1 ? TR("receive-addresses") : awaitingTitle(section->kind);
+        auto *historyModal = new modal::AddressHistoryModal(
+            historyTitle, entries, verifyUnavailableNote().isEmpty(), m_verify_error);
         connect(historyModal, &modal::AddressHistoryModal::verifyRequested, this,
                 &Receive::onVerifyHistoryAddress, qontrol::UNIQUE);
         connect(historyModal, &modal::AddressHistoryModal::labelEdited, this,

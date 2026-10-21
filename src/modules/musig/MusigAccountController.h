@@ -30,7 +30,7 @@ class MusigAccountController : public AccountBackend {
 
 public:
     MusigAccountController(const QString &account, MusigAccountWidget *widget);
-    ~MusigAccountController() override = default;
+    ~MusigAccountController() override;
     void init(const QString &account);
     void loadPanels();
     auto screen(const QString &screen) -> std::optional<qontrol::Screen *>;
@@ -52,7 +52,7 @@ public:
     auto startEndpoint(Endpoint endpoint) -> bool override;
     void stopEndpoint(Endpoint endpoint) override;
     [[nodiscard]] auto networkEditable() const -> bool override;
-    // Saves the Electrum url and restarts the listener on it; the network is fixed.
+    // Saves the Electrum url and stops the listener; the network is fixed.
     auto saveSettings(const QHash<Endpoint, QString> &urls, Network network) -> QString override;
     // The descriptor, the cosigners and Delete.
     auto settingsExtras() -> QWidget * override;
@@ -62,6 +62,13 @@ public:
     auto sendSigning() -> account::SendSigning * override;
     // stop() waits for the worker before it drops the account.
     void startWorker(QThread *worker) override;
+    void requestTxDetails(uint64_t req_id, const QString &txid) override;
+    void editTxLabel(uint64_t req_id, const QString &txid, const QString &label) override;
+    void editOutpointLabel(uint64_t req_id, const QString &outpoint, const QString &label) override;
+    void requestEndpointTip(uint64_t req_id, Endpoint endpoint) override;
+    void testAndSaveEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
+                             bool verify_certificate) override;
+    void setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) override;
     auto electrumUrl() -> QString;
     [[nodiscard]] auto roundStatus() const -> MusigRoundStatus;
     [[nodiscard]] auto psbtInFlight() const -> QString;
@@ -145,6 +152,7 @@ public slots:
     void onKeysCancelled(ReqId req_id);
     void onBroadcastResult(const TxResult &result);
     void onWorkerFinished();
+    void onEndpointFinished();
     void onRestartFinished();
     void onStorageFinished();
     void onSavedPsbtDeleteConfirmed(const QString &id);
@@ -171,6 +179,10 @@ protected:
     void setSaveWarning(const QString &message);
     void refreshActiveWarning();
     void completeSavedPsbtDeletion(const QString &id, const SavedPsbtMutation &result);
+    void listenNotifications();
+    void changeEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
+                        bool verify_certificate, bool test, bool connected);
+    void startEndpointChange();
 
 private:
     QPointer<qontrol::Panel> m_current_panel;
@@ -212,4 +224,15 @@ private:
     bool m_init = false;
     bool m_stopping = false;
     bool m_stop_requested = false;
+    std::shared_ptr<std::optional<rust::Box<MusigAccount>>> m_endpoint_account;
+    std::shared_ptr<EndpointResult> m_endpoint_result;
+    std::shared_ptr<bool> m_endpoint_replaced;
+    uint64_t m_endpoint_req_id = 0;
+    Endpoint m_endpoint = Endpoint::Electrum;
+    bool m_endpoint_busy = false;
+    bool m_endpoint_connection_lost = false;
+    QString m_endpoint_url;
+    bool m_endpoint_verify = true;
+    bool m_endpoint_test = false;
+    bool m_endpoint_connect = false;
 };

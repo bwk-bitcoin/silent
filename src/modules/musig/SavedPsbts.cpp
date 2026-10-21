@@ -1,58 +1,131 @@
 #include "SavedPsbts.h"
 
 #include "AppController.h"
+#include "account/views/TransactionDetails.h"
 #include "catalog/Button.h"
-#include "catalog/Table.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/ModalActions.h"
+#include "catalog/display/Badge.h"
+#include "catalog/display/InfoTip.h"
 #include "catalog/display/Label.h"
+#include "catalog/display/TxIndicators.h"
+#include "catalog/form/LabelCell.h"
 #include "catalog/inputs/Checkbox.h"
-#include "catalog/inputs/Input.h"
+#include "catalog/panels/home/RowClickTable.h"
 #include "i18n/Tr.h"
 #include "modules/musig/MusigAccountController.h"
 #include "views/utils.h"
 
+#include <QPointer>
+#include <QResizeEvent>
 #include <QShowEvent>
+#include <QStringList>
+#include <algorithm>
 #include <common.h>
+#include <cstdint>
 
 namespace musig {
 
 namespace {
 
+constexpr int K_VALUE_W = 130;
+constexpr int K_INFO_TIP_SIZE = 14;
+// The status pill and its info tip.
+constexpr int K_STATUS_W = resolve(PillWidth::L) + resolve(Spacing::XS) + K_INFO_TIP_SIZE;
+
+const char *const K_SAVED_ID = "savedId";
+
 auto text(const rust::String &value) -> QString {
     return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
 }
 
-auto statusText(const SavedPsbtEntry &entry) -> QString {
-    if (entry.confirmed_height != 0) {
-        return TR("psbt-confirmed").arg(entry.confirmed_height);
-    }
-    if (entry.in_history || entry.record.broadcast) {
-        return TR("psbt-broadcast");
-    }
-    if (!entry.record.finalized_tx_hex.empty()) {
-        return TR("psbt-finalized");
-    }
-    return TR("psbt-signing");
+auto broadcast(const SavedPsbtEntry &entry) -> bool {
+    return entry.confirmed_height != 0 || entry.in_history || entry.record.broadcast;
 }
 
-auto statusView(const SavedPsbtEntry &entry) -> QWidget * {
-    auto *column = (new qontrol::Column)->spacing(resolve(Spacing::XXS));
-    auto *state = new catalog::Label(statusText(entry));
-    state->setWordWrap(true);
-    column->push(state);
+// The transaction a click on the row shows: the one that replaced a deprecated draft,
+// the broadcast one itself, none for a draft (it opens in Send).
+auto openTxid(const SavedPsbtEntry &entry) -> QString {
+    if (!entry.conflicting_txids.empty()) {
+        return text(entry.conflicting_txids.front());
+    }
+    if (broadcast(entry)) {
+        return text(entry.txid);
+    }
+    return {};
+}
+
+// What the recipients receive: the frozen template's outputs, MAX resolved.
+auto amount(const SavedPsbtEntry &entry) -> uint64_t {
+    uint64_t total = 0;
+    for (const auto &output : entry.frozen_template.outputs) {
+        total += output.amount;
+    }
+    return total;
+}
+
+auto signedText(const SavedPsbtEntry &entry) -> QString {
+    if (!entry.signatures_known) {
+        return QStringLiteral("-");
+    }
+    return QStringLiteral("%1/%2").arg(entry.signatures_complete).arg(entry.signatures_required);
+}
+
+enum class PsbtStatus : std::uint8_t { Signing, Ready, Unconfirmed, Confirmed, Deprecated };
+
+auto statusOf(const SavedPsbtEntry &entry) -> PsbtStatus {
+    if (entry.confirmed_height != 0) {
+        return PsbtStatus::Confirmed;
+    }
+    if (!entry.conflicting_txids.empty()) {
+        return PsbtStatus::Deprecated;
+    }
+    if (broadcast(entry)) {
+        return PsbtStatus::Unconfirmed;
+    }
+    if (!entry.record.finalized_tx_hex.empty()) {
+        return PsbtStatus::Ready;
+    }
+    return PsbtStatus::Signing;
+}
+
+auto statusPill(PsbtStatus status) -> catalog::Badge * {
+    switch (status) {
+    case PsbtStatus::Signing:
+        return catalog::pillPsbtSigning();
+    case PsbtStatus::Ready:
+        return catalog::pillPsbtReady();
+    case PsbtStatus::Unconfirmed:
+        return catalog::pillPsbtUnconfirmed();
+    case PsbtStatus::Confirmed:
+        return catalog::pillPsbtConfirmed();
+    case PsbtStatus::Deprecated:
+        return catalog::pillPsbtDeprecated();
+    }
+    return catalog::pillPsbtSigning();
+}
+
+// The entry's warning and its conflicting transactions.
+auto notesOf(const SavedPsbtEntry &entry) -> QStringList {
+    QStringList notes;
     if (!entry.warning.empty()) {
-        auto *warning = new catalog::Label(text(entry.warning));
-        warning->setWordWrap(true);
-        column->push(warning);
+        notes.append(text(entry.warning));
     }
     for (const auto &conflict : entry.conflicting_txids) {
-        column->push(new catalog::Label(TR("psbt-conflict").arg(QString())));
-        auto *txid = new catalog::Label;
-        txid->setTextWrapAnywhere(text(conflict));
-        column->push(txid);
+        notes.append(TR("psbt-conflict").arg(text(conflict)));
     }
-    return column;
+    return notes;
+}
+
+// The status pill, then an info tip with the entry's notes.
+auto statusCell(const SavedPsbtEntry &entry) -> QWidget * {
+    auto *cell =
+        (new qontrol::Row)->spacing(resolve(Spacing::XS))->push(statusPill(statusOf(entry)));
+    auto notes = notesOf(entry);
+    if (!notes.isEmpty()) {
+        cell->push(new catalog::InfoTip(notes.join(QStringLiteral("\n"))));
+    }
+    return cell;
 }
 
 } // namespace
@@ -101,11 +174,7 @@ SavedPsbts::SavedPsbts(MusigAccountController *controller) : m_controller(contro
 }
 
 void SavedPsbts::init() {
-    m_table = new catalog::Table;
-    m_table->addColumn({.title = TR("psbt-transaction"), .width = resolve(Size::S)});
-    m_table->addColumn({.title = TR("coins-label"), .width = resolve(Size::M)});
-    m_table->addColumn({.title = TR("psbt-status"), .grow = true});
-    m_table->addColumn({.title = QString(), .width = resolve(BtnWidth::M)});
+    m_table = new catalog::RowClickTable;
     m_confirmed = new catalog::Checkbox(TR("psbt-show-confirmed"));
     m_confirmed->setChecked(false);
     m_error_label = new catalog::Label;
@@ -119,6 +188,7 @@ void SavedPsbts::init() {
     m_retry_btn->setText(TR("psbt-retry-save"));
     m_retry_btn->hide();
     onSaveWarningChanged(m_controller->saveWarning());
+    renderRows();
 }
 
 void SavedPsbts::doConnect() {
@@ -126,6 +196,8 @@ void SavedPsbts::doConnect() {
             &SavedPsbts::onDeleteConfirmationNeeded, qontrol::UNIQUE);
     connect(m_confirmed, &QCheckBox::clicked, this, &SavedPsbts::onRefresh, qontrol::UNIQUE);
     connect(m_retry_btn, &QPushButton::clicked, this, &SavedPsbts::onRetryClicked, qontrol::UNIQUE);
+    connect(m_table, &catalog::RowClickTable::rowClicked, this, &SavedPsbts::onRowClicked,
+            qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::savedPsbtsChanged, this, &SavedPsbts::onRefresh,
             qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::savedPsbtsListed, this, &SavedPsbts::onListed,
@@ -139,20 +211,107 @@ void SavedPsbts::doConnect() {
 void SavedPsbts::view() {
     auto *content = (new qontrol::Column)
                         ->spacing(resolve(Spacing::S))
-                        ->push(m_confirmed)
                         ->push(m_error_label)
                         ->push(m_warning_label)
                         ->push(m_retry_btn)
                         ->push(m_empty_label)
                         ->push(m_table)
                         ->pushSpacer();
-    setScreenContent(this, m_main_widget, dashboard(TR("musig-menu-psbt"), content));
+    setScreenContent(this, m_main_widget,
+                     dashboard(TR("musig-menu-psbt"), content, false, m_confirmed));
 }
 
 void SavedPsbts::showEvent(QShowEvent *event) {
     qontrol::Screen::showEvent(event);
     onRefresh();
 }
+
+void SavedPsbts::resizeEvent(QResizeEvent *event) {
+    qontrol::Screen::resizeEvent(event);
+    bool compact = catalog::compactDates(this);
+    if (compact != m_compact && !held()) {
+        m_compact = compact;
+        renderRows();
+    }
+}
+
+void SavedPsbts::renderRows() {
+    m_table->clearColumns();
+    m_table->clearRows();
+    m_open_txids.clear();
+    m_open_notes.clear();
+    m_label_cells.clear();
+    m_shown_rows = shownRows();
+    m_table->addColumn(
+        {.title = TR("psbt-last-edited"), .width = catalog::dateColumnWidth(m_compact)});
+    m_table->addColumn({.title = TR("psbt-signed"), .width = resolve(Size::XXS)});
+    m_table->addColumn({.title = TR("coins-label"), .grow = true});
+    m_table->addColumn({.width = resolve(BtnWidth::Icon), .icon = true});
+    m_table->addColumn({.title = TR("psbt-status"), .width = K_STATUS_W});
+    m_table->addColumn({.title = TR("coins-value"),
+                        .width = K_VALUE_W,
+                        .alignment = Qt::AlignRight,
+                        .headerAlignment = Qt::AlignRight});
+    m_table->addColumn({.width = resolve(BtnWidth::Icon), .icon = true});
+    m_empty_label->setVisible(m_list.is_ok);
+    for (const auto &entry : m_list.entries) {
+        if (entry.confirmed_height != 0 && !m_confirmed->isChecked()) {
+            continue;
+        }
+        m_empty_label->hide();
+        addRow(entry);
+    }
+}
+
+void SavedPsbts::addRow(const SavedPsbtEntry &entry) {
+    auto id = text(entry.record.id);
+    m_open_txids.insert(id, openTxid(entry));
+    m_open_notes.insert(id, notesOf(entry));
+
+    auto *signatures = new catalog::Label(signedText(entry), catalog::LabelRole::Mono);
+    signatures->setProperty("tblmono", "secondary");
+
+    auto *label = new catalog::LabelCell(text(entry.record.label));
+    label->setProperty(K_SAVED_ID, id);
+    connect(label, &catalog::LabelCell::edited, this, &SavedPsbts::onLabelEdited, qontrol::UNIQUE);
+    m_label_cells.insert(id, label);
+
+    auto *remove = catalog::btnDeleteRow();
+    remove->setProperty(K_SAVED_ID, id);
+    connect(remove, &QPushButton::clicked, this, &SavedPsbts::onDeleteClicked, qontrol::UNIQUE);
+    // In a cell of its own: the row's click filter sits on the cells, not their children.
+    auto *removeCell = (new qontrol::Row)->push(remove);
+
+    m_table->addClickableRow(id, {catalog::dateStamp(entry.record.updated_at, false, m_compact),
+                                  signatures, label, label->takeEditButton(), statusCell(entry),
+                                  catalog::amountLabel(amount(entry)), removeCell});
+}
+
+auto SavedPsbts::shownRows() const -> QStringList {
+    QStringList rows;
+    for (const auto &entry : m_list.entries) {
+        if (entry.confirmed_height != 0 && !m_confirmed->isChecked()) {
+            continue;
+        }
+        rows.append(QStringList{text(entry.record.id), QString::number(entry.record.updated_at),
+                                signedText(entry), text(entry.record.label),
+                                QString::number(static_cast<int>(statusOf(entry))),
+                                notesOf(entry).join(QStringLiteral("\n")),
+                                QString::number(amount(entry)), openTxid(entry)}
+                        .join(QStringLiteral("\t")));
+    }
+    return rows;
+}
+
+auto SavedPsbts::held() const -> bool {
+    if (m_modal_open) {
+        return true;
+    }
+    return std::ranges::any_of(
+        m_label_cells, [](const auto &cell) { return cell != nullptr && cell->isEditing(); });
+}
+
+// ===== Slots =====
 
 void SavedPsbts::onRefresh() {
     if (!isVisible()) {
@@ -169,43 +328,46 @@ void SavedPsbts::onRefresh() {
 
 void SavedPsbts::onListed(const SavedPsbtList &result) {
     m_loading = false;
-    if (!result.is_ok) {
+    // Dropped: the next poll or label edit lists them again.
+    if (held()) {
+        m_dirty = true;
+        return;
+    }
+    if (result.is_ok) {
+        m_error_label->hide();
+    } else {
         onFailure(text(result.error));
     }
-    m_table->clearRows();
-    m_empty_label->setVisible(result.is_ok);
-    for (const auto &entry : result.entries) {
-        if (entry.confirmed_height != 0 && !m_confirmed->isChecked()) {
-            continue;
-        }
-        auto id = text(entry.record.id);
-        m_empty_label->hide();
-        auto *open = catalog::btnOpenSavedPsbt(text(entry.txid));
-        open->setProperty("savedId", id);
-        connect(open, &QPushButton::clicked, this, &SavedPsbts::onOpenClicked, qontrol::UNIQUE);
-        auto *label = new catalog::Input;
-        label->setWidth(Size::M);
-        label->setText(text(entry.record.label));
-        label->setProperty("savedId", id);
-        connect(label, &QLineEdit::editingFinished, this, &SavedPsbts::onLabelEdited,
-                qontrol::UNIQUE);
-        auto *status = statusView(entry);
-        auto *remove = catalog::btnDelete();
-        remove->setProperty("savedId", id);
-        connect(remove, &QPushButton::clicked, this, &SavedPsbts::onDeleteClicked, qontrol::UNIQUE);
-        m_table->addWidgetRow(id, {open, label, status, remove});
+    bool wasOk = m_list.is_ok;
+    m_list = result;
+    bool compact = catalog::compactDates(this);
+    if (compact != m_compact || wasOk != m_list.is_ok || shownRows() != m_shown_rows) {
+        m_compact = compact;
+        renderRows();
     }
     if (m_dirty) {
         onRefresh();
     }
 }
 
-void SavedPsbts::onOpenClicked() {
-    m_controller->restoreSavedPsbt(sender()->property("savedId").toString());
+void SavedPsbts::onRowClicked(const QString &id) {
+    auto txid = m_open_txids.value(id);
+    if (txid.isEmpty()) {
+        // The controller shows it in Send.
+        m_controller->restoreSavedPsbt(id);
+        return;
+    }
+    // The rows stay while the details run over them.
+    m_modal_open = true;
+    QPointer<SavedPsbts> self(this);
+    account::showTransactionDetails(m_controller, txid, m_open_notes.value(id));
+    if (self != nullptr) {
+        m_modal_open = false;
+    }
 }
 
 void SavedPsbts::onDeleteClicked() {
-    m_controller->deleteSavedPsbt(sender()->property("savedId").toString());
+    m_controller->deleteSavedPsbt(sender()->property(K_SAVED_ID).toString());
 }
 
 void SavedPsbts::onDeleteConfirmationNeeded(const QString &id) {
@@ -214,16 +376,16 @@ void SavedPsbts::onDeleteConfirmationNeeded(const QString &id) {
             &MusigAccountController::onSavedPsbtDeleteConfirmed, qontrol::UNIQUE);
     connect(confirm, &ConfirmPsbtDelete::cancelled, m_controller,
             &MusigAccountController::onSavedPsbtDeleteCancelled, qontrol::UNIQUE);
+    m_modal_open = true;
+    QPointer<SavedPsbts> self(this);
     AppController::execModal(confirm);
+    if (self != nullptr) {
+        m_modal_open = false;
+    }
 }
 
-void SavedPsbts::onLabelEdited() {
-    auto *input = qobject_cast<catalog::Input *>(sender());
-    if (input == nullptr || !input->isModified()) {
-        return;
-    }
-    input->setModified(false);
-    m_controller->labelSavedPsbt(input->property("savedId").toString(), input->text());
+void SavedPsbts::onLabelEdited(const QString &label) {
+    m_controller->labelSavedPsbt(sender()->property(K_SAVED_ID).toString(), label);
 }
 
 void SavedPsbts::onFailure(const QString &message) {

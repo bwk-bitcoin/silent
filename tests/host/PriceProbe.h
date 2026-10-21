@@ -6,6 +6,8 @@
 #include "interfaces/host.h"
 #include "interfaces/instance.h"
 #include "interfaces/module.h"
+#include <QList>
+#include <QPointer>
 #include <QWidget>
 
 namespace smoke {
@@ -16,6 +18,9 @@ class PriceEvents final : public QObject {
 public:
     int sources = 0;
     int selected = 0;
+    bool account_stopped = false;
+    bool screens_destroyed = false;
+    QList<QPointer<QObject>> account_views;
 
 public slots:
 
@@ -25,6 +30,17 @@ public slots:
 
     void onSelectedChanged() {
         ++selected;
+    }
+
+    void onAccountStopped() {
+        account_stopped = true;
+    }
+
+    void onAccountDestroyed() {
+        screens_destroyed = true;
+        for (const auto &view : account_views) {
+            screens_destroyed = screens_destroyed && view.isNull();
+        }
     }
 };
 
@@ -291,6 +307,24 @@ public:
     }
 
     void startWorker([[maybe_unused]] QThread *worker) override {
+    }
+
+    void requestTxDetails(uint64_t, const QString &) override {
+    }
+
+    void editTxLabel(uint64_t, const QString &, const QString &) override {
+    }
+
+    void editOutpointLabel(uint64_t, const QString &, const QString &) override {
+    }
+
+    void requestEndpointTip(uint64_t, Endpoint) override {
+    }
+
+    void testAndSaveEndpoint(uint64_t, Endpoint, const QString &, bool) override {
+    }
+
+    void setEndpointConnected(uint64_t, Endpoint, bool) override {
     }
 
     void updateCoinLabel([[maybe_unused]] const QString &outpoint,

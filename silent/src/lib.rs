@@ -20,6 +20,7 @@ pub mod saved_psbt;
 pub mod spending;
 pub mod state_crypt;
 pub mod sync_estimator;
+pub mod tx_details;
 
 use bwk_sp::bwk::bwk_electrum::url::ElectrumScheme;
 
@@ -187,6 +188,8 @@ mod ffi {
         pub outpoint: String,
         pub value: u64,
         pub height: u32,
+        /// Confirming block time, zero until known.
+        pub timestamp: u64,
         pub label: String,
         pub spent: bool,
         pub account_type: String,
@@ -328,13 +331,70 @@ mod ffi {
     }
 
     /// A transaction entry from payment history.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Default)]
     pub struct RustTx {
         pub txid: String,
         pub direction: String,
         pub amount: u64,
+        pub amount_known: bool,
         pub fee: u64,
+        pub fee_known: bool,
         pub height: u32,
+        pub timestamp: u64,
+        pub label: String,
+        pub status: String,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct RustTxIo {
+        pub index: u32,
+        pub outpoint: String,
+        pub value: u64,
+        pub value_known: bool,
+        pub address: String,
+        pub script: String,
+        pub is_mine: bool,
+        pub ownership_known: bool,
+        pub label: String,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct LabelEditResult {
+        pub is_ok: bool,
+        pub error: String,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct RustTxDetails {
+        pub is_ok: bool,
+        pub error: String,
+        /// Missing prevouts or an offline lookup do not invalidate known transaction data.
+        pub warning: String,
+        pub tx: RustTx,
+        pub network: Network,
+        pub version: i32,
+        pub lock_time: u32,
+        pub weight: u64,
+        pub vsize: u64,
+        pub inputs: Vec<RustTxIo>,
+        pub outputs: Vec<RustTxIo>,
+        pub input_total: u64,
+        pub input_total_known: bool,
+        pub output_total: u64,
+        pub fee: u64,
+        pub fee_known: bool,
+        pub fee_rate: f64,
+        pub chain_tip: u32,
+        pub chain_tip_known: bool,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct EndpointResult {
+        pub is_ok: bool,
+        pub saved: bool,
+        pub error: String,
+        pub url: String,
+        pub verify_certificate: bool,
     }
 
     /// Transaction output specification.
@@ -462,6 +522,9 @@ mod ffi {
         pub in_history: bool,
         pub conflicting_txids: Vec<String>,
         pub warning: String,
+        pub signatures_complete: u32,
+        pub signatures_required: u32,
+        pub signatures_known: bool,
     }
 
     #[derive(Debug, Clone, Default)]
@@ -1029,7 +1092,7 @@ mod ffi {
     pub struct MusigElectrumUrlResult {
         /// The url was written to the config.
         pub saved: bool,
-        /// The listener started on it: false for an empty or unparsable url.
+        /// Kept for existing callers. Saving never starts a listener.
         pub started: bool,
     }
 
@@ -1365,6 +1428,13 @@ mod ffi {
         /// Test Electrum server connectivity.
         /// Blocking call - attempts TCP connect and server.version handshake.
         fn test_electrum(address: String, verify_certificate: bool) -> ConnectionResult;
+        /// Test, then persist the complete endpoint. Does not start a wallet listener.
+        fn test_and_save_endpoint(
+            account_name: String,
+            server: BackendServer,
+            url: String,
+            verify_certificate: bool,
+        ) -> EndpointResult;
 
         /// The height of the chain tip the Electrum server at `address` follows.
         /// Blocking: call it off the GUI thread.
@@ -1527,6 +1597,8 @@ mod ffi {
 
         /// Save config to file.
         fn to_file(self: &Config);
+        /// Empty on success, otherwise the write error.
+        fn save(self: &Config) -> String;
 
         /// Get SP descriptor.
         fn get_descriptor(self: &Config) -> String;
@@ -1631,6 +1703,10 @@ mod ffi {
 
         /// The account's network (Regtest when it failed to load).
         fn network(self: &Account) -> Network;
+        fn electrum_url(self: &Account) -> String;
+        fn blindbit_url(self: &Account) -> String;
+        fn verify_certificate(self: &Account) -> bool;
+        fn electrum_running(self: &Account) -> bool;
 
         /// Whether the account has a segwit (wpkh) sub-account.
         fn has_segwit(self: &Account) -> bool;
@@ -1652,10 +1728,14 @@ mod ffi {
         fn spendable_coins(self: &Account) -> CoinState;
 
         /// Update a coin's label.
-        fn update_coin_label(self: &mut Account, outpoint: String, label: String) -> bool;
+        fn update_coin_label(self: &Account, outpoint: String, label: String) -> LabelEditResult;
 
         /// Get payment history.
         fn payment_history(self: &Account) -> Vec<RustTx>;
+        fn reopen_backend(self: &mut Account, connect_electrum: bool) -> EndpointResult;
+        fn close_backend(self: &mut Account);
+        fn tx_details(self: &Account, txid: &str, allow_network: bool) -> RustTxDetails;
+        fn update_tx_label(self: &Account, txid: String, label: String) -> LabelEditResult;
 
         /// Get the account SP descriptor.
         fn descriptor(self: &Account) -> String;
@@ -2195,7 +2275,7 @@ mod ffi {
         fn electrum_url(self: &MusigAccount) -> String;
         /// Whether the Electrum server's TLS certificate is checked.
         fn verify_certificate(self: &MusigAccount) -> bool;
-        /// Saves the endpoint to the config and restarts the listener.
+        /// Saves the endpoint and stops the listener. Reopen explicitly to connect.
         fn set_electrum_url(self: &mut MusigAccount, url: String) -> MusigElectrumUrlResult;
 
         fn try_recv(self: &mut MusigAccount) -> Box<Poll>;
@@ -2206,8 +2286,16 @@ mod ffi {
         fn coins(self: &MusigAccount) -> Vec<RustCoin>;
         fn spending_coins(self: &MusigAccount) -> SpendCoinsResult;
         fn spendable_coins(self: &MusigAccount) -> CoinState;
-        fn update_coin_label(self: &mut MusigAccount, outpoint: String, label: String) -> bool;
+        fn update_coin_label(
+            self: &MusigAccount,
+            outpoint: String,
+            label: String,
+        ) -> LabelEditResult;
         fn payment_history(self: &MusigAccount) -> Vec<RustTx>;
+        fn tx_details(self: &MusigAccount, txid: &str, allow_network: bool) -> RustTxDetails;
+        fn update_tx_label(self: &MusigAccount, txid: String, label: String) -> LabelEditResult;
+        fn reopen_backend(self: &mut MusigAccount, connect_electrum: bool) -> EndpointResult;
+        fn close_backend(self: &mut MusigAccount);
         fn address_verify_info(self: &MusigAccount, address: &str) -> AddressVerifyInfo;
 
         fn simulate_transaction(
@@ -2502,13 +2590,20 @@ fn electrum_connect(
         .recv_str()
         .map_err(|e| format!("No response from server: {e}"))?;
 
-    // A server that does not speak this transport just closes the connection, and
-    // bwk reads a closed connection back as an empty line, so recv_str returning
-    // Ok proves nothing. Only a JSON-RPC reply means the transport is right.
-    match serde_json::from_str::<serde_json::Value>(response.trim()) {
-        Ok(serde_json::Value::Object(_)) => Ok(client),
-        _ => Err("No electrum response from server".to_string()),
+    let response: serde_json::Value = serde_json::from_str(response.trim())
+        .map_err(|e| format!("Invalid Electrum version response: {e}"))?;
+    if response.get("id") != Some(&serde_json::json!(request.id))
+        || response.get("error").is_some_and(|error| !error.is_null())
+        || !response
+            .get("result")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|result| {
+                result.len() == 2 && result.iter().all(serde_json::Value::is_string)
+            })
+    {
+        return Err("Electrum server refused the version handshake".into());
     }
+    Ok(client)
 }
 
 /// Render an electrum address the way bwk expects it: the scheme rides as an
@@ -2768,16 +2863,17 @@ pub use coordination::{
     transaction_finalize,
 };
 pub use ffi::{
-    BackendInfo, CameraFrameResult, CameraListResult, CoordinationResult, FingerprintsResult,
-    KeyDescriptor, KeyDevice, KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind, KeyUnusableReason,
-    KeyXpub, LiveDevice, LogLevel, MnemonicResult, MusigFinalizeResult, MusigRound, MusigSpendLeaf,
-    Network, Notification, NotificationFlag, Output, PolicyCompileResult, PolicyKey, PolicyKeyType,
-    PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey, PolicyReviewPath, PolicySemantic,
-    PolicySpec, PsbtFileResult, PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult,
-    QrResponseKind, RegtestDefaults, RustSelectedInput, RustSpendCoin, RustSpendLock,
-    RustSpendVariant, SavedPsbtAttempt, SavedPsbtEntry, SavedPsbtInput, SavedPsbtList,
-    SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore, SignResult,
-    SigningCandidate, SigningPlan, SigningProgress, SigningStage, SpendAvailability,
+    BackendInfo, BackendServer, CameraFrameResult, CameraListResult, CoordinationResult,
+    EndpointResult, FingerprintsResult, KeyDescriptor, KeyDevice, KeyInfo, KeyInfoResult,
+    KeyOpResult, KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice, LogLevel, MnemonicResult,
+    MusigFinalizeResult, MusigRound, MusigSpendLeaf, Network, Notification, NotificationFlag,
+    Output, PolicyCompileResult, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath,
+    PolicyReview, PolicyReviewKey, PolicyReviewPath, PolicySemantic, PolicySpec, PsbtFileResult,
+    PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult, QrResponseKind,
+    RegtestDefaults, RustCoin, RustSelectedInput, RustSpendCoin, RustSpendLock, RustSpendVariant,
+    RustTx, RustTxDetails, RustTxIo, SavedPsbtAttempt, SavedPsbtEntry, SavedPsbtInput,
+    SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore,
+    SignResult, SigningCandidate, SigningPlan, SigningProgress, SigningStage, SpendAvailability,
     SpendCoinStatus, SpendCoinsResult, SpendError, SpendLockKind, SpendMaturity,
     TransactionSimulation, TransactionTemplate,
 };
@@ -2812,6 +2908,7 @@ pub use state_crypt::{
     state_unlock_with_device, state_unlock_with_password,
 };
 pub use sync_estimator::{new_sync_estimator, SyncEstimator};
+pub use tx_details::test_and_save_endpoint;
 
 #[cfg(test)]
 mod tests {
@@ -2863,6 +2960,49 @@ mod tests {
             "unexpected error: {}",
             result.error
         );
+    }
+
+    #[test]
+    fn test_electrum_refuses_a_json_rpc_error_or_wrong_response_id() {
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+            thread,
+            time::Duration,
+        };
+
+        for wrong_id in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("isolated version server");
+            let address = listener.local_addr().expect("local address");
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().expect("test client connects");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("read timeout");
+                let mut line = String::new();
+                BufReader::new(stream.try_clone().expect("socket clone"))
+                    .read_line(&mut line)
+                    .expect("version request");
+                let request: serde_json::Value = serde_json::from_str(&line).expect("JSON request");
+                let response = if wrong_id {
+                    serde_json::json!({"jsonrpc":"2.0", "id":12345, "result":["server", "1.4"]})
+                } else {
+                    serde_json::json!({"jsonrpc":"2.0", "id":request["id"], "error":{"code":-1, "message":"refused"}})
+                };
+                writeln!(stream, "{response}").expect("version response");
+            });
+            let result = test_electrum(format!("tcp://{address}"), true);
+            server.join().expect("version server finished");
+            assert!(
+                !result.is_ok,
+                "wrong_id={wrong_id}: a failed handshake is not a passing test"
+            );
+            assert!(
+                result.error.contains("refused the version handshake"),
+                "handshake refusal reported: {}",
+                result.error
+            );
+        }
     }
 
     #[test]

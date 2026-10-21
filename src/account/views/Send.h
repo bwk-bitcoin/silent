@@ -50,12 +50,9 @@ class ValidationMark;
 }
 
 namespace catalog {
-class TxFlow;
-}
-
-namespace catalog {
 class Card;
-}
+class TxFlowCard;
+} // namespace catalog
 
 class QCheckBox;
 #include <qstringlist.h>
@@ -205,12 +202,7 @@ private:
     QWidget *m_inputs_frame = nullptr;
     QWidget *m_transaction_frame = nullptr;
     // Transaction-view widgets updated in place by updateTransactionFlow().
-    catalog::TxFlow *m_tx_flow = nullptr;
-    catalog::Card *m_flow_card = nullptr;
-    catalog::Label *m_flow_inputs_eyebrow = nullptr;
-    catalog::Label *m_flow_outputs_eyebrow = nullptr;
-    QWidget *m_legend_change = nullptr;
-    QWidget *m_legend_fee = nullptr;
+    catalog::TxFlowCard *m_flow_card = nullptr;
     // Transaction summary values, split into a BTC column and a fiat column.
     catalog::Label *m_sending_btc = nullptr;
     catalog::Label *m_sending_fiat = nullptr;

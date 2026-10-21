@@ -31,11 +31,12 @@ use crate::{
         AddressVerifyInfo, CoinState, MusigCosignerStatus, MusigDescriptorResult,
         MusigElectrumUrlResult, MusigFinalizeResult, MusigReceiveAddress, MusigRound,
         MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, PsbtValidation, RustCoin,
-        RustTx, SavedPsbtEntry, SavedPsbtList, SavedPsbtMutation, SavedPsbtReset, SavedPsbtRestore,
-        TransactionSimulation, TransactionTemplate, TxResult,
+        RustTx, RustTxDetails, SavedPsbtEntry, SavedPsbtList, SavedPsbtMutation, SavedPsbtReset,
+        SavedPsbtRestore, TransactionSimulation, TransactionTemplate, TxResult,
     },
     keys::bridge::musig_session_restart,
     saved_psbt::{apply_chain_state, frozen_entry, mutation_error, SavedPsbtStore},
+    tx_details::{details_result, TxSnapshot},
 };
 
 /// A MuSig2 policy account, wrapping bwk::Account.
@@ -43,6 +44,8 @@ use crate::{
 pub struct MusigAccount {
     inner: Option<MusigAccountInner>,
     error: String,
+    closed_saved_psbts: Option<Mutex<SavedPsbtStore>>,
+    closed_name: Option<String>,
 }
 
 struct MusigAccountInner {
@@ -69,18 +72,30 @@ pub fn new_musig_account(account_name: String) -> Box<MusigAccount> {
         Err(e) => {
             let error = format!("failed to load config: {e}");
             log::error!("{error}");
-            return Box::new(MusigAccount { inner: None, error });
+            return Box::new(MusigAccount {
+                inner: None,
+                error,
+                closed_saved_psbts: None,
+                closed_name: None,
+            });
         }
     };
     match MusigAccount::new_inner(config) {
         Ok(inner) => Box::new(MusigAccount {
             inner: Some(inner),
             error: String::new(),
+            closed_saved_psbts: None,
+            closed_name: None,
         }),
         Err(e) => {
             let error = format!("Failed to create account: {e}");
             log::error!("{error}");
-            Box::new(MusigAccount { inner: None, error })
+            Box::new(MusigAccount {
+                inner: None,
+                error,
+                closed_saved_psbts: None,
+                closed_name: None,
+            })
         }
     }
 }
@@ -155,7 +170,12 @@ pub fn musig_first_receive_address(descriptor: String, network: Network) -> Musi
 
 impl MusigAccount {
     fn new_inner(config: Config) -> Result<MusigAccountInner, String> {
-        let musig_config = config.to_musig_config()?;
+        Self::new_inner_connected(config, true)
+    }
+
+    fn new_inner_connected(config: Config, connect: bool) -> Result<MusigAccountInner, String> {
+        let mut musig_config = config.to_musig_config()?;
+        musig_config.scanner.set_stay_offline(!connect);
         let mut account = BwkAccount::try_new(musig_config).map_err(|e| e.to_string())?;
         let receiver = account.receiver();
         let saved_psbts = Mutex::new(SavedPsbtStore::load(
@@ -167,6 +187,69 @@ impl MusigAccount {
             config,
             saved_psbts,
         })
+    }
+
+    /// Header workers can outlive account drop; drain the taken receiver before reopening.
+    pub fn close_backend(&mut self) {
+        if let Some(mut old) = self.inner.take() {
+            self.closed_name = Some(old.config.account_name);
+            self.closed_saved_psbts = Some(old.saved_psbts);
+            old.account.stop_electrum();
+            drop(old.account);
+            if let Some(receiver) = old.receiver {
+                while receiver.recv().is_ok() {}
+            }
+        }
+    }
+
+    /// Called after workers and the old notification receiver have drained.
+    pub fn reopen_backend(&mut self, connect_electrum: bool) -> crate::ffi::EndpointResult {
+        self.close_backend();
+        let result = (|| {
+            let name = self.closed_name.as_ref().ok_or(NOT_INITIALIZED)?.clone();
+            let config = Config::from_file(name).map_err(|e| e.to_string())?;
+            config.to_musig_config()?;
+            let usable = matches!(parse_electrum_url(&config.electrum_url), (Some(_), Some(_)));
+            let mut connection_error = None;
+            let mut inner =
+                match Self::new_inner_connected(config.clone(), connect_electrum && usable) {
+                    Ok(inner) => inner,
+                    Err(error) if connect_electrum && usable => {
+                        connection_error =
+                            Some(format!("Cannot connect; backend reopened offline: {error}"));
+                        Self::new_inner_connected(config.clone(), false)?
+                    }
+                    Err(error) => return Err(error),
+                };
+            inner.saved_psbts = self
+                .closed_saved_psbts
+                .take()
+                .ok_or("Saved PSBT state missing during reopen")?;
+            self.inner = Some(inner);
+            self.closed_name = None;
+            Ok(crate::ffi::EndpointResult {
+                is_ok: (!connect_electrum || usable) && connection_error.is_none(),
+                saved: false,
+                url: config.electrum_url,
+                verify_certificate: config.verify_certificate,
+                error: if connect_electrum && !usable {
+                    "No usable saved Electrum endpoint".into()
+                } else {
+                    connection_error.unwrap_or_default()
+                },
+            })
+        })();
+        match result {
+            Ok(result) => result,
+            Err(error) => {
+                log::error!("reopen_backend: {error}");
+                self.error = error.clone();
+                crate::ffi::EndpointResult {
+                    error,
+                    ..crate::ffi::EndpointResult::default()
+                }
+            }
+        }
     }
 
     pub fn is_ok(&self) -> bool {
@@ -221,8 +304,14 @@ impl MusigAccount {
             inner.config = config;
             return false;
         };
-        inner.account.set_electrum(host, port.to_string());
-        inner.config = config;
+        let endpoint = inner.account.scanner().config().endpoint();
+        if endpoint.server() != Some((host.as_str(), port))
+            || endpoint.certificate_check()
+                != crate::config::certificate_check(config.verify_certificate)
+        {
+            log::error!("start_electrum: endpoint changed, reopen the backend first");
+            return false;
+        }
         inner.account.start_electrum();
         true
     }
@@ -248,9 +337,7 @@ impl MusigAccount {
             .is_none_or(|inner| inner.config.verify_certificate)
     }
 
-    /// Save the Electrum endpoint to the config file and restart the listener. An empty
-    /// or unparsable url is saved but stops it. A failed write keeps the old url and the
-    /// running listener, and reports `saved` false.
+    /// Save only. The controller closes/reopens the backend before connecting.
     pub fn set_electrum_url(&mut self, url: String) -> MusigElectrumUrlResult {
         let Some(inner) = &mut self.inner else {
             return MusigElectrumUrlResult {
@@ -258,21 +345,20 @@ impl MusigAccount {
                 started: false,
             };
         };
-        let previous = inner.config.clone();
-        inner.config.set_electrum_url(url);
-        if let Err(e) = inner.config.write_file() {
+        let mut config = inner.config.clone();
+        config.set_electrum_url(url);
+        if let Err(e) = config.write_file() {
             log::error!("set_electrum_url: {e}");
-            // Nothing changed on disk: keep the old url and leave Electrum as it runs.
-            inner.config = previous;
             return MusigElectrumUrlResult {
                 saved: false,
                 started: false,
             };
         }
+        inner.config = config;
         self.stop_electrum();
         MusigElectrumUrlResult {
             saved: true,
-            started: self.start_electrum(),
+            started: false,
         }
     }
 
@@ -328,6 +414,7 @@ impl MusigAccount {
         let Some(inner) = &self.inner else {
             return vec![];
         };
+        let history = inner.account.scanner().tx_history();
         inner
             .account
             .scanner()
@@ -337,6 +424,11 @@ impl MusigAccount {
                 outpoint: entry.outpoint_str(),
                 value: entry.amount_sat(),
                 height: entry.height().unwrap_or(0) as u32,
+                timestamp: history
+                    .iter()
+                    .find(|tx| tx.txid() == entry.outpoint().txid)
+                    .and_then(|tx| tx.timestamp())
+                    .unwrap_or(0),
                 label: entry.label(),
                 spent: matches!(entry.status(), CoinStatus::Spent | CoinStatus::BeingSpend),
                 // A musig account is a taproot wallet.
@@ -388,24 +480,110 @@ impl MusigAccount {
         }
     }
 
-    pub fn update_coin_label(&mut self, outpoint: String, label: String) -> bool {
-        let Some(inner) = &mut self.inner else {
-            return false;
-        };
-        if let Err(e) = parse_outpoint(&outpoint) {
-            log::error!("update_coin_label: {e}");
-            return false;
-        }
-        inner.account.scanner().update_coin_label(outpoint, label);
-        true
+    pub fn update_coin_label(
+        &self,
+        outpoint: String,
+        label: String,
+    ) -> crate::ffi::LabelEditResult {
+        self.edit_coin_label(&outpoint, label).into()
+    }
+
+    fn edit_coin_label(&self, outpoint: &str, label: String) -> Result<(), String> {
+        let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+        let outpoint = parse_outpoint(outpoint).map_err(|e| e.to_string())?;
+        inner
+            .account
+            .scanner()
+            .try_update_coin_label(outpoint, label)
+            .map_err(|e| format!("Label is not saved: {e}. Edit it again to retry."))
     }
 
     /// Payment history, newest first.
     pub fn payment_history(&self) -> Vec<RustTx> {
-        match &self.inner {
-            Some(inner) => rust_txs(inner.account.scanner().payment_history()),
-            None => vec![],
+        match self.tx_snapshot() {
+            Ok(snapshot) => snapshot
+                .history
+                .into_iter()
+                .filter(|tx| tx.status != "finalized" && tx.status != "broadcast")
+                .collect(),
+            Err(error) => {
+                log::error!("payment_history: {error}");
+                Vec::new()
+            }
         }
+    }
+
+    pub fn tx_details(&self, txid: &str, allow_network: bool) -> RustTxDetails {
+        details_result(self.tx_snapshot().and_then(|snapshot| {
+            let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+            let mut details = snapshot.details(
+                txid,
+                &inner.config.electrum_url,
+                inner.config.verify_certificate,
+                allow_network,
+            )?;
+            crate::tx_details::apply_scanner_labels(&mut details, inner.account.scanner())?;
+            Ok(details)
+        }))
+    }
+
+    fn tx_snapshot(&self) -> Result<TxSnapshot, String> {
+        let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+        let mut snapshot = TxSnapshot::new(
+            inner.config.network.into(),
+            rust_txs(inner.account.scanner().payment_history()),
+            None,
+        );
+        // Clone the saved state, then release its lock before any network lookup.
+        let records = self.saved_store()?.records().to_vec();
+        for record in records {
+            let psbt = decode_psbt(&record.original_psbt_v2_hex)?;
+            for (input, funding) in psbt.unsigned_tx.input.iter().zip(psbt.iter_funding_utxos()) {
+                let funding = funding.map_err(|e| format!("Invalid saved funding output: {e}"))?;
+                snapshot
+                    .prevouts
+                    .insert(input.previous_output, funding.clone());
+            }
+            if !record.finalized_tx_hex.is_empty() {
+                let tx: bitcoin::Transaction =
+                    deserialize_hex(&record.finalized_tx_hex).map_err(|e| e.to_string())?;
+                if !snapshot
+                    .history
+                    .iter()
+                    .any(|summary| summary.txid == tx.compute_txid().to_string())
+                {
+                    snapshot.history.push(RustTx {
+                        txid: tx.compute_txid().to_string(),
+                        label: record.label,
+                        status: if record.broadcast {
+                            "broadcast"
+                        } else {
+                            "finalized"
+                        }
+                        .into(),
+                        ..RustTx::default()
+                    });
+                }
+                snapshot.transactions.insert(tx.compute_txid(), tx);
+            }
+        }
+        snapshot.add_scanner(inner.account.scanner());
+        snapshot.update_history_fees();
+        Ok(snapshot)
+    }
+
+    pub fn update_tx_label(&self, txid: String, label: String) -> crate::ffi::LabelEditResult {
+        self.edit_tx_label(&txid, label).into()
+    }
+
+    fn edit_tx_label(&self, txid: &str, label: String) -> Result<(), String> {
+        let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+        let txid = txid.parse::<bitcoin::Txid>().map_err(|e| e.to_string())?;
+        crate::tx_details::edit_scanner_label(
+            inner.account.scanner(),
+            bwk::bwk_electrum::label_store::LabelKey::Transaction(txid),
+            label,
+        )
     }
 
     /// Descriptor and derivation path to verify `address` on a signing device. Empty
@@ -802,6 +980,42 @@ impl MusigAccount {
             .as_ref()
             .ok_or_else(|| NOT_INITIALIZED.to_string())?;
         let mut entry = frozen_entry(record)?;
+        let status = self.round_status(&record.current_psbt_v2_hex);
+        if !status.is_ok {
+            return Err(status.error);
+        }
+        entry.signatures_required = record.spend.fingerprints.len() as u32;
+        entry.signatures_known = entry.signatures_required > 0;
+        let psbt = decode_psbt(&record.current_psbt_v2_hex)?;
+        entry.signatures_complete = record
+            .spend
+            .fingerprints
+            .iter()
+            .filter(|fingerprint| {
+                if !record.finalized_tx_hex.is_empty() {
+                    return true;
+                }
+                if let Some(cosigner) = status
+                    .cosigners
+                    .iter()
+                    .find(|cosigner| cosigner.fingerprint.eq_ignore_ascii_case(fingerprint))
+                {
+                    return cosigner.expected > 0 && cosigner.partial_sigs == cosigner.expected;
+                }
+                psbt.inputs.iter().all(|input| {
+                    input.tap_key_origins.iter().any(|(key, (_, (origin, _)))| {
+                        origin.to_string().eq_ignore_ascii_case(fingerprint)
+                            && if record.spend.key_path {
+                                input.tap_key_sig.is_some()
+                            } else {
+                                input.tap_script_sigs.keys().any(|(signed_key, leaf)| {
+                                    signed_key == key && leaf.to_string() == record.spend.leaf_hash
+                                })
+                            }
+                    })
+                })
+            })
+            .count() as u32;
         apply_chain_state(&mut entry, &inner.account.scanner().tx_history());
         let coins = inner.account.scanner().coins();
         if !entry.in_history

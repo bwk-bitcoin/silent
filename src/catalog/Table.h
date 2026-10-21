@@ -22,6 +22,8 @@ struct TableColumn {
     Qt::Alignment headerAlignment = Qt::AlignLeft; // header alignment (independent)
     DisplayRole role = DisplayRole::Default;
     bool grow = false;
+    // A row-action column (edit, delete): tight side padding, its content centered.
+    bool icon = false;
     bool editable = false;
     // Shown muted in an empty cell; an edit still starts from the empty text.
     QString placeholder;
@@ -81,6 +83,7 @@ private:
     auto buildRow(int index) -> QWidget *;
     auto buildCell(const Row &row, int column, int row_index) -> QWidget *;
     auto buildWidgetCell(const Row &row, int column) -> QWidget *;
+    [[nodiscard]] auto cellPadding(int column) const -> int;
     void finishEdit(bool commit);
 
     QList<TableColumn> m_columns;

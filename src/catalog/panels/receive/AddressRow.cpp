@@ -23,9 +23,6 @@ AddressRow::AddressRow(QWidget *parent) : QWidget(parent) {
     m_address = new ChunkedAddress(this);
     m_qr_code = new QrCode(this);
     m_label = new LabelRow(this);
-    m_placeholder = new Label(LabelRole::Body, this);
-    m_placeholder->setTone(LabelTone::Muted);
-    m_placeholder->setAlignment(Qt::AlignCenter);
     m_copy = btnCopyAddress();
     m_generate = btnGenerate();
     m_generate_new = btnGenerateNew();
@@ -33,11 +30,14 @@ AddressRow::AddressRow(QWidget *parent) : QWidget(parent) {
     m_verify = btnVerifyOnDevice();
     m_verify->setToolTip(TR("receive-verify-tooltip"));
 
-    // Empty state: the centered placeholder over Generate.
-    m_empty_state = (new qontrol::Column)
-                        ->spacing(resolve(Spacing::M))
-                        ->pushAligned(m_placeholder, Qt::AlignHCenter)
-                        ->pushAligned(m_generate, Qt::AlignHCenter);
+    // The label, Generate new and the awaiting-payment list, centered over the address.
+    m_actions_row = (new qontrol::Row)
+                        ->spacing(resolve(Spacing::L))
+                        ->pushSpacer()
+                        ->push(m_label)
+                        ->push(m_generate_new)
+                        ->push(m_history)
+                        ->pushSpacer();
 
     // Address row: <device/verify button> <chunked address> <copy button>,
     // centered (design Receive AddressRow). Hidden as a whole when there is no
@@ -49,14 +49,6 @@ AddressRow::AddressRow(QWidget *parent) : QWidget(parent) {
                         ->push(m_address)
                         ->push(m_copy)
                         ->pushSpacer();
-
-    // Secondary actions below: generate-new and awaiting-payment history.
-    m_extra_actions = (new qontrol::Row)
-                          ->spacing(resolve(Spacing::L))
-                          ->pushSpacer()
-                          ->push(m_generate_new)
-                          ->push(m_history)
-                          ->pushSpacer();
 
     auto *noteIcon = new QLabel(this);
     noteIcon->setPixmap(icon::info(IconColor::Muted)
@@ -72,19 +64,19 @@ AddressRow::AddressRow(QWidget *parent) : QWidget(parent) {
     m_verify_note->setVisible(false);
 
     // Outer column. Layout spacing (not fixed spacers) so the gap collapses when
-    // a section is hidden by applyVisibility().
+    // a section is hidden by applyVisibility(). The QR card holds its place before
+    // an address is generated.
     (new qontrol::Column)
-        ->spacing(resolve(Spacing::S))
-        ->push(m_empty_state)
+        ->spacing(resolve(Spacing::L))
         ->push(m_qr_code, 0, Qt::AlignHCenter)
-        ->push(m_label, 0, Qt::AlignHCenter)
+        ->push(m_generate, 0, Qt::AlignHCenter)
+        ->push(m_actions_row)
         ->push(m_address_row)
-        ->push(m_extra_actions)
         ->push(m_verify_note)
         ->into(this);
 
     m_verify->setVisible(false); // shown via setVerifyVisible()
-    applyVisibility();           // default (no address): only placeholder shows
+    applyVisibility();           // default (no address): the empty QR card and Generate
 
     connect(m_copy, &Button::clicked, this, &AddressRow::onCopyClicked, qontrol::UNIQUE);
     connect(m_generate, &Button::clicked, this, &AddressRow::onGenerateClicked, qontrol::UNIQUE);
@@ -104,20 +96,18 @@ void AddressRow::setAddress(const QString &address) {
 
 void AddressRow::applyVisibility() {
     bool hasAddress = !m_address_text.isEmpty();
-    // No address: show only the placeholder (and the Generate button below it);
-    // the QR and the address row are hidden entirely (design).
-    m_empty_state->setVisible(!hasAddress);
-    m_qr_code->setVisible(hasAddress);
+    // No address: the empty QR card over Generate; the actions and the address row
+    // are hidden entirely (design).
     m_address_row->setVisible(hasAddress);
     m_copy->setEnabled(hasAddress);
-    // Label/history only show with an address; gated on their stored flags (not
-    // isVisible(), which is unreliable during init). The device (verify) button
-    // is owned by setVerifyVisible() and lives inside the (hidden-when-empty) row.
-    m_label->setVisible(hasAddress && m_label_enabled);
+    // Gated on the stored flags (not isVisible(), which is unreliable during init).
+    // The device (verify) button is owned by setVerifyVisible() and lives inside the
+    // (hidden-when-empty) address row.
     m_generate->setVisible(!hasAddress && m_generate_enabled);
+    m_label->setVisible(m_label_enabled);
     m_generate_new->setVisible(m_generate_enabled);
     m_history->setVisible(m_history_count > 0);
-    m_extra_actions->setVisible(hasAddress && (m_generate_enabled || m_history_count > 0));
+    m_actions_row->setVisible(hasAddress && (m_label_enabled || m_generate_enabled));
 }
 
 auto AddressRow::address() const -> QString {
@@ -132,10 +122,6 @@ void AddressRow::setTwoLineAddress(bool two_lines) {
 void AddressRow::setGenerateVisible(bool visible) {
     m_generate_enabled = visible;
     applyVisibility();
-}
-
-void AddressRow::setPlaceholderText(const QString &text) {
-    m_placeholder->setText(text);
 }
 
 void AddressRow::setLabelText(const QString &text) {

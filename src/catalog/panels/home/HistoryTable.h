@@ -1,16 +1,25 @@
 #pragma once
 
-#include "catalog/Table.h"
+#include "catalog/panels/home/RowClickTable.h"
+
 #include <cstdint>
+#include <silent.h>
 
 namespace catalog {
 
-// The History panel's transaction table: owns the column layout and turns a
-// raw transaction (direction / txid / height / amount) into a formatted row.
-class HistoryTable : public Table {
+// The History panel's transaction table: direction, confirmations, date, txid,
+// editable label and amount. A row opens its transaction, keyed by txid.
+class HistoryTable : public RowClickTable {
+    Q_OBJECT
+
 public:
-    explicit HistoryTable(QWidget *parent = nullptr);
-    void addEntry(const QString &direction, const QString &txid, uint32_t height, uint64_t amount);
+    // `compact` dates drop the time.
+    explicit HistoryTable(bool compact, QWidget *parent = nullptr);
+    // `tip` counts its confirmations, 0 when not known.
+    void addEntry(const RustTx &tx, uint32_t tip);
+
+private:
+    bool m_compact = false;
 };
 
 } // namespace catalog

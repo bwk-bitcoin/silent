@@ -9,6 +9,18 @@
 
 namespace catalog {
 
+namespace {
+
+// components.css .s-tbl__cell .s-badge: 11px over 12px, padding 3px 8px, gap 4px and
+// the pill widths times 0.85.
+constexpr qreal DENSE_FONT_SCALE = 11.0 / 12.0;
+constexpr int DENSE_PADDING_H = 8;
+constexpr int DENSE_PADDING_V = 3;
+constexpr int DENSE_GAP = 4;
+constexpr qreal DENSE_WIDTH_SCALE = 0.85;
+
+} // namespace
+
 Badge::Badge(const QString &text, Role role, QWidget *parent) : Badge(role, parent) {
     setText(text);
 }
@@ -20,20 +32,11 @@ Badge::Badge(Role role, QWidget *parent) : QFrame(parent), m_role(role) {
     m_icon->setVisible(false);
     m_text = new QLabel(this);
 
-    m_text->setFont(textFont());
-
-    (new qontrol::Row)
-        ->margins(metric::BADGE_PADDING_H, metric::BADGE_PADDING_V, metric::BADGE_PADDING_H,
-                  metric::BADGE_PADDING_V)
-        ->spacing(resolve(Padding::XS))
-        ->pushSpacer()
-        ->push(m_icon)
-        ->push(m_text)
-        ->pushSpacer()
-        ->into(this);
+    m_row = (new qontrol::Row)->pushSpacer()->push(m_icon)->push(m_text)->pushSpacer();
+    m_row->into(this);
 
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    setFixedHeight(pillHeight());
+    applyMetrics();
     applyRole();
 }
 
@@ -65,26 +68,50 @@ void Badge::setIcon(const QIcon &icon) {
 }
 
 void Badge::setWidth(PillWidth width) {
-    if (width == PillWidth::Auto) {
+    m_width = width;
+    applyMetrics();
+}
+
+void Badge::setDense(bool dense) {
+    if (m_dense == dense) {
+        return;
+    }
+    m_dense = dense;
+    setProperty("dense", dense);
+    applyMetrics();
+    style()->unpolish(this);
+    style()->polish(this);
+}
+
+void Badge::applyMetrics() {
+    int padH = m_dense ? DENSE_PADDING_H : metric::BADGE_PADDING_H;
+    int padV = m_dense ? DENSE_PADDING_V : metric::BADGE_PADDING_V;
+    m_row->margins(padH, padV, padH, padV)->spacing(m_dense ? DENSE_GAP : resolve(Padding::XS));
+    m_text->setFont(textFont(m_dense));
+    setFixedHeight(pillHeight(m_dense));
+
+    if (m_width == PillWidth::Auto) {
         setMinimumWidth(0);
         setMaximumWidth(QWIDGETSIZE_MAX);
         return;
     }
-    setFixedWidth(resolve(width));
+    qreal scale = m_dense ? DENSE_WIDTH_SCALE : 1.0;
+    setFixedWidth(qRound(resolve(m_width) * scale));
 }
 
-auto Badge::textFont() -> QFont {
+auto Badge::textFont(bool dense) -> QFont {
     const auto &font = Theme::get()->fontPalette().caption;
     QFont badgeFont;
     badgeFont.setFamily(font.family);
-    badgeFont.setPointSize(font.size);
+    badgeFont.setPointSizeF(dense ? font.size * DENSE_FONT_SCALE : font.size);
     badgeFont.setWeight(font::DEMIBOLD);
     badgeFont.setLetterSpacing(QFont::PercentageSpacing, 102); // design 0.02em tracking
     return badgeFont;
 }
 
-auto Badge::pillHeight() -> int {
-    return QFontMetrics(textFont()).height() + (2 * metric::BADGE_PADDING_V) + 2;
+auto Badge::pillHeight(bool dense) -> int {
+    int padV = dense ? DENSE_PADDING_V : metric::BADGE_PADDING_V;
+    return QFontMetrics(textFont(dense)).height() + (2 * padV) + 2;
 }
 
 void Badge::applyRole() {
@@ -122,7 +149,8 @@ auto Badge::qss(const Palette &p) -> QString {
                "QFrame[class=\"badge\"][role=\"neutral\"] { background: %11; border-color: %12; }"
                "QFrame[class=\"badge\"][role=\"neutral\"] QLabel { color: %13; }"
                "QFrame[class=\"badge\"][role=\"off\"] { background: %14; border-color: %15; }"
-               "QFrame[class=\"badge\"][role=\"off\"] QLabel { color: %16; }")
+               "QFrame[class=\"badge\"][role=\"off\"] QLabel { color: %16; }"
+               "QFrame[class=\"badge\"][dense=\"true\"] { border-radius: %17px; }")
         .arg(pillHeight() / 2)
         .arg(qssColor(p.badgeSuccessBg))
         .arg(qssColor(p.badgeSuccessBorder))
@@ -138,7 +166,8 @@ auto Badge::qss(const Palette &p) -> QString {
         .arg(p.badgeNeutralText.name())
         .arg(qssColor(p.badgeOffBg))
         .arg(p.badgeOffBorder.name())
-        .arg(p.badgeOffText.name());
+        .arg(p.badgeOffText.name())
+        .arg(pillHeight(true) / 2);
 }
 
 } // namespace catalog

@@ -8,24 +8,29 @@
 namespace {
 // silent-design DashboardLayout constants.
 const int DASH_MIN_W = DashboardLayout::MIN_CONTENT_WIDTH; // min single-column / block width
-const int DASH_COL_MAX = 1140;                          // 1.5x min: single-column cap
-const int DASH_MAX_W = 1600;                            // two-column total cap
-const int DASH_GUTTER = 49;                             // 1px rule + 2x space-l
-const int DASH_SPLIT_AT = 2 * DASH_MIN_W + DASH_GUTTER; // 1569: columns fit side by side
-const int DASH_WIDE_AT = DASH_SPLIT_AT;                 // 1569: top gap appears
+const int DASH_COL_MAX = 1140;                             // 1.5x min: single-column cap
+const int DASH_MAX_W = 1600;                               // two-column total cap
+const int DASH_GUTTER = 49;                                // 1px rule + 2x space-l
+const int DASH_SPLIT_AT = 2 * DASH_MIN_W + DASH_GUTTER;    // 1569: columns fit side by side
+const int DASH_WIDE_AT = DASH_SPLIT_AT;                    // 1569: top gap appears
 } // namespace
 
 DashboardLayout::DashboardLayout(const QString &title, QWidget *content, bool two_column,
-                                 QWidget *parent)
-    : catalog::ScrollArea(parent), m_two_column(two_column) {
+                                 QWidget *parent, QWidget *title_right)
+    : catalog::ScrollArea(parent),
+      m_two_column(two_column) {
     // Page scroll like the design's overflow-y:auto; overflow-x is hidden (the
     // block is clamped to a min width and clips rather than scrolling sideways).
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
-    m_block = (new qontrol::Column)
-                  ->push(new catalog::Label(title, catalog::LabelRole::Title))
-                  ->pushSpacer(resolve(Spacing::M))
-                  ->push(content);
+    auto *titleRow = (new qontrol::Row)
+                         ->spacing(resolve(Spacing::M))
+                         ->push(new catalog::Label(title, catalog::LabelRole::Title))
+                         ->pushSpacer();
+    if (title_right != nullptr) {
+        titleRow->push(title_right);
+    }
+    m_block = (new qontrol::Column)->push(titleRow)->pushSpacer(resolve(Spacing::M))->push(content);
 
     // Centre horizontally (margin:0 auto) and pin to the top (top-aligned block).
     int pad = resolve(Spacing::S);

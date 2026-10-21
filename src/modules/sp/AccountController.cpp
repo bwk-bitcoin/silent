@@ -10,6 +10,7 @@
 #include "account/views/Settings.h"
 #include "catalog/feedback/MessageModal.h"
 #include "i18n/Tr.h"
+#include "metatypes.h"
 #include <Qontrol>
 #include <common.h>
 #include <qlogging.h>
@@ -48,6 +49,19 @@ auto AccountController::init(const QString &account) -> void {
     // Take the notification receiver and spawn a blocking listener thread
     connect(this, &AccountController::notificationReceived, this,
             &AccountController::handleNotification, qontrol::UNIQUE);
+    listenNotifications();
+
+    m_init = true;
+}
+
+AccountController::~AccountController() {
+    // A panel only observes its screen, which a layout may have reparented.
+    for (auto *panel : m_panels) {
+        delete panel->screen();
+    }
+}
+
+void AccountController::listenNotifications() {
     auto receiver = m_account.value()->take_receiver();
     m_notif_thread = QThread::create([this, recv = std::move(receiver)]() {
         while (true) {
@@ -60,8 +74,6 @@ auto AccountController::init(const QString &account) -> void {
         }
     });
     m_notif_thread->start();
-
-    m_init = true;
 }
 
 auto AccountController::loadPanel(const QString &name) -> void {
@@ -72,6 +84,7 @@ auto AccountController::loadPanel(const QString &name) -> void {
 }
 
 auto AccountController::insertPanel(qontrol::Panel *panel) -> void {
+    panel->setParent(this);
     m_panels.insert(panel->name(), panel);
 }
 
@@ -98,6 +111,13 @@ auto AccountController::etaSecs() const -> uint64_t {
 }
 
 auto AccountController::handleNotification(Notification notif) -> void {
+    if (m_endpoint_busy || m_stopping) {
+        if (m_endpoint_busy && (notif.flag == NotificationFlag::ElectrumError ||
+                                notif.flag == NotificationFlag::ElectrumStopped)) {
+            m_endpoint_connection_lost = true;
+        }
+        return;
+    }
     auto flag = notif.flag;
 
     switch (flag) {
@@ -266,6 +286,10 @@ auto AccountController::startScanner() -> void {
 }
 
 auto AccountController::stop() -> void {
+    if (m_endpoint_busy) {
+        m_endpoint_stop_requested = true;
+        return;
+    }
     if (m_stopping) {
         return;
     }
@@ -436,55 +460,38 @@ auto AccountController::endpoints() -> QList<Endpoint> {
 }
 
 auto AccountController::verifiesCertificate() const -> bool {
-    if (!m_account.has_value()) {
-        return true;
-    }
-    auto config = config_from_file(m_account.value()->name());
-    return !config->is_ok() || config->get_verify_certificate();
+    return !m_account.has_value() || m_account.value()->verify_certificate();
 }
 
 auto AccountController::endpointUrl(Endpoint endpoint) -> QString {
     if (!m_account.has_value()) {
         return {};
     }
-    auto config = config_from_file(m_account.value()->name());
-    if (!config->is_ok()) {
-        qWarning() << "AccountController: cannot load config:"
-                   << QString::fromStdString(std::string(config->get_error().c_str()));
-        return {};
-    }
-    auto url =
-        endpoint == Endpoint::Blindbit ? config->get_blindbit_url() : config->get_electrum_url();
+    auto url = endpoint == Endpoint::Blindbit ? m_account.value()->blindbit_url()
+                                              : m_account.value()->electrum_url();
     return QString::fromStdString(std::string(url.c_str()));
 }
 
 auto AccountController::isEndpointRunning(Endpoint endpoint) const -> bool {
-    return endpoint == Endpoint::Blindbit ? m_scanner_running : m_electrum_running;
+    return endpoint == Endpoint::Blindbit
+               ? m_scanner_running
+               : m_account.has_value() && m_account.value()->electrum_running();
 }
 
 auto AccountController::startEndpoint(Endpoint endpoint) -> bool {
-    if (!m_account.has_value()) {
+    if (!m_account.has_value() || m_endpoint_busy || m_stopping) {
         return false;
     }
-    return endpoint == Endpoint::Blindbit ? m_account.value()->start_scanner()
-                                          : m_account.value()->start_electrum();
+    setEndpointConnected(0, endpoint, true);
+    return true;
 }
 
 void AccountController::stopEndpoint(Endpoint endpoint) {
-    if (!m_account.has_value()) {
-        return;
-    }
-    if (endpoint == Endpoint::Blindbit) {
-        m_account.value()->stop_scanner();
-    } else {
-        // Stopped on purpose: not reconnected.
-        m_reconnect->stopped();
-        m_account.value()->stop_electrum();
-    }
+    setEndpointConnected(0, endpoint, false);
 }
 
 void AccountController::onElectrumReconnect() {
-    if (m_account.has_value() && !m_stopping) {
+    if (m_account.has_value() && !m_stopping && !m_endpoint_busy) {
         qInfo() << "electrum: reconnecting";
         m_account.value()->start_electrum();
     }
@@ -519,8 +526,7 @@ auto AccountController::saveSettings(const QHash<Endpoint, QString> &urls, Netwo
     config->set_blindbit_url(rust::String(urls.value(Endpoint::Blindbit).toStdString()));
     config->set_electrum_url(rust::String(urls.value(Endpoint::Electrum).toStdString()));
     config->set_network(network);
-    config->to_file();
-    return {};
+    return QString::fromStdString(std::string(config->save()));
 }
 
 auto AccountController::module() -> IModule * {
@@ -545,16 +551,139 @@ auto AccountController::coins() -> qontrol::Screen * {
 }
 
 void AccountController::updateCoinLabel(const QString &outpoint, const QString &label) {
-    if (m_account.has_value()) {
-        if (!m_account.value()->update_coin_label(rust::String(outpoint.toStdString()),
-                                                  rust::String(label.toStdString()))) {
-            qWarning() << "Failed to update coin label for:" << outpoint;
-        }
-        pollCoins();
-    }
+    editOutpointLabel(0, outpoint, label);
 }
 
 auto AccountController::getAccount() -> std::optional<rust::Box<Account>> & {
     return m_account;
 }
 
+void AccountController::requestTxDetails(uint64_t req_id, const QString &txid) {
+    requestAccountTxDetails(req_id, txid, m_account.has_value() ? &*m_account.value() : nullptr,
+                            isEndpointRunning(Endpoint::Electrum) && !m_endpoint_busy);
+}
+
+void AccountController::editTxLabel(uint64_t req_id, const QString &txid, const QString &label) {
+    editAccountLabel(req_id, txid, label, m_account.has_value() ? &*m_account.value() : nullptr,
+                     true);
+}
+
+void AccountController::editOutpointLabel(uint64_t req_id, const QString &outpoint,
+                                          const QString &label) {
+    editAccountLabel(req_id, outpoint, label, m_account.has_value() ? &*m_account.value() : nullptr,
+                     false);
+}
+
+void AccountController::requestEndpointTip(uint64_t req_id, Endpoint endpoint) {
+    if (!m_account.has_value() || !isEndpointRunning(endpoint)) {
+        ElectrumTipResult result;
+        result.is_ok = false;
+        result.error = rust::String("Endpoint is disconnected");
+        emit endpointTipReady(req_id, endpoint, result);
+        return;
+    }
+    requestAccountEndpointTip(req_id, endpoint,
+                              QString::fromStdString(std::string(m_account.value()->name())));
+}
+
+void AccountController::testAndSaveEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
+                                            bool verify_certificate) {
+    changeEndpoint(req_id, endpoint, url, verify_certificate, true, false);
+}
+
+void AccountController::setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) {
+    changeEndpoint(req_id, endpoint, {}, true, false, connected);
+}
+
+void AccountController::changeEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
+                                       bool verify_certificate, bool test, bool connected) {
+    if (m_endpoint_busy || m_stopping || !m_account.has_value()) {
+        EndpointResult result;
+        result.is_ok = false;
+        result.error = rust::String("Account is not available");
+        emit endpointRequestFinished(req_id, endpoint, result);
+        return;
+    }
+    m_endpoint_busy = true;
+    m_endpoint_connection_lost = false;
+    m_endpoint_req_id = req_id;
+    m_endpoint = endpoint;
+    m_resume_scanner = endpoint == Endpoint::Blindbit ? connected : m_scanner_running;
+    auto connectElectrum =
+        endpoint == Endpoint::Electrum ? connected : isEndpointRunning(Endpoint::Electrum);
+    m_endpoint_account = std::make_shared<std::optional<rust::Box<Account>>>(std::move(m_account));
+    m_account.reset();
+    m_endpoint_result = std::make_shared<EndpointResult>();
+    m_endpoint_replaced = std::make_shared<bool>(false);
+    auto workers = std::move(m_workers);
+    m_workers.clear();
+    auto *thread = QThread::create([account = m_endpoint_account, result = m_endpoint_result,
+                                    replaced = m_endpoint_replaced, workers, notif = m_notif_thread,
+                                    endpoint, url = url.toStdString(), verify_certificate, test,
+                                    connectElectrum, resumeScanner = m_resume_scanner] {
+        for (auto *worker : workers) {
+            worker->wait();
+            worker->deleteLater();
+        }
+        auto &acc = account->value();
+        if (test) {
+            *result = test_and_save_endpoint(
+                acc->name(),
+                endpoint == Endpoint::Electrum ? BackendServer::Electrum : BackendServer::Blindbit,
+                rust::String(url), verify_certificate);
+            if (!result->is_ok) {
+                return;
+            }
+        }
+        *replaced = true;
+        auto saved = result->saved;
+        auto savedUrl = result->url;
+        acc->close_backend();
+        if (notif != nullptr) {
+            notif->wait();
+            notif->deleteLater();
+        }
+        *result = acc->reopen_backend(connectElectrum);
+        result->saved = saved;
+        if (saved) {
+            result->url = savedUrl;
+        }
+        if (acc->is_ok() && resumeScanner && !acc->start_scanner()) {
+            result->is_ok = false;
+            result->error = rust::String("Backend reopened but scanner could not start");
+        }
+    });
+    connect(thread, &QThread::finished, this, &AccountController::onEndpointFinished,
+            qontrol::UNIQUE);
+    startWorker(thread);
+}
+
+void AccountController::onEndpointFinished() {
+    m_account = std::move(*m_endpoint_account);
+    m_endpoint_account = nullptr;
+    m_endpoint_busy = false;
+    if (*m_endpoint_replaced) {
+        m_reconnect->stopped();
+        m_notif_thread = nullptr;
+        m_scanner_running = false;
+        m_electrum_running = false;
+        m_electrum_connected_count = 0;
+        if (m_account.has_value() && m_account.value()->is_ok()) {
+            listenNotifications();
+        }
+        emit scannerStateChanged(false);
+        emit electrumDisconnected();
+        emit endpointStateChanged(Endpoint::Blindbit);
+        emit endpointStateChanged(Endpoint::Electrum);
+    } else if (m_endpoint_connection_lost) {
+        m_electrum_running = false;
+        m_electrum_connected_count = 0;
+        m_reconnect->lost();
+        emit electrumDisconnected();
+        emit endpointStateChanged(Endpoint::Electrum);
+    }
+    emit endpointRequestFinished(m_endpoint_req_id, m_endpoint, *m_endpoint_result);
+    if (m_endpoint_stop_requested) {
+        stop();
+    }
+}

@@ -1,178 +1,138 @@
 #include "account/views/Settings.h"
 
-#include "AppController.h"
+#include "account/RequestId.h"
 #include "catalog/Button.h"
 #include "catalog/Variants.h"
-#include "catalog/containers/FoldSection.h"
-#include "catalog/containers/Separator.h"
+#include "catalog/display/Badge.h"
+#include "catalog/display/InfoTip.h"
 #include "catalog/display/Label.h"
-#include "catalog/feedback/MessageModal.h"
-#include "catalog/form/FieldGroup.h"
+#include "catalog/form/Field.h"
 #include "catalog/form/FieldNote.h"
-#include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
+#include "catalog/inputs/Toggle.h"
 #include "i18n/Tr.h"
 #include "theme/Palette.h"
 #include "views/utils.h"
 
-#include <QHash>
+#include <QSizePolicy>
 #include <QThread>
 #include <QTimer>
 #include <Qontrol>
+#include <algorithm>
 #include <common.h>
 #include <string>
 
 namespace {
 
-// How often the Electrum block height is asked while Settings shows.
-constexpr int ELECTRUM_HEIGHT_REFRESH_MS = 30000;
+// How often the server heights are asked while Settings shows.
+constexpr int HEIGHT_REFRESH_MS = 30000;
+
+const QString K_SSL_SCHEME = QStringLiteral("ssl://");
+const QString K_TCP_SCHEME = QStringLiteral("tcp://");
+const QString K_SCHEME_SEPARATOR = QStringLiteral("://");
+
+auto toQString(const rust::String &value) -> QString {
+    return QString::fromStdString(std::string(value));
+}
 
 } // namespace
 
 namespace account::view {
 
-using catalog::FieldGroup;
-using catalog::FieldNote;
-using catalog::FoldSection;
-
 Settings::Settings(AccountBackend *backend) : m_backend(backend) {
     init();
     doConnect();
     view();
-    if (auto *blindbit = row(Endpoint::Blindbit); blindbit != nullptr) {
-        testEndpoint(*blindbit);
-    }
+    requestCapabilities();
 }
 
 void Settings::init() {
     for (auto endpoint : m_backend->endpoints()) {
-        EndpointRow endpointRow;
-        endpointRow.endpoint = endpoint;
-        endpointRow.url = new catalog::Input;
-        endpointRow.url->setWidth(Size::XL);
-        endpointRow.url->setText(m_backend->endpointUrl(endpoint));
-        endpointRow.test = catalog::btnTest();
-        endpointRow.testing = catalog::btnTesting();
-        endpointRow.testing->setEnabled(false);
-        endpointRow.test_ok = catalog::btnTestOk();
-        endpointRow.note = new FieldNote(QString(), FieldNote::Tone::Error);
-        endpointRow.note->setVisible(false);
+        ServerRow serverRow;
+        serverRow.endpoint = endpoint;
+        serverRow.label = new catalog::Label(catalog::LabelRole::Eyebrow);
+        serverRow.label->setTone(catalog::LabelTone::Muted);
+        serverRow.url = new catalog::Input;
+        serverRow.height = new catalog::Label(catalog::LabelRole::Mono);
+        serverRow.height->setTone(catalog::LabelTone::Secondary);
+        // A fixed slot, so stacked rows' inputs share one width.
+        serverRow.height->setFixedWidth(resolve(Size::XS));
+        serverRow.test = catalog::btnTest();
+        serverRow.testing = catalog::btnTesting();
+        serverRow.testing->setEnabled(false);
         bool blindbit = endpoint == Endpoint::Blindbit;
-        endpointRow.connect =
+        serverRow.connect =
             blindbit ? catalog::btnConnectBlindbit() : catalog::btnConnectElectrum();
-        endpointRow.disconnect =
+        serverRow.disconnect =
             blindbit ? catalog::btnDisconnectBlindbit() : catalog::btnDisconnectElectrum();
-        showTestState(endpointRow, TestState::Untested);
-        m_endpoints.append(endpointRow);
-    }
-
-    if (m_backend->networkEditable()) {
-        m_network_selector = new catalog::ComboBox;
-        m_network_selector->addItem("Regtest", static_cast<int>(Network::Regtest));
-        m_network_selector->addItem("Signet", static_cast<int>(Network::Signet));
-        m_network_selector->addItem("Testnet", static_cast<int>(Network::Testnet));
-        m_network_selector->addItem("Bitcoin", static_cast<int>(Network::Bitcoin));
-        m_network_selector->setWidth(Size::M);
-        int index = m_network_selector->findData(static_cast<int>(m_backend->network()));
-        if (index != -1) {
-            m_network_selector->setCurrentIndex(index);
+        serverRow.note = new catalog::FieldNote(QString(), catalog::FieldNote::Tone::Error);
+        serverRow.note->setVisible(false);
+        if (!blindbit) {
+            serverRow.ssl = new catalog::Toggle;
+            serverRow.verify = new catalog::Toggle;
         }
+        loadSaved(serverRow);
+        showSaved(serverRow);
+        m_rows.append(serverRow);
     }
 
-    m_info_network_label = new catalog::Label("--");
-    m_info_height_label = new catalog::Label("--");
     m_capabilities = new catalog::Label("--");
-    m_electrum_height_label = new catalog::Label("--");
+    m_capabilities->setAlignment(Qt::AlignTop);
     m_height_timer = new QTimer(this);
-    m_height_timer->setInterval(ELECTRUM_HEIGHT_REFRESH_MS);
-    m_save_btn = catalog::btnSaveSettings();
+    m_height_timer->setInterval(HEIGHT_REFRESH_MS);
     m_extras = m_backend->settingsExtras();
 
     retranslateUi();
-    updateButtons();
+    refreshRows();
 }
 
 void Settings::doConnect() {
-    for (const auto &endpointRow : m_endpoints) {
-        connect(endpointRow.url, &QLineEdit::textChanged, this, &Settings::onUrlEdited,
+    for (const auto &serverRow : m_rows) {
+        connect(serverRow.url, &QLineEdit::textEdited, this, &Settings::onUrlEdited,
                 qontrol::UNIQUE);
-        connect(endpointRow.test, &QPushButton::clicked, this, &Settings::onTestClicked,
+        connect(serverRow.test, &QPushButton::clicked, this, &Settings::onTestClicked,
                 qontrol::UNIQUE);
-        connect(endpointRow.test_ok, &QPushButton::clicked, this, &Settings::onTestClicked,
+        connect(serverRow.connect, &QPushButton::clicked, this, &Settings::onConnectClicked,
                 qontrol::UNIQUE);
-        connect(endpointRow.connect, &QPushButton::clicked, this, &Settings::onConnectClicked,
+        connect(serverRow.disconnect, &QPushButton::clicked, this, &Settings::onDisconnectClicked,
                 qontrol::UNIQUE);
-        connect(endpointRow.disconnect, &QPushButton::clicked, this, &Settings::onDisconnectClicked,
-                qontrol::UNIQUE);
+        if (serverRow.ssl != nullptr) {
+            connect(serverRow.ssl, &QCheckBox::clicked, this, &Settings::onSslToggled,
+                    qontrol::UNIQUE);
+            connect(serverRow.verify, &QCheckBox::clicked, this, &Settings::onVerifyToggled,
+                    qontrol::UNIQUE);
+        }
     }
-    connect(m_save_btn, &QPushButton::clicked, this, &Settings::onSaveClicked, qontrol::UNIQUE);
     connect(m_backend, &AccountBackend::endpointStateChanged, this,
             &Settings::onEndpointStateChanged, qontrol::UNIQUE);
-    connect(m_backend, &AccountBackend::scanProgress, this, &Settings::onScanProgress,
+    connect(m_backend, &AccountBackend::endpointRequestFinished, this,
+            &Settings::onEndpointRequestFinished, qontrol::UNIQUE);
+    connect(m_backend, &AccountBackend::endpointTipReady, this, &Settings::onEndpointTipReady,
             qontrol::UNIQUE);
-    connect(this, &Settings::backendInfoReady, this, &Settings::onBackendInfoReady,
-            qontrol::UNIQUE);
-    connect(this, &Settings::electrumTestReady, this, &Settings::onElectrumTestReady,
-            qontrol::UNIQUE);
-    connect(this, &Settings::electrumHeightReady, this, &Settings::onElectrumHeightReady,
-            qontrol::UNIQUE);
-    connect(m_height_timer, &QTimer::timeout, this, &Settings::refreshElectrumHeight,
-            qontrol::UNIQUE);
+    connect(m_height_timer, &QTimer::timeout, this, &Settings::onHeightTimeout, qontrol::UNIQUE);
 }
 
 void Settings::view() {
-    auto *connectionContent = new FieldGroup;
-    for (const auto &endpointRow : m_endpoints) {
-        auto *control = (new qontrol::Row)
-                            ->spacing(resolve(Spacing::XS))
-                            ->push(endpointRow.url)
-                            ->push(endpointRow.test)
-                            ->push(endpointRow.testing)
-                            ->push(endpointRow.test_ok);
-        connectionContent->addField(label(endpointRow.endpoint), control)
-            ->addNote(endpointRow.note);
+    auto *network = catalog::pillNetwork(networkName(m_backend->network()));
+    auto *col = (new qontrol::Column)->spacing(resolve(Spacing::L));
+    for (const auto &serverRow : m_rows) {
+        auto *server = viewRow(serverRow);
+        if (serverRow.endpoint == Endpoint::Blindbit) {
+            // What the BlindBit server reports it serves.
+            auto *capabilities = new catalog::Field(TR("settings-capabilities"), m_capabilities);
+            capabilities->setTopAligned(true);
+            server = (new qontrol::Column)
+                         ->spacing(resolve(Spacing::S))
+                         ->push(server)
+                         ->push(capabilities);
+        }
+        col->push(server);
     }
-    if (row(Endpoint::Electrum) != nullptr) {
-        connectionContent->addField(TR("settings-electrum-height"), m_electrum_height_label);
-    }
-    if (m_network_selector != nullptr) {
-        connectionContent->addField(TR("settings-network"), m_network_selector);
-    }
-    auto *connectionSection = new FoldSection(TR("settings-connection"));
-    connectionSection->setContent(connectionContent);
-
-    auto *col = (new qontrol::Column)->pushSpacer(resolve(Spacing::XXL))->push(connectionSection);
-
-    if (row(Endpoint::Blindbit) != nullptr) {
-        auto *infoContent = (new FieldGroup)
-                                ->addField(TR("settings-network"), m_info_network_label)
-                                ->addField(TR("settings-block-height"), m_info_height_label)
-                                ->addField(TR("settings-capabilities"), m_capabilities, true);
-        auto *infoSection = new FoldSection(TR("settings-backend-info"));
-        infoSection->setExpanded(false);
-        infoSection->setContent(infoContent);
-        col->pushSpacer(resolve(Spacing::M))
-            ->push(new catalog::Separator)
-            ->pushSpacer(resolve(Spacing::M))
-            ->push(infoSection);
-    }
-
-    auto *buttonRow = (new qontrol::Row)->pushSpacer();
-    for (const auto &endpointRow : m_endpoints) {
-        buttonRow->push(endpointRow.connect)
-            ->push(endpointRow.disconnect)
-            ->pushSpacer(resolve(Spacing::S));
-    }
-    buttonRow->push(m_save_btn)->pushSpacer();
-    col->pushSpacer(resolve(Spacing::L))->push(buttonRow);
-
     if (m_extras != nullptr) {
-        col->pushSpacer(resolve(Spacing::M))->push(m_extras);
+        col->push(m_extras);
     }
     col->pushSpacer();
-
-    auto *centered = (new qontrol::Row)->pushSpacer()->push(col)->pushSpacer();
-    setScreenContent(this, m_main_widget, dashboard(TR("settings-title"), centered));
+    setScreenContent(this, m_main_widget, dashboard(TR("settings-title"), col, false, network));
 }
 
 void Settings::changeEvent(QEvent *event) {
@@ -182,43 +142,85 @@ void Settings::changeEvent(QEvent *event) {
     qontrol::Screen::changeEvent(event);
 }
 
-void Settings::retranslateUi() {
-    for (const auto &endpointRow : m_endpoints) {
-        endpointRow.url->setPlaceholderText(endpointRow.endpoint == Endpoint::Blindbit
-                                                ? TR("settings-placeholder-blindbit")
-                                                : TR("settings-placeholder-electrum"));
+void Settings::showEvent(QShowEvent *event) {
+    for (auto &serverRow : m_rows) {
+        requestHeight(serverRow);
     }
-    if (m_network_selector != nullptr) {
-        m_network_selector->setItemText(0, TR("network-regtest"));
-        m_network_selector->setItemText(1, TR("network-signet"));
-        m_network_selector->setItemText(2, TR("network-testnet"));
-        m_network_selector->setItemText(3, TR("network-bitcoin"));
+    m_height_timer->start();
+    qontrol::Screen::showEvent(event);
+}
+
+void Settings::hideEvent(QHideEvent *event) {
+    m_height_timer->stop();
+    qontrol::Screen::hideEvent(event);
+}
+
+void Settings::retranslateUi() {
+    for (const auto &serverRow : m_rows) {
+        serverRow.label->setText(label(serverRow.endpoint));
+        serverRow.url->setPlaceholderText(serverRow.endpoint == Endpoint::Blindbit
+                                              ? TR("settings-placeholder-blindbit")
+                                              : TR("settings-placeholder-electrum"));
     }
 }
 
-auto Settings::rowOf(const QObject *widget) -> EndpointRow * {
-    for (auto &endpointRow : m_endpoints) {
-        if (endpointRow.url == widget || endpointRow.test == widget ||
-            endpointRow.test_ok == widget || endpointRow.connect == widget ||
-            endpointRow.disconnect == widget) {
-            return &endpointRow;
+auto Settings::viewRow(const ServerRow &row) -> QWidget * {
+    auto *control = (new qontrol::Row)
+                        ->spacing(resolve(Spacing::S))
+                        ->push(row.url, 1)
+                        ->push(row.height)
+                        ->push(row.test)
+                        ->push(row.testing)
+                        ->push(row.connect)
+                        ->push(row.disconnect);
+    auto *server = (new qontrol::Column)
+                       ->spacing(resolve(Spacing::XS))
+                       ->push(row.label)
+                       ->push(control)
+                       ->push(row.note);
+    if (row.ssl == nullptr) {
+        return server;
+    }
+    auto *verify = (new qontrol::Row)
+                       ->spacing(resolve(Spacing::XS))
+                       ->push(new catalog::InfoTip(TR("musig-electrum-verify-tip")))
+                       ->push(row.verify);
+    auto *sslField = new catalog::Field(TR("musig-electrum-ssl"), row.ssl);
+    auto *verifyField = new catalog::Field(TR("musig-electrum-verify-certificate"), verify);
+    // Each field as wide as its label and toggle, the spacer takes the rest.
+    sslField->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+    verifyField->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+    auto *transport = (new qontrol::Row)
+                          ->spacing(resolve(Spacing::L))
+                          ->push(sslField)
+                          ->push(verifyField)
+                          ->pushSpacer();
+    return (new qontrol::Column)->spacing(resolve(Spacing::S))->push(server)->push(transport);
+}
+
+auto Settings::rowOf(const QObject *widget) -> ServerRow * {
+    for (auto &serverRow : m_rows) {
+        if (serverRow.url == widget || serverRow.test == widget || serverRow.connect == widget ||
+            serverRow.disconnect == widget || serverRow.ssl == widget ||
+            serverRow.verify == widget) {
+            return &serverRow;
         }
     }
     return nullptr;
 }
 
-auto Settings::row(Endpoint endpoint) -> EndpointRow * {
-    for (auto &endpointRow : m_endpoints) {
-        if (endpointRow.endpoint == endpoint) {
-            return &endpointRow;
+auto Settings::row(Endpoint endpoint) -> ServerRow * {
+    for (auto &serverRow : m_rows) {
+        if (serverRow.endpoint == endpoint) {
+            return &serverRow;
         }
     }
     return nullptr;
 }
 
 auto Settings::label(Endpoint endpoint) -> QString {
-    return endpoint == Endpoint::Blindbit ? TR("settings-blindbit-url")
-                                          : TR("settings-electrum-server");
+    return endpoint == Endpoint::Blindbit ? TR("settings-blindbit-address")
+                                          : TR("settings-electrum-address");
 }
 
 auto Settings::networkName(Network network) -> QString {
@@ -235,203 +237,263 @@ auto Settings::networkName(Network network) -> QString {
     return {};
 }
 
-auto Settings::selectedNetwork() const -> Network {
-    if (m_network_selector == nullptr) {
-        return m_backend->network();
+auto Settings::candidateUrl(const ServerRow &row) -> QString {
+    auto address = row.url->text().trimmed();
+    if (row.ssl != nullptr && row.ssl->isChecked() && !address.isEmpty() &&
+        !address.contains(K_SCHEME_SEPARATOR)) {
+        return K_SSL_SCHEME + address;
     }
-    return static_cast<Network>(m_network_selector->currentData().toInt());
+    return address;
 }
 
-void Settings::showTestState(const EndpointRow &row, TestState state) {
-    row.test->setVisible(state == TestState::Untested);
-    row.testing->setVisible(state == TestState::Testing);
-    row.test_ok->setVisible(state == TestState::Ok);
+auto Settings::candidateVerify(const ServerRow &row) -> bool {
+    // Only an SSL server presents a certificate to check.
+    return row.ssl == nullptr || !row.ssl->isChecked() || row.verify_wanted;
 }
 
-void Settings::showTestError(const EndpointRow &row, const QString &error) {
+auto Settings::isDirty(const ServerRow &row) -> bool {
+    auto url = candidateUrl(row);
+    if (url.isEmpty()) {
+        return false;
+    }
+    // A tested plaintext server is saved without its scheme, one saved by hand may have it.
+    auto saved = row.saved_url;
+    if (url.startsWith(K_TCP_SCHEME)) {
+        url = url.mid(K_TCP_SCHEME.size());
+    }
+    if (saved.startsWith(K_TCP_SCHEME)) {
+        saved = saved.mid(K_TCP_SCHEME.size());
+    }
+    return url != saved || candidateVerify(row) != row.saved_verify;
+}
+
+auto Settings::isBusy() const -> bool {
+    return std::ranges::any_of(
+        m_rows, [](const ServerRow &server_row) { return server_row.action_req != 0; });
+}
+
+void Settings::loadSaved(ServerRow &row) {
+    row.saved_url = m_backend->endpointUrl(row.endpoint);
+    row.saved_verify = row.ssl == nullptr || !row.saved_url.startsWith(K_SSL_SCHEME) ||
+                       m_backend->verifiesCertificate();
+}
+
+void Settings::showSaved(ServerRow &row) {
+    row.url->setText(row.saved_url);
+    if (row.ssl != nullptr) {
+        row.ssl->setChecked(row.saved_url.startsWith(K_SSL_SCHEME));
+        row.verify_wanted = row.saved_verify;
+    }
+}
+
+void Settings::showError(const ServerRow &row, const QString &error) {
     row.note->setText(error);
     row.note->setVisible(!error.isEmpty());
 }
 
-void Settings::testEndpoint(const EndpointRow &row) {
-    auto url = row.url->text().trimmed();
-    if (url.isEmpty()) {
+void Settings::refreshRows() {
+    for (const auto &serverRow : m_rows) {
+        refreshRow(serverRow);
+    }
+}
+
+void Settings::refreshRow(const ServerRow &row) {
+    bool busy = isBusy();
+    bool testing = row.action_req != 0 && row.testing_req;
+    bool dirty = isDirty(row);
+    bool running = m_backend->isEndpointRunning(row.endpoint);
+
+    row.url->setEnabled(!testing);
+    // Test keeps its slot while hidden, Testing… takes it while the test runs.
+    auto policy = row.test->sizePolicy();
+    policy.setRetainSizeWhenHidden(!testing);
+    row.test->setSizePolicy(policy);
+    row.test->setVisible(!testing && dirty);
+    row.test->setEnabled(!busy);
+    row.testing->setVisible(testing);
+
+    row.connect->setVisible(!running);
+    row.disconnect->setVisible(running);
+    row.connect->setEnabled(!busy && !dirty && !row.saved_url.isEmpty());
+    row.disconnect->setEnabled(!busy);
+
+    if (row.ssl != nullptr) {
+        bool ssl = row.ssl->isChecked();
+        row.ssl->setEnabled(!testing);
+        // The shown state follows SSL, the choice stays in verify_wanted.
+        row.verify->setChecked(ssl && row.verify_wanted);
+        row.verify->setEnabled(!testing && ssl);
+    }
+}
+
+void Settings::requestHeight(ServerRow &row) {
+    if (!m_backend->isEndpointRunning(row.endpoint)) {
+        row.tip_req = 0;
+        row.height->clear();
         return;
     }
-    QThread *thread = nullptr;
-    if (row.endpoint == Endpoint::Blindbit) {
-        thread = QThread::create([this, url = url.toStdString()]() -> void {
-            auto info = ::get_backend_info(rust::String(url));
-            emit backendInfoReady(info);
-        });
-    } else {
-        thread = QThread::create(
-            [this, url = url.toStdString(), verify = m_backend->verifiesCertificate()]() -> void {
-                auto result = ::test_electrum(rust::String(url), verify);
-                emit electrumTestReady(result);
-            });
-    }
-    m_backend->startWorker(thread);
+    row.tip_req = nextRequestId();
+    m_backend->requestEndpointTip(row.tip_req, row.endpoint);
 }
 
-void Settings::refreshElectrumHeight() {
-    auto url = m_backend->endpointUrl(Endpoint::Electrum);
-    if (!m_backend->isEndpointRunning(Endpoint::Electrum) || url.isEmpty()) {
-        m_electrum_height_label->setText("--");
-        return;
-    }
-    auto *thread = QThread::create(
-        [this, url = url.toStdString(), verify = m_backend->verifiesCertificate()]() -> void {
-            emit electrumHeightReady(::electrum_tip_height(rust::String(url), verify));
-        });
-    m_backend->startWorker(thread);
-}
-
-void Settings::onElectrumHeightReady(const ElectrumTipResult &result) {
-    m_electrum_height_label->setText(result.is_ok ? QString::number(result.height)
-                                                  : QStringLiteral("--"));
-}
-
-void Settings::showEvent(QShowEvent *event) {
-    refreshElectrumHeight();
-    m_height_timer->start();
-    qontrol::Screen::showEvent(event);
-}
-
-void Settings::hideEvent(QHideEvent *event) {
-    m_height_timer->stop();
-    qontrol::Screen::hideEvent(event);
-}
-
-void Settings::clearBackendInfo() {
-    m_info_network_label->setText("--");
-    m_info_height_label->setText("--");
-    m_capabilities->setText("--");
-    m_current_height = 0;
-}
-
-void Settings::updateButtons() {
-    bool allVerified = true;
-    for (const auto &endpointRow : m_endpoints) {
-        bool running = m_backend->isEndpointRunning(endpointRow.endpoint);
-        allVerified = allVerified && endpointRow.verified;
-        endpointRow.connect->setVisible(!running);
-        endpointRow.disconnect->setVisible(running);
-        endpointRow.connect->setEnabled(endpointRow.verified);
-        endpointRow.disconnect->setEnabled(true);
-        endpointRow.url->setEnabled(!running);
-        endpointRow.test->setEnabled(!running && !endpointRow.url->text().trimmed().isEmpty());
-        endpointRow.test_ok->setEnabled(!running);
-    }
-    m_save_btn->setEnabled(allVerified);
-}
-
-// ===== Slots =====
-
-void Settings::onSaveClicked() {
-    QHash<Endpoint, QString> urls;
-    for (const auto &endpointRow : m_endpoints) {
-        urls.insert(endpointRow.endpoint, endpointRow.url->text().trimmed());
-    }
-    auto error = m_backend->saveSettings(urls, selectedNetwork());
-    if (!error.isEmpty()) {
-        AppController::execModal(new catalog::MessageModal(TR("common-error"), error));
-    }
-}
-
-void Settings::onConnectClicked() {
-    auto *endpointRow = rowOf(sender());
-    if (endpointRow == nullptr) {
-        return;
-    }
-    if (!m_backend->startEndpoint(endpointRow->endpoint)) {
-        auto message = endpointRow->endpoint == Endpoint::Blindbit
-                           ? TR("settings-failed-start-scanner")
-                           : TR("settings-failed-start-electrum");
-        AppController::execModal(new catalog::MessageModal(TR("common-error"), message));
-        return;
-    }
-    if (endpointRow->endpoint == Endpoint::Blindbit) {
-        testEndpoint(*endpointRow);
-    }
-}
-
-void Settings::onDisconnectClicked() {
-    auto *endpointRow = rowOf(sender());
-    if (endpointRow == nullptr) {
-        return;
-    }
-    endpointRow->disconnect->setEnabled(false);
-    m_backend->stopEndpoint(endpointRow->endpoint);
-    if (endpointRow->endpoint == Endpoint::Blindbit) {
-        clearBackendInfo();
-    }
-}
-
-void Settings::onTestClicked() {
-    auto *endpointRow = rowOf(sender());
-    if (endpointRow == nullptr || endpointRow->url->text().trimmed().isEmpty()) {
-        return;
-    }
-    showTestError(*endpointRow, QString());
-    showTestState(*endpointRow, TestState::Testing);
-    testEndpoint(*endpointRow);
-}
-
-void Settings::onUrlEdited() {
-    auto *endpointRow = rowOf(sender());
-    if (endpointRow == nullptr) {
-        return;
-    }
-    endpointRow->verified = false;
-    showTestError(*endpointRow, QString());
-    showTestState(*endpointRow, TestState::Untested);
-    if (endpointRow->endpoint == Endpoint::Blindbit) {
-        clearBackendInfo();
-    }
-    updateButtons();
-}
-
-void Settings::onEndpointStateChanged(Endpoint endpoint) {
-    updateButtons();
-    if (endpoint == Endpoint::Electrum) {
-        refreshElectrumHeight();
-    }
-}
-
-void Settings::onScanProgress(uint32_t height, [[maybe_unused]] uint32_t tip) {
-    if (height > m_current_height) {
-        m_current_height = height;
-        m_info_height_label->setText(QString::number(height));
-    }
-}
-
-void Settings::onBackendInfoReady(const BackendInfo &info) {
+void Settings::requestCapabilities() {
     auto *blindbit = row(Endpoint::Blindbit);
     if (blindbit == nullptr) {
         return;
     }
-    if (!info.is_ok) {
-        blindbit->verified = false;
-        showTestState(*blindbit, TestState::Untested);
-        clearBackendInfo();
-        updateButtons();
-        showTestError(*blindbit,
-                      mapBackendErrorSummary(QString::fromStdString(std::string(info.error))));
+    m_capabilities->setText("--");
+    if (blindbit->saved_url.isEmpty()) {
+        m_info_req = 0;
         return;
     }
+    m_info_req = nextRequestId();
+    // The reply outlives the request even if the Settings view closes during the fetch.
+    auto *reply = new BackendInfoReply;
+    auto *worker =
+        QThread::create([reply, req = m_info_req, url = blindbit->saved_url.toStdString()]() {
+            emit reply->ready(req, ::get_backend_info(rust::String(url)));
+        });
+    connect(reply, &BackendInfoReply::ready, this, &Settings::onBackendInfoReady, qontrol::UNIQUE);
+    connect(worker, &QThread::finished, reply, &QObject::deleteLater, qontrol::UNIQUE);
+    m_backend->startWorker(worker);
+}
 
-    auto networkStr = networkName(info.network);
-    bool networkMatch = info.network == selectedNetwork();
-    // Before setting verified: setText fires textChanged, which clears it.
-    blindbit->url->setText(QString::fromStdString(std::string(info.url)));
-    blindbit->verified = networkMatch;
-    showTestState(*blindbit, networkMatch ? TestState::Ok : TestState::Untested);
-    updateButtons();
-    m_info_network_label->setText(networkStr);
-    m_current_height = info.height;
-    m_info_height_label->setText(QString::number(info.height));
+void Settings::startAction(ServerRow &row, bool test) {
+    row.action_req = nextRequestId();
+    row.testing_req = test;
+    showError(row, QString());
+    refreshRows();
+}
 
+// ===== Slots =====
+
+void Settings::onTestClicked() {
+    auto *serverRow = rowOf(sender());
+    if (serverRow == nullptr || isBusy() || !isDirty(*serverRow)) {
+        return;
+    }
+    startAction(*serverRow, true);
+    m_backend->testAndSaveEndpoint(serverRow->action_req, serverRow->endpoint,
+                                   candidateUrl(*serverRow), candidateVerify(*serverRow));
+}
+
+void Settings::onConnectClicked() {
+    auto *serverRow = rowOf(sender());
+    if (serverRow == nullptr || isBusy()) {
+        return;
+    }
+    startAction(*serverRow, false);
+    m_backend->setEndpointConnected(serverRow->action_req, serverRow->endpoint, true);
+}
+
+void Settings::onDisconnectClicked() {
+    auto *serverRow = rowOf(sender());
+    if (serverRow == nullptr || isBusy()) {
+        return;
+    }
+    startAction(*serverRow, false);
+    m_backend->setEndpointConnected(serverRow->action_req, serverRow->endpoint, false);
+}
+
+void Settings::onUrlEdited() {
+    auto *serverRow = rowOf(sender());
+    if (serverRow == nullptr) {
+        return;
+    }
+    if (serverRow->ssl != nullptr) {
+        auto url = serverRow->url->text().trimmed();
+        if (url.startsWith(K_SSL_SCHEME)) {
+            serverRow->ssl->setChecked(true);
+        } else if (url.startsWith(K_TCP_SCHEME)) {
+            serverRow->ssl->setChecked(false);
+        }
+    }
+    showError(*serverRow, QString());
+    refreshRow(*serverRow);
+}
+
+void Settings::onSslToggled(bool checked) {
+    auto *serverRow = rowOf(sender());
+    if (serverRow == nullptr) {
+        return;
+    }
+    // Another scheme: the server is tested again under it.
+    auto bare = serverRow->url->text().trimmed();
+    if (bare.contains(K_SCHEME_SEPARATOR)) {
+        bare = bare.section(K_SCHEME_SEPARATOR, 1);
+    }
+    if (!bare.isEmpty()) {
+        serverRow->url->setText((checked ? K_SSL_SCHEME : K_TCP_SCHEME) + bare);
+    }
+    showError(*serverRow, QString());
+    refreshRow(*serverRow);
+}
+
+void Settings::onVerifyToggled(bool checked) {
+    auto *serverRow = rowOf(sender());
+    if (serverRow == nullptr) {
+        return;
+    }
+    serverRow->verify_wanted = checked;
+    showError(*serverRow, QString());
+    refreshRow(*serverRow);
+}
+
+void Settings::onEndpointStateChanged(Endpoint endpoint) {
+    refreshRows();
+    auto *serverRow = row(endpoint);
+    if (serverRow != nullptr && isVisible()) {
+        requestHeight(*serverRow);
+    }
+}
+
+void Settings::onEndpointRequestFinished(uint64_t req_id, Endpoint endpoint,
+                                         const EndpointResult &result) {
+    auto *serverRow = row(endpoint);
+    if (serverRow == nullptr || req_id == 0 || serverRow->action_req != req_id) {
+        return;
+    }
+    serverRow->action_req = 0;
+    serverRow->testing_req = false;
+    loadSaved(*serverRow);
+    if (result.saved) {
+        showSaved(*serverRow);
+        if (endpoint == Endpoint::Blindbit) {
+            requestCapabilities();
+        }
+    }
+    if (!result.is_ok) {
+        showError(*serverRow, mapBackendErrorSummary(toQString(result.error)));
+    }
+    refreshRows();
+    if (isVisible()) {
+        requestHeight(*serverRow);
+    }
+}
+
+void Settings::onEndpointTipReady(uint64_t req_id, Endpoint endpoint,
+                                  const ElectrumTipResult &result) {
+    auto *serverRow = row(endpoint);
+    if (serverRow == nullptr || req_id == 0 || serverRow->tip_req != req_id) {
+        return;
+    }
+    serverRow->tip_req = 0;
+    if (!result.is_ok) {
+        serverRow->height->clear();
+        return;
+    }
+    serverRow->height->setText(TR("settings-height").arg(result.height));
+}
+
+void Settings::onBackendInfoReady(uint64_t req_id, const BackendInfo &info) {
+    if (req_id != m_info_req) {
+        return;
+    }
+    m_info_req = 0;
+    if (!info.is_ok) {
+        m_capabilities->setText("--");
+        return;
+    }
     auto yesText = TR("common-yes");
     auto noText = TR("common-no");
     auto yn = [&yesText, &noText](bool value) -> QString { return value ? yesText : noText; };
@@ -440,34 +502,12 @@ void Settings::onBackendInfoReady(const BackendInfo &info) {
                                 .arg(yn(info.tweaks_full_basic))
                                 .arg(yn(info.tweaks_full_with_dust_filter))
                                 .arg(yn(info.tweaks_cut_through_with_dust_filter)));
-    m_capabilities->setAlignment(Qt::AlignTop);
-
-    QString mismatch;
-    if (!networkMatch) {
-        mismatch =
-            TR("create-account-backend-network").arg(networkStr, networkName(selectedNetwork()));
-    }
-    showTestError(*blindbit, mismatch);
 }
 
-void Settings::onElectrumTestReady(const ConnectionResult &result) {
-    auto *electrum = row(Endpoint::Electrum);
-    if (electrum == nullptr) {
-        return;
+void Settings::onHeightTimeout() {
+    for (auto &serverRow : m_rows) {
+        requestHeight(serverRow);
     }
-    if (!result.is_ok) {
-        electrum->verified = false;
-        showTestState(*electrum, TestState::Untested);
-        updateButtons();
-        showTestError(*electrum,
-                      mapBackendErrorSummary(QString::fromStdString(std::string(result.error))));
-        return;
-    }
-    // Before setting verified: setText fires textChanged, which clears it.
-    electrum->url->setText(QString::fromStdString(std::string(result.url)));
-    electrum->verified = true;
-    showTestState(*electrum, TestState::Ok);
-    updateButtons();
 }
 
 } // namespace account::view

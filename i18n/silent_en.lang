@@ -114,10 +114,10 @@ send-proceed-anyway => "Proceed anyway?"
 send-recipients => "Payments"
 send-signing-failed => "Signing failed."
 send-summary-change => "Change"
-send-summary-fee => "Network Fee"
+send-summary-fee => "Network fee"
 send-summary-sending => "Sending"
 send-summary-usd-placeholder => "0.00"
-send-summary-total => "Total send"
+send-summary-total => "Total"
 txflow-input-n => "Input #%1"
 txflow-output-n => "Output #%1"
 txflow-change-title => "Change"
@@ -138,6 +138,7 @@ send-validation-error => "Validation Error"
 settings-backend-info => "Backend Info:"
 settings-blindbit-url => "BlindBit URL:"
 settings-block-height => "Block Height:"
+settings-height => "Height %1"
 
 settings-electrum-height => "Electrum Block Height:"
 settings-capabilities => "Capabilities:"
@@ -1027,8 +1028,6 @@ create-account-reason-backends => "Test both backends first."
 
 create-account-backend-network => "The server runs on %1, not %2."
 
-receive-not-generated => "Not generated yet. Click Generate."
-
 receive-verify-tooltip => "Verify on signing device"
 
 receive-index => "Index"
@@ -1572,3 +1571,145 @@ musig-electrum-ssl => "SSL:"
 musig-electrum-verify-certificate => "Verify Certificate:"
 
 musig-electrum-verify-tip => "Turn off for a server with a self-signed certificate."
+
+amount-cycle => "Show as BTC / %1 / hidden"
+
+amount-cycle-no-fiat => "Show as BTC / hidden"
+
+balance-title => "Balance"
+
+balance-unconfirmed => "Unconfirmed"
+
+coins-date => "Date"
+
+coins-label-failed => "Could not save the label"
+
+history-date => "Date"
+
+history-label => "Label"
+
+history-label-failed => "Could not save the label"
+
+pill-confirmed => "Confirmed"
+
+pill-deprecated => "Deprecated"
+
+pill-psbt-confirmed => "Confirmed"
+
+pill-psbt-deprecated => "Deprecated"
+
+pill-psbt-signing => "Signing"
+
+pill-unconfirmed => "Unconfirmed"
+
+psbt-last-edited => "Last Edited"
+
+psbt-signed => "Signed"
+
+time-ago-days => "%1 days ago"
+
+time-ago-days-one => "1 day ago"
+
+time-ago-hours => "%1 hours ago"
+
+time-ago-hours-one => "1 hour ago"
+
+time-ago-months => "%1 months ago"
+
+time-ago-months-one => "1 month ago"
+
+time-ago-under-hour => "less than an hour ago"
+
+time-ago-years => "%1 years ago"
+
+time-ago-years-one => "1 year ago"
+
+tx-confirmations => "%1 confirmations"
+
+tx-confirmations-one => "1 confirmation"
+
+tx-details-change => "Change"
+
+tx-details-failed => "Could not load the transaction"
+
+tx-details-fee-rate => "%1 sat/vB"
+
+tx-details-fees => "Fees"
+
+tx-details-inputs => "Inputs"
+
+tx-details-loading => "Loading transaction…"
+
+tx-details-moved => "Moved"
+
+tx-details-output-total => "Output total"
+
+tx-details-outputs => "Outputs"
+
+tx-details-received => "Received"
+
+tx-details-sent => "Sent"
+
+tx-details-size => "Size"
+
+tx-details-status => "Status"
+
+tx-details-title => "Transaction"
+
+tx-details-total => "Total"
+
+tx-details-txid => "Transaction ID"
+
+tx-details-version => "Version"
+
+tx-details-version-lock => "%1 · lock %2"
+
+tx-details-vsize => "%1 vB"
+
+tx-direction-received => "Received"
+
+tx-direction-self => "Sent to self"
+
+tx-direction-sent => "Sent"
+
+tx-direction-unknown => "Unknown"
+
+tx-label-failed => "Could not save the label"
+
+tx-status-block => "Block %1"
+
+tx-status-confirmed => "%1 conf. · block %2"
+
+tx-status-mempool => "In the mempool"
+
+tx-status-not-broadcast => "Not broadcast"
+
+tx-status-not-in-history => "Not in the account history"
+
+tx-unconfirmed => "Unconfirmed"
+
+tx-unknown => "Unknown"
+
+txflow-input-count-one => "1 input"
+
+txflow-legend-change => "change"
+
+txflow-legend-fee => "fee"
+
+txflow-legend-recipient => "recipient"
+
+txflow-output-count-one => "1 output"
+
+tx-status-broadcast => "Broadcast, unconfirmed"
+
+tx-status-unverified => "%1 · unverified"
+
+tx-status-verify-failed => "%1 · verification failed"
+
+settings-blindbit-address => "BlindBit URL"
+
+settings-electrum-address => "Electrum Address"
+
+receive-addresses => "Addresses"
+
+musig-lock-line-absolute => "From block %1"

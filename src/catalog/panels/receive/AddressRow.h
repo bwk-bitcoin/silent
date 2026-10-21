@@ -22,7 +22,6 @@ public:
     // payment); otherwise it stays on a single line.
     void setTwoLineAddress(bool two_lines);
     void setGenerateVisible(bool visible);
-    void setPlaceholderText(const QString &text);
     void setLabelText(const QString &text);
     [[nodiscard]] auto labelText() const -> QString;
     void setLabelVisible(bool visible);
@@ -45,8 +44,8 @@ public slots:
     void onVerifyClicked();
 
 protected:
-    // Show/hide the QR, address row and empty state per the current address
-    // (no address: only the placeholder and Generate).
+    // Show/hide the actions and the address row per the current address (no
+    // address: only the empty QR card and Generate).
     void applyVisibility();
 
 private:
@@ -57,10 +56,8 @@ private:
     ChunkedAddress *m_address = nullptr;
     QrCode *m_qr_code = nullptr;
     LabelRow *m_label = nullptr;
-    QWidget *m_empty_state = nullptr;
+    QWidget *m_actions_row = nullptr;
     QWidget *m_address_row = nullptr;
-    QWidget *m_extra_actions = nullptr;
-    Label *m_placeholder = nullptr;
     CopyButton *m_copy = nullptr;
     Button *m_generate = nullptr;
     Button *m_generate_new = nullptr;

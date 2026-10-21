@@ -9,6 +9,7 @@
 #include <QString>
 #include <QThread>
 #include <Qontrol>
+#include <memory>
 #include <optional>
 #include <silent.h>
 
@@ -19,6 +20,7 @@ class AccountController : public AccountBackend {
 
 public:
     AccountController(const QString &account, AccountWidget *widget);
+    ~AccountController() override;
     auto init(const QString &account) -> void;
     auto screen(const QString &screen) -> std::optional<qontrol::Screen *>;
     virtual auto loadPanels() -> void;
@@ -54,6 +56,13 @@ public:
     // stop() waits for the worker before it drops the account and before stopped()
     // lets the owner delete them.
     void startWorker(QThread *worker) override;
+    void requestTxDetails(uint64_t req_id, const QString &txid) override;
+    void editTxLabel(uint64_t req_id, const QString &txid, const QString &label) override;
+    void editOutpointLabel(uint64_t req_id, const QString &outpoint, const QString &label) override;
+    void requestEndpointTip(uint64_t req_id, Endpoint endpoint) override;
+    void testAndSaveEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
+                             bool verify_certificate) override;
+    void setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) override;
 
 signals:
     void newAddress(rust::String addr);
@@ -76,6 +85,7 @@ public slots:
     auto startScanner() -> void;
     auto stop() -> void;
     void onWorkerFinished();
+    void onEndpointFinished();
     // A lost Electrum connection starts again.
     void onElectrumReconnect();
     // The reconnect gave up: the user is told, the connection stays down.
@@ -97,6 +107,9 @@ public slots:
 protected:
     // Construct without FFI init, for a mock subclass (dummy data, no account).
     explicit AccountController(AccountWidget *widget);
+    void listenNotifications();
+    void changeEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
+                        bool verify_certificate, bool test, bool connected);
 
 private:
     QPointer<qontrol::Panel> m_current_panel;
@@ -113,4 +126,13 @@ private:
     account::ElectrumReconnect *m_reconnect = new account::ElectrumReconnect(this);
     int m_electrum_connected_count = 0;
     int m_electrum_expected_count = 0;
+    std::shared_ptr<std::optional<rust::Box<Account>>> m_endpoint_account;
+    std::shared_ptr<EndpointResult> m_endpoint_result;
+    std::shared_ptr<bool> m_endpoint_replaced;
+    uint64_t m_endpoint_req_id = 0;
+    Endpoint m_endpoint = Endpoint::Electrum;
+    bool m_endpoint_busy = false;
+    bool m_endpoint_connection_lost = false;
+    bool m_endpoint_stop_requested = false;
+    bool m_resume_scanner = false;
 };

@@ -4,6 +4,7 @@
 #include "interfaces/types.h"
 
 #include <QHash>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <Qontrol>
@@ -52,6 +53,9 @@ public slots:
     void onBroadcastDone(const TxResult &result);
     void onCancelClicked();
     void onSavedPsbtRestored(const SavedPsbtEntry &entry);
+    void onRoundChanged(const MusigRoundStatus &status);
+    void onSignerAnswered(const QString &fingerprint);
+    void onSigningReset();
     void onSessionCleared();
     void onSaveWarningChanged(const QString &message);
 
@@ -84,6 +88,9 @@ private:
     bool m_loading = false;
     // The Sign modal broadcast the transaction.
     bool m_sent = false;
+    // The spend path's keys whose signature is in, lowercased: a finalized PSBT no longer
+    // carries its rounds, so the Sign modal shows these.
+    QSet<QString> m_signed;
 
     QWidget *m_leaf_widget = nullptr;
     catalog::Label *m_leaf_title = nullptr;

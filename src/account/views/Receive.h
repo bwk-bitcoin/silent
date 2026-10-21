@@ -39,6 +39,7 @@ public slots:
 protected:
     struct Section {
         AddressKind kind = AddressKind::SilentPayment;
+        // nullptr when the account receives on a single kind: its row has no heading.
         catalog::FoldSection *fold = nullptr;
         catalog::AddressRow *row = nullptr;
         // The addresses generated before the current one, with their labels.

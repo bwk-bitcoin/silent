@@ -39,6 +39,10 @@ MusigAccountWidget::MusigAccountWidget(const QString &account, QWidget *parent) 
     m_controller->loadPanel("history");
     // The views show the stored coins before the first notification.
     m_controller->pollCoins();
+    // Endpoint replacement takes the account away while the worker runs.
+    if (!m_controller->electrumUrl().isEmpty()) {
+        m_controller->startElectrum();
+    }
 }
 
 MusigAccountWidget::~MusigAccountWidget() = default;
@@ -144,11 +148,6 @@ void MusigAccountWidget::initUI() {
             &MusigStatusBar::onElectrumDisconnected, qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::electrumUrlChanged, m_status_bar,
             &MusigStatusBar::onReloadUrl, qontrol::UNIQUE);
-
-    // Started once the status bar listens.
-    if (!m_controller->electrumUrl().isEmpty()) {
-        m_controller->startElectrum();
-    }
 
     auto *mainCol = (new qontrol::Column)->push(contentWidget)->push(m_status_bar);
     mainCol->layout()->setContentsMargins(0, 0, 0, 0);

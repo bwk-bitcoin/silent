@@ -145,21 +145,6 @@ fn encoded(psbt: &PsbtV2) -> String {
     hex::encode(psbt.serialize().expect("serialize consumer PSBT"))
 }
 
-fn close_sp(mut account: Box<silent::Account>) {
-    let receiver = account.take_receiver();
-    account.stop_scanner();
-    account.stop_electrum();
-    drop(account);
-    while receiver.recv().is_some() {}
-}
-
-fn close_multikey(mut account: Box<silent::MusigAccount>) {
-    let receiver = account.take_receiver();
-    account.stop_electrum();
-    drop(account);
-    while receiver.recv().is_some() {}
-}
-
 fn corrupt_ecdsa(psbt: &str) -> String {
     let mut psbt = PsbtV2::deserialize(&hex::decode(psbt).expect("PSBT hex")).expect("PSBTv2");
     let signature = psbt.inputs[0]
@@ -254,11 +239,7 @@ fn funded_sp_bip32_and_multikey_hot_spend_through_public_api() {
         "sp".into(),
     );
     config.set_segwit_descriptor(bip32);
-    config.to_file();
-    assert!(
-        silent::config_from_file("external-sp".into()).is_ok(),
-        "save SP/BIP32 account"
-    );
+    assert!(config.save().is_empty(), "save SP/BIP32 account");
     let config = new_config(
         "external-multikey".into(),
         Network::Regtest,
@@ -268,11 +249,7 @@ fn funded_sp_bip32_and_multikey_hot_spend_through_public_api() {
         0,
         MUSIG_PLUGIN_ID.into(),
     );
-    config.to_file();
-    assert!(
-        silent::config_from_file("external-multikey".into()).is_ok(),
-        "save Multikey account"
-    );
+    assert!(config.save().is_empty(), "save Multikey account");
     let mut sp_account = new_account("external-sp".into());
     let mut multikey = new_musig_account("external-multikey".into());
     assert!(sp_account.is_ok(), "SP account: {}", sp_account.get_error());
@@ -474,9 +451,9 @@ fn funded_sp_bip32_and_multikey_hot_spend_through_public_api() {
         !wrong_network.is_ok,
         "network mismatch rejected before submission"
     );
-    close_sp(sp_account);
-    close_multikey(multikey);
     if let Some(binary) = std::env::var_os("SILENT_HOST_SMOKE") {
+        sp_account.close_backend();
+        multikey.close_backend();
         let fixture = serde_json::json!({
             "psbt": encoded(&tx), "endpoint": endpoint,
             "firstFingerprint": first.fingerprint(), "secondFingerprint": second.fingerprint(),
@@ -529,6 +506,8 @@ fn funded_sp_bip32_and_multikey_hot_spend_through_public_api() {
         chain::get_tx(&mut node.client, final_tx.compute_txid()).is_some(),
         "real funded mixed spend mined"
     );
+    sp_account.close_backend();
+    multikey.close_backend();
     funded_musig(
         &mut keys,
         &mut node.client,
@@ -920,7 +899,7 @@ fn funded_sp_output(
         SpendAvailability::Available,
         "availability restored from current coin state"
     );
-    close_sp(account);
+    account.close_backend();
 }
 
 fn nonce_input_request(text: &str, index: usize) -> PsbtV2 {
@@ -1026,11 +1005,7 @@ fn funded_musig(
         0,
         MUSIG_PLUGIN_ID.into(),
     );
-    config.to_file();
-    assert!(
-        silent::config_from_file("external-musig-rounds".into()).is_ok(),
-        "save MuSig account"
-    );
+    assert!(config.save().is_empty(), "save MuSig account");
     let mut account = new_musig_account("external-musig-rounds".into());
     for fingerprint in [first, second] {
         assert!(
@@ -1047,11 +1022,7 @@ fn funded_musig(
         0,
         MUSIG_PLUGIN_ID.into(),
     );
-    config.to_file();
-    assert!(
-        silent::config_from_file("external-musig-other".into()).is_ok(),
-        "save other MuSig account"
-    );
+    assert!(config.save().is_empty(), "save other MuSig account");
     let mut other = new_musig_account("external-musig-other".into());
     assert!(other.is_ok(), "open other MuSig account");
     assert!(account.is_ok(), "open MuSig account");
@@ -1179,9 +1150,9 @@ fn funded_musig(
         missing_password.is_ok && missing_password.needs_password,
         "real hot route needs a password with ready A and uncached B"
     );
-    close_multikey(account);
-    close_multikey(other);
     if let Some(binary) = std::env::var_os("SILENT_HOST_SMOKE") {
+        account.close_backend();
+        other.close_backend();
         run_nonce_fixture(
             binary,
             directory,
@@ -1356,6 +1327,8 @@ fn funded_musig(
         "retired attempt cannot publish cached nonces again"
     );
     if let Some(binary) = std::env::var_os("SILENT_HOST_SMOKE") {
+        account.close_backend();
+        other.close_backend();
         for retry_release in [false, true] {
             assert!(
                 hot_create_sessions(&a, "first", &policy, 1).is_ok,
@@ -1381,4 +1354,6 @@ fn funded_musig(
                     "real IKeys allocation must be retired after prep failure plus caller unload, or failed Release plus retry; retry_release={retry_release}");
         }
     }
+    account.close_backend();
+    other.close_backend();
 }

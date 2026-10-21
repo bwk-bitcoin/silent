@@ -676,10 +676,12 @@ fn test_manual_coin_selection() {
 fn test_invalid_outpoint_format() {
     let account_name = test_account_name();
     let config = create_test_config(account_name.clone());
-    let mut account = Account::new(config).expect("Account creation should succeed");
+    let account = Account::new(config).expect("Account creation should succeed");
 
     assert!(
-        !account.update_coin_label("invalid_format".to_string(), "test".to_string()),
+        !account
+            .update_coin_label("invalid_format".to_string(), "test".to_string())
+            .is_ok,
         "Should reject invalid outpoint format"
     );
 

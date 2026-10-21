@@ -1,7 +1,7 @@
 #include "utils.h"
-#include "views/DashboardLayout.h"
 #include "catalog/containers/Card.h"
 #include "catalog/display/Label.h"
+#include "views/DashboardLayout.h"
 #include <QCoreApplication>
 #include <QHBoxLayout>
 #include <QLocale>
@@ -18,8 +18,9 @@ auto margin(QWidget *widget, int margin) -> QWidget * {
     return row;
 }
 
-auto dashboard(const QString &title, QWidget *widget, bool two_column) -> QWidget * {
-    return new DashboardLayout(title, widget, two_column);
+auto dashboard(const QString &title, QWidget *widget, bool two_column, QWidget *title_right)
+    -> QWidget * {
+    return new DashboardLayout(title, widget, two_column, nullptr, title_right);
 }
 
 auto frame(QWidget *widget) -> QWidget * {
@@ -57,8 +58,7 @@ auto coinsCount(uint64_t count) -> QString {
 auto mapBackendErrorSummary(const QString &raw_error) -> QString {
     auto err = raw_error.trimmed().toLower();
     if (err.contains("already spent") || err.contains("double-spend") || err.contains("spent")) {
-        return QCoreApplication::translate("view::utils",
-                                           "Transaction input conflict detected.");
+        return QCoreApplication::translate("view::utils", "Transaction input conflict detected.");
     }
     if (err.contains("address reuse") || err.contains("reuse")) {
         return QCoreApplication::translate("view::utils", "Address reuse detected.");
