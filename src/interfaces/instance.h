@@ -12,6 +12,8 @@ class IInstance {
 public:
     virtual ~IInstance() = default;
 
+    // Persist this ID, not this live handle. instanceRemoved invalidates the
+    // handle; account() is a QObject and can be observed with QPointer.
     [[nodiscard]] virtual QString id() const = 0;
     virtual void stop() = 0;
 

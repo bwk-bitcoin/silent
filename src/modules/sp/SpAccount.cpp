@@ -1,12 +1,13 @@
 #include "SpAccount.h"
 
 #include "AccountController.h"
+#include "account/Spending.h"
 
 #include <QMap>
 #include <QString>
 #include <common.h>
-#include <silent.h>
 #include <optional>
+#include <silent.h>
 #include <string>
 
 namespace {
@@ -14,22 +15,12 @@ auto toQString(rust::String value) -> QString {
     return QString::fromStdString(std::string(value.c_str()));
 }
 
-auto toPluginCoin(RustCoin coin) -> plugin::Coin {
-    plugin::Coin out;
-    out.outpoint = toQString(std::move(coin.outpoint));
-    out.value = coin.value;
-    out.height = coin.height;
-    out.label = toQString(std::move(coin.label));
-    out.spent = coin.spent;
-    out.accountType = toQString(std::move(coin.account_type));
-    return out;
-}
 } // namespace
 
 SpAccount::SpAccount(AccountController *controller) : m_controller(controller) {
     if (m_controller != nullptr) {
-        connect(m_controller, &AccountController::updateCoins, this, &SpAccount::onControllerCoinsUpdate,
-                qontrol::UNIQUE);
+        connect(m_controller, &AccountController::updateCoins, this,
+                &SpAccount::onControllerCoinsUpdate, qontrol::UNIQUE);
         connect(m_controller, &AccountController::updateBalance, this,
                 &SpAccount::onControllerBalanceUpdate, qontrol::UNIQUE);
     }
@@ -142,16 +133,21 @@ ReqId SpAccount::nextReqId() {
 
 void SpAccount::emitCoins(ReqId req_id) {
     QList<plugin::Coin> out;
-    if (m_controller == nullptr) {
+    if (m_controller == nullptr || !m_controller->getAccount().has_value()) {
         emit error(req_id == 0 ? std::nullopt : std::optional<ReqId>(req_id),
                    QStringLiteral("SP account controller missing"));
         return;
     }
 
-    auto rustCoins = m_controller->getCoins();
-    out.reserve(static_cast<qsizetype>(rustCoins.size()));
-    for (const auto &coin : rustCoins) {
-        out.append(toPluginCoin(coin));
+    auto result = m_controller->getAccount().value()->spending_coins();
+    if (!result.is_ok) {
+        emit error(req_id == 0 ? std::nullopt : std::optional<ReqId>(req_id),
+                   toQString(result.error));
+        return;
+    }
+    out.reserve(static_cast<qsizetype>(result.coins.size()));
+    for (const auto &coin : result.coins) {
+        out.append(account::spendingCoin(coin));
     }
     emit IAccount::coins(req_id, out);
 }

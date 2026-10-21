@@ -255,6 +255,10 @@ IKeys *HostImpl::keys(IModule *caller) {
         return nullptr;
     }
     auto *&handle = m_keys_handles[caller];
+    if (handle != nullptr && handle->target() != m_keys) {
+        handle->release();
+        handle = nullptr;
+    }
     if (handle == nullptr) {
         handle = new host::KeysHandle(this, caller, m_keys);
         handle->setParent(this);
@@ -265,6 +269,16 @@ IKeys *HostImpl::keys(IModule *caller) {
 auto HostImpl::keysModule() const -> IKeys * {
     assertGuiThread();
     return m_keys;
+}
+
+auto HostImpl::transactions(IModule *caller) -> ITransactions * {
+    assertGuiThread();
+    auto *&handle = m_transaction_handles[caller];
+    if (handle == nullptr) {
+        handle = new host::TransactionsHandle(this, caller);
+        handle->setParent(this);
+    }
+    return handle;
 }
 
 auto HostImpl::caller(IModule *module) -> plugin::Caller {
@@ -378,6 +392,10 @@ auto HostImpl::saveState(IModule *caller, const QByteArray &state) -> bool {
 
 void HostImpl::dropCaller(IModule *module) {
     if (auto *handle = m_keys_handles.take(module); handle != nullptr) {
+        handle->release();
+    }
+    if (auto *handle = m_transaction_handles.take(module); handle != nullptr) {
+        handle->retire();
         handle->deleteLater();
     }
     for (auto it = m_instance_handles.begin(); it != m_instance_handles.end();) {

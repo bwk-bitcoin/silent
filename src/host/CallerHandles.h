@@ -3,7 +3,9 @@
 #include "interfaces/account.h"
 #include "interfaces/instance.h"
 #include "interfaces/keys.h"
+#include "interfaces/transactions.h"
 
+#include <QHash>
 #include <QList>
 #include <QPointer>
 #include <QSet>
@@ -62,6 +64,9 @@ public:
     [[nodiscard]] QList<KeyEntry> keys(Network network) const override;
     auto newRequest() -> ReqId override;
     void cancelRequest(ReqId req_id) override;
+    void coordinate(ReqId req_id, const plugin::SigningRequest &request) override;
+    void retire();
+    void release();
     void sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
               const QStringList &descriptors, const QString &wallet_name,
               const QString &fingerprint) override;
@@ -90,6 +95,13 @@ public:
                                    const QString &descriptor) override;
 
 private slots:
+    void onTargetDestroyed();
+    void onCoordinated(ReqId req_id, const plugin::SigningResult &result);
+    void onCoordinationStarted(ReqId req_id, const plugin::SigningResult &prepared);
+    void onAttemptRetirement(const QString &session_id, plugin::RetirementStatus status,
+                             const QString &error);
+    void onRetirementFinished();
+    void onCoordinationError(ReqId req_id, SpendError kind, const QString &message);
     void onSigned(ReqId req_id, const QString &psbt_v2_hex);
     void onVerified(ReqId req_id, bool verified);
     void onSpDescriptorReady(ReqId req_id, const QString &descriptor, const QString &fingerprint);
@@ -100,16 +112,49 @@ private slots:
     void onError(std::optional<ReqId> req_id, const QString &message, plugin::SignError kind);
     void onCancelled(ReqId req_id);
 
-private:
+protected:
     // The keys module, with the caller stamped, or null after answering error() when
     // the caller may not use keys or the keys module is gone.
     [[nodiscard]] auto allowedTarget(std::optional<ReqId> req_id) const -> IKeys *;
     [[nodiscard]] auto mine(ReqId req_id) const -> bool;
+    auto finish(ReqId req_id) -> bool;
 
+private:
     HostImpl *m_host = nullptr;
     IModule *m_module = nullptr;
     QPointer<IKeys> m_target;
     QSet<ReqId> m_requests;
+    QSet<ReqId> m_submitted;
+    QHash<ReqId, plugin::SigningRequest> m_coordination_requests;
+    QHash<QString, plugin::SigningRequest> m_attempts;
+    QSet<QObject *> m_retirement_jobs;
+    bool m_releasing = false;
+};
+
+class TransactionsHandle final : public ITransactions {
+    Q_OBJECT
+public:
+    TransactionsHandle(HostImpl *host, IModule *module);
+    auto newRequest() -> ReqId override;
+    void cancelRequest(ReqId req_id) override;
+    void finalize(ReqId req_id, const plugin::SigningRequest &request) override;
+    void broadcast(ReqId req_id, Network network, const QString &endpoint,
+                   const QString &tx_hex) override;
+    void retire();
+
+public slots:
+    void onFinished();
+
+protected:
+    auto begin(ReqId req_id) -> bool;
+
+private:
+    HostImpl *m_host;
+    IModule *m_module;
+    ReqId m_next_req_id = 0;
+    QSet<ReqId> m_allocated;
+    QSet<ReqId> m_pending;
+    bool m_retired = false;
 };
 
 // The IAccount behind an InstanceHandle: forwards each request with the caller
@@ -120,6 +165,8 @@ class AccountHandle final : public IAccount {
 
 public:
     AccountHandle(HostImpl *host, IModule *module, IAccount *target);
+    ~AccountHandle() override;
+    void cancelRequest(ReqId req_id) override;
 
     [[nodiscard]] bool implemented() const override;
     ReqId name() override;
@@ -133,6 +180,8 @@ public:
 
 private slots:
     void onName(ReqId req_id, const QString &name);
+    void onAccountDestroyed();
+    void onAccountCancelled(ReqId req_id);
     void onInfo(ReqId req_id, const QMap<QString, QString> &info);
     void onCoins(ReqId req_id, const QList<plugin::Coin> &coins);
     void onBalance(ReqId req_id, plugin::Balance balance);

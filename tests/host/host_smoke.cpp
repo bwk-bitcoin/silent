@@ -28,6 +28,7 @@
 #include <silent.h>
 
 #include <AppController.h>
+#include <MainWindow.h>
 #include <host/Host.h>
 #include <host/PluginRegistry.h>
 #include <i18n/I18nManager.h>
@@ -38,9 +39,12 @@
 #include <modules/keys/DeviceName.h>
 #include <modules/keys/KeysModule.h>
 #include <modules/musig/MusigModule.h>
+#include <modules/musig/MusigPlugin.h>
 #include <modules/musig/creator/MusigCreatorModule.h>
+#include <modules/sp/SpPlugin.h>
 #include <theme/Theme.h>
 
+#include "ExternalSpendConsumer.h"
 #include "MockPlugin.h"
 #include "PriceProbe.h"
 
@@ -166,6 +170,54 @@ auto main(int argc, char *argv[]) -> int {
     qRegisterMetaType<std::optional<ReqId>>();
     i18n::I18nManager::get()->init(&app);
     auto arguments = QApplication::arguments();
+    if (arguments.size() == 3 && (arguments.at(1) == QStringLiteral("--external-spend") ||
+                                  arguments.at(1) == QStringLiteral("--external-nonce-review") ||
+                                  arguments.at(1) == QStringLiteral("--external-lifecycle"))) {
+        auto error = ::state_unlock_with_password(rust::String("consumer password"));
+        check(error.empty(), "external consumer state unlocks");
+        Host::get();
+        AppController::init();
+        Theme::init();
+        auto sp = std::make_unique<SpPlugin>();
+        auto multikey = std::make_unique<MusigPlugin>();
+        auto *spModule = sp->modules().first();
+        auto *multikeyModule = multikey->modules().first();
+        AppController::get()->registerBuiltinPlugin(std::move(sp));
+        AppController::get()->registerBuiltinPlugin(std::move(multikey));
+        AppController::get()->registerBuiltinPlugin(std::make_unique<keys::KeysModule>());
+        smoke::MockPlugin consumer;
+        auto *registry = AppController::get()->pluginRegistry();
+        registry->registerBuiltin(&consumer);
+        MainWindow window;
+        AppController::get()->start(&window);
+        auto lifecycle = arguments.at(1) == QStringLiteral("--external-lifecycle");
+        auto nonceReview =
+            lifecycle || arguments.at(1) == QStringLiteral("--external-nonce-review");
+        if (nonceReview) {
+            multikeyModule->startInstance(QStringLiteral("external-musig-rounds"));
+            multikeyModule->startInstance(QStringLiteral("external-musig-other"));
+        } else {
+            spModule->startInstance(QStringLiteral("external-sp"));
+            multikeyModule->startInstance(QStringLiteral("external-multikey"));
+        }
+        smoke::ExternalSpendConsumer probe(Host::get(), consumer.module());
+        probe.run(arguments.at(2));
+        if (lifecycle) {
+            auto *host = dynamic_cast<HostImpl *>(Host::get());
+            check(host != nullptr, "host supports registry caller teardown");
+            host->dropCaller(consumer.module());
+            probe.waitForRetirement();
+        }
+        if (nonceReview) {
+            Host::get()->removeInstance(QStringLiteral("external-musig-rounds"), multikeyModule);
+            Host::get()->removeInstance(QStringLiteral("external-musig-other"), multikeyModule);
+        } else {
+            Host::get()->removeInstance(QStringLiteral("external-sp"), spModule);
+            Host::get()->removeInstance(QStringLiteral("external-multikey"), multikeyModule);
+        }
+        std::fprintf(stdout, "external spend consumer: OK\n");
+        return gOk ? 0 : 1;
+    }
     if (arguments.size() == 4 && arguments.at(1) == QStringLiteral("--sp-signing")) {
         auto error = ::state_unlock_with_device(rust::String(arguments.at(2).toStdString()));
         check(error.empty(), "the funded SP fixture state should unlock");
@@ -199,8 +251,9 @@ auto main(int argc, char *argv[]) -> int {
 
     smoke::MockPlugin plugin;
     check(qobject_cast<IPlugin *>(&plugin) == &plugin &&
-              plugin.qt_metacast("dev.silent.IPlugin/2.0") == nullptr,
-          "mock plugin metadata exposes ABI 3 only");
+              plugin.qt_metacast("dev.silent.IPlugin/2.0") == nullptr &&
+              plugin.qt_metacast("dev.silent.IPlugin/3.0") == nullptr,
+          "mock plugin metadata exposes ABI 4 only");
     auto *module = plugin.module();
 
     PluginRegistry registry;

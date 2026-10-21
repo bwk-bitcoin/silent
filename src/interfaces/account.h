@@ -29,6 +29,11 @@ public:
     virtual ReqId descriptor() = 0;
     virtual ReqId raw(const QByteArray &request) = 0;
 
+    // Retires this request's reply. Already-running backend work may finish.
+    virtual void cancelRequest(ReqId req_id) {
+        emit cancelled(req_id);
+    }
+
     // Who makes the request underway: the host's handle stamps it around each call, so
     // read it at the start of a request. An account can enforce its own finer
     // whitelist with it.
@@ -42,6 +47,7 @@ public:
     }
 
 signals:
+    void cancelled(ReqId req_id);
     void name(ReqId req_id, QString name);
     void info(ReqId req_id, QMap<QString, QString> info);
     void coins(ReqId req_id, QList<plugin::Coin> coins);
@@ -56,4 +62,4 @@ private:
     plugin::Caller m_caller;
 };
 
-Q_DECLARE_INTERFACE(IAccount, "dev.silent.IAccount/1.0")
+Q_DECLARE_INTERFACE(IAccount, "dev.silent.IAccount/2.0")

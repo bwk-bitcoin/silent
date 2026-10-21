@@ -345,6 +345,29 @@ impl MusigAccount {
             .collect()
     }
 
+    pub fn spending_coins(&self) -> crate::ffi::SpendCoinsResult {
+        let Some(inner) = &self.inner else {
+            return Err(NOT_INITIALIZED.to_string()).into();
+        };
+        let history = inner.account.scanner().tx_history();
+        inner
+            .account
+            .scanner()
+            .coins()
+            .into_values()
+            .map(|entry| {
+                let mut coin = crate::spending::descriptor_coin(&entry.coin, inner.config.network)?;
+                let coinbase = history
+                    .iter()
+                    .find(|tx| tx.txid() == entry.coin.outpoint.txid)
+                    .map(|tx| tx.tx().is_coinbase());
+                crate::spending::set_availability(&mut coin, coinbase);
+                Ok(coin)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .into()
+    }
+
     pub fn spendable_coins(&self) -> CoinState {
         match &self.inner {
             Some(inner) => {

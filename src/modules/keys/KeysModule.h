@@ -9,6 +9,7 @@
 #include <QList>
 #include <QMap>
 #include <QPointer>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -86,10 +87,12 @@ class KeysBus final : public IKeys {
 
 public:
     explicit KeysBus(KeysModule *module, QObject *parent = nullptr);
-    ~KeysBus() override = default;
+    ~KeysBus() override;
 
     [[nodiscard]] QList<KeyEntry> keys(Network network) const override;
     auto newRequest() -> ReqId override;
+    void coordinate(ReqId req_id, const plugin::SigningRequest &request) override;
+    void cancelRequest(ReqId req_id) override;
     void sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
               const QStringList &descriptors, const QString &wallet_name,
               const QString &fingerprint) override;
@@ -118,6 +121,7 @@ public:
                                    const QString &descriptor) override;
 
 public slots:
+    void onCoordinationReleased();
     // Called by the module and its signing flows, which own every outstanding request.
     void deliverSigned(ReqId req_id, const QString &psbt_v2_hex);
     // `matched` is the device's own answer; false is a refusal, not a failure.
@@ -133,6 +137,8 @@ public slots:
 
 private:
     KeysModule *m_module = nullptr;
+    QHash<ReqId, plugin::SigningRequest> m_coordination;
+    QSet<ReqId> m_releases;
 };
 
 // Runs the keys module's blocking notification receiver on a background thread and
@@ -370,6 +376,7 @@ private slots:
 
 protected:
     enum class HotWorkKind { CreateSessions, PublishCached, Sign };
+
     struct HotWork {
         HotWorkKind kind;
         ReqId req_id;
@@ -380,6 +387,7 @@ protected:
         QString psbt;
         QString error;
     };
+
     void createModule();
     void teardownModule();
     void refreshLiveDevices();

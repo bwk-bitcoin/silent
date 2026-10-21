@@ -1,4 +1,6 @@
 #include "KeysModule.h"
+#include "account/Spending.h"
+#include "account/TransactionJob.h"
 
 #include "DeviceName.h"
 #include "KeysTab.h"
@@ -60,6 +62,13 @@ Network KeysModule::s_network = Network::Bitcoin;
 KeysBus::KeysBus(KeysModule *module, QObject *parent) : IKeys(parent), m_module(module) {
 }
 
+KeysBus::~KeysBus() {
+    auto requests = m_coordination.keys();
+    for (auto reqId : requests) {
+        cancelRequest(reqId);
+    }
+}
+
 QList<KeyEntry> KeysBus::keys(Network network) const {
     QList<KeyEntry> entries;
     NetworkScope scope(m_module, network);
@@ -71,6 +80,101 @@ QList<KeyEntry> KeysBus::keys(Network network) const {
 
 auto KeysBus::newRequest() -> ReqId {
     return m_module->nextReqId();
+}
+
+void KeysBus::coordinate(ReqId req_id, const plugin::SigningRequest &request) {
+    if (m_coordination.contains(req_id) || m_releases.contains(req_id)) {
+        emit coordinationError(req_id, SpendError::InvalidRequest,
+                               QStringLiteral("request already running"));
+        return;
+    }
+    if (request.stage == SigningStage::Release) {
+        m_releases.insert(req_id);
+        auto *job = new TransactionJob(req_id, TransactionJob::Operation::Release, request);
+        emit attemptRetirement(request.sessionId, plugin::RetirementStatus::Pending, {});
+        connect(job, &QThread::finished, this, &KeysBus::onCoordinationReleased, qontrol::UNIQUE);
+        connect(job, &QThread::finished, job, &QObject::deleteLater, qontrol::UNIQUE);
+        job->start();
+        return;
+    }
+    auto prepared = ::coordination_prepare(request.network, request.psbtV2Hex.toStdString(),
+                                           account::selectedInputs(request.inputs), request.stage);
+    if (!prepared.is_ok) {
+        emit coordinationError(req_id, prepared.kind,
+                               QString::fromStdString(std::string(prepared.error)));
+        return;
+    }
+    if (!request.sessionId.isEmpty() &&
+        request.sessionId != QString::fromStdString(std::string(prepared.session_id))) {
+        emit coordinationError(req_id, SpendError::Integrity,
+                               QStringLiteral("session identity does not match the PSBT"));
+        return;
+    }
+    if (request.stage == SigningStage::CompleteSpOutputs ||
+        request.stage == SigningStage::VerifySpContributions) {
+        emit coordinated(req_id,
+                         {.psbtV2Hex = QString::fromStdString(std::string(prepared.psbt_v2_hex)),
+                          .progress = prepared.progress,
+                          .sessionId = QString::fromStdString(std::string(prepared.session_id))});
+        return;
+    }
+    auto active = request;
+    active.psbtV2Hex = QString::fromStdString(std::string(prepared.psbt_v2_hex));
+    active.sessionId = QString::fromStdString(std::string(prepared.session_id));
+    m_coordination.insert(req_id, active);
+    emit coordinationStarted(req_id, {.psbtV2Hex = active.psbtV2Hex,
+                                      .progress = SigningProgress::Partial,
+                                      .sessionId = active.sessionId});
+    QStringList descriptors;
+    for (const auto &input : request.inputs) {
+        if (!input.variant.descriptor.isEmpty() &&
+            !descriptors.contains(input.variant.descriptor)) {
+            descriptors.append(input.variant.descriptor);
+        }
+    }
+    sign(req_id, request.network, active.psbtV2Hex, descriptors, request.walletName,
+         request.fingerprint);
+}
+
+void KeysBus::cancelRequest(ReqId req_id) {
+    m_releases.remove(req_id);
+    if (m_coordination.contains(req_id)) {
+        auto request = m_coordination.take(req_id);
+        auto *job = new TransactionJob(req_id, TransactionJob::Operation::Release, request);
+        emit attemptRetirement(request.sessionId, plugin::RetirementStatus::Pending, {});
+        connect(job, &QThread::finished, this, &KeysBus::onCoordinationReleased, qontrol::UNIQUE);
+        connect(job, &QThread::finished, job, &QObject::deleteLater, qontrol::UNIQUE);
+        job->start();
+    }
+    emit requestCancelled(req_id);
+}
+
+void KeysBus::onCoordinationReleased() {
+    auto *job = dynamic_cast<TransactionJob *>(sender());
+    if (job == nullptr) {
+        return;
+    }
+    const auto &result = job->result();
+    emit attemptRetirement(job->sessionId(),
+                           result.is_ok ? plugin::RetirementStatus::Retired
+                                        : plugin::RetirementStatus::Failed,
+                           QString::fromStdString(std::string(result.error)));
+    if (!m_releases.remove(job->requestId())) {
+        if (!result.is_ok) {
+            qWarning() << "MuSig retirement failed:"
+                       << QString::fromStdString(std::string(result.error));
+        }
+        return;
+    }
+    if (!result.is_ok) {
+        emit coordinationError(job->requestId(), result.kind,
+                               QString::fromStdString(std::string(result.error)));
+    } else {
+        emit coordinated(job->requestId(),
+                         {.psbtV2Hex = QString::fromStdString(std::string(result.psbt_v2_hex)),
+                          .progress = result.progress,
+                          .sessionId = QString::fromStdString(std::string(result.session_id))});
+    }
 }
 
 void KeysBus::sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
@@ -147,6 +251,24 @@ void KeysBus::checkDescriptorRegistered(ReqId req_id, Network network, const QSt
 }
 
 void KeysBus::deliverSigned(ReqId req_id, const QString &psbt_v2_hex) {
+    if (m_coordination.contains(req_id)) {
+        auto request = m_coordination.value(req_id);
+        auto accepted =
+            ::coordination_accept(request.psbtV2Hex.toStdString(), psbt_v2_hex.toStdString(),
+                                  account::selectedInputs(request.inputs), request.stage);
+        if (!accepted.is_ok) {
+            cancelRequest(req_id);
+            emit coordinationError(req_id, accepted.kind,
+                                   QString::fromStdString(std::string(accepted.error)));
+        } else {
+            m_coordination.remove(req_id);
+            emit coordinated(
+                req_id, {.psbtV2Hex = QString::fromStdString(std::string(accepted.psbt_v2_hex)),
+                         .progress = accepted.progress,
+                         .sessionId = QString::fromStdString(std::string(accepted.session_id))});
+        }
+        return;
+    }
     emit signed_(req_id, psbt_v2_hex);
 }
 
@@ -156,10 +278,21 @@ void KeysBus::deliverVerified(ReqId req_id, bool matched) {
 
 void KeysBus::deliverError(std::optional<ReqId> req_id, const QString &message,
                            plugin::SignError kind) {
+    if (req_id.has_value() && m_coordination.contains(*req_id)) {
+        cancelRequest(*req_id);
+        emit coordinationError(*req_id,
+                               kind == plugin::SignError::MusigSession ? SpendError::LostSession
+                                                                       : SpendError::Other,
+                               message);
+        return;
+    }
     emit error(req_id, message, kind);
 }
 
 void KeysBus::deliverCancelled(ReqId req_id) {
+    if (m_coordination.contains(req_id)) {
+        cancelRequest(req_id);
+    }
     emit cancelled(req_id);
 }
 
@@ -529,8 +662,8 @@ void KeysModule::signOnDevice(ReqId req_id, const QString &psbt_v2_hex, const QS
     }
     // Deleted once it answers, or with this module.
     auto *sign = new flow::DeviceSign(this, device.has_value() ? device->signer : nullptr,
-                                     device.has_value() ? device->instanceId : QString(),
-                                     psbt_v2_hex, fingerprint, this);
+                                      device.has_value() ? device->instanceId : QString(),
+                                      psbt_v2_hex, fingerprint, this);
     m_device_signs.insert(
         sign, {.bus_req = req_id,
                .device = device.has_value() ? deviceName(*device->signer) : fingerprint});
@@ -855,8 +988,9 @@ void KeysModule::onMnemonicRevealFinished(ReqId req_id, const MnemonicResult &re
     emit mnemonicRevealed(req_id, result);
 }
 
-void KeysModule::createHotSessions(ReqId req_id, const QString &fingerprint, const QString &password,
-                                    const QString &descriptor, unsigned int quantity) {
+void KeysModule::createHotSessions(ReqId req_id, const QString &fingerprint,
+                                   const QString &password, const QString &descriptor,
+                                   unsigned int quantity) {
     if (rust() == nullptr) {
         emit hotSessionsCreated(req_id, false, TR("keys-module-not-ready"), false);
         return;
@@ -892,16 +1026,16 @@ void KeysModule::publishHotCached(ReqId req_id, const QString &fingerprint,
     auto result = std::make_shared<HotWork>();
     result->kind = HotWorkKind::PublishCached;
     result->req_id = req_id;
-    auto *thread = QThread::create([result, material = material.into_raw(),
-                                    psbt = psbt_v2_hex.toStdString()] {
-        auto box = rust::Box<HotMaterial>::from_raw(material);
-        auto cached = ::hot_cached_nonces(*box, psbt);
-        result->is_ok = cached.is_ok;
-        result->needs_password = cached.needs_password;
-        result->psbt = KeysModule::toQt(cached.psbt_v2_hex);
-        result->error = KeysModule::toQt(cached.error);
-        result->musig_session = cached.musig_session;
-    });
+    auto *thread =
+        QThread::create([result, material = material.into_raw(), psbt = psbt_v2_hex.toStdString()] {
+            auto box = rust::Box<HotMaterial>::from_raw(material);
+            auto cached = ::hot_cached_nonces(*box, psbt);
+            result->is_ok = cached.is_ok;
+            result->needs_password = cached.needs_password;
+            result->psbt = KeysModule::toQt(cached.psbt_v2_hex);
+            result->error = KeysModule::toQt(cached.error);
+            result->musig_session = cached.musig_session;
+        });
     m_hot_work.insert(thread, result);
     connect(thread, &QThread::finished, this, &KeysModule::onHotWorkFinished, qontrol::UNIQUE);
     connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
@@ -922,19 +1056,19 @@ void KeysModule::signHot(ReqId req_id, const QString &fingerprint, const QString
     auto result = std::make_shared<HotWork>();
     result->kind = HotWorkKind::Sign;
     result->req_id = req_id;
-    auto *thread = QThread::create([result, material = material.into_raw(),
-                                    password = password.toStdString(),
-                                    psbt = psbt_v2_hex.toStdString()]() mutable {
-        auto box = rust::Box<HotMaterial>::from_raw(material);
-        auto signedPsbt = ::hot_sign(*box, password, psbt);
-        password.assign(password.size(), '\0');
-        password.clear();
-        result->is_ok = signedPsbt.is_ok;
-        result->psbt = KeysModule::toQt(signedPsbt.psbt_v2_hex);
-        result->error = KeysModule::toQt(signedPsbt.error);
-        result->wrong_password = signedPsbt.wrong_password;
-        result->musig_session = signedPsbt.musig_session;
-    });
+    auto *thread =
+        QThread::create([result, material = material.into_raw(), password = password.toStdString(),
+                         psbt = psbt_v2_hex.toStdString()]() mutable {
+            auto box = rust::Box<HotMaterial>::from_raw(material);
+            auto signedPsbt = ::hot_sign(*box, password, psbt);
+            password.assign(password.size(), '\0');
+            password.clear();
+            result->is_ok = signedPsbt.is_ok;
+            result->psbt = KeysModule::toQt(signedPsbt.psbt_v2_hex);
+            result->error = KeysModule::toQt(signedPsbt.error);
+            result->wrong_password = signedPsbt.wrong_password;
+            result->musig_session = signedPsbt.musig_session;
+        });
     m_hot_work.insert(thread, result);
     connect(thread, &QThread::finished, this, &KeysModule::onHotWorkFinished, qontrol::UNIQUE);
     connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
@@ -956,14 +1090,14 @@ void KeysModule::onHotWorkFinished() {
                             work->error, work->musig_session);
         return;
     case HotWorkKind::Sign:
-        emit hotSigned(work->req_id, work->is_ok, work->psbt, work->error,
-                       work->wrong_password, work->musig_session);
+        emit hotSigned(work->req_id, work->is_ok, work->psbt, work->error, work->wrong_password,
+                       work->musig_session);
         return;
     }
 }
 
 void KeysModule::onHotSignFinished(ReqId req_id, bool is_ok, QString psbt_v2_hex, QString error,
-                                    bool wrong_password, bool musig_session) {
+                                   bool wrong_password, bool musig_session) {
     if (is_ok) {
         emit nonceSessionsChanged();
     }

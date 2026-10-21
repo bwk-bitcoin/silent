@@ -980,6 +980,19 @@ enum class QrErrorKind : ::std::uint8_t;
 struct RustFeePreferences;
 struct Notification;
 struct RustCoin;
+enum class SpendLockKind : ::std::uint8_t;
+enum class SpendMaturity : ::std::uint8_t;
+enum class SpendAvailability : ::std::uint8_t;
+enum class SpendCoinStatus : ::std::uint8_t;
+struct RustSpendLock;
+struct RustSpendVariant;
+struct RustSpendCoin;
+struct SpendCoinsResult;
+enum class SigningStage : ::std::uint8_t;
+enum class SigningProgress : ::std::uint8_t;
+enum class SpendError : ::std::uint8_t;
+struct RustSelectedInput;
+struct CoordinationResult;
 struct CoinState;
 struct RustTx;
 struct Output;
@@ -1273,6 +1286,170 @@ struct RustCoin final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_RustCoin
+
+#ifndef CXXBRIDGE1_ENUM_SpendLockKind
+#define CXXBRIDGE1_ENUM_SpendLockKind
+enum class SpendLockKind : ::std::uint8_t {
+  None = 0,
+  AbsoluteHeight = 1,
+  AbsoluteTime = 2,
+  RelativeBlocks = 3,
+  RelativeTime512 = 4,
+};
+#endif // CXXBRIDGE1_ENUM_SpendLockKind
+
+#ifndef CXXBRIDGE1_ENUM_SpendMaturity
+#define CXXBRIDGE1_ENUM_SpendMaturity
+enum class SpendMaturity : ::std::uint8_t {
+  Mature = 0,
+  Immature = 1,
+  Unknown = 2,
+};
+#endif // CXXBRIDGE1_ENUM_SpendMaturity
+
+#ifndef CXXBRIDGE1_ENUM_SpendAvailability
+#define CXXBRIDGE1_ENUM_SpendAvailability
+enum class SpendAvailability : ::std::uint8_t {
+  Available = 0,
+  Immature = 1,
+  Unknown = 2,
+  Spent = 3,
+};
+#endif // CXXBRIDGE1_ENUM_SpendAvailability
+
+#ifndef CXXBRIDGE1_ENUM_SpendCoinStatus
+#define CXXBRIDGE1_ENUM_SpendCoinStatus
+enum class SpendCoinStatus : ::std::uint8_t {
+  Unconfirmed = 0,
+  ConfirmedUnverified = 1,
+  Confirmed = 2,
+  BeingSpent = 3,
+  Spent = 4,
+};
+#endif // CXXBRIDGE1_ENUM_SpendCoinStatus
+
+#ifndef CXXBRIDGE1_STRUCT_RustSpendLock
+#define CXXBRIDGE1_STRUCT_RustSpendLock
+struct RustSpendLock final {
+  ::SpendLockKind kind;
+  ::std::uint32_t value CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_RustSpendLock
+
+#ifndef CXXBRIDGE1_STRUCT_RustSpendVariant
+#define CXXBRIDGE1_STRUCT_RustSpendVariant
+struct RustSpendVariant final {
+  ::rust::String path_id;
+  ::std::uint32_t keychain CXX_DEFAULT_VALUE(0);
+  ::std::uint32_t derivation_index CXX_DEFAULT_VALUE(0);
+  ::rust::String display;
+  ::rust::String psbt_v2_hex;
+  ::rust::String descriptor;
+  ::rust::String sp_spend_key;
+  ::rust::Vec<::rust::String> required_keys;
+  ::rust::Vec<::rust::String> required_preimages;
+  ::std::uint64_t satisfaction_wu CXX_DEFAULT_VALUE(0);
+  ::RustSpendLock absolute_lock;
+  ::RustSpendLock relative_lock;
+  ::SpendMaturity maturity;
+  ::SpendAvailability availability;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_RustSpendVariant
+
+#ifndef CXXBRIDGE1_STRUCT_RustSpendCoin
+#define CXXBRIDGE1_STRUCT_RustSpendCoin
+struct RustSpendCoin final {
+  ::rust::String outpoint;
+  ::rust::String account_type;
+  ::Network network;
+  ::std::uint64_t value CXX_DEFAULT_VALUE(0);
+  ::std::uint64_t height CXX_DEFAULT_VALUE(0);
+  bool has_height CXX_DEFAULT_VALUE(false);
+  ::rust::String label;
+  ::SpendCoinStatus status;
+  ::rust::Vec<::RustSpendVariant> variants;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_RustSpendCoin
+
+#ifndef CXXBRIDGE1_STRUCT_SpendCoinsResult
+#define CXXBRIDGE1_STRUCT_SpendCoinsResult
+struct SpendCoinsResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::Vec<::RustSpendCoin> coins;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SpendCoinsResult
+
+#ifndef CXXBRIDGE1_ENUM_SigningStage
+#define CXXBRIDGE1_ENUM_SigningStage
+enum class SigningStage : ::std::uint8_t {
+  Signatures = 0,
+  MusigNonces = 1,
+  MusigSignatures = 2,
+  SpContributions = 3,
+  VerifySpContributions = 4,
+  CompleteSpOutputs = 5,
+  SpCompleteAndSign = 6,
+  Release = 7,
+};
+#endif // CXXBRIDGE1_ENUM_SigningStage
+
+#ifndef CXXBRIDGE1_ENUM_SigningProgress
+#define CXXBRIDGE1_ENUM_SigningProgress
+enum class SigningProgress : ::std::uint8_t {
+  Partial = 0,
+  StageComplete = 1,
+  Complete = 2,
+};
+#endif // CXXBRIDGE1_ENUM_SigningProgress
+
+#ifndef CXXBRIDGE1_ENUM_SpendError
+#define CXXBRIDGE1_ENUM_SpendError
+enum class SpendError : ::std::uint8_t {
+  Other = 0,
+  Unsupported = 1,
+  InvalidRequest = 2,
+  Integrity = 3,
+  LostSession = 4,
+  Permission = 5,
+  Cancelled = 6,
+};
+#endif // CXXBRIDGE1_ENUM_SpendError
+
+#ifndef CXXBRIDGE1_STRUCT_RustSelectedInput
+#define CXXBRIDGE1_STRUCT_RustSelectedInput
+struct RustSelectedInput final {
+  ::std::uint32_t input_index CXX_DEFAULT_VALUE(0);
+  ::Network network;
+  ::RustSpendVariant variant;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_RustSelectedInput
+
+#ifndef CXXBRIDGE1_STRUCT_CoordinationResult
+#define CXXBRIDGE1_STRUCT_CoordinationResult
+struct CoordinationResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::SpendError kind;
+  ::rust::String psbt_v2_hex;
+  ::SigningProgress progress;
+  ::rust::String tx_hex;
+  ::rust::String txid;
+  ::rust::String session_id;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_CoordinationResult
 
 #ifndef CXXBRIDGE1_STRUCT_CoinState
 #define CXXBRIDGE1_STRUCT_CoinState
@@ -2600,6 +2777,8 @@ struct Account final : public ::rust::Opaque {
   // Get all coins (spent and unspent).
   ::rust::Vec<::RustCoin> coins() const noexcept;
 
+  ::SpendCoinsResult spending_coins() const noexcept;
+
   // Get spendable coins summary.
   ::CoinState spendable_coins() const noexcept;
 
@@ -3146,6 +3325,7 @@ struct MusigAccount final : public ::rust::Opaque {
   ::std::uint64_t balance() const noexcept;
   ::rust::String new_addr() noexcept;
   ::rust::Vec<::RustCoin> coins() const noexcept;
+  ::SpendCoinsResult spending_coins() const noexcept;
   ::CoinState spendable_coins() const noexcept;
   bool update_coin_label(::rust::String outpoint, ::rust::String label) noexcept;
   ::rust::Vec<::RustTx> payment_history() const noexcept;
@@ -3207,6 +3387,16 @@ private:
   };
 };
 #endif // CXXBRIDGE1_STRUCT_LedgerNonceFetch
+
+::CoordinationResult coordination_prepare(::Network network, ::rust::Str psbt, ::rust::Vec<::RustSelectedInput> inputs, ::SigningStage stage) noexcept;
+
+::CoordinationResult coordination_accept(::rust::Str original, ::rust::Str returned, ::rust::Vec<::RustSelectedInput> inputs, ::SigningStage stage) noexcept;
+
+::CoordinationResult coordination_release(::Network network, ::rust::Str psbt, ::rust::Vec<::RustSelectedInput> inputs, ::rust::Str session_id) noexcept;
+
+::CoordinationResult transaction_finalize(::Network network, ::rust::Str psbt, ::rust::Vec<::RustSelectedInput> inputs, ::rust::Str session_id) noexcept;
+
+::CoordinationResult transaction_broadcast(::Network network, ::rust::Str endpoint, ::rust::Str tx_hex) noexcept;
 
 // `m/87'/coin'/account'` for `network`.
 ::rust::String bip87_account_path(::Network network, ::std::uint32_t account) noexcept;

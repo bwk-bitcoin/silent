@@ -319,6 +319,50 @@ impl Account {
             .collect()
     }
 
+    pub fn spending_coins(&self) -> crate::ffi::SpendCoinsResult {
+        self.export_spending_coins().into()
+    }
+
+    fn export_spending_coins(&self) -> Result<Vec<crate::ffi::RustSpendCoin>, String> {
+        let inner = self.inner.as_ref().ok_or("Account not initialized")?;
+        let network = inner.network.into();
+        let account_index =
+            bitcoin::bip32::ChildNumber::from_hardened_idx(0).map_err(|e| e.to_string())?;
+        let source = inner.account.mnemonic_fingerprint().map(|fingerprint| {
+            (
+                fingerprint,
+                bwk_sp::receiver::spend_path(inner.network, account_index),
+            )
+        });
+        let spend_pk = inner.account.sp_receiver().spend_pubkey();
+        let mut coins = Vec::new();
+        for (outpoint, entry) in inner.account.coins() {
+            let mut coin = bwk_sp::account::sp_coin_entry_to_coin(outpoint, &entry);
+            coin.label = inner.account.get_coin_label(&outpoint);
+            coins.push(crate::spending::sp_coin(
+                &coin,
+                network,
+                spend_pk,
+                source.clone(),
+            )?);
+        }
+        for scanner in inner.account.scanners() {
+            let history = scanner.tx_history();
+            for entry in scanner.coins().into_values() {
+                let mut coin = entry.coin;
+                coin.label = inner.account.get_coin_label(&coin.outpoint);
+                let mut exported = crate::spending::descriptor_coin(&coin, network)?;
+                let coinbase = history
+                    .iter()
+                    .find(|tx| tx.txid() == coin.outpoint.txid)
+                    .map(|tx| tx.tx().is_coinbase());
+                crate::spending::set_availability(&mut exported, coinbase);
+                coins.push(exported);
+            }
+        }
+        Ok(coins)
+    }
+
     /// Get spendable coins summary (SP + sub-accounts).
     pub fn spendable_coins(&self) -> CoinState {
         match &self.inner {

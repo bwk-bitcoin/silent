@@ -8,6 +8,7 @@ pub mod backup;
 pub mod bbqr;
 pub mod camera;
 pub mod config;
+pub mod coordination;
 pub mod hwi;
 pub mod hwi_config;
 pub mod image;
@@ -16,6 +17,7 @@ pub mod musig;
 pub mod plugin_bundle;
 pub mod policy;
 pub mod saved_psbt;
+pub mod spending;
 pub mod state_crypt;
 pub mod sync_estimator;
 
@@ -188,6 +190,132 @@ mod ffi {
         pub label: String,
         pub spent: bool,
         pub account_type: String,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum SpendLockKind {
+        None,
+        AbsoluteHeight,
+        AbsoluteTime,
+        RelativeBlocks,
+        RelativeTime512,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum SpendMaturity {
+        Mature,
+        Immature,
+        Unknown,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum SpendAvailability {
+        Available,
+        Immature,
+        Unknown,
+        Spent,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum SpendCoinStatus {
+        Unconfirmed,
+        ConfirmedUnverified,
+        Confirmed,
+        BeingSpent,
+        Spent,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct RustSpendLock {
+        pub kind: SpendLockKind,
+        pub value: u32,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct RustSpendVariant {
+        pub path_id: String,
+        pub keychain: u32,
+        pub derivation_index: u32,
+        pub display: String,
+        pub psbt_v2_hex: String,
+        pub descriptor: String,
+        pub sp_spend_key: String,
+        pub required_keys: Vec<String>,
+        pub required_preimages: Vec<String>,
+        pub satisfaction_wu: u64,
+        pub absolute_lock: RustSpendLock,
+        pub relative_lock: RustSpendLock,
+        pub maturity: SpendMaturity,
+        pub availability: SpendAvailability,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct RustSpendCoin {
+        pub outpoint: String,
+        pub account_type: String,
+        pub network: Network,
+        pub value: u64,
+        pub height: u64,
+        pub has_height: bool,
+        pub label: String,
+        pub status: SpendCoinStatus,
+        pub variants: Vec<RustSpendVariant>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct SpendCoinsResult {
+        pub is_ok: bool,
+        pub error: String,
+        pub coins: Vec<RustSpendCoin>,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum SigningStage {
+        Signatures,
+        MusigNonces,
+        MusigSignatures,
+        SpContributions,
+        VerifySpContributions,
+        CompleteSpOutputs,
+        SpCompleteAndSign,
+        Release,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum SigningProgress {
+        Partial,
+        StageComplete,
+        Complete,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum SpendError {
+        Other,
+        Unsupported,
+        InvalidRequest,
+        Integrity,
+        LostSession,
+        Permission,
+        Cancelled,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct RustSelectedInput {
+        pub input_index: u32,
+        pub network: Network,
+        pub variant: RustSpendVariant,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct CoordinationResult {
+        pub is_ok: bool,
+        pub error: String,
+        pub kind: SpendError,
+        pub psbt_v2_hex: String,
+        pub progress: SigningProgress,
+        pub tx_hex: String,
+        pub txid: String,
+        pub session_id: String,
     }
 
     /// Summary of spendable coins.
@@ -1083,6 +1211,35 @@ mod ffi {
     }
 
     extern "Rust" {
+        fn coordination_prepare(
+            network: Network,
+            psbt: &str,
+            inputs: Vec<RustSelectedInput>,
+            stage: SigningStage,
+        ) -> CoordinationResult;
+        fn coordination_accept(
+            original: &str,
+            returned: &str,
+            inputs: Vec<RustSelectedInput>,
+            stage: SigningStage,
+        ) -> CoordinationResult;
+        fn coordination_release(
+            network: Network,
+            psbt: &str,
+            inputs: Vec<RustSelectedInput>,
+            session_id: &str,
+        ) -> CoordinationResult;
+        fn transaction_finalize(
+            network: Network,
+            psbt: &str,
+            inputs: Vec<RustSelectedInput>,
+            session_id: &str,
+        ) -> CoordinationResult;
+        fn transaction_broadcast(
+            network: Network,
+            endpoint: &str,
+            tx_hex: &str,
+        ) -> CoordinationResult;
         /// `m/87'/coin'/account'` for `network`.
         fn bip87_account_path(network: Network, account: u32) -> String;
         /// `target` rounded up to the grid a renewable absolute timelock sits on.
@@ -1489,6 +1646,7 @@ mod ffi {
 
         /// Get all coins (spent and unspent).
         fn coins(self: &Account) -> Vec<RustCoin>;
+        fn spending_coins(self: &Account) -> SpendCoinsResult;
 
         /// Get spendable coins summary.
         fn spendable_coins(self: &Account) -> CoinState;
@@ -2046,6 +2204,7 @@ mod ffi {
         fn balance(self: &MusigAccount) -> u64;
         fn new_addr(self: &mut MusigAccount) -> String;
         fn coins(self: &MusigAccount) -> Vec<RustCoin>;
+        fn spending_coins(self: &MusigAccount) -> SpendCoinsResult;
         fn spendable_coins(self: &MusigAccount) -> CoinState;
         fn update_coin_label(self: &mut MusigAccount, outpoint: String, label: String) -> bool;
         fn payment_history(self: &MusigAccount) -> Vec<RustTx>;
@@ -2604,16 +2763,23 @@ pub use config::{
     config_from_file, delete_config, list_configs, new_config, segwit_descriptor_for, set_datadir,
     taproot_descriptor_for, Config, CONFIG_FILE,
 };
+pub use coordination::{
+    coordination_accept, coordination_prepare, coordination_release, transaction_broadcast,
+    transaction_finalize,
+};
 pub use ffi::{
-    BackendInfo, CameraFrameResult, CameraListResult, FingerprintsResult, KeyDescriptor, KeyDevice,
-    KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice,
-    LogLevel, MnemonicResult, MusigFinalizeResult, MusigRound, MusigSpendLeaf, Network,
-    Notification, NotificationFlag, Output, PolicyCompileResult, PolicyKey, PolicyKeyType,
+    BackendInfo, CameraFrameResult, CameraListResult, CoordinationResult, FingerprintsResult,
+    KeyDescriptor, KeyDevice, KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind, KeyUnusableReason,
+    KeyXpub, LiveDevice, LogLevel, MnemonicResult, MusigFinalizeResult, MusigRound, MusigSpendLeaf,
+    Network, Notification, NotificationFlag, Output, PolicyCompileResult, PolicyKey, PolicyKeyType,
     PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey, PolicyReviewPath, PolicySemantic,
     PolicySpec, PsbtFileResult, PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult,
-    QrResponseKind, RegtestDefaults, SavedPsbtAttempt, SavedPsbtEntry, SavedPsbtInput,
-    SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore,
-    SignResult, SigningCandidate, SigningPlan, TransactionSimulation, TransactionTemplate,
+    QrResponseKind, RegtestDefaults, RustSelectedInput, RustSpendCoin, RustSpendLock,
+    RustSpendVariant, SavedPsbtAttempt, SavedPsbtEntry, SavedPsbtInput, SavedPsbtList,
+    SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore, SignResult,
+    SigningCandidate, SigningPlan, SigningProgress, SigningStage, SpendAvailability,
+    SpendCoinStatus, SpendCoinsResult, SpendError, SpendLockKind, SpendMaturity,
+    TransactionSimulation, TransactionTemplate,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{

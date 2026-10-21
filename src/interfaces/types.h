@@ -6,6 +6,7 @@
 #include <QtGlobal>
 #include <cstdint>
 #include <optional>
+#include <silent.h>
 
 using ReqId = quint64;
 
@@ -14,6 +15,32 @@ class ISigner;
 
 namespace plugin {
 
+struct SpendLock {
+    SpendLockKind kind = SpendLockKind::None;
+    quint32 value{};
+};
+
+struct SpendVariant {
+    QString pathId;
+    quint32 keychain{};
+    quint32 derivationIndex{};
+    QString display;
+    // PSBTv2, one input and no outputs. Merge maps with conflict detection, not combine().
+    QString psbtV2Hex;
+    QString descriptor;
+    // Set instead of descriptor for SP; contains no scan secret.
+    QString spSpendKey;
+    QList<QString> requiredKeys;
+    QList<QString> requiredPreimages;
+    // Added WU over empty scriptSig/witness, including witness count; no base input/marker/flag.
+    quint64 satisfactionWu{};
+    SpendLock absoluteLock;
+    SpendLock relativeLock;
+    // Timelocks only, not coinbase maturity or signer availability.
+    SpendMaturity maturity = SpendMaturity::Unknown;
+    SpendAvailability availability = SpendAvailability::Unknown;
+};
+
 struct Coin {
     QString outpoint;
     quint64 value{};
@@ -21,7 +48,35 @@ struct Coin {
     QString label;
     bool spent{};
     QString accountType;
+    Network network = Network::Bitcoin;
+    SpendCoinStatus status = SpendCoinStatus::Unconfirmed;
+    std::optional<quint64> confirmationHeight;
+    QList<SpendVariant> variants;
 };
+
+struct SelectedInput {
+    quint32 inputIndex{};
+    Network network = Network::Bitcoin;
+    SpendVariant variant;
+};
+
+struct SigningRequest {
+    Network network = Network::Bitcoin;
+    SigningStage stage = SigningStage::Signatures;
+    QString psbtV2Hex;
+    QList<SelectedInput> inputs;
+    QString walletName;
+    QString fingerprint;
+    QString sessionId;
+};
+
+struct SigningResult {
+    QString psbtV2Hex;
+    SigningProgress progress = SigningProgress::Partial;
+    QString sessionId;
+};
+
+enum class RetirementStatus { Pending, Retired, Failed };
 
 struct Balance {
     quint64 confirmed{};
@@ -78,3 +133,6 @@ Q_DECLARE_METATYPE(plugin::Balance)
 Q_DECLARE_METATYPE(QList<plugin::Coin>)
 Q_DECLARE_METATYPE(std::optional<ReqId>)
 Q_DECLARE_METATYPE(plugin::SignError)
+Q_DECLARE_METATYPE(plugin::SigningResult)
+Q_DECLARE_METATYPE(plugin::RetirementStatus)
+Q_DECLARE_METATYPE(SpendError)

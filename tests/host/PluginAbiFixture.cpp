@@ -1,4 +1,4 @@
-#ifdef SILENT_ABI2_FIXTURE
+#if defined(SILENT_ABI2_FIXTURE) || defined(SILENT_ABI3_FIXTURE)
 #include "legacy/ModuleV2.h"
 #else
 #include "interfaces/module.h"
@@ -11,16 +11,16 @@ class Q_DECL_HIDDEN PluginAbiFixture final : public QObject, public IPlugin {
 
 public:
     [[nodiscard]] auto meta() const -> QMap<QString, QString> override {
-#ifdef SILENT_ABI2_FIXTURE
-        qFatal("registry must reject ABI 2 before calling plugin virtual methods");
+#if defined(SILENT_ABI2_FIXTURE) || defined(SILENT_ABI3_FIXTURE)
+        qFatal("registry must reject old ABI before calling plugin virtual methods");
 #else
         return {};
 #endif
     }
 
     [[nodiscard]] auto modules() const -> QList<IModule *> override {
-#ifdef SILENT_ABI2_FIXTURE
-        qFatal("registry must reject ABI 2 before discovering modules or feeds");
+#if defined(SILENT_ABI2_FIXTURE) || defined(SILENT_ABI3_FIXTURE)
+        qFatal("registry must reject old ABI before discovering modules or feeds");
 #else
         return {};
 #endif

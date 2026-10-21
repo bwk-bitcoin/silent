@@ -53,10 +53,15 @@ public:
     // Allocates a request id. Callers must call this before every request below,
     // store the id, then call the request: an answer may arrive during the call.
     virtual auto newRequest() -> ReqId = 0;
+
     // Retires user interaction for this request. Already-running I/O may finish.
     virtual void cancelRequest(ReqId req_id) {
         emit requestCancelled(req_id);
     }
+
+    // One explicit stage, independently selected policy/path per input. Release retires
+    // every local MuSig allocation for this attempt before returning a fresh envelope.
+    virtual void coordinate(ReqId req_id, const plugin::SigningRequest &request) = 0;
     // Each request below names the network of the keys it needs (the account's), which
     // need not be the one the Keys tab shows.
     // Signs the PSBT with every key the descriptors need, in the order the module
@@ -130,6 +135,12 @@ public:
     }
 
 signals:
+    // Nonterminal: a validated attempt exists before a route may allocate nonces.
+    void coordinationStarted(ReqId req_id, plugin::SigningResult prepared);
+    // Separate from request failure: only Retired confirms nonce cleanup.
+    void attemptRetirement(QString session_id, plugin::RetirementStatus status, QString error);
+    void coordinated(ReqId req_id, plugin::SigningResult result);
+    void coordinationError(ReqId req_id, SpendError kind, QString message);
     void requestCancelled(ReqId req_id);
     // NOLINTNEXTLINE(readability-identifier-naming)
     void signed_(ReqId req_id, QString psbt_v2_hex);
@@ -155,4 +166,4 @@ private:
     plugin::Caller m_caller;
 };
 
-Q_DECLARE_INTERFACE(IKeys, "dev.silent.IKeys/1.0")
+Q_DECLARE_INTERFACE(IKeys, "dev.silent.IKeys/2.0")

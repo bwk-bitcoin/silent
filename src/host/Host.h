@@ -35,6 +35,7 @@ public:
     void registerPriceSource(const QString &instance_id, const QString &plugin_id);
     void setKeys(IKeys *keys, IModule *owner) override;
     [[nodiscard]] IKeys *keys(IModule *caller) override;
+    [[nodiscard]] auto transactions(IModule *caller) -> ITransactions * override;
     auto requestAccess(IModule *caller, plugin::Access wanted) -> plugin::Access override;
     auto loadState(IModule *caller) -> std::optional<QByteArray> override;
     auto saveState(IModule *caller, const QByteArray &state) -> bool override;
@@ -127,10 +128,11 @@ private:
 
     QHash<QString, IInstance *> m_instances;
     QHash<QString, IModule *> m_instance_owner;
-    IKeys *m_keys = nullptr;
-    IModule *m_keys_owner = nullptr;
+    QPointer<IKeys> m_keys;
+    QPointer<IModule> m_keys_owner;
     // The handles each module was given, so a module gets the same one every call.
     QHash<IModule *, host::KeysHandle *> m_keys_handles;
+    QHash<IModule *, host::TransactionsHandle *> m_transaction_handles;
     std::map<std::pair<IModule *, IInstance *>, std::unique_ptr<host::InstanceHandle>>
         m_instance_handles;
     // A plugin is being asked: a call made meanwhile is refused, not asked again.

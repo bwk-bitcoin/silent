@@ -9,14 +9,19 @@
 namespace smoke {
 
 void pluginAbiSmoke() {
-    for (auto legacy : {true, false}) {
+    for (auto version : {2, 3, 4}) {
+        auto legacy = version != 4;
         QTemporaryDir directory;
         if (!directory.isValid()) {
             qFatal("ABI fixture directory creation failed");
         }
-        auto id = legacy ? QStringLiteral("abi2") : QStringLiteral("abi3");
-        auto library = legacy ? QString::fromUtf8(SILENT_ABI2_FIXTURE_PATH)
-                              : QString::fromUtf8(SILENT_ABI3_FIXTURE_PATH);
+        auto id = QStringLiteral("abi%1").arg(version);
+        auto library = QString::fromUtf8(SILENT_ABI4_FIXTURE_PATH);
+        if (version == 2) {
+            library = QString::fromUtf8(SILENT_ABI2_FIXTURE_PATH);
+        } else if (version == 3) {
+            library = QString::fromUtf8(SILENT_ABI3_FIXTURE_PATH);
+        }
         auto libraryPath = QDir(directory.path()).filePath(QStringLiteral("lib%1.so").arg(id));
         if (!QFile::copy(library, libraryPath)) {
             qFatal("ABI fixture library copy failed");
@@ -36,10 +41,10 @@ void pluginAbiSmoke() {
             registry.rescanDiscoveredPlugins();
             auto enabled = registry.setEnabled(id, true);
             if (enabled == legacy || registry.isPluginEnabled(id) == legacy) {
-                qFatal("registry must reject ABI 2 and accept ABI 3 binaries");
+                qFatal("registry must reject ABI 2/3 and accept ABI 4 binaries");
             }
             if (legacy && registry.pluginLoadError(id) != TR("settings-plugin-not-silent")) {
-                qFatal("ABI 2 binary must fail at the plugin interface admission gate");
+                qFatal("old ABI binary must fail at the plugin interface admission gate");
             }
             if (!registry.enabledModulesForLauncher().empty()) {
                 qFatal("ABI fixture must register no modules or feed instances");

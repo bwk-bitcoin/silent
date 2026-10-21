@@ -44,6 +44,11 @@ public:
 
 class DeferredKeys final : public IKeys {
 public:
+    void coordinate(ReqId req_id, const plugin::SigningRequest &) override {
+        emit coordinationError(req_id, SpendError::Unsupported,
+                               QStringLiteral("deferred device mock has no coordination backend"));
+    }
+
     [[nodiscard]] auto keys([[maybe_unused]] Network network) const -> QList<KeyEntry> override {
         return {};
     }

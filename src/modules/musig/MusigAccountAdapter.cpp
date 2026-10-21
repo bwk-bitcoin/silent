@@ -1,5 +1,6 @@
 #include "modules/musig/MusigAccountAdapter.h"
 
+#include "account/Spending.h"
 #include "modules/musig/MusigAccountController.h"
 
 #include <QList>
@@ -14,17 +15,6 @@
 namespace {
 auto toQString(const rust::String &value) -> QString {
     return QString::fromStdString(std::string(value));
-}
-
-auto toPluginCoin(const RustCoin &coin) -> plugin::Coin {
-    plugin::Coin out;
-    out.outpoint = toQString(coin.outpoint);
-    out.value = coin.value;
-    out.height = coin.height;
-    out.label = toQString(coin.label);
-    out.spent = coin.spent;
-    out.accountType = toQString(coin.account_type);
-    return out;
 }
 
 // A push from the controller has no request: its error carries no id.
@@ -138,15 +128,19 @@ auto MusigAccountAdapter::nextReqId() -> ReqId {
 }
 
 void MusigAccountAdapter::emitCoins(ReqId req_id) {
-    if (m_controller == nullptr) {
+    if (m_controller == nullptr || !m_controller->getAccount().has_value()) {
         emit error(requestOf(req_id), QStringLiteral("MuSig2 account controller missing"));
         return;
     }
     QList<plugin::Coin> out;
-    auto rustCoins = m_controller->getCoins();
-    out.reserve(static_cast<qsizetype>(rustCoins.size()));
-    for (const auto &coin : rustCoins) {
-        out.append(toPluginCoin(coin));
+    auto result = m_controller->getAccount().value()->spending_coins();
+    if (!result.is_ok) {
+        emit error(requestOf(req_id), toQString(result.error));
+        return;
+    }
+    out.reserve(static_cast<qsizetype>(result.coins.size()));
+    for (const auto &coin : result.coins) {
+        out.append(account::spendingCoin(coin));
     }
     emit IAccount::coins(req_id, out);
 }

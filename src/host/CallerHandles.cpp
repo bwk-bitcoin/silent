@@ -1,6 +1,7 @@
 #include "CallerHandles.h"
 
 #include "Host.h"
+#include "account/TransactionJob.h"
 #include "i18n/Tr.h"
 
 #include <Qontrol>
@@ -12,6 +13,14 @@ KeysHandle::KeysHandle(HostImpl *host, IModule *module, IKeys *target)
     : m_host(host),
       m_module(module),
       m_target(target) {
+    connect(target, &QObject::destroyed, this, &KeysHandle::onTargetDestroyed, qontrol::UNIQUE);
+    connect(target, &IKeys::coordinated, this, &KeysHandle::onCoordinated, qontrol::UNIQUE);
+    connect(target, &IKeys::coordinationStarted, this, &KeysHandle::onCoordinationStarted,
+            qontrol::UNIQUE);
+    connect(target, &IKeys::attemptRetirement, this, &KeysHandle::onAttemptRetirement,
+            qontrol::UNIQUE);
+    connect(target, &IKeys::coordinationError, this, &KeysHandle::onCoordinationError,
+            qontrol::UNIQUE);
     connect(target, &IKeys::signed_, this, &KeysHandle::onSigned, qontrol::UNIQUE);
     connect(target, &IKeys::verified, this, &KeysHandle::onVerified, qontrol::UNIQUE);
     connect(target, &IKeys::spDescriptorReady, this, &KeysHandle::onSpDescriptorReady,
@@ -26,21 +35,252 @@ KeysHandle::KeysHandle(HostImpl *host, IModule *module, IKeys *target)
 }
 
 KeysHandle::~KeysHandle() {
+    retire();
+}
+
+void KeysHandle::retire() {
     auto requests = m_requests;
     for (auto req : requests) {
         cancelRequest(req);
     }
+    if (!m_retirement_jobs.empty()) {
+        return;
+    }
+    for (const auto &request : m_attempts) {
+        auto *job = new TransactionJob(0, TransactionJob::Operation::Release, request);
+        m_retirement_jobs.insert(job);
+        connect(job, &QThread::finished, this, &KeysHandle::onRetirementFinished, qontrol::UNIQUE);
+        connect(job, &QThread::finished, job, &QObject::deleteLater, qontrol::UNIQUE);
+        job->start();
+    }
+    m_target = nullptr;
+}
+
+void KeysHandle::release() {
+    m_releasing = true;
+    retire();
+    if (m_retirement_jobs.empty() && m_attempts.empty()) {
+        deleteLater();
+    }
+}
+
+void KeysHandle::onRetirementFinished() {
+    auto *job = dynamic_cast<TransactionJob *>(sender());
+    if (job == nullptr || !m_retirement_jobs.remove(job)) {
+        return;
+    }
+    const auto &result = job->result();
+    onAttemptRetirement(job->sessionId(),
+                        result.is_ok ? plugin::RetirementStatus::Retired
+                                     : plugin::RetirementStatus::Failed,
+                        QString::fromStdString(std::string(result.error)));
+    if (m_releasing && m_retirement_jobs.empty() && m_attempts.empty()) {
+        deleteLater();
+    }
+}
+
+void KeysHandle::onCoordinationStarted(ReqId req_id, const plugin::SigningResult &prepared) {
+    if (!m_requests.contains(req_id) || !m_coordination_requests.contains(req_id)) {
+        return;
+    }
+    if (!prepared.sessionId.isEmpty() && !m_attempts.contains(prepared.sessionId)) {
+        auto request = m_coordination_requests.value(req_id);
+        request.psbtV2Hex = prepared.psbtV2Hex;
+        request.sessionId = prepared.sessionId;
+        m_attempts.insert(prepared.sessionId, request);
+    }
+    emit coordinationStarted(req_id, prepared);
+}
+
+void KeysHandle::onAttemptRetirement(const QString &session_id, plugin::RetirementStatus status,
+                                     const QString &error) {
+    if (!m_attempts.contains(session_id)) {
+        return;
+    }
+    if (status == plugin::RetirementStatus::Retired) {
+        m_attempts.remove(session_id);
+    }
+    if (status == plugin::RetirementStatus::Failed) {
+        qCritical() << "MuSig attempt retirement failed; retaining valid snapshot for retry:"
+                    << session_id << error;
+    }
+    emit attemptRetirement(session_id, status, error);
+    if (m_releasing && m_retirement_jobs.empty() && m_attempts.empty()) {
+        deleteLater();
+    }
 }
 
 void KeysHandle::cancelRequest(ReqId req_id) {
+    m_submitted.remove(req_id);
+    m_coordination_requests.remove(req_id);
     if (!m_requests.remove(req_id) || m_target.isNull()) {
         return;
     }
     m_target->cancelRequest(req_id);
+    emit cancelled(req_id);
+}
+
+void KeysHandle::coordinate(ReqId req_id, const plugin::SigningRequest &request) {
+    if (m_submitted.contains(req_id)) {
+        return;
+    }
+    if (!mine(req_id)) {
+        emit coordinationError(req_id, SpendError::InvalidRequest,
+                               QStringLiteral("request was not allocated by this caller"));
+        return;
+    }
+    if (m_target == nullptr || !m_host->allowed(m_module, Grant::Keys, true)) {
+        m_requests.remove(req_id);
+        emit coordinationError(req_id, SpendError::Permission,
+                               QStringLiteral("keys unavailable or access denied"));
+        return;
+    }
+    CallerScope scope(m_target.data(), HostImpl::caller(m_module));
+    setCaller(HostImpl::caller(m_module));
+    m_submitted.insert(req_id);
+    m_coordination_requests.insert(req_id, request);
+    m_target->coordinate(req_id, request);
+}
+
+void KeysHandle::onCoordinated(ReqId req_id, const plugin::SigningResult &result) {
+    if (!m_requests.remove(req_id)) {
+        return;
+    }
+    m_submitted.remove(req_id);
+    auto request = m_coordination_requests.take(req_id);
+    if (request.stage == SigningStage::Release) {
+        m_attempts.remove(request.sessionId);
+    } else if (!result.sessionId.isEmpty()) {
+        if (result.progress == SigningProgress::Complete) {
+            m_attempts.remove(result.sessionId);
+        } else {
+            request.psbtV2Hex = result.psbtV2Hex;
+            request.sessionId = result.sessionId;
+            m_attempts.insert(result.sessionId, request);
+        }
+    }
+    if (m_host->allowed(m_module, Grant::Keys, false)) {
+        emit coordinated(req_id, result);
+    } else {
+        retire();
+        emit coordinationError(req_id, SpendError::Permission,
+                               QStringLiteral("keys permission revoked"));
+    }
+}
+
+void KeysHandle::onCoordinationError(ReqId req_id, SpendError kind, const QString &message) {
+    m_submitted.remove(req_id);
+    m_coordination_requests.remove(req_id);
+    if (m_requests.remove(req_id)) {
+        emit coordinationError(req_id, kind, message);
+    }
+}
+
+TransactionsHandle::TransactionsHandle(HostImpl *host, IModule *module)
+    : m_host(host),
+      m_module(module) {
+}
+
+auto TransactionsHandle::newRequest() -> ReqId {
+    if (m_retired) {
+        return 0;
+    }
+    auto reqId = ++m_next_req_id;
+    m_allocated.insert(reqId);
+    return reqId;
+}
+
+void TransactionsHandle::cancelRequest(ReqId req_id) {
+    auto allocated = m_allocated.remove(req_id);
+    auto pending = m_pending.remove(req_id);
+    if (allocated || pending) {
+        emit cancelled(req_id);
+    }
+}
+
+void TransactionsHandle::retire() {
+    m_retired = true;
+    auto requests = m_allocated | m_pending;
+    for (auto reqId : requests) {
+        cancelRequest(reqId);
+    }
+}
+
+auto TransactionsHandle::begin(ReqId req_id) -> bool {
+    if (m_pending.contains(req_id)) {
+        return false;
+    }
+    if (m_retired || !m_allocated.remove(req_id)) {
+        emit error(req_id, SpendError::InvalidRequest,
+                   QStringLiteral("request is unknown or already submitted"));
+        return false;
+    }
+    if (!m_host->allowed(m_module, Grant::Account, true)) {
+        emit error(req_id, SpendError::Permission, QStringLiteral("account access denied"));
+        return false;
+    }
+    m_pending.insert(req_id);
+    return true;
+}
+
+void TransactionsHandle::finalize(ReqId req_id, const plugin::SigningRequest &request) {
+    if (!begin(req_id)) {
+        return;
+    }
+    auto *job = new TransactionJob(req_id, TransactionJob::Operation::Finalize, request);
+    connect(job, &QThread::finished, this, &TransactionsHandle::onFinished, qontrol::UNIQUE);
+    connect(job, &QThread::finished, job, &QObject::deleteLater, qontrol::UNIQUE);
+    job->start();
+}
+
+void TransactionsHandle::broadcast(ReqId req_id, Network network, const QString &endpoint,
+                                   const QString &tx_hex) {
+    if (!begin(req_id)) {
+        return;
+    }
+    plugin::SigningRequest request;
+    request.network = network;
+    auto *job =
+        new TransactionJob(req_id, TransactionJob::Operation::Broadcast, request, endpoint, tx_hex);
+    connect(job, &QThread::finished, this, &TransactionsHandle::onFinished, qontrol::UNIQUE);
+    connect(job, &QThread::finished, job, &QObject::deleteLater, qontrol::UNIQUE);
+    job->start();
+}
+
+void TransactionsHandle::onFinished() {
+    auto *job = dynamic_cast<TransactionJob *>(sender());
+    if (job == nullptr || !m_pending.remove(job->requestId())) {
+        return;
+    }
+    auto reqId = job->requestId();
+    if (!m_host->allowed(m_module, Grant::Account, false)) {
+        emit error(reqId, SpendError::Permission, QStringLiteral("account permission revoked"));
+        return;
+    }
+    const auto &result = job->result();
+    if (!result.is_ok) {
+        emit error(reqId, result.kind, QString::fromStdString(std::string(result.error)));
+    } else if (job->operation() == TransactionJob::Operation::Broadcast) {
+        emit broadcasted(reqId, QString::fromStdString(std::string(result.txid)));
+    } else {
+        emit finalized(reqId, QString::fromStdString(std::string(result.psbt_v2_hex)),
+                       QString::fromStdString(std::string(result.tx_hex)),
+                       QString::fromStdString(std::string(result.txid)));
+    }
 }
 
 auto KeysHandle::allowedTarget(std::optional<ReqId> req_id) const -> IKeys * {
     auto *self = const_cast<KeysHandle *>(this);
+    if (req_id.has_value()) {
+        if (m_submitted.contains(*req_id)) {
+            return nullptr;
+        }
+        if (!mine(*req_id)) {
+            emit self->error(req_id, QStringLiteral("request was not allocated by this caller"));
+            return nullptr;
+        }
+        self->m_submitted.insert(*req_id);
+    }
     if (m_target == nullptr) {
         if (req_id.has_value()) {
             emit self->error(req_id, TR("plugin-access-no-keys"));
@@ -60,6 +300,35 @@ auto KeysHandle::mine(ReqId req_id) const -> bool {
     return m_requests.contains(req_id);
 }
 
+auto KeysHandle::finish(ReqId req_id) -> bool {
+    if (!m_requests.remove(req_id)) {
+        return false;
+    }
+    m_submitted.remove(req_id);
+    if (!m_host->allowed(m_module, Grant::Keys, false)) {
+        emit error(req_id, QStringLiteral("keys permission revoked"));
+        return false;
+    }
+    return true;
+}
+
+void KeysHandle::onTargetDestroyed() {
+    auto requests = m_requests;
+    for (auto reqId : requests) {
+        if (m_coordination_requests.contains(reqId)) {
+            emit coordinationError(reqId, SpendError::LostSession,
+                                   QStringLiteral("keys service removed"));
+        } else {
+            emit error(reqId, QStringLiteral("keys service removed"),
+                       plugin::SignError::MusigSession);
+        }
+    }
+    m_requests.clear();
+    m_coordination_requests.clear();
+    m_submitted.clear();
+    retire();
+}
+
 QList<KeyEntry> KeysHandle::keys(Network network) const {
     auto *target = allowedTarget(std::nullopt);
     if (target == nullptr) {
@@ -74,7 +343,9 @@ auto KeysHandle::newRequest() -> ReqId {
         return 0;
     }
     ReqId reqId = m_target->newRequest();
-    m_requests.insert(reqId);
+    if (reqId != 0) {
+        m_requests.insert(reqId);
+    }
     return reqId;
 }
 
@@ -201,39 +472,39 @@ void KeysHandle::checkDescriptorRegistered(ReqId req_id, Network network,
 }
 
 void KeysHandle::onSigned(ReqId req_id, const QString &psbt_v2_hex) {
-    if (mine(req_id)) {
+    if (finish(req_id)) {
         emit signed_(req_id, psbt_v2_hex);
     }
 }
 
 void KeysHandle::onVerified(ReqId req_id, bool verified) {
-    if (mine(req_id)) {
+    if (finish(req_id)) {
         emit IKeys::verified(req_id, verified);
     }
 }
 
 void KeysHandle::onSpDescriptorReady(ReqId req_id, const QString &descriptor,
                                      const QString &fingerprint) {
-    if (mine(req_id)) {
+    if (finish(req_id)) {
         emit spDescriptorReady(req_id, descriptor, fingerprint);
     }
 }
 
 void KeysHandle::onXpubReady(ReqId req_id, const QString &xpub, const QString &fingerprint,
                              const QString &path) {
-    if (mine(req_id)) {
+    if (finish(req_id)) {
         emit xpubReady(req_id, xpub, fingerprint, path);
     }
 }
 
 void KeysHandle::onDescriptorRegistered(ReqId req_id, const QString &fingerprint) {
-    if (mine(req_id)) {
+    if (finish(req_id)) {
         emit descriptorRegistered(req_id, fingerprint);
     }
 }
 
 void KeysHandle::onRegistrationChecked(ReqId req_id, bool registered) {
-    if (mine(req_id)) {
+    if (finish(req_id)) {
         emit registrationChecked(req_id, registered);
     }
 }
@@ -241,14 +512,15 @@ void KeysHandle::onRegistrationChecked(ReqId req_id, bool registered) {
 void KeysHandle::onError(std::optional<ReqId> req_id, const QString &message,
                          plugin::SignError kind) {
     // A failure tied to no request goes to every caller allowed to use keys.
-    bool forMe = req_id.has_value() ? mine(*req_id) : m_host->allowed(m_module, Grant::Keys, false);
+    bool forMe =
+        req_id.has_value() ? finish(*req_id) : m_host->allowed(m_module, Grant::Keys, false);
     if (forMe) {
         emit error(req_id, message, kind);
     }
 }
 
 void KeysHandle::onCancelled(ReqId req_id) {
-    if (mine(req_id)) {
+    if (finish(req_id)) {
         emit cancelled(req_id);
     }
 }
@@ -257,6 +529,9 @@ AccountHandle::AccountHandle(HostImpl *host, IModule *module, IAccount *target)
     : m_host(host),
       m_module(module),
       m_target(target) {
+    connect(target, &QObject::destroyed, this, &AccountHandle::onAccountDestroyed, qontrol::UNIQUE);
+    connect(target, &IAccount::cancelled, this, &AccountHandle::onAccountCancelled,
+            qontrol::UNIQUE);
     connect(target, qOverload<ReqId, QString>(&IAccount::name), this, &AccountHandle::onName,
             qontrol::UNIQUE);
     connect(target, qOverload<ReqId, QMap<QString, QString>>(&IAccount::info), this,
@@ -280,6 +555,36 @@ bool AccountHandle::implemented() const {
     return m_target != nullptr && m_target->implemented();
 }
 
+AccountHandle::~AccountHandle() {
+    auto requests = m_requests;
+    for (auto reqId : requests) {
+        cancelRequest(reqId);
+    }
+}
+
+void AccountHandle::cancelRequest(ReqId req_id) {
+    if (!m_requests.remove(req_id)) {
+        return;
+    }
+    if (m_target != nullptr) {
+        CallerScope scope(m_target.data(), HostImpl::caller(m_module));
+        m_target->cancelRequest(req_id);
+    }
+    emit cancelled(req_id);
+}
+
+void AccountHandle::onAccountDestroyed() {
+    auto requests = std::exchange(m_requests, {});
+    m_held.clear();
+    for (auto reqId : requests) {
+        emit cancelled(reqId);
+    }
+}
+
+void AccountHandle::onAccountCancelled(ReqId req_id) {
+    relay(req_id, [this, req_id]() { emit cancelled(req_id); });
+}
+
 auto AccountHandle::forward(const std::function<ReqId(IAccount *)> &request) -> ReqId {
     if (m_target == nullptr) {
         emit error(std::nullopt, TR("plugin-access-no-account"));
@@ -296,13 +601,13 @@ auto AccountHandle::forward(const std::function<ReqId(IAccount *)> &request) -> 
         reqId = request(m_target);
     }
     --m_in_call;
-    m_requests.insert(reqId);
+    if (reqId != 0) {
+        m_requests.insert(reqId);
+    }
     if (m_in_call == 0) {
         auto held = std::exchange(m_held, {});
         for (const auto &[held_id, emit_answer] : held) {
-            if (!held_id.has_value() || *held_id == 0 || m_requests.contains(*held_id)) {
-                emit_answer();
-            }
+            relay(held_id, emit_answer);
         }
     }
     return reqId;
@@ -321,8 +626,12 @@ void AccountHandle::relay(std::optional<ReqId> req_id, std::function<void()> emi
         m_held.append({req_id, std::move(emit_answer)});
         return;
     }
-    if (m_requests.contains(*req_id)) {
-        emit_answer();
+    if (m_requests.remove(*req_id)) {
+        if (m_host->allowed(m_module, Grant::Account, false)) {
+            emit_answer();
+        } else {
+            emit error(req_id, TR("plugin-access-refused-account"));
+        }
     }
 }
 

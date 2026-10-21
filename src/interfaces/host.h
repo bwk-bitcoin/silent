@@ -14,6 +14,7 @@ class QWidget;
 class IInstance;
 class IKeys;
 class IModule;
+class ITransactions;
 
 struct PriceSource {
     QString id;
@@ -137,6 +138,9 @@ public:
     // only the answers to the requests it allocated with newRequest(). The same handle
     // for every call of one module.
     [[nodiscard]] virtual IKeys *keys(IModule *caller) = 0;
+    // Account grant, no account ownership restriction. Finalization and network
+    // submission do not mutate account transaction history or saved PSBTs.
+    [[nodiscard]] virtual auto transactions(IModule *caller) -> ITransactions * = 0;
     // What the calling module may use. For an external plugin, asks the user for each
     // grant in `wanted` its library has no answer for yet, and saves the answer; a grant
     // already refused is not asked again (the user changes it in Settings). The host

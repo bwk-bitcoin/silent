@@ -493,7 +493,7 @@ signals:
 //     error answers a specific request, empty for a spontaneous error.
 
 // An account: coins, addresses, balance. Signing is NOT part of this capability;
-// it is the separate ISigner capability.
+// external signing goes through the caller-scoped IKeys service.
 class IAccount : public QObject {
     Q_OBJECT
 public:
@@ -872,29 +872,206 @@ wraps a `bwk` `HwSigner` internally via CXX.
 ## Inter-Account Operation: Send To / Spend From Siblings
 
 A key use case is moving funds between sibling accounts (e.g. a consolidation or
-swap plugin). The account capability has no signing methods, so signing always routes
-through one or more `ISigner` instances.
+swap plugin). Accounts export spending data; external coordination signs through
+the caller-scoped `IKeys` from `Host::keys(this)`, not through account controllers.
 
 - **Send TO a sibling**: pick a recipient instance from `Host::get()->instances(this)`
   (gated on `account()->implemented()`), call `account()->newReceiveAddress()`, and
   read the address off its `receiveAddress(ReqId, ...)` signal.
-- **Spend FROM a sibling**: call the source `account()->coins()`, assemble a PSBT
-  spanning the chosen UTXOs, then route the PSBT + descriptor to the `Host::get()->signers()`
-  entries holding the keys via `signWithDescriptor` (the signed PSBT arrives on
-  the `signed_` signal); combine partial signatures and broadcast. PSBTs cross the
-  boundary as base64 strings.
+- **Spend FROM siblings**: request their coins, choose one variant per input,
+  assemble a PSBTv2, and call `IKeys::coordinate`. Finalize and submit through
+  `Host::transactions(this)`. These operations take no account owner pointer.
+  Coordination PSBTs are hex-encoded PSBTv2, not base64 PSBTv0.
 
-> Cross-account PSBT construction over multiple accounts' UTXOs may need wallet-core
-> support in `bwk-sp`, coordinated separately. The signing path (`ISigner`) exists
-> from the start; the full multi-account build flow lands once core support is in
-> place.
+### Public spending exports
+
+`IAccount::coins()` returns typed network and status, optional confirmation height,
+and independent `SpendVariant` values per coin. Persist the instance ID, outpoint
+and `pathId`, never an owning account pointer. Descriptor path IDs come from bwk's
+underived policy and satisfaction alternative, not a derived tapleaf hash.
+`keychain` and `derivationIndex` identify the concrete derivation separately.
+
+Each `psbtV2Hex` is a construction envelope: one populated input and no outputs.
+It carries the prevout, origins, scripts and required SP/MuSig metadata, but no
+signature, nonce, signing-attempt ID or transaction-dependent SP contribution.
+Decode each envelope, append its input to the new transaction, and merge global
+maps by key. Equal key/value pairs may be shared; a key with different values is
+an error. Do not combine the envelopes as complete PSBTs. Counts, transaction
+version, nLockTime, per-input nSequence and outputs belong to the assembled PSBT.
+
+`descriptor` contains the full public Miniscript policy for registration. For SP,
+it is empty and `spSpendKey` identifies the public spend policy instead. This is
+not an `sp()` descriptor and must not be passed to a descriptor parser. The scan
+secret is never exported by `coins()`. Required keys retain origin/derivation
+expressions. Preimage requirements use `sha256:`, `hash256:`, `ripemd160:` or
+`hash160:` followed by the digest, not the secret preimage.
+Before coordination, the builder may supply matching preimages, a full previous
+transaction matching the exported prevout, and a sighash type where the envelope
+does not prescribe one. Hashes and prevouts are checked. These additions become
+immutable request metadata; a signer response cannot replace them.
+
+Absolute locks distinguish heights from Unix times. Relative locks distinguish
+blocks from 512-second units; convert these units to the BIP68 sequence encoding.
+CSV requires transaction version at least 2. CLTV requires a non-final input
+sequence and a compatible transaction nLockTime. Incompatible absolute units
+cannot share a transaction. Relative units are independent between inputs.
+
+`satisfactionWu` is a conservative added weight in weight units over an input
+with empty scriptSig/witness, including witness count, scripts and control block.
+It excludes the base input, transaction marker/flag and outputs. It allows a
+non-default sighash byte, not an annex. Alternative satisfactions within one
+script use that script's maximum, not a guessed minimum.
+
+`maturity` currently describes timelocks only. Without a coherent scanner
+tip/hash/MTP snapshot, locked variants report `Unknown`; unlocked variants report
+`Mature`. This does not assert coinbase maturity, unspent status or signer
+availability. `availability` is separate: spent/being-spent inputs are `Spent`,
+known non-coinbase inputs with mature locks are `Available`, immature locks are
+`Immature`, and otherwise it is `Unknown`. Coinbase maturity is not guessed from
+wall-clock time or a stale height. Spent and offline-signable variants remain in the export. The
+account's normal coin-update signal refreshes exports, including after reorgs.
+An export failure answers `error`, never a successful empty list.
+Legacy non-Segwit coins are unsupported when the full previous transaction is
+unavailable; a witness-UTXO-only template is not exported as a complete legacy
+construction envelope.
+
+### Signing and contribution stages
+
+Allocate `newRequest()` before calling `IKeys::coordinate(reqId, request)`; connect
+named slots first because some answers are synchronous. `SigningRequest` carries
+the explicit network, PSBTv2 and one `SelectedInput` per input. Each selection has
+its input index, network and exported variant. Multiple descriptors and independent
+paths are allowed. The optional fingerprint selects one key instead of opening
+the picker. Policy/path IDs, derivations, input metadata and typed locks are checked
+before signing. A variant within a script with multiple satisfactions remains
+exported, but current signing routes report `Unsupported` rather than pretending
+to enforce that alternative.
+
+| Stage | Permitted result changes |
+|---|---|
+| `Signatures` | Add ordinary signatures only. MuSig inputs require their explicit rounds. |
+| `MusigNonces` | Add public nonces and ordinary signatures; never MuSig partial signatures. |
+| `MusigSignatures` | Add signatures/partials; nonce maps and attempt identity cannot change. |
+| `SpContributions` | Independent share/proof production is explicitly unsupported by current routes. |
+| `VerifySpContributions` | Read-only verification of present DLEQ proofs; reports partial coverage or complete coverage. |
+| `CompleteSpOutputs` | Verify shares/proofs, fill missing SP scripts, freeze transaction modification flags. |
+| `SpCompleteAndSign` | Supported combined single-key SP route: add shares/proofs, fill missing SP scripts and add signatures. |
+| `Release` | Retire local allocations, clear MuSig round data and return a fresh attempt identity. |
+
+Transaction version, locks, input/output order, prevouts, amounts, existing scripts,
+policy metadata and existing signatures cannot change in a signer response. Only
+the combined SP stage may fill previously absent SP scripts, verified against its
+shares/proofs. Existing merge/integrity checks reject substitutions and conflicting
+nonce data. Every received public nonce is parsed as curve points using bwk's
+NonceAgg backend, even before other nonces arrive. Every present MuSig partial is
+verified with bwk's partial-verification helper against the complete nonce
+transcript, policy tweaks and slot sighash. Missing or invalid transcript data is
+an integrity error, not successful partial progress. Complete outputs before ordinary/MuSig signing. Changing a transaction
+requires releasing its old attempt and starting again, not editing nonce-bearing
+PSBTs. A nonce stage can also collect ordinary signatures for mixed inputs.
+
+`coordinated` is a successful operation, not necessarily a completed transaction:
+`Partial` means more contributions are needed; `StageComplete` completes only the
+nonce/proof/output/release stage; `Complete` means aggregation and finalization
+checks succeeded. Finalization errors other than missing satisfactions are errors,
+not partial success. `coordinationError` distinguishes unsupported requests, invalid
+requests, integrity failures, lost sessions and permission failures. Multiple SP
+owners and combined SP/MuSig signing are currently unsupported. The combined SP
+route requires one identifiable signing fingerprint; that is a backend limitation,
+not a restriction on the request types. A nonce request with one MuSig policy
+already ready for signatures and another still missing nonces is also
+`Unsupported`: current routes cannot honor that stage without potentially
+consuming the ready policy's nonce. This refusal happens before signer selection,
+cache allocation or a password/device interaction, not after a signer response.
+
+Runtime `sessionId` identifies a MuSig attempt and is also carried in its PSBT.
+Persist both if retaining progress. A supplied session ID must match the PSBT.
+It never appears in reusable coin templates. Session loss requires `Release` and
+fresh nonces, not retrying a partial signature with changed transaction data.
+
+`coordinationStarted` is nonterminal: the request passed preparation and a route
+may allocate nonces. The caller handle retains that initial snapshot, then updates
+it only with successfully validated progress. Preparation refusals and failed
+Release requests never erase the last valid snapshot. A request error alone does
+not confirm cleanup: `attemptRetirement` reports `Pending`, `Retired` or `Failed`
+separately. Post-route failures start cleanup; only its confirmed `Retired` result
+or completed signing drops the retained attempt. Failed cleanup is reported and
+keeps the valid snapshot for retry. Caller teardown keeps the handle host-owned
+until cleanup succeeds; a cleanup failure is logged and retained, not deleted
+along with the unloaded caller.
+
+### Finalization, broadcast and lifetime
+
+`ITransactions::finalize` checks the selected paths, verifies SP proofs, aggregates
+MuSig partial signatures, finalizes all inputs and returns PSBTv2, transaction hex
+and txid. It does not require the inputs to belong to one account.
+`broadcast(reqId, network, endpoint, txHex)` checks the endpoint's genesis header
+and submits on that same connection, checking the returned txid. It uses no account
+bookkeeping; scanners discover the spend independently. Both run off the GUI thread
+and use the caller's account grant. Signing uses the keys grant.
+
+Handles allocate and correlate their own requests. A caller cannot submit another
+caller's keys request. An in-flight keys request cannot be submitted twice.
+Transaction handles ignore duplicate in-flight submissions, including a different
+operation using the same ID, without emitting a competing terminal error.
+Subsequent newly allocated IDs work normally. Account
+replies are consumed once, including synchronous replies held during forwarding.
+Permission is checked at submission and before delivering private results.
+
+`cancelRequest` immediately suppresses late replies. Already-running I/O may finish;
+a broadcast already sent cannot be recalled. Cancelling signing starts durable
+nonce retirement in the background. Use a `Release` request when the coordinator
+needs acknowledgement of retirement before restarting. Caller removal retires
+outstanding requests and retained MuSig attempts. Removing the keys service reports
+lost sessions. Account removal cancels pending account replies and emits the host's
+`instanceRemoved`; discard that instance handle and rediscover by its stable ID.
+Exported value snapshots remain usable without the account. Account removal does
+not cancel an independent transaction service operation.
+
+### Conformance checks
+
+`silent/tests/external_spend.rs` composes independently exported templates, rejects
+global-map conflicts and incompatible typed locks, signs real funded BIP32/Multikey
+inputs with hot keys, and exercises MuSig rounds, SP proofs, SP input/output spending
+and a reorg. It checks malformed nonce points and an invalid first partial before
+the other cosigner contributes. It uses public bridge operations, not private wallet stores.
+`tests/host/ExternalSpendConsumer.*` imports only public interfaces and Qt. It
+discovers those funded accounts through Host, signs through the real IKeys hot
+route, finalizes/submits through ITransactions, and checks denied access, duplicate
+in-flight requests and late reply suppression. A second real-IKeys scenario checks
+pre-route refusal of unequal nonce progress with cached A nonces and a
+password-needed B policy, followed by successful use of the unconsumed nonces in
+the Rust signing test. This does not claim that the public IKeys route supports
+that unequal-progress combination. The host smoke executable supplies normal module startup.
+
+The real-IKeys lifecycle checks allocate nonce progress through the hot route,
+request a premature signature round, then run the same caller teardown path used
+by plugin unloading. The Rust driver verifies that the old allocation can no
+longer publish nonces. A second case sends an invalid Release, checks its explicit
+cleanup-failure status, retries with the retained valid snapshot and verifies
+retirement. The consumer uses public interfaces; host/registry startup and caller
+teardown belong to the test driver.
+
+Run the combined test against an already-built host smoke executable:
+
+```sh
+SILENT_HOST_SMOKE="$PWD/build/host_smoke" cargo test --manifest-path silent/Cargo.toml \
+  --test external_spend -- --include-ignored
+```
+
+Bitcoin Core, electrs and the existing BlindBit test harness are required. No device
+is used. Without `SILENT_HOST_SMOKE`, the Rust public-interface tests still run but
+the Qt consumer is not launched. Deferred device mocks explicitly reject coordination;
+they are not evidence of a supported funded signing combination.
 
 ## ABI & Linking Rules (Plugin Authors Must Read)
 
-The current plugin IID is `dev.silent.IPlugin/3.0` and the feed IID is
-`dev.silent.IFeed/3.0`. The price/fee request methods and cached Host API change the
-virtual interfaces. Rebuild plugins against this checkout and use
-`SILENT_IPlugin_IID` in plugin metadata. Old 1.0 and 2.0 plugins are refused rather than
+The current plugin IID is `dev.silent.IPlugin/4.0`, the account IID is
+`dev.silent.IAccount/2.0`, the keys IID is `dev.silent.IKeys/2.0`, and the transaction
+service IID is `dev.silent.ITransactions/1.0`. The feed IID remains
+`dev.silent.IFeed/3.0`. The richer coin result and coordination methods change the ABI. Rebuild plugins
+against this checkout and use `SILENT_IPlugin_IID` in plugin metadata. Include both
+`src` and the matching generated `lib/include` directory. Old 1.0, 2.0 and 3.0 plugins are refused rather than
 called through incompatible vtables.
 
 Silent statically links Qt, and the host binary acts as the **single Qt provider**:
