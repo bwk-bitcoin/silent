@@ -289,8 +289,9 @@ auto main(int argc, char *argv[]) -> int {
               plugin.qt_metacast("dev.silent.IPlugin/2.0") == nullptr &&
               plugin.qt_metacast("dev.silent.IPlugin/3.0") == nullptr &&
               plugin.qt_metacast("dev.silent.IPlugin/4.0") == nullptr &&
-              plugin.qt_metacast("dev.silent.IPlugin/5.0") == nullptr,
-          "mock plugin metadata exposes ABI 6 only");
+              plugin.qt_metacast("dev.silent.IPlugin/5.0") == nullptr &&
+              plugin.qt_metacast("dev.silent.IPlugin/6.0") == nullptr,
+          "mock plugin metadata exposes ABI 7 only");
     auto *module = plugin.module();
 
     PluginRegistry registry;

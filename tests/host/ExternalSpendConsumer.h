@@ -22,7 +22,7 @@ public:
 public slots:
     void onCoins(ReqId req_id, const QList<plugin::Coin> &coins);
     void onCoordinated(ReqId req_id, const plugin::SigningResult &result);
-    void onCoordinationError(ReqId req_id, SpendError kind, const QString &message);
+    void onCoordinationError(ReqId req_id, plugin::SpendError kind, const QString &message);
     void onFinalized(ReqId req_id, const QString &psbt, const QString &tx, const QString &txid);
     void onBroadcasted(ReqId req_id, const QString &txid);
     void onCancelled(ReqId req_id);
@@ -33,7 +33,8 @@ public slots:
 
 protected:
     void wait() const;
-    void sign(const QString &fingerprint, const QString &password, SigningProgress expected);
+    void sign(const QString &fingerprint, const QString &password,
+              plugin::SigningProgress expected);
     void accountLifecycle();
     void nonceReview(const QJsonObject &data);
     void lifecycleReview(QJsonObject data, const QString &fixture);
@@ -50,7 +51,7 @@ private:
     QString m_tx;
     QString m_txid;
     QString m_error;
-    SpendError m_error_kind = SpendError::Other;
+    plugin::SpendError m_error_kind = plugin::SpendError::Other;
     ReqId m_pending = 0;
     bool m_answered = false;
     int m_answers = 0;

@@ -89,36 +89,35 @@ public:
     explicit KeysBus(KeysModule *module, QObject *parent = nullptr);
     ~KeysBus() override;
 
-    [[nodiscard]] QList<KeyEntry> keys(Network network) const override;
     auto newRequest() -> ReqId override;
     void coordinate(ReqId req_id, const plugin::SigningRequest &request) override;
     void cancelRequest(ReqId req_id) override;
-    void sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
+    void sign(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
               const QStringList &descriptors, const QString &wallet_name,
               const QString &fingerprint) override;
-    void signOnDevice(ReqId req_id, Network network, const QString &psbt_v2_hex,
+    void signOnDevice(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
                       const QString &descriptor, const QString &fingerprint) override;
-    void verifyAddress(ReqId req_id, Network network, const QString &descriptor,
+    void verifyAddress(ReqId req_id, plugin::Network network, const QString &descriptor,
                        const QString &path, const QString &address,
                        const QString &fingerprint) override;
-    void verifyOnDevice(ReqId req_id, Network network, const QString &descriptor,
+    void verifyOnDevice(ReqId req_id, plugin::Network network, const QString &descriptor,
                         const QString &path, const QString &address,
                         const QString &fingerprint) override;
-    void spDescriptor(ReqId req_id, Network network, const QString &fingerprint) override;
-    void xpub(ReqId req_id, Network network, const QString &fingerprint,
+    void spDescriptor(ReqId req_id, plugin::Network network, const QString &fingerprint) override;
+    void xpub(ReqId req_id, plugin::Network network, const QString &fingerprint,
               const QString &path) override;
-    void xpubOnDevice(ReqId req_id, Network network, const QString &fingerprint,
+    void xpubOnDevice(ReqId req_id, plugin::Network network, const QString &fingerprint,
                       const QString &path) override;
-    [[nodiscard]] auto cachedXpub(Network network, const QString &fingerprint,
+    [[nodiscard]] auto cachedXpub(plugin::Network network, const QString &fingerprint,
                                   const QString &path) const -> QString override;
-    [[nodiscard]] auto registrationHmac(Network network, const QString &fingerprint,
+    [[nodiscard]] auto registrationHmac(plugin::Network network, const QString &fingerprint,
                                         const QString &descriptor) const -> QString override;
-    auto storeRegistrationHmac(Network network, const QString &fingerprint,
+    auto storeRegistrationHmac(plugin::Network network, const QString &fingerprint,
                                const QString &descriptor, const QString &hmac) -> bool override;
-    void registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
+    void registerDescriptor(ReqId req_id, plugin::Network network, const QString &fingerprint,
                             const QString &descriptor) override;
-    void checkDescriptorRegistered(ReqId req_id, Network network, const QString &fingerprint,
-                                   const QString &descriptor) override;
+    void checkDescriptorRegistered(ReqId req_id, plugin::Network network,
+                                   const QString &fingerprint, const QString &descriptor) override;
 
 public slots:
     void onCoordinationReleased();
@@ -134,6 +133,11 @@ public slots:
                      const QString &path);
     void deliverDescriptorRegistered(ReqId req_id, const QString &fingerprint);
     void deliverRegistrationChecked(ReqId req_id, bool registered);
+
+protected:
+    [[nodiscard]] auto readKeys(plugin::Network network) const -> KeyListResult override;
+    [[nodiscard]] auto requestNetwork(plugin::Network network, std::optional<ReqId> req_id) const
+        -> std::optional<Network>;
 
 private:
     KeysModule *m_module = nullptr;

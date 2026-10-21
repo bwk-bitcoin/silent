@@ -1,6 +1,7 @@
 #include "modules/musig/MusigAccountController.h"
 
 #include "AppController.h"
+#include "account/InterfaceEnums.h"
 #include "account/views/Coins.h"
 #include "account/views/History.h"
 #include "account/views/Receive.h"
@@ -635,8 +636,9 @@ void MusigAccountController::signRound(const QString &fingerprint) {
     if (keys == nullptr) {
         return;
     }
-    keys->sign(req, network(), m_psbt_v2_hex, QStringList{toQString(getDescriptor())},
-               toQString(m_account.value()->name()), fingerprint);
+    keys->sign(req, account::toPublic<plugin::Network>(network()), m_psbt_v2_hex,
+               QStringList{toQString(getDescriptor())}, toQString(m_account.value()->name()),
+               fingerprint);
 }
 
 void MusigAccountController::signRoundOnDevice(const QString &fingerprint) {
@@ -644,7 +646,8 @@ void MusigAccountController::signRoundOnDevice(const QString &fingerprint) {
     if (keys == nullptr) {
         return;
     }
-    keys->signOnDevice(req, network(), m_psbt_v2_hex, toQString(getDescriptor()), fingerprint);
+    keys->signOnDevice(req, account::toPublic<plugin::Network>(network()), m_psbt_v2_hex,
+                       toQString(getDescriptor()), fingerprint);
 }
 
 void MusigAccountController::retireSignRequests() {

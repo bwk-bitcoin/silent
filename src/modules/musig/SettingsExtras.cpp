@@ -1,6 +1,7 @@
 #include "modules/musig/SettingsExtras.h"
 
 #include "AppController.h"
+#include "account/InterfaceEnums.h"
 #include "catalog/CopyButton.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/Card.h"
@@ -183,11 +184,20 @@ SettingsExtras::SettingsExtras(MusigAccountController *ctrl) : m_controller(ctrl
 
 void SettingsExtras::init() {
     auto descriptor = toQString(m_controller->getDescriptor());
-    auto aliases = keyAliases();
+    auto *keys = Host::get()->keys(MusigModule::get());
+    auto metadata = keys != nullptr
+                        ? keys->keys(account::toPublic<plugin::Network>(m_controller->network()))
+                        : KeyListResult{.error = TR("musig-send-no-keys")};
+    auto aliases = keyAliases(metadata.entries);
 
     m_policy = (new qontrol::Column)->spacing(resolve(Spacing::S));
     auto review = ::review_policy(rust::String(descriptor.toStdString()));
-    if (review.is_ok) {
+    if (!metadata.is_ok) {
+        auto *error = new catalog::Label(metadata.error);
+        error->setTone(catalog::LabelTone::Error);
+        error->setWordWrap(true);
+        m_policy->push(error);
+    } else if (review.is_ok) {
         int index = 0;
         for (const auto &path : review.paths) {
             m_policy->push(policyCard(path, index++, aliases));
@@ -207,6 +217,7 @@ void SettingsExtras::init() {
     m_copy_btn->setTextToCopy(descriptor);
 
     m_register_btn = catalog::btnRegisterDescriptor();
+    m_register_btn->setEnabled(metadata.is_ok);
 }
 
 void SettingsExtras::doConnect() {
@@ -234,13 +245,9 @@ void SettingsExtras::view() {
     setLayout(col->layout());
 }
 
-auto SettingsExtras::keyAliases() const -> QHash<QString, QString> {
+auto SettingsExtras::keyAliases(const QList<KeyEntry> &entries) -> QHash<QString, QString> {
     QHash<QString, QString> aliases;
-    auto *keys = Host::get()->keys(MusigModule::get());
-    if (keys == nullptr) {
-        return aliases;
-    }
-    for (const auto &entry : keys->keys(m_controller->network())) {
+    for (const auto &entry : entries) {
         if (!entry.alias.isEmpty()) {
             aliases.insert(entry.fingerprint.toLower(), entry.alias);
         }

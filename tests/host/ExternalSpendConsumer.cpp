@@ -113,7 +113,7 @@ void ExternalSpendConsumer::run(const QString &fixture) {
     require(file.open(QIODevice::ReadOnly), "open public request fixture");
     auto data = QJsonDocument::fromJson(file.readAll()).object();
     file.close();
-    m_request.network = Network::Regtest;
+    m_request.network = plugin::Network::Regtest;
     m_request.psbtV2Hex = data.value(QStringLiteral("psbt")).toString();
     m_request.walletName = QStringLiteral("external-consumer");
     auto selections = data.value(QStringLiteral("inputs")).toArray();
@@ -138,7 +138,8 @@ void ExternalSpendConsumer::run(const QString &fixture) {
                 }
                 for (const auto &variant : coin.variants) {
                     if (variant.pathId == selection.value(QStringLiteral("path")).toString()) {
-                        require(coin.network == Network::Regtest, "coin carries explicit network");
+                        require(coin.network == plugin::Network::Regtest,
+                                "coin carries explicit network");
                         require(variant.psbtV2Hex ==
                                     selection.value(QStringLiteral("envelope")).toString(),
                                 "public metadata round trips across Rust/CXX/Qt");
@@ -189,7 +190,7 @@ void ExternalSpendConsumer::run(const QString &fixture) {
     m_answered = false;
     unregistered->finalize(m_pending, m_request);
     wait();
-    require(m_error_kind == SpendError::Permission,
+    require(m_error_kind == plugin::SpendError::Permission,
             "unregistered caller cannot finalize or submit a transaction");
     disconnect(unregistered, &ITransactions::error, this,
                &ExternalSpendConsumer::onCoordinationError);
@@ -200,7 +201,7 @@ void ExternalSpendConsumer::run(const QString &fixture) {
     m_answered = false;
     m_keys->coordinate(m_pending, m_request);
     wait();
-    require(m_error_kind == SpendError::InvalidRequest,
+    require(m_error_kind == plugin::SpendError::InvalidRequest,
             "foreign keys request ID cannot be used through this caller's handle");
     otherKeys->cancelRequest(m_pending);
     m_error.clear();
@@ -210,25 +211,26 @@ void ExternalSpendConsumer::run(const QString &fixture) {
     m_answered = false;
     otherKeys->coordinate(m_pending, m_request);
     wait();
-    require(m_error_kind == SpendError::Permission, "unregistered caller cannot use signing keys");
+    require(m_error_kind == plugin::SpendError::Permission,
+            "unregistered caller cannot use signing keys");
     disconnect(otherKeys, &IKeys::coordinationError, this,
                &ExternalSpendConsumer::onCoordinationError);
     m_error.clear();
     accountLifecycle();
 
-    m_request.stage = SigningStage::SpContributions;
+    m_request.stage = plugin::SigningStage::SpContributions;
     m_pending = m_keys->newRequest();
     m_answered = false;
     m_keys->coordinate(m_pending, m_request);
     wait();
-    require(m_error_kind == SpendError::Unsupported,
+    require(m_error_kind == plugin::SpendError::Unsupported,
             "unsupported backend stage has a structured result");
     m_error.clear();
-    m_request.stage = SigningStage::Signatures;
+    m_request.stage = plugin::SigningStage::Signatures;
     sign(data.value(QStringLiteral("firstFingerprint")).toString(), QStringLiteral("first"),
-         SigningProgress::Partial);
+         plugin::SigningProgress::Partial);
     sign(data.value(QStringLiteral("secondFingerprint")).toString(), QStringLiteral("second"),
-         SigningProgress::Complete);
+         plugin::SigningProgress::Complete);
 
     m_pending = m_transactions->newRequest();
     m_answered = false;
@@ -242,9 +244,9 @@ void ExternalSpendConsumer::run(const QString &fixture) {
     m_pending = m_transactions->newRequest();
     m_answered = false;
     answers = m_answers;
-    m_transactions->broadcast(m_pending, Network::Regtest,
+    m_transactions->broadcast(m_pending, plugin::Network::Regtest,
                               data.value(QStringLiteral("endpoint")).toString(), m_tx);
-    m_transactions->broadcast(m_pending, Network::Regtest,
+    m_transactions->broadcast(m_pending, plugin::Network::Regtest,
                               data.value(QStringLiteral("endpoint")).toString(), m_tx);
     m_transactions->finalize(m_pending, m_request);
     require(
@@ -281,7 +283,7 @@ void ExternalSpendConsumer::run(const QString &fixture) {
 }
 
 void ExternalSpendConsumer::nonceReview(const QJsonObject &data) {
-    m_request.stage = SigningStage::MusigNonces;
+    m_request.stage = plugin::SigningStage::MusigNonces;
     m_request.fingerprint = data.value(QStringLiteral("firstFingerprint")).toString();
     m_password = QStringLiteral("first");
     m_pending = m_keys->newRequest();
@@ -293,26 +295,26 @@ void ExternalSpendConsumer::nonceReview(const QJsonObject &data) {
     password.start(1);
     m_keys->coordinate(m_pending, m_request);
     wait();
-    require(m_error_kind == SpendError::Unsupported && m_answers == answers + 1,
+    require(m_error_kind == plugin::SpendError::Unsupported && m_answers == answers + 1,
             "real IKeys refuses unequal nonce progress before selecting a route");
     require(m_password_prompts == 0,
             "cached plus password route must be refused before any password prompt");
 }
 
 void ExternalSpendConsumer::lifecycleReview(QJsonObject data, const QString &fixture) {
-    m_request.stage = SigningStage::MusigNonces;
+    m_request.stage = plugin::SigningStage::MusigNonces;
     sign(data.value(QStringLiteral("firstFingerprint")).toString(), QStringLiteral("first"),
-         SigningProgress::Partial);
+         plugin::SigningProgress::Partial);
     require(!m_request.sessionId.isEmpty(), "IKeys allocated a real retained nonce attempt");
     data.insert(QStringLiteral("lifecyclePsbt"), m_request.psbtV2Hex);
     data.insert(QStringLiteral("lifecycleSessionId"), m_request.sessionId);
 
-    m_request.stage = SigningStage::MusigSignatures;
+    m_request.stage = plugin::SigningStage::MusigSignatures;
     m_pending = m_keys->newRequest();
     m_answered = false;
     m_keys->coordinate(m_pending, m_request);
     wait();
-    require(m_error_kind == SpendError::InvalidRequest,
+    require(m_error_kind == plugin::SpendError::InvalidRequest,
             "premature signature round fails before routing");
     require(m_retired_session.isEmpty() && m_retirement_failures == 0,
             "preparation failure did not retire the existing attempt");
@@ -320,24 +322,24 @@ void ExternalSpendConsumer::lifecycleReview(QJsonObject data, const QString &fix
 
     if (data.value(QStringLiteral("retryRelease")).toBool()) {
         auto broken = m_request;
-        broken.stage = SigningStage::Release;
+        broken.stage = plugin::SigningStage::Release;
         broken.psbtV2Hex = QStringLiteral("00");
         m_pending = m_keys->newRequest();
         m_answered = false;
         m_keys->coordinate(m_pending, broken);
         wait();
         require(
-            m_error_kind == SpendError::InvalidRequest && m_retirement_failures == 1,
+            m_error_kind == plugin::SpendError::InvalidRequest && m_retirement_failures == 1,
             "failed Release reports cleanup failure instead of pretending retirement succeeded");
         require(m_retired_session.isEmpty(),
                 "failed Release preserves the last valid attempt snapshot");
         m_error.clear();
-        m_request.stage = SigningStage::Release;
+        m_request.stage = plugin::SigningStage::Release;
         m_pending = m_keys->newRequest();
         m_answered = false;
         m_keys->coordinate(m_pending, m_request);
         wait();
-        require(m_error.isEmpty() && m_result.progress == SigningProgress::StageComplete,
+        require(m_error.isEmpty() && m_result.progress == plugin::SigningProgress::StageComplete,
                 "Release retry with the valid snapshot succeeds");
         require(m_retired_session == m_request.sessionId,
                 "successful retry confirms retirement of the old attempt");
@@ -412,7 +414,7 @@ void ExternalSpendConsumer::onAccountCoins([[maybe_unused]] ReqId req_id,
 }
 
 void ExternalSpendConsumer::sign(const QString &fingerprint, const QString &password,
-                                 SigningProgress expected) {
+                                 plugin::SigningProgress expected) {
     m_password = password;
     m_request.fingerprint = fingerprint;
     m_pending = m_keys->newRequest();
@@ -450,7 +452,7 @@ void ExternalSpendConsumer::onCoordinated(ReqId req_id, const plugin::SigningRes
     ++m_answers;
 }
 
-void ExternalSpendConsumer::onCoordinationError(ReqId req_id, SpendError kind,
+void ExternalSpendConsumer::onCoordinationError(ReqId req_id, plugin::SpendError kind,
                                                 const QString &message) {
     require(req_id == m_pending, "error correlation");
     m_error_kind = kind;

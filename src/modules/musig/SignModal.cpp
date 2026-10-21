@@ -1,4 +1,5 @@
 #include "SignModal.h"
+#include "account/InterfaceEnums.h"
 
 #include "AppController.h"
 #include "catalog/Button.h"
@@ -47,7 +48,7 @@ auto toQString(const rust::String &value) -> QString {
 auto keyRow(const KeyEntry &entry, const QString &fingerprint, catalog::Badge *pill)
     -> catalog::SelectRow * {
     auto *row = new catalog::SelectRow;
-    row->setIcon(catalog::routeIcon(entry.route));
+    row->setIcon(catalog::routeIcon(*account::toBridge(entry.route)));
     row->setTitle(entry.alias.isEmpty() ? fingerprint : entry.alias);
     row->setSub(fingerprint);
     row->setStatus(pill);
@@ -232,6 +233,9 @@ void SignModal::render(const MusigRoundStatus &status) {
     // clear() also resets the layout spacing.
     catalog::clearRows(m_rows);
     m_rows->spacing(resolve(Spacing::XS));
+    if (!refreshKeys()) {
+        return;
+    }
     if (!m_controller->finalizedTx().isEmpty()) {
         renderFinalized();
         return;
@@ -274,9 +278,10 @@ void SignModal::render(const MusigRoundStatus &status) {
             candidates.insert(fingerprint, candidate);
             entry.can_sign = candidate.can_sign;
             if (candidate.route != KeyRouteKind::Unknown) {
-                entry.route = candidate.route;
+                entry.route = account::toPublic<plugin::KeyRouteKind>(candidate.route);
             }
-            entry.on_device = entry.on_device && entry.route == KeyRouteKind::Usb && entry.can_sign;
+            entry.on_device =
+                entry.on_device && entry.route == plugin::KeyRouteKind::Usb && entry.can_sign;
             entries.insert(fingerprint, entry);
         }
     }
@@ -309,7 +314,7 @@ void SignModal::render(const MusigRoundStatus &status) {
             ++left;
         }
         bool signing = !in && busy.contains(fingerprint.toLower());
-        if (signing && entry.route == KeyRouteKind::Hot) {
+        if (signing && entry.route == plugin::KeyRouteKind::Hot) {
             hotSigning = true;
         } else if (signing) {
             deviceSigning = true;
@@ -342,8 +347,8 @@ void SignModal::render(const MusigRoundStatus &status) {
         bool usable = why.isEmpty();
         if (usable) {
             if (signing) {
-                pill = entry.route == KeyRouteKind::Hot ? catalog::pillMusigSigning()
-                                                        : catalog::pillMusigOnDevice();
+                pill = entry.route == plugin::KeyRouteKind::Hot ? catalog::pillMusigSigning()
+                                                                : catalog::pillMusigOnDevice();
             } else if (!in) {
                 pill = catalog::pillMusigNeeded();
             } else if (partial) {
@@ -419,13 +424,26 @@ void SignModal::renderFinalized() {
 }
 
 auto SignModal::keyEntries() const -> QHash<QString, KeyEntry> {
-    QHash<QString, KeyEntry> entries;
-    if (auto *keys = Host::get()->keys(MusigModule::get()); keys != nullptr) {
-        for (const auto &entry : keys->keys(m_controller->network())) {
-            entries.insert(entry.fingerprint.toLower(), entry);
-        }
+    return m_key_entries;
+}
+
+auto SignModal::refreshKeys() -> bool {
+    auto *keys = Host::get()->keys(MusigModule::get());
+    auto result = keys != nullptr
+                      ? keys->keys(account::toPublic<plugin::Network>(m_controller->network()))
+                      : KeyListResult{.error = TR("musig-send-no-keys")};
+    m_key_entries.clear();
+    if (!result.is_ok) {
+        catalog::clearRows(m_rows);
+        showFailure(Failure::Sign, result.error);
+        m_continue_btn->setEnabled(false);
+        m_broadcast_btn->setEnabled(false);
+        return false;
     }
-    return entries;
+    for (const auto &entry : result.entries) {
+        m_key_entries.insert(entry.fingerprint.toLower(), entry);
+    }
+    return true;
 }
 
 auto SignModal::otherRows(const QStringList &signers, const QHash<QString, KeyEntry> &entries) const
@@ -456,7 +474,7 @@ auto SignModal::strangerRows(const QHash<QString, KeyEntry> &entries) const
             continue;
         }
         auto entry = entries.value(fingerprint.toLower());
-        entry.route = KeyRouteKind::Usb;
+        entry.route = plugin::KeyRouteKind::Usb;
         if (entry.alias.isEmpty()) {
             entry.alias = keys::deviceName(*device.signer);
         }
@@ -477,11 +495,7 @@ void SignModal::showFailure(Failure failure, const QString &text) {
 }
 
 auto SignModal::onDevice(const QString &fingerprint) const -> bool {
-    auto *keys = Host::get()->keys(MusigModule::get());
-    if (keys == nullptr) {
-        return false;
-    }
-    auto entries = keys->keys(m_controller->network());
+    auto entries = keyEntries();
     return std::ranges::any_of(entries, [&fingerprint](const KeyEntry &entry) {
         return entry.on_device && entry.fingerprint.compare(fingerprint, Qt::CaseInsensitive) == 0;
     });
@@ -543,6 +557,9 @@ void SignModal::onSigningReset() {
 }
 
 void SignModal::onCosignerClicked() {
+    if (!refreshKeys()) {
+        return;
+    }
     if (!m_plan_ready || !m_plan->is_ok || m_plan_psbt != m_controller->psbtInFlight() ||
         m_controller->restartPending()) {
         return;
@@ -572,11 +589,17 @@ void SignModal::onCosignerClicked() {
 }
 
 void SignModal::onContinueClicked() {
+    if (!refreshKeys()) {
+        return;
+    }
     m_partial = true;
     refresh();
 }
 
 void SignModal::onBroadcastClicked() {
+    if (!refreshKeys()) {
+        return;
+    }
     m_broadcast_btn->setEnabled(false);
     m_controller->broadcast();
 }

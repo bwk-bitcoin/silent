@@ -67,7 +67,7 @@ protected:
     // The spend path picked in the picker, nullptr when none is.
     [[nodiscard]] auto chosenLeaf() const -> const MusigSpendLeaf *;
     [[nodiscard]] auto defaultLeafIndex(const QHash<QString, KeyEntry> &keys) const -> int;
-    [[nodiscard]] auto keyEntries() const -> QHash<QString, KeyEntry>;
+    [[nodiscard]] auto keyEntries() -> QHash<QString, KeyEntry>;
     // Enables Sign, or says why it cannot start.
     void updateSignState();
     // Runs the Sign modal; once it broadcast, shows Transaction Sent and starts over.
@@ -99,6 +99,7 @@ private:
     QWidget *m_actions = nullptr;
     catalog::Button *m_cancel_btn = nullptr;
     catalog::Button *m_sign_btn = nullptr;
+    QString m_keys_error;
 };
 
 } // namespace musig

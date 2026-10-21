@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <optional>
 
 #include <QList>
@@ -8,7 +9,6 @@
 #include <QStringList>
 
 #include <interfaces/types.h>
-#include <silent.h>
 
 class ISigner;
 
@@ -27,12 +27,25 @@ struct KeyEntry {
     QString alias;
     bool can_sign{};
     ISigner *signer{};
-    KeyRouteKind descriptor_route = KeyRouteKind::Unknown;
+    plugin::KeyRouteKind descriptor_route = plugin::KeyRouteKind::Unknown;
     bool can_show_address{};
-    KeyRouteKind route = KeyRouteKind::Unknown;
+    plugin::KeyRouteKind route = plugin::KeyRouteKind::Unknown;
     // Signs MuSig2: a hot key, or a device reporting the MuSig2 capability.
     bool can_musig{};
     bool on_device{};
+};
+
+namespace plugin {
+inline auto validateKeyEntry(const KeyEntry &entry) -> bool {
+    return enumToWire(entry.route).has_value() && enumToWire(entry.descriptor_route).has_value();
+}
+} // namespace plugin
+
+struct KeyListResult {
+    bool is_ok{};
+    plugin::SignError kind = plugin::SignError::Other;
+    QString error{};
+    QList<KeyEntry> entries{};
 };
 
 // The keys module, as accounts and plugins see it. An account never picks a signer:
@@ -49,7 +62,24 @@ public:
     ~IKeys() override = default;
 
     // Registered keys for `network`, in a stable order. GUI thread only.
-    [[nodiscard]] virtual QList<KeyEntry> keys(Network network) const = 0;
+    [[nodiscard]] auto keys(plugin::Network network) const -> KeyListResult {
+        QString message;
+        if (!plugin::enumToWire(network).has_value()) {
+            message = QStringLiteral("invalid network value");
+        } else {
+            auto result = readKeys(network);
+            if (!result.is_ok) {
+                result.entries.clear();
+                return result;
+            }
+            if (std::ranges::all_of(result.entries, plugin::validateKeyEntry)) {
+                return result;
+            }
+            message = QStringLiteral("invalid key route metadata");
+        }
+        return {.kind = plugin::SignError::InvalidRequest, .error = message};
+    }
+
     // Allocates a request id. Callers must call this before every request below,
     // store the id, then call the request: an answer may arrive during the call.
     virtual auto newRequest() -> ReqId = 0;
@@ -69,57 +99,58 @@ public:
     // `wallet_name` names the files of an SD card route.
     // One round per call. A PSBT answered with only MuSig2 nonces added is success
     // (signed_), the caller calls sign() again for the next round.
-    virtual void sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
+    virtual void sign(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
                       const QStringList &descriptors, const QString &wallet_name,
                       const QString &fingerprint) = 0;
     // Signs the PSBT with the key `fingerprint` on its connected USB device (a key
     // whose entry is `on_device`), opening no window: for a caller that shows the wait
     // itself. Answers as sign() does, signed_() or error(), never cancelled().
-    virtual void signOnDevice(ReqId req_id, Network network, const QString &psbt_v2_hex,
+    virtual void signOnDevice(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
                               const QString &descriptor, const QString &fingerprint) = 0;
     // Shows `address` on the device holding the key `descriptor` belongs to, or on the
     // key `fingerprint` alone when it is set (no signer picker).
-    virtual void verifyAddress(ReqId req_id, Network network, const QString &descriptor,
+    virtual void verifyAddress(ReqId req_id, plugin::Network network, const QString &descriptor,
                                const QString &path, const QString &address,
                                const QString &fingerprint) = 0;
     // Shows `address` on the connected USB device of the key `fingerprint` (a key whose
     // entry is `on_device`), opening no window: for a caller that shows the wait
     // itself. Answers verified() or error(), never cancelled().
-    virtual void verifyOnDevice(ReqId req_id, Network network, const QString &descriptor,
+    virtual void verifyOnDevice(ReqId req_id, plugin::Network network, const QString &descriptor,
                                 const QString &path, const QString &address,
                                 const QString &fingerprint) = 0;
     // Fetches the sp() descriptor from the key, over its best route. The only
     // descriptor a key ever hands out: see the SP exception in the design.
-    virtual void spDescriptor(ReqId req_id, Network network, const QString &fingerprint) = 0;
+    virtual void spDescriptor(ReqId req_id, plugin::Network network,
+                              const QString &fingerprint) = 0;
     // Fetches the key's xpub at `path` (an account's segwit or taproot sub-account):
     // from the key's cache when it holds one, else over the key's route. Answers
     // xpubReady(), error() or cancelled().
-    virtual void xpub(ReqId req_id, Network network, const QString &fingerprint,
+    virtual void xpub(ReqId req_id, plugin::Network network, const QString &fingerprint,
                       const QString &path) = 0;
     // Fetches the key's xpub at `path` from its cache, else from its connected USB
     // device (a key whose entry is `on_device`), opening no window. Answers xpubReady()
     // or error(), never cancelled().
-    virtual void xpubOnDevice(ReqId req_id, Network network, const QString &fingerprint,
+    virtual void xpubOnDevice(ReqId req_id, plugin::Network network, const QString &fingerprint,
                               const QString &path) = 0;
     // The key's xpub at `path` when its cache holds one, else empty: no modal, no
     // request, so a caller can skip xpub() and the window it opens.
-    [[nodiscard]] virtual auto cachedXpub(Network network, const QString &fingerprint,
+    [[nodiscard]] virtual auto cachedXpub(plugin::Network network, const QString &fingerprint,
                                           const QString &path) const -> QString = 0;
     // The proof the device returned when `descriptor` was registered on the key
     // `fingerprint` (Ledger's wallet HMAC, hex), empty when none is stored. No request.
-    [[nodiscard]] virtual auto registrationHmac(Network network, const QString &fingerprint,
+    [[nodiscard]] virtual auto registrationHmac(plugin::Network network, const QString &fingerprint,
                                                 const QString &descriptor) const -> QString = 0;
     // Stores it, recording `descriptor` as registered with the key. False when the key
     // is unknown or `hmac` is not 32 bytes of hex.
-    virtual auto storeRegistrationHmac(Network network, const QString &fingerprint,
+    virtual auto storeRegistrationHmac(plugin::Network network, const QString &fingerprint,
                                        const QString &descriptor, const QString &hmac) -> bool = 0;
     // Records that `descriptor` is registered with this key, and registers it on the
     // devices that need it.
-    virtual void registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
-                                    const QString &descriptor) = 0;
+    virtual void registerDescriptor(ReqId req_id, plugin::Network network,
+                                    const QString &fingerprint, const QString &descriptor) = 0;
     // Asks the key's connected USB device whether it holds `descriptor`, registering
     // nothing. Answers registrationChecked() or error() (no device connected...).
-    virtual void checkDescriptorRegistered(ReqId req_id, Network network,
+    virtual void checkDescriptorRegistered(ReqId req_id, plugin::Network network,
                                            const QString &fingerprint,
                                            const QString &descriptor) = 0;
 
@@ -140,7 +171,7 @@ signals:
     // Separate from request failure: only Retired confirms nonce cleanup.
     void attemptRetirement(QString session_id, plugin::RetirementStatus status, QString error);
     void coordinated(ReqId req_id, plugin::SigningResult result);
-    void coordinationError(ReqId req_id, SpendError kind, QString message);
+    void coordinationError(ReqId req_id, plugin::SpendError kind, QString message);
     void requestCancelled(ReqId req_id);
     // NOLINTNEXTLINE(readability-identifier-naming)
     void signed_(ReqId req_id, QString psbt_v2_hex);
@@ -162,8 +193,12 @@ signals:
     // caller shows nothing.
     void cancelled(ReqId req_id);
 
+protected:
+    // Provider hook. Only keys() publishes the validated result to consumers.
+    [[nodiscard]] virtual auto readKeys(plugin::Network network) const -> KeyListResult = 0;
+
 private:
     plugin::Caller m_caller;
 };
 
-Q_DECLARE_INTERFACE(IKeys, "dev.silent.IKeys/2.0")
+Q_DECLARE_INTERFACE(IKeys, "dev.silent.IKeys/3.0")

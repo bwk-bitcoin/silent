@@ -1,4 +1,5 @@
 #include "HwiSigner.h"
+#include "account/InterfaceEnums.h"
 
 #include "HwiModule.h"
 
@@ -40,15 +41,15 @@ constexpr qint64 CONFIRM_TIMEOUT_MS = 300000;
 } // namespace
 
 HwiSigner::HwiSigner(HwiModule *module, const HwiDevice &device, QObject *parent)
-    : ISigner(parent)
-    , m_module(module)
-    , m_id(toQt(device.id))
-    , m_kind(toQt(device.kind))
-    , m_fingerprint(toQt(device.fingerprint))
-    , m_version(toQt(device.version))
-    , m_capabilities(device.capabilities)
-    , m_detail(toQt(device.detail))
-    , m_state(toState(device.state)) {
+    : ISigner(parent),
+      m_module(module),
+      m_id(toQt(device.id)),
+      m_kind(toQt(device.kind)),
+      m_fingerprint(toQt(device.fingerprint)),
+      m_version(toQt(device.version)),
+      m_capabilities(device.capabilities),
+      m_detail(toQt(device.detail)),
+      m_state(toState(device.state)) {
     // Queued on purpose: a result must not land before the caller holds the ReqId.
     auto deferred = static_cast<Qt::ConnectionType>(Qt::QueuedConnection | Qt::UniqueConnection);
     connect(this, &HwiSigner::deferredInfo, this, &HwiSigner::onDeferredInfo, deferred);
@@ -140,14 +141,16 @@ auto HwiSigner::storedHmac(const QString &descriptor) const -> QString {
     if (keys == nullptr) {
         return {};
     }
-    return keys->registrationHmac(HwiModule::network(), m_fingerprint, descriptor);
+    return keys->registrationHmac(account::toPublic<plugin::Network>(HwiModule::network()),
+                                  m_fingerprint, descriptor);
 }
 
 void HwiSigner::storeHmac(const QString &descriptor, const QString &hmac) const {
     auto *keys = Host::get()->keys(m_module);
     // The device did register: a proof not stored only costs a registration later.
     if (keys == nullptr ||
-        !keys->storeRegistrationHmac(HwiModule::network(), m_fingerprint, descriptor, hmac)) {
+        !keys->storeRegistrationHmac(account::toPublic<plugin::Network>(HwiModule::network()),
+                                     m_fingerprint, descriptor, hmac)) {
         qWarning() << "hwi: registration proof of" << m_fingerprint << "not stored";
         return;
     }

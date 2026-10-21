@@ -73,13 +73,27 @@ KeysBus::~KeysBus() {
     }
 }
 
-QList<KeyEntry> KeysBus::keys(Network network) const {
+auto KeysBus::requestNetwork(plugin::Network network, std::optional<ReqId> req_id) const
+    -> std::optional<Network> {
+    auto converted = account::toBridge(network);
+    if (!converted.has_value()) {
+        emit const_cast<KeysBus *>(this)->error(req_id, QStringLiteral("invalid network value"),
+                                                plugin::SignError::InvalidRequest);
+    }
+    return converted;
+}
+
+auto KeysBus::readKeys(plugin::Network network) const -> KeyListResult {
+    auto converted = requestNetwork(network, std::nullopt);
+    if (!converted.has_value()) {
+        return {};
+    }
     QList<KeyEntry> entries;
-    NetworkScope scope(m_module, network);
+    NetworkScope scope(m_module, *converted);
     for (const auto &info : m_module->keys()) {
         entries.append(m_module->buildKeyEntry(info));
     }
-    return entries;
+    return {.is_ok = true, .entries = entries};
 }
 
 auto KeysBus::newRequest() -> ReqId {
@@ -87,12 +101,17 @@ auto KeysBus::newRequest() -> ReqId {
 }
 
 void KeysBus::coordinate(ReqId req_id, const plugin::SigningRequest &request) {
+    if (!account::validRequest(request)) {
+        emit coordinationError(req_id, plugin::SpendError::InvalidRequest,
+                               QStringLiteral("invalid public enum value"));
+        return;
+    }
     if (m_coordination.contains(req_id) || m_releases.contains(req_id)) {
-        emit coordinationError(req_id, SpendError::InvalidRequest,
+        emit coordinationError(req_id, plugin::SpendError::InvalidRequest,
                                QStringLiteral("request already running"));
         return;
     }
-    if (request.stage == SigningStage::Release) {
+    if (request.stage == plugin::SigningStage::Release) {
         m_releases.insert(req_id);
         auto *job = new TransactionJob(req_id, TransactionJob::Operation::Release, request);
         emit attemptRetirement(request.sessionId, plugin::RetirementStatus::Pending, {});
@@ -101,24 +120,25 @@ void KeysBus::coordinate(ReqId req_id, const plugin::SigningRequest &request) {
         job->start();
         return;
     }
-    auto prepared = ::coordination_prepare(request.network, request.psbtV2Hex.toStdString(),
-                                           account::selectedInputs(request.inputs), request.stage);
+    auto prepared = ::coordination_prepare(
+        *account::toBridge(request.network), request.psbtV2Hex.toStdString(),
+        account::selectedInputs(request.inputs), *account::toBridge(request.stage));
     if (!prepared.is_ok) {
-        emit coordinationError(req_id, prepared.kind,
+        emit coordinationError(req_id, account::toPublic<plugin::SpendError>(prepared.kind),
                                QString::fromStdString(std::string(prepared.error)));
         return;
     }
     if (!request.sessionId.isEmpty() &&
         request.sessionId != QString::fromStdString(std::string(prepared.session_id))) {
-        emit coordinationError(req_id, SpendError::Integrity,
+        emit coordinationError(req_id, plugin::SpendError::Integrity,
                                QStringLiteral("session identity does not match the PSBT"));
         return;
     }
-    if (request.stage == SigningStage::CompleteSpOutputs ||
-        request.stage == SigningStage::VerifySpContributions) {
+    if (request.stage == plugin::SigningStage::CompleteSpOutputs ||
+        request.stage == plugin::SigningStage::VerifySpContributions) {
         emit coordinated(req_id,
                          {.psbtV2Hex = QString::fromStdString(std::string(prepared.psbt_v2_hex)),
-                          .progress = prepared.progress,
+                          .progress = account::toPublic<plugin::SigningProgress>(prepared.progress),
                           .sessionId = QString::fromStdString(std::string(prepared.session_id))});
         return;
     }
@@ -127,7 +147,7 @@ void KeysBus::coordinate(ReqId req_id, const plugin::SigningRequest &request) {
     active.sessionId = QString::fromStdString(std::string(prepared.session_id));
     m_coordination.insert(req_id, active);
     emit coordinationStarted(req_id, {.psbtV2Hex = active.psbtV2Hex,
-                                      .progress = SigningProgress::Partial,
+                                      .progress = plugin::SigningProgress::Partial,
                                       .sessionId = active.sessionId});
     QStringList descriptors;
     for (const auto &input : request.inputs) {
@@ -171,104 +191,153 @@ void KeysBus::onCoordinationReleased() {
         return;
     }
     if (!result.is_ok) {
-        emit coordinationError(job->requestId(), result.kind,
+        emit coordinationError(job->requestId(), account::toPublic<plugin::SpendError>(result.kind),
                                QString::fromStdString(std::string(result.error)));
     } else {
         emit coordinated(job->requestId(),
                          {.psbtV2Hex = QString::fromStdString(std::string(result.psbt_v2_hex)),
-                          .progress = result.progress,
+                          .progress = account::toPublic<plugin::SigningProgress>(result.progress),
                           .sessionId = QString::fromStdString(std::string(result.session_id))});
     }
 }
 
-void KeysBus::sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
+void KeysBus::sign(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
                    const QStringList &descriptors, const QString &wallet_name,
                    const QString &fingerprint) {
-    NetworkScope scope(m_module, network);
+    auto converted = requestNetwork(network, req_id);
+    if (!converted.has_value()) {
+        return;
+    }
+    NetworkScope scope(m_module, *converted);
     m_module->sign(req_id, psbt_v2_hex, descriptors, wallet_name, fingerprint);
 }
 
-void KeysBus::signOnDevice(ReqId req_id, Network network, const QString &psbt_v2_hex,
+void KeysBus::signOnDevice(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
                            const QString &descriptor, const QString &fingerprint) {
-    NetworkScope scope(m_module, network);
+    auto converted = requestNetwork(network, req_id);
+    if (!converted.has_value()) {
+        return;
+    }
+    NetworkScope scope(m_module, *converted);
     m_module->signOnDevice(req_id, psbt_v2_hex, descriptor, fingerprint);
 }
 
-void KeysBus::verifyAddress(ReqId req_id, Network network, const QString &descriptor,
+void KeysBus::verifyAddress(ReqId req_id, plugin::Network network, const QString &descriptor,
                             const QString &path, const QString &address,
                             const QString &fingerprint) {
-    NetworkScope scope(m_module, network);
+    auto converted = requestNetwork(network, req_id);
+    if (!converted.has_value()) {
+        return;
+    }
+    NetworkScope scope(m_module, *converted);
     m_module->verifyAddress(req_id, descriptor, path, address, fingerprint);
 }
 
-void KeysBus::verifyOnDevice(ReqId req_id, Network network, const QString &descriptor,
+void KeysBus::verifyOnDevice(ReqId req_id, plugin::Network network, const QString &descriptor,
                              const QString &path, const QString &address,
                              const QString &fingerprint) {
-    NetworkScope scope(m_module, network);
+    auto converted = requestNetwork(network, req_id);
+    if (!converted.has_value()) {
+        return;
+    }
+    NetworkScope scope(m_module, *converted);
     m_module->verifyOnDevice(req_id, descriptor, path, address, fingerprint);
 }
 
-void KeysBus::spDescriptor(ReqId req_id, Network network, const QString &fingerprint) {
-    NetworkScope scope(m_module, network);
+void KeysBus::spDescriptor(ReqId req_id, plugin::Network network, const QString &fingerprint) {
+    auto converted = requestNetwork(network, req_id);
+    if (!converted.has_value()) {
+        return;
+    }
+    NetworkScope scope(m_module, *converted);
     m_module->spDescriptor(req_id, fingerprint);
 }
 
-void KeysBus::xpub(ReqId req_id, Network network, const QString &fingerprint, const QString &path) {
-    NetworkScope scope(m_module, network);
+void KeysBus::xpub(ReqId req_id, plugin::Network network, const QString &fingerprint,
+                   const QString &path) {
+    auto converted = requestNetwork(network, req_id);
+    if (!converted.has_value()) {
+        return;
+    }
+    NetworkScope scope(m_module, *converted);
     m_module->fetchXpub(req_id, fingerprint, path);
 }
 
-void KeysBus::xpubOnDevice(ReqId req_id, Network network, const QString &fingerprint,
+void KeysBus::xpubOnDevice(ReqId req_id, plugin::Network network, const QString &fingerprint,
                            const QString &path) {
-    NetworkScope scope(m_module, network);
+    auto converted = requestNetwork(network, req_id);
+    if (!converted.has_value()) {
+        return;
+    }
+    NetworkScope scope(m_module, *converted);
     m_module->fetchXpubOnDevice(req_id, fingerprint, path);
 }
 
-auto KeysBus::cachedXpub(Network network, const QString &fingerprint, const QString &path) const
-    -> QString {
-    NetworkScope scope(m_module, network);
+auto KeysBus::cachedXpub(plugin::Network network, const QString &fingerprint,
+                         const QString &path) const -> QString {
+    auto converted = requestNetwork(network, std::nullopt);
+    if (!converted.has_value()) {
+        return {};
+    }
+    NetworkScope scope(m_module, *converted);
     return m_module->cachedXpub(fingerprint, path);
 }
 
-auto KeysBus::registrationHmac(Network network, const QString &fingerprint,
+auto KeysBus::registrationHmac(plugin::Network network, const QString &fingerprint,
                                const QString &descriptor) const -> QString {
-    NetworkScope scope(m_module, network);
+    auto converted = requestNetwork(network, std::nullopt);
+    if (!converted.has_value()) {
+        return {};
+    }
+    NetworkScope scope(m_module, *converted);
     return m_module->registrationHmac(fingerprint, descriptor);
 }
 
-auto KeysBus::storeRegistrationHmac(Network network, const QString &fingerprint,
+auto KeysBus::storeRegistrationHmac(plugin::Network network, const QString &fingerprint,
                                     const QString &descriptor, const QString &hmac) -> bool {
-    NetworkScope scope(m_module, network);
+    auto converted = requestNetwork(network, std::nullopt);
+    if (!converted.has_value()) {
+        return false;
+    }
+    NetworkScope scope(m_module, *converted);
     return m_module->storeRegistrationHmac(fingerprint, descriptor, hmac);
 }
 
-void KeysBus::registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
+void KeysBus::registerDescriptor(ReqId req_id, plugin::Network network, const QString &fingerprint,
                                  const QString &descriptor) {
-    NetworkScope scope(m_module, network);
+    auto converted = requestNetwork(network, req_id);
+    if (!converted.has_value()) {
+        return;
+    }
+    NetworkScope scope(m_module, *converted);
     m_module->registerDescriptor(req_id, fingerprint, descriptor);
 }
 
-void KeysBus::checkDescriptorRegistered(ReqId req_id, Network network, const QString &fingerprint,
-                                        const QString &descriptor) {
-    NetworkScope scope(m_module, network);
+void KeysBus::checkDescriptorRegistered(ReqId req_id, plugin::Network network,
+                                        const QString &fingerprint, const QString &descriptor) {
+    auto converted = requestNetwork(network, req_id);
+    if (!converted.has_value()) {
+        return;
+    }
+    NetworkScope scope(m_module, *converted);
     m_module->checkDescriptorRegistered(req_id, fingerprint, descriptor);
 }
 
 void KeysBus::deliverSigned(ReqId req_id, const QString &psbt_v2_hex) {
     if (m_coordination.contains(req_id)) {
         auto request = m_coordination.value(req_id);
-        auto accepted =
-            ::coordination_accept(request.psbtV2Hex.toStdString(), psbt_v2_hex.toStdString(),
-                                  account::selectedInputs(request.inputs), request.stage);
+        auto accepted = ::coordination_accept(
+            request.psbtV2Hex.toStdString(), psbt_v2_hex.toStdString(),
+            account::selectedInputs(request.inputs), *account::toBridge(request.stage));
         if (!accepted.is_ok) {
             cancelRequest(req_id);
-            emit coordinationError(req_id, accepted.kind,
+            emit coordinationError(req_id, account::toPublic<plugin::SpendError>(accepted.kind),
                                    QString::fromStdString(std::string(accepted.error)));
         } else {
             m_coordination.remove(req_id);
             emit coordinated(
                 req_id, {.psbtV2Hex = QString::fromStdString(std::string(accepted.psbt_v2_hex)),
-                         .progress = accepted.progress,
+                         .progress = account::toPublic<plugin::SigningProgress>(accepted.progress),
                          .sessionId = QString::fromStdString(std::string(accepted.session_id))});
         }
         return;
@@ -285,8 +354,9 @@ void KeysBus::deliverError(std::optional<ReqId> req_id, const QString &message,
     if (req_id.has_value() && m_coordination.contains(*req_id)) {
         cancelRequest(*req_id);
         emit coordinationError(*req_id,
-                               kind == plugin::SignError::MusigSession ? SpendError::LostSession
-                                                                       : SpendError::Other,
+                               kind == plugin::SignError::MusigSession
+                                   ? plugin::SpendError::LostSession
+                                   : plugin::SpendError::Other,
                                message);
         return;
     }
@@ -501,10 +571,10 @@ auto KeysModule::buildKeyEntry(const KeyInfo &info) -> KeyEntry {
     KeyEntry entry;
     entry.fingerprint = fingerprint;
     entry.alias = toQt(info.alias);
-    entry.descriptor_route = descriptorRoute(info);
+    entry.descriptor_route = account::toPublic<plugin::KeyRouteKind>(descriptorRoute(info));
     entry.can_musig = info.can_musig;
     if (!info.routes.empty()) {
-        entry.route = info.routes.front();
+        entry.route = account::toPublic<plugin::KeyRouteKind>(info.routes.front());
     }
     entry.can_show_address = std::ranges::any_of(info.routes, [](KeyRouteKind route) {
         return route == KeyRouteKind::Usb || route == KeyRouteKind::Qr;

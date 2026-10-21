@@ -1,6 +1,7 @@
 #pragma once
 
 #include "catalog/containers/Modal.h"
+#include "interfaces/keys.h"
 #include "interfaces/types.h"
 
 #include <QHash>
@@ -63,6 +64,7 @@ protected:
     // Checks the key's device when it is connected, else marks it Disconnected.
     void check(const QString &fingerprint);
     void refresh();
+    auto refreshKeys() -> bool;
     // The key's route needs the account registered on a device (USB, QR, SD card).
     [[nodiscard]] auto needsRegister(const QString &fingerprint) const -> bool;
     [[nodiscard]] auto onDevice(const QString &fingerprint) const -> bool;
@@ -80,6 +82,7 @@ private:
     qontrol::Column *m_rows = nullptr;
     catalog::Button *m_done_btn = nullptr;
     catalog::ModalActions *m_actions = nullptr;
+    QHash<QString, KeyEntry> m_key_entries;
 };
 
 } // namespace musig::modal

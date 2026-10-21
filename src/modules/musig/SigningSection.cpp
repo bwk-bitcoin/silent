@@ -1,4 +1,5 @@
 #include "SigningSection.h"
+#include "account/InterfaceEnums.h"
 
 #include "AppController.h"
 #include "account/views/Send.h"
@@ -146,13 +147,20 @@ void SigningSection::retranslateUi() {
     updateSignState();
 }
 
-auto SigningSection::keyEntries() const -> QHash<QString, KeyEntry> {
+auto SigningSection::keyEntries() -> QHash<QString, KeyEntry> {
     QHash<QString, KeyEntry> entries;
     auto *keys = Host::get()->keys(MusigModule::get());
     if (keys == nullptr) {
         return entries;
     }
-    for (const auto &entry : keys->keys(m_controller->network())) {
+    auto result = keys->keys(account::toPublic<plugin::Network>(m_controller->network()));
+    m_keys_error = result.error;
+    if (!result.is_ok) {
+        m_reason_label->setText(result.error);
+        m_sign_btn->setEnabled(false);
+        return entries;
+    }
+    for (const auto &entry : result.entries) {
         entries.insert(entry.fingerprint.toLower(), entry);
     }
     return entries;
@@ -216,6 +224,11 @@ auto SigningSection::chosenLeaf() const -> const MusigSpendLeaf * {
 }
 
 void SigningSection::updateSignState() {
+    if (!m_keys_error.isEmpty()) {
+        m_reason_label->setText(m_keys_error);
+        m_sign_btn->setEnabled(false);
+        return;
+    }
     // While a session runs, Sign opens its modal again and Cancel drops it.
     m_cancel_btn->setVisible(m_session);
     if (m_session) {
@@ -323,6 +336,10 @@ void SigningSection::onSpendLeafChosen(int index) {
 }
 
 void SigningSection::onSignClicked() {
+    static_cast<void>(keyEntries());
+    if (!m_keys_error.isEmpty()) {
+        return;
+    }
     if (m_session) {
         openSignModal();
         return;

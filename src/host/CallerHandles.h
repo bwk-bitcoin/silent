@@ -61,38 +61,37 @@ public:
         return m_target;
     }
 
-    [[nodiscard]] QList<KeyEntry> keys(Network network) const override;
     auto newRequest() -> ReqId override;
     void cancelRequest(ReqId req_id) override;
     void coordinate(ReqId req_id, const plugin::SigningRequest &request) override;
     void retire();
     void release();
-    void sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
+    void sign(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
               const QStringList &descriptors, const QString &wallet_name,
               const QString &fingerprint) override;
-    void signOnDevice(ReqId req_id, Network network, const QString &psbt_v2_hex,
+    void signOnDevice(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
                       const QString &descriptor, const QString &fingerprint) override;
-    void verifyAddress(ReqId req_id, Network network, const QString &descriptor,
+    void verifyAddress(ReqId req_id, plugin::Network network, const QString &descriptor,
                        const QString &path, const QString &address,
                        const QString &fingerprint) override;
-    void verifyOnDevice(ReqId req_id, Network network, const QString &descriptor,
+    void verifyOnDevice(ReqId req_id, plugin::Network network, const QString &descriptor,
                         const QString &path, const QString &address,
                         const QString &fingerprint) override;
-    void spDescriptor(ReqId req_id, Network network, const QString &fingerprint) override;
-    void xpub(ReqId req_id, Network network, const QString &fingerprint,
+    void spDescriptor(ReqId req_id, plugin::Network network, const QString &fingerprint) override;
+    void xpub(ReqId req_id, plugin::Network network, const QString &fingerprint,
               const QString &path) override;
-    void xpubOnDevice(ReqId req_id, Network network, const QString &fingerprint,
+    void xpubOnDevice(ReqId req_id, plugin::Network network, const QString &fingerprint,
                       const QString &path) override;
-    [[nodiscard]] auto cachedXpub(Network network, const QString &fingerprint,
+    [[nodiscard]] auto cachedXpub(plugin::Network network, const QString &fingerprint,
                                   const QString &path) const -> QString override;
-    [[nodiscard]] auto registrationHmac(Network network, const QString &fingerprint,
+    [[nodiscard]] auto registrationHmac(plugin::Network network, const QString &fingerprint,
                                         const QString &descriptor) const -> QString override;
-    auto storeRegistrationHmac(Network network, const QString &fingerprint,
+    auto storeRegistrationHmac(plugin::Network network, const QString &fingerprint,
                                const QString &descriptor, const QString &hmac) -> bool override;
-    void registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
+    void registerDescriptor(ReqId req_id, plugin::Network network, const QString &fingerprint,
                             const QString &descriptor) override;
-    void checkDescriptorRegistered(ReqId req_id, Network network, const QString &fingerprint,
-                                   const QString &descriptor) override;
+    void checkDescriptorRegistered(ReqId req_id, plugin::Network network,
+                                   const QString &fingerprint, const QString &descriptor) override;
 
 private slots:
     void onTargetDestroyed();
@@ -101,7 +100,7 @@ private slots:
     void onAttemptRetirement(const QString &session_id, plugin::RetirementStatus status,
                              const QString &error);
     void onRetirementFinished();
-    void onCoordinationError(ReqId req_id, SpendError kind, const QString &message);
+    void onCoordinationError(ReqId req_id, plugin::SpendError kind, const QString &message);
     void onSigned(ReqId req_id, const QString &psbt_v2_hex);
     void onVerified(ReqId req_id, bool verified);
     void onSpDescriptorReady(ReqId req_id, const QString &descriptor, const QString &fingerprint);
@@ -113,9 +112,11 @@ private slots:
     void onCancelled(ReqId req_id);
 
 protected:
+    [[nodiscard]] auto readKeys(plugin::Network network) const -> KeyListResult override;
     // The keys module, with the caller stamped, or null after answering error() when
     // the caller may not use keys or the keys module is gone.
-    [[nodiscard]] auto allowedTarget(std::optional<ReqId> req_id) const -> IKeys *;
+    [[nodiscard]] auto allowedTarget(std::optional<ReqId> req_id, plugin::Network network) const
+        -> IKeys *;
     [[nodiscard]] auto mine(ReqId req_id) const -> bool;
     auto finish(ReqId req_id) -> bool;
 
@@ -138,7 +139,7 @@ public:
     auto newRequest() -> ReqId override;
     void cancelRequest(ReqId req_id) override;
     void finalize(ReqId req_id, const plugin::SigningRequest &request) override;
-    void broadcast(ReqId req_id, Network network, const QString &endpoint,
+    void broadcast(ReqId req_id, plugin::Network network, const QString &endpoint,
                    const QString &tx_hex) override;
     void retire();
 

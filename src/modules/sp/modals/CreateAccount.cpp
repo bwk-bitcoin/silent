@@ -1,4 +1,5 @@
 #include "CreateAccount.h"
+#include "account/InterfaceEnums.h"
 
 #include "AppController.h"
 #include "catalog/Button.h"
@@ -220,6 +221,9 @@ auto CreateAccount::network() const -> Network {
 }
 
 auto CreateAccount::disabledReason() const -> QString {
+    if (!m_keys_error.isEmpty()) {
+        return m_keys_error;
+    }
     QString name = m_name_input->text();
     QString trimmed = name.trimmed();
     if (trimmed.isEmpty()) {
@@ -257,22 +261,30 @@ void CreateAccount::populateKeys() {
     m_keys_column->spacing(resolve(Spacing::S));
     m_key_rows.clear();
     m_keys.clear();
+    m_keys_error.clear();
 
     auto *bus = Host::get()->keys(SpModule::get());
     if (bus != nullptr) {
-        m_keys = bus->keys(network());
+        auto result = bus->keys(account::toPublic<plugin::Network>(network()));
+        if (!result.is_ok) {
+            m_keys_error = result.error;
+            showFetchError(result.error);
+            m_fetch_row->hide();
+            updateActions();
+            return;
+        }
+        m_keys = result.entries;
     }
 
     for (const auto &entry : m_keys) {
         auto *row = new catalog::SelectRow;
-        bool reachable = entry.descriptor_route != KeyRouteKind::Unknown;
-        row->setIcon(reachable ? catalog::routeIcon(entry.descriptor_route) : icon::key);
+        auto route = account::toBridge(entry.descriptor_route);
+        bool reachable = *route != KeyRouteKind::Unknown;
+        row->setIcon(reachable ? catalog::routeIcon(*route) : icon::key);
         row->setTitle(entry.alias.isEmpty() ? entry.fingerprint : entry.alias);
         row->setMeta(entry.fingerprint);
-        row->setSub(
-            reachable
-                ? TR("create-account-key-route").arg(catalog::routeLabel(entry.descriptor_route))
-                : TR("create-account-key-no-route"));
+        row->setSub(reachable ? TR("create-account-key-route").arg(catalog::routeLabel(*route))
+                              : TR("create-account-key-no-route"));
         row->setEnabled(reachable);
         row->setProperty("fingerprint", entry.fingerprint);
         connect(row, &catalog::SelectRow::clicked, this, &CreateAccount::onKeyClicked,
@@ -289,8 +301,16 @@ void CreateAccount::populateKeys() {
         // only the keys it has loaded.
         bool elsewhere = false;
         for (auto other : NETWORKS) {
-            if (other != network() && bus != nullptr && !bus->keys(other).empty()) {
-                elsewhere = true;
+            if (other != network() && bus != nullptr) {
+                auto result = bus->keys(account::toPublic<plugin::Network>(other));
+                if (!result.is_ok) {
+                    m_keys_error = result.error;
+                    showFetchError(result.error);
+                    m_fetch_row->hide();
+                    updateActions();
+                    return;
+                }
+                elsewhere = elsewhere || !result.entries.empty();
             }
         }
         catalog::EmptyState *empty = nullptr;
@@ -401,7 +421,7 @@ auto CreateAccount::takeCachedXpub(Fetch fetch) -> bool {
         return false;
     }
     QString xpub =
-        bus->cachedXpub(network(), m_key_fp,
+        bus->cachedXpub(account::toPublic<plugin::Network>(network()), m_key_fp,
                         subAccountPath(fetch == Fetch::Taproot ? TAPROOT_PURPOSE : SEGWIT_PURPOSE));
     if (xpub.isEmpty()) {
         return false;
@@ -426,13 +446,14 @@ void CreateAccount::runFetch() {
     switch (fetch) {
     case Fetch::SilentPayment:
         m_descriptor_req_id = bus->newRequest();
-        bus->spDescriptor(m_descriptor_req_id, network(), m_key_fp);
+        bus->spDescriptor(m_descriptor_req_id, account::toPublic<plugin::Network>(network()),
+                          m_key_fp);
         break;
     case Fetch::Taproot:
     case Fetch::Segwit:
         m_xpub_fetch = fetch;
         m_xpub_req_id = bus->newRequest();
-        bus->xpub(m_xpub_req_id, network(), m_key_fp,
+        bus->xpub(m_xpub_req_id, account::toPublic<plugin::Network>(network()), m_key_fp,
                   subAccountPath(fetch == Fetch::Taproot ? TAPROOT_PURPOSE : SEGWIT_PURPOSE));
         break;
     }
@@ -551,8 +572,8 @@ void CreateAccount::registerNext() {
     }
     m_register_req_id = bus->newRequest();
     updateActions();
-    bus->registerDescriptor(m_register_req_id, network(), m_descriptor_fingerprint,
-                            m_to_register.takeFirst());
+    bus->registerDescriptor(m_register_req_id, account::toPublic<plugin::Network>(network()),
+                            m_descriptor_fingerprint, m_to_register.takeFirst());
 }
 
 void CreateAccount::onDescriptorRegistered(ReqId req_id) {

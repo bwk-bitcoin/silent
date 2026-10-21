@@ -1,6 +1,7 @@
 #include "CallerHandles.h"
 
 #include "Host.h"
+#include "account/Spending.h"
 #include "account/TransactionJob.h"
 #include "i18n/Tr.h"
 
@@ -125,17 +126,29 @@ void KeysHandle::coordinate(ReqId req_id, const plugin::SigningRequest &request)
         return;
     }
     if (!mine(req_id)) {
-        emit coordinationError(req_id, SpendError::InvalidRequest,
+        emit coordinationError(req_id, plugin::SpendError::InvalidRequest,
                                QStringLiteral("request was not allocated by this caller"));
         return;
     }
     if (m_target == nullptr || !m_host->allowed(m_module, Grant::Keys, true)) {
         m_requests.remove(req_id);
-        emit coordinationError(req_id, SpendError::Permission,
+        emit coordinationError(req_id, plugin::SpendError::Permission,
                                QStringLiteral("keys unavailable or access denied"));
         return;
     }
+    if (!account::validRequest(request)) {
+        m_requests.remove(req_id);
+        emit coordinationError(req_id, plugin::SpendError::InvalidRequest,
+                               QStringLiteral("invalid public enum value"));
+        return;
+    }
     CallerScope scope(m_target.data(), HostImpl::caller(m_module));
+    auto metadata = m_target->keys(request.network);
+    if (!metadata.is_ok) {
+        m_requests.remove(req_id);
+        emit coordinationError(req_id, plugin::SpendError::InvalidRequest, metadata.error);
+        return;
+    }
     setCaller(HostImpl::caller(m_module));
     m_submitted.insert(req_id);
     m_coordination_requests.insert(req_id, request);
@@ -148,10 +161,10 @@ void KeysHandle::onCoordinated(ReqId req_id, const plugin::SigningResult &result
     }
     m_submitted.remove(req_id);
     auto request = m_coordination_requests.take(req_id);
-    if (request.stage == SigningStage::Release) {
+    if (request.stage == plugin::SigningStage::Release) {
         m_attempts.remove(request.sessionId);
     } else if (!result.sessionId.isEmpty()) {
-        if (result.progress == SigningProgress::Complete) {
+        if (result.progress == plugin::SigningProgress::Complete) {
             m_attempts.remove(result.sessionId);
         } else {
             request.psbtV2Hex = result.psbtV2Hex;
@@ -163,12 +176,13 @@ void KeysHandle::onCoordinated(ReqId req_id, const plugin::SigningResult &result
         emit coordinated(req_id, result);
     } else {
         retire();
-        emit coordinationError(req_id, SpendError::Permission,
+        emit coordinationError(req_id, plugin::SpendError::Permission,
                                QStringLiteral("keys permission revoked"));
     }
 }
 
-void KeysHandle::onCoordinationError(ReqId req_id, SpendError kind, const QString &message) {
+void KeysHandle::onCoordinationError(ReqId req_id, plugin::SpendError kind,
+                                     const QString &message) {
     m_submitted.remove(req_id);
     m_coordination_requests.remove(req_id);
     if (m_requests.remove(req_id)) {
@@ -211,12 +225,12 @@ auto TransactionsHandle::begin(ReqId req_id) -> bool {
         return false;
     }
     if (m_retired || !m_allocated.remove(req_id)) {
-        emit error(req_id, SpendError::InvalidRequest,
+        emit error(req_id, plugin::SpendError::InvalidRequest,
                    QStringLiteral("request is unknown or already submitted"));
         return false;
     }
     if (!m_host->allowed(m_module, Grant::Account, true)) {
-        emit error(req_id, SpendError::Permission, QStringLiteral("account access denied"));
+        emit error(req_id, plugin::SpendError::Permission, QStringLiteral("account access denied"));
         return false;
     }
     m_pending.insert(req_id);
@@ -233,7 +247,7 @@ void TransactionsHandle::finalize(ReqId req_id, const plugin::SigningRequest &re
     job->start();
 }
 
-void TransactionsHandle::broadcast(ReqId req_id, Network network, const QString &endpoint,
+void TransactionsHandle::broadcast(ReqId req_id, plugin::Network network, const QString &endpoint,
                                    const QString &tx_hex) {
     if (!begin(req_id)) {
         return;
@@ -254,12 +268,14 @@ void TransactionsHandle::onFinished() {
     }
     auto reqId = job->requestId();
     if (!m_host->allowed(m_module, Grant::Account, false)) {
-        emit error(reqId, SpendError::Permission, QStringLiteral("account permission revoked"));
+        emit error(reqId, plugin::SpendError::Permission,
+                   QStringLiteral("account permission revoked"));
         return;
     }
     const auto &result = job->result();
     if (!result.is_ok) {
-        emit error(reqId, result.kind, QString::fromStdString(std::string(result.error)));
+        emit error(reqId, account::toPublic<plugin::SpendError>(result.kind),
+                   QString::fromStdString(std::string(result.error)));
     } else if (job->operation() == TransactionJob::Operation::Broadcast) {
         emit broadcasted(reqId, QString::fromStdString(std::string(result.txid)));
     } else {
@@ -269,7 +285,8 @@ void TransactionsHandle::onFinished() {
     }
 }
 
-auto KeysHandle::allowedTarget(std::optional<ReqId> req_id) const -> IKeys * {
+auto KeysHandle::allowedTarget(std::optional<ReqId> req_id, plugin::Network network) const
+    -> IKeys * {
     auto *self = const_cast<KeysHandle *>(this);
     if (req_id.has_value()) {
         if (m_submitted.contains(*req_id)) {
@@ -280,6 +297,15 @@ auto KeysHandle::allowedTarget(std::optional<ReqId> req_id) const -> IKeys * {
             return nullptr;
         }
         self->m_submitted.insert(*req_id);
+    }
+    if (!plugin::enumToWire(network).has_value()) {
+        if (req_id.has_value()) {
+            self->m_requests.remove(*req_id);
+            self->m_submitted.remove(*req_id);
+        }
+        emit self->error(req_id, QStringLiteral("invalid network value"),
+                         plugin::SignError::InvalidRequest);
+        return nullptr;
     }
     if (m_target == nullptr) {
         if (req_id.has_value()) {
@@ -292,6 +318,16 @@ auto KeysHandle::allowedTarget(std::optional<ReqId> req_id) const -> IKeys * {
             emit self->error(req_id, TR("plugin-access-refused-keys"));
         }
         return nullptr;
+    }
+    if (req_id.has_value()) {
+        CallerScope scope(m_target.data(), HostImpl::caller(m_module));
+        auto metadata = m_target->keys(network);
+        if (!metadata.is_ok) {
+            self->m_requests.remove(*req_id);
+            self->m_submitted.remove(*req_id);
+            emit self->error(req_id, metadata.error, metadata.kind);
+            return nullptr;
+        }
     }
     return m_target;
 }
@@ -316,7 +352,7 @@ void KeysHandle::onTargetDestroyed() {
     auto requests = m_requests;
     for (auto reqId : requests) {
         if (m_coordination_requests.contains(reqId)) {
-            emit coordinationError(reqId, SpendError::LostSession,
+            emit coordinationError(reqId, plugin::SpendError::LostSession,
                                    QStringLiteral("keys service removed"));
         } else {
             emit error(reqId, QStringLiteral("keys service removed"),
@@ -329,10 +365,10 @@ void KeysHandle::onTargetDestroyed() {
     retire();
 }
 
-QList<KeyEntry> KeysHandle::keys(Network network) const {
-    auto *target = allowedTarget(std::nullopt);
+auto KeysHandle::readKeys(plugin::Network network) const -> KeyListResult {
+    auto *target = allowedTarget(std::nullopt, network);
     if (target == nullptr) {
-        return {};
+        return {.error = QStringLiteral("keys unavailable or access denied")};
     }
     CallerScope scope(target, HostImpl::caller(m_module));
     return target->keys(network);
@@ -349,10 +385,10 @@ auto KeysHandle::newRequest() -> ReqId {
     return reqId;
 }
 
-void KeysHandle::sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
+void KeysHandle::sign(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
                       const QStringList &descriptors, const QString &wallet_name,
                       const QString &fingerprint) {
-    auto *target = allowedTarget(req_id);
+    auto *target = allowedTarget(req_id, network);
     if (target == nullptr) {
         return;
     }
@@ -360,9 +396,9 @@ void KeysHandle::sign(ReqId req_id, Network network, const QString &psbt_v2_hex,
     target->sign(req_id, network, psbt_v2_hex, descriptors, wallet_name, fingerprint);
 }
 
-void KeysHandle::signOnDevice(ReqId req_id, Network network, const QString &psbt_v2_hex,
+void KeysHandle::signOnDevice(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
                               const QString &descriptor, const QString &fingerprint) {
-    auto *target = allowedTarget(req_id);
+    auto *target = allowedTarget(req_id, network);
     if (target == nullptr) {
         return;
     }
@@ -370,10 +406,10 @@ void KeysHandle::signOnDevice(ReqId req_id, Network network, const QString &psbt
     target->signOnDevice(req_id, network, psbt_v2_hex, descriptor, fingerprint);
 }
 
-void KeysHandle::verifyAddress(ReqId req_id, Network network, const QString &descriptor,
+void KeysHandle::verifyAddress(ReqId req_id, plugin::Network network, const QString &descriptor,
                                const QString &path, const QString &address,
                                const QString &fingerprint) {
-    auto *target = allowedTarget(req_id);
+    auto *target = allowedTarget(req_id, network);
     if (target == nullptr) {
         return;
     }
@@ -381,10 +417,10 @@ void KeysHandle::verifyAddress(ReqId req_id, Network network, const QString &des
     target->verifyAddress(req_id, network, descriptor, path, address, fingerprint);
 }
 
-void KeysHandle::verifyOnDevice(ReqId req_id, Network network, const QString &descriptor,
+void KeysHandle::verifyOnDevice(ReqId req_id, plugin::Network network, const QString &descriptor,
                                 const QString &path, const QString &address,
                                 const QString &fingerprint) {
-    auto *target = allowedTarget(req_id);
+    auto *target = allowedTarget(req_id, network);
     if (target == nullptr) {
         return;
     }
@@ -392,8 +428,8 @@ void KeysHandle::verifyOnDevice(ReqId req_id, Network network, const QString &de
     target->verifyOnDevice(req_id, network, descriptor, path, address, fingerprint);
 }
 
-void KeysHandle::spDescriptor(ReqId req_id, Network network, const QString &fingerprint) {
-    auto *target = allowedTarget(req_id);
+void KeysHandle::spDescriptor(ReqId req_id, plugin::Network network, const QString &fingerprint) {
+    auto *target = allowedTarget(req_id, network);
     if (target == nullptr) {
         return;
     }
@@ -401,9 +437,9 @@ void KeysHandle::spDescriptor(ReqId req_id, Network network, const QString &fing
     target->spDescriptor(req_id, network, fingerprint);
 }
 
-void KeysHandle::xpub(ReqId req_id, Network network, const QString &fingerprint,
+void KeysHandle::xpub(ReqId req_id, plugin::Network network, const QString &fingerprint,
                       const QString &path) {
-    auto *target = allowedTarget(req_id);
+    auto *target = allowedTarget(req_id, network);
     if (target == nullptr) {
         return;
     }
@@ -411,9 +447,9 @@ void KeysHandle::xpub(ReqId req_id, Network network, const QString &fingerprint,
     target->xpub(req_id, network, fingerprint, path);
 }
 
-void KeysHandle::xpubOnDevice(ReqId req_id, Network network, const QString &fingerprint,
+void KeysHandle::xpubOnDevice(ReqId req_id, plugin::Network network, const QString &fingerprint,
                               const QString &path) {
-    auto *target = allowedTarget(req_id);
+    auto *target = allowedTarget(req_id, network);
     if (target == nullptr) {
         return;
     }
@@ -421,9 +457,9 @@ void KeysHandle::xpubOnDevice(ReqId req_id, Network network, const QString &fing
     target->xpubOnDevice(req_id, network, fingerprint, path);
 }
 
-auto KeysHandle::cachedXpub(Network network, const QString &fingerprint, const QString &path) const
-    -> QString {
-    auto *target = allowedTarget(std::nullopt);
+auto KeysHandle::cachedXpub(plugin::Network network, const QString &fingerprint,
+                            const QString &path) const -> QString {
+    auto *target = allowedTarget(std::nullopt, network);
     if (target == nullptr) {
         return {};
     }
@@ -431,9 +467,9 @@ auto KeysHandle::cachedXpub(Network network, const QString &fingerprint, const Q
     return target->cachedXpub(network, fingerprint, path);
 }
 
-auto KeysHandle::registrationHmac(Network network, const QString &fingerprint,
+auto KeysHandle::registrationHmac(plugin::Network network, const QString &fingerprint,
                                   const QString &descriptor) const -> QString {
-    auto *target = allowedTarget(std::nullopt);
+    auto *target = allowedTarget(std::nullopt, network);
     if (target == nullptr) {
         return {};
     }
@@ -441,9 +477,9 @@ auto KeysHandle::registrationHmac(Network network, const QString &fingerprint,
     return target->registrationHmac(network, fingerprint, descriptor);
 }
 
-auto KeysHandle::storeRegistrationHmac(Network network, const QString &fingerprint,
+auto KeysHandle::storeRegistrationHmac(plugin::Network network, const QString &fingerprint,
                                        const QString &descriptor, const QString &hmac) -> bool {
-    auto *target = allowedTarget(std::nullopt);
+    auto *target = allowedTarget(std::nullopt, network);
     if (target == nullptr) {
         return false;
     }
@@ -451,9 +487,9 @@ auto KeysHandle::storeRegistrationHmac(Network network, const QString &fingerpri
     return target->storeRegistrationHmac(network, fingerprint, descriptor, hmac);
 }
 
-void KeysHandle::registerDescriptor(ReqId req_id, Network network, const QString &fingerprint,
-                                    const QString &descriptor) {
-    auto *target = allowedTarget(req_id);
+void KeysHandle::registerDescriptor(ReqId req_id, plugin::Network network,
+                                    const QString &fingerprint, const QString &descriptor) {
+    auto *target = allowedTarget(req_id, network);
     if (target == nullptr) {
         return;
     }
@@ -461,9 +497,9 @@ void KeysHandle::registerDescriptor(ReqId req_id, Network network, const QString
     target->registerDescriptor(req_id, network, fingerprint, descriptor);
 }
 
-void KeysHandle::checkDescriptorRegistered(ReqId req_id, Network network,
+void KeysHandle::checkDescriptorRegistered(ReqId req_id, plugin::Network network,
                                            const QString &fingerprint, const QString &descriptor) {
-    auto *target = allowedTarget(req_id);
+    auto *target = allowedTarget(req_id, network);
     if (target == nullptr) {
         return;
     }

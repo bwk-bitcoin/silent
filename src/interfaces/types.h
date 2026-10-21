@@ -4,9 +4,8 @@
 #include <QMetaType>
 #include <QString>
 #include <QtGlobal>
-#include <cstdint>
+#include <interfaces/enums.h>
 #include <optional>
-#include <silent.h>
 
 using ReqId = quint64;
 
@@ -76,8 +75,6 @@ struct SigningResult {
     QString sessionId;
 };
 
-enum class RetirementStatus { Pending, Retired, Failed };
-
 struct Balance {
     quint64 confirmed{};
     quint64 unconfirmed{};
@@ -120,12 +117,6 @@ struct Access {
     bool state{};
 };
 
-// Why a sign request failed, beyond its message.
-enum class SignError : std::uint8_t {
-    Other,
-    MusigSession, // the device has no matching MuSig2 session: restart from round 1
-};
-
 } // namespace plugin
 
 Q_DECLARE_METATYPE(plugin::Coin)
@@ -135,4 +126,4 @@ Q_DECLARE_METATYPE(std::optional<ReqId>)
 Q_DECLARE_METATYPE(plugin::SignError)
 Q_DECLARE_METATYPE(plugin::SigningResult)
 Q_DECLARE_METATYPE(plugin::RetirementStatus)
-Q_DECLARE_METATYPE(SpendError)
+Q_DECLARE_METATYPE(plugin::SpendError)

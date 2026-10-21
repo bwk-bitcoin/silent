@@ -105,6 +105,7 @@ protected:
     // The same from `status`.
     void render(const MusigRoundStatus &status);
     void renderFinalized();
+    auto refreshKeys() -> bool;
     [[nodiscard]] auto keyEntries() const -> QHash<QString, KeyEntry>;
     // The wallet's keys the spend path `signers` does not use, greyed out.
     [[nodiscard]] auto otherRows(const QStringList &signers,
@@ -139,6 +140,7 @@ private:
     bool m_plan_loading = false;
     bool m_plan_ready = false;
     bool m_plan_dirty = false;
+    QHash<QString, KeyEntry> m_key_entries;
 };
 
 } // namespace musig

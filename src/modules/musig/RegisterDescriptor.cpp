@@ -1,4 +1,5 @@
 #include "RegisterDescriptor.h"
+#include "account/InterfaceEnums.h"
 
 #include "catalog/Button.h"
 #include "catalog/ClearRows.h"
@@ -26,16 +27,6 @@ namespace {
 
 const char *const K_FINGERPRINT = "fingerprint";
 
-auto keyEntries(Network network) -> QHash<QString, KeyEntry> {
-    QHash<QString, KeyEntry> entries;
-    if (auto *keys = Host::get()->keys(MusigModule::get()); keys != nullptr) {
-        for (const auto &entry : keys->keys(network)) {
-            entries.insert(entry.fingerprint.toLower(), entry);
-        }
-    }
-    return entries;
-}
-
 } // namespace
 
 RegisterDescriptor::RegisterDescriptor(MusigAccountController *controller)
@@ -45,6 +36,9 @@ RegisterDescriptor::RegisterDescriptor(MusigAccountController *controller)
     init();
     doConnect();
     view();
+    if (!refreshKeys()) {
+        return;
+    }
     for (const auto &fingerprint : m_fingerprints) {
         if (needsRegister(fingerprint)) {
             check(fingerprint);
@@ -100,31 +94,34 @@ void RegisterDescriptor::retranslateUi() {
 }
 
 auto RegisterDescriptor::needsRegister(const QString &fingerprint) const -> bool {
-    auto entry = keyEntries(m_controller->network()).value(fingerprint.toLower());
+    auto entry = m_key_entries.value(fingerprint.toLower());
     switch (entry.route) {
-    case KeyRouteKind::Usb:
-    case KeyRouteKind::Qr:
-    case KeyRouteKind::SdCard:
+    case plugin::KeyRouteKind::Usb:
+    case plugin::KeyRouteKind::Qr:
+    case plugin::KeyRouteKind::SdCard:
         return true;
-    case KeyRouteKind::Hot:
-    case KeyRouteKind::Unknown:
-    default:
+    case plugin::KeyRouteKind::Hot:
+    case plugin::KeyRouteKind::Unknown:
         return false;
     }
+    qFatal("unvalidated key route");
 }
 
 auto RegisterDescriptor::onDevice(const QString &fingerprint) const -> bool {
-    return keyEntries(m_controller->network()).value(fingerprint.toLower()).on_device;
+    return m_key_entries.value(fingerprint.toLower()).on_device;
 }
 
 void RegisterDescriptor::check(const QString &fingerprint) {
+    if (!refreshKeys()) {
+        return;
+    }
     auto *keys = Host::get()->keys(MusigModule::get());
     if (keys == nullptr) {
         return;
     }
     // A QR or SD card key is never asked: it reads Not Registered until registered here.
-    auto entry = keyEntries(m_controller->network()).value(fingerprint.toLower());
-    if (entry.route != KeyRouteKind::Usb) {
+    auto entry = m_key_entries.value(fingerprint.toLower());
+    if (entry.route != plugin::KeyRouteKind::Usb) {
         m_states.insert(fingerprint, State::NotRegistered);
         return;
     }
@@ -136,14 +133,39 @@ void RegisterDescriptor::check(const QString &fingerprint) {
     auto req = keys->newRequest();
     m_requests.insert(req, fingerprint);
     // The answer may come during the call.
-    keys->checkDescriptorRegistered(req, m_controller->network(), fingerprint, m_descriptor);
+    keys->checkDescriptorRegistered(req,
+                                    account::toPublic<plugin::Network>(m_controller->network()),
+                                    fingerprint, m_descriptor);
+}
+
+auto RegisterDescriptor::refreshKeys() -> bool {
+    auto *keys = Host::get()->keys(MusigModule::get());
+    auto result = keys != nullptr
+                      ? keys->keys(account::toPublic<plugin::Network>(m_controller->network()))
+                      : KeyListResult{.error = TR("musig-send-no-keys")};
+    m_key_entries.clear();
+    if (!result.is_ok) {
+        catalog::clearRows(m_rows);
+        m_lead->setText(result.error);
+        m_lead->setTone(catalog::LabelTone::Error);
+        return false;
+    }
+    m_lead->setText(TR("musig-register-lead"));
+    m_lead->setTone(catalog::LabelTone::Default);
+    for (const auto &entry : result.entries) {
+        m_key_entries.insert(entry.fingerprint.toLower(), entry);
+    }
+    return true;
 }
 
 void RegisterDescriptor::refresh() {
     // clear() also resets the layout spacing.
     catalog::clearRows(m_rows);
     m_rows->spacing(resolve(Spacing::XS));
-    auto entries = keyEntries(m_controller->network());
+    if (!refreshKeys()) {
+        return;
+    }
+    auto entries = m_key_entries;
     for (const auto &fingerprint : m_fingerprints) {
         auto entry = entries.value(fingerprint.toLower());
         auto state = m_states.value(fingerprint, State::NotNeeded);
@@ -172,7 +194,7 @@ void RegisterDescriptor::refresh() {
             break;
         }
         auto *row = new catalog::SelectRow;
-        row->setIcon(catalog::routeIcon(entry.route));
+        row->setIcon(catalog::routeIcon(*account::toBridge(entry.route)));
         row->setTitle(entry.alias.isEmpty() ? fingerprint : entry.alias);
         row->setSub(fingerprint);
         row->setStatus(pill);
@@ -201,6 +223,9 @@ void RegisterDescriptor::refresh() {
 // ===== Slots =====
 
 void RegisterDescriptor::onRowClicked() {
+    if (!refreshKeys()) {
+        return;
+    }
     auto fingerprint = sender()->property(K_FINGERPRINT).toString();
     auto *keys = Host::get()->keys(MusigModule::get());
     if (keys == nullptr) {
@@ -219,7 +244,8 @@ void RegisterDescriptor::onRowClicked() {
     refresh();
     // No window: the key's device registers it, checked first. The answer may come
     // during the call.
-    keys->registerDescriptor(req, m_controller->network(), fingerprint, m_descriptor);
+    keys->registerDescriptor(req, account::toPublic<plugin::Network>(m_controller->network()),
+                             fingerprint, m_descriptor);
 }
 
 void RegisterDescriptor::onDoneClicked() {

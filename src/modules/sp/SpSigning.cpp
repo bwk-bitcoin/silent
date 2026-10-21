@@ -1,4 +1,5 @@
 #include "SpSigning.h"
+#include "account/InterfaceEnums.h"
 
 #include "AccountController.h"
 #include "AppController.h"
@@ -128,8 +129,8 @@ void SpSigning::showSignerStep() {
     auto descriptor = QString::fromStdString(std::string(m_controller->getDescriptor().c_str()));
     auto walletName = QString::fromStdString(std::string(account.value()->name()));
     m_sign_req_id = keys->newRequest();
-    keys->sign(m_sign_req_id, m_controller->network(), psbtV2Hex, QStringList{descriptor},
-               walletName, QString());
+    keys->sign(m_sign_req_id, account::toPublic<plugin::Network>(m_controller->network()),
+               psbtV2Hex, QStringList{descriptor}, walletName, QString());
 }
 
 void SpSigning::disconnectSigner() const {

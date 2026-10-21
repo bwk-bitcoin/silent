@@ -778,7 +778,7 @@ enum class SignerState { Ready, Locked, Unsupported };
 // one live signer: which entry it is, where it came from, how to reach it
 struct SignerEntry { QString instanceId; IModule *module; ISigner *signer; };
 // why a sign request failed, beyond its message
-enum class SignError { Other, MusigSession };
+enum class SignError : std::uint32_t { Other = 0, MusigSession = 1, InvalidRequest = 2 };
 }
 ```
 
@@ -1216,15 +1216,42 @@ they are not evidence of a supported funded signing combination.
 
 ## ABI & Linking Rules (Plugin Authors Must Read)
 
-The current plugin IID is `dev.silent.IPlugin/6.0`, the signer IID is
-`dev.silent.ISigner/2.0`, the account IID is
-`dev.silent.IAccount/2.0`, the keys IID is `dev.silent.IKeys/2.0`, and the transaction
-service IID is `dev.silent.ITransactions/1.0`. The feed IID remains
-`dev.silent.IFeed/3.0`. Typed signer capabilities and the optional host page placement
-change the ABI. Rebuild plugins
+The current plugin IID is `dev.silent.IPlugin/7.0`, the signer IID is
+`dev.silent.ISigner/3.0`, the account IID is
+`dev.silent.IAccount/3.0`, the keys IID is `dev.silent.IKeys/3.0`, and the transaction
+service IID is `dev.silent.ITransactions/2.0`. The feed IID remains
+`dev.silent.IFeed/3.0`. Public Keys and spending enums are SDK-owned, not generated
+Rust types. This changes record layouts, signatures and callbacks. Rebuild plugins
 against this checkout and use `SILENT_IPlugin_IID` in plugin metadata. Include both
-`src` and the matching generated `lib/include` directory. Old 1.0 to 5.0 plugins are refused rather than
+`src` only for public interfaces; generated `lib/include` and CXX headers are not needed.
+Old 1.0 to 6.0 plugins are refused rather than
 called through incompatible vtables.
+
+`interfaces/enums.h` defines the shared `plugin::Network`, `plugin::KeyRouteKind`
+and spending/coordination enums. Network wire integers are Bitcoin=0, Testnet=1,
+Signet=2, Regtest=3. Route integers are Unknown=0, Hot=1, Usb=2, Qr=3, SdCard=4.
+Unknown means no configured route, not an unrecognized protocol value. The other
+wire integers are explicit in that header. Encode with `plugin::enumToWire()` and
+decode unsigned 32-bit integers with `plugin::enumFromWire<Enum>()`. Both return
+`std::nullopt` on invalid values; a transport must reject these as protocol errors,
+not substitute a default or narrow an integer before decoding. Serialize integers
+with the transport's integer encoding, never enum object bytes. Keys rejects invalid
+networks with `SignError::InvalidRequest`; synchronous lookups return that typed
+failure in `KeyListResult`. Coordination and transaction services use `SpendError::InvalidRequest`.
+Bridge conversions are internal. This contract is transport-ready, not OS sandboxing.
+
+`IKeys::keys()` returns `KeyListResult`, not an ambiguous empty list. Its non-virtual
+public entry point validates both route fields with the pure public
+`plugin::validateKeyEntry()` before returning any records. Providers implement the
+protected `readKeys()` hook. A malformed record rejects the entire list with
+`SignError::InvalidRequest`; `entries` is empty on failure. Valid `Unknown` still
+means no configured route. Consumers must check `is_ok` and present `error` rather
+than rendering failure as ordinary no-route metadata. Caller handles recheck
+metadata before signing, coordination or registration dispatch.
+
+The independent check needs Qt Core and a C++20 compiler, no Rust build:
+`cmake -S tests/interfaces -B <build-dir>`, then build and run CTest in that directory.
+Its include guards deliberately fail if public headers include generated Rust/CXX headers.
 
 Silent statically links Qt, and the host binary acts as the **single Qt provider**:
 plugins link **no Qt of their own** and resolve Qt symbols against the host at load

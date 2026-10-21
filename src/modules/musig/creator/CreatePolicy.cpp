@@ -1,6 +1,7 @@
 #include "modules/musig/creator/CreatePolicy.h"
 
 #include "AppController.h"
+#include "account/InterfaceEnums.h"
 #include "catalog/Button.h"
 #include "catalog/ClearRows.h"
 #include "catalog/SelectRow.h"
@@ -97,7 +98,7 @@ auto lead(const QString &text) -> catalog::Label * {
 // `status` on the right. Clickable only when `clickable`.
 auto keyRow(const KeyEntry &entry, QWidget *status, bool clickable) -> catalog::SelectRow * {
     auto *row = new catalog::SelectRow;
-    row->setIcon(catalog::routeIcon(entry.route));
+    row->setIcon(catalog::routeIcon(*account::toBridge(entry.route)));
     row->setTitle(entry.alias.isEmpty() ? entry.fingerprint : entry.alias);
     row->setSub(entry.fingerprint);
     row->setStatus(status);
@@ -303,6 +304,7 @@ void CreatePolicy::initPaths() {
     m_paths_next_btn = catalog::btnContinue();
     m_paths_actions = new catalog::ModalActions;
     m_paths_actions->addAction(m_paths_next_btn);
+    refreshNetworkKeys();
     m_paths.append(defaultPath());
 }
 
@@ -359,6 +361,9 @@ void CreatePolicy::refreshPathRows() {
 }
 
 auto CreatePolicy::pathsReason() -> QString {
+    if (!m_key_list.is_ok) {
+        return m_key_list.error;
+    }
     if (networkKeys().isEmpty()) {
         return TR("musig-create-reason-keys");
     }
@@ -483,6 +488,10 @@ void CreatePolicy::refreshXpubRows() {
     // clear() also resets the layout spacing.
     catalog::clearRows(m_xpub_rows);
     m_xpub_rows->spacing(resolve(Spacing::XS));
+    if (!m_key_list.is_ok) {
+        showStatus(m_key_list.error, catalog::LabelTone::Error);
+        return;
+    }
     for (const auto &fingerprint : m_fingerprints) {
         auto entry = keyEntry(fingerprint).value_or(KeyEntry{.fingerprint = fingerprint});
         bool fetched = !missing.contains(fingerprint);
@@ -670,6 +679,10 @@ void CreatePolicy::refreshRegisterRows() {
     // clear() also resets the layout spacing.
     catalog::clearRows(m_register_rows);
     m_register_rows->spacing(resolve(Spacing::XS));
+    if (!m_key_list.is_ok) {
+        showStatus(m_key_list.error, catalog::LabelTone::Error);
+        return;
+    }
     int left = 0;
     for (const auto &fingerprint : m_fingerprints) {
         auto entry = keyEntry(fingerprint).value_or(KeyEntry{.fingerprint = fingerprint});
@@ -718,6 +731,10 @@ void CreatePolicy::refreshRegisterRows() {
 }
 
 void CreatePolicy::registerNextQuiet() {
+    if (!refreshNetworkKeys()) {
+        refreshRegisterRows();
+        return;
+    }
     auto *keys = Host::get()->keys(MusigCreatorModule::get());
     if (keys == nullptr) {
         return;
@@ -728,7 +745,8 @@ void CreatePolicy::registerNextQuiet() {
             !busy(fingerprint)) {
             auto req = beginAsk(Ask::Register, fingerprint);
             // No window: a key with no device records the descriptor at once.
-            keys->registerDescriptor(req, network(), fingerprint, m_descriptor);
+            keys->registerDescriptor(req, account::toPublic<plugin::Network>(network()),
+                                     fingerprint, m_descriptor);
         }
     }
 }
@@ -781,6 +799,10 @@ void CreatePolicy::refreshVerifyRows() {
     // clear() also resets the layout spacing.
     catalog::clearRows(m_verify_rows);
     m_verify_rows->spacing(resolve(Spacing::XS));
+    if (!m_key_list.is_ok) {
+        showStatus(m_key_list.error, catalog::LabelTone::Error);
+        return;
+    }
     bool checkable = false;
     for (const auto &fingerprint : m_fingerprints) {
         auto entry = keyEntry(fingerprint).value_or(KeyEntry{.fingerprint = fingerprint});
@@ -942,8 +964,17 @@ auto CreatePolicy::network() const -> Network {
 }
 
 auto CreatePolicy::networkKeys() const -> QList<KeyEntry> {
+    return m_key_list.entries;
+}
+
+auto CreatePolicy::refreshNetworkKeys() -> bool {
     auto *bus = Host::get()->keys(MusigCreatorModule::get());
-    return bus != nullptr ? bus->keys(network()) : QList<KeyEntry>{};
+    m_key_list = bus != nullptr ? bus->keys(account::toPublic<plugin::Network>(network()))
+                                : KeyListResult{.error = TR("musig-send-no-keys")};
+    if (!m_key_list.is_ok) {
+        showStatus(m_key_list.error, catalog::LabelTone::Error);
+    }
+    return m_key_list.is_ok;
 }
 
 auto CreatePolicy::defaultPath() const -> SpendPath {
@@ -1066,24 +1097,39 @@ auto CreatePolicy::needsRegister(const QString &fingerprint) const -> bool {
         return false;
     }
     switch (entry->route) {
-    case KeyRouteKind::Usb:
-    case KeyRouteKind::Qr:
-    case KeyRouteKind::SdCard:
+    case plugin::KeyRouteKind::Usb:
+    case plugin::KeyRouteKind::Qr:
+    case plugin::KeyRouteKind::SdCard:
         return true;
-    case KeyRouteKind::Hot:
-    case KeyRouteKind::Unknown:
-    default:
+    case plugin::KeyRouteKind::Hot:
+    case plugin::KeyRouteKind::Unknown:
         return false;
     }
+    qFatal("unvalidated key route");
 }
 
 void CreatePolicy::showStatus(const QString &text, catalog::LabelTone tone) {
+    if (!m_key_list.is_ok && !m_key_list.error.isEmpty()) {
+        m_status_label->setText(m_key_list.error);
+        m_status_label->setTone(catalog::LabelTone::Error);
+        m_status_label->show();
+        for (auto *next : {m_paths_next_btn, m_save_path_btn, m_xpubs_next_btn, m_review_next_btn,
+                           m_register_next_btn, m_verify_next_btn, m_install_btn}) {
+            if (next != nullptr) {
+                next->setEnabled(false);
+            }
+        }
+        return;
+    }
     m_status_label->setText(text);
     m_status_label->setTone(tone);
     m_status_label->setVisible(!text.isEmpty());
 }
 
 void CreatePolicy::runFlow() {
+    if (!refreshNetworkKeys()) {
+        return;
+    }
     auto flow = m_pending_flow;
     m_pending_flow = Flow::None;
     auto *keys = Host::get()->keys(MusigCreatorModule::get());
@@ -1096,17 +1142,19 @@ void CreatePolicy::runFlow() {
     case Flow::Xpub: {
         auto req = beginAsk(Ask::Xpub, m_flow_fingerprint);
         // Returns once the flow's window has closed, its answer delivered.
-        keys->xpub(req, network(), m_flow_fingerprint, accountPath());
+        keys->xpub(req, account::toPublic<plugin::Network>(network()), m_flow_fingerprint,
+                   accountPath());
         showXpubs();
         break;
     }
     case Flow::Verify: {
         auto req = beginAsk(Ask::Verify, m_flow_fingerprint);
         // Returns once the flow's window has closed, its answer delivered.
-        keys->verifyAddress(
-            req, network(), QString::fromStdString(std::string(m_address.descriptor)),
-            QString::fromStdString(std::string(m_address.path)),
-            QString::fromStdString(std::string(m_address.address)), m_flow_fingerprint);
+        keys->verifyAddress(req, account::toPublic<plugin::Network>(network()),
+                            QString::fromStdString(std::string(m_address.descriptor)),
+                            QString::fromStdString(std::string(m_address.path)),
+                            QString::fromStdString(std::string(m_address.address)),
+                            m_flow_fingerprint);
         refreshVerifyRows();
         break;
     }
@@ -1181,6 +1229,9 @@ void CreatePolicy::onBackClicked() {
 }
 
 void CreatePolicy::onNextClicked() {
+    if (!refreshNetworkKeys()) {
+        return;
+    }
     switch (m_view) {
     case View::Paths: {
         if (!pathsReason().isEmpty()) {
@@ -1197,7 +1248,8 @@ void CreatePolicy::onNextClicked() {
         m_account_xpubs.clear();
         if (auto *keys = Host::get()->keys(MusigCreatorModule::get()); keys != nullptr) {
             for (const auto &fingerprint : m_fingerprints) {
-                auto xpub = keys->cachedXpub(network(), fingerprint, accountPath());
+                auto xpub = keys->cachedXpub(account::toPublic<plugin::Network>(network()),
+                                             fingerprint, accountPath());
                 if (!xpub.isEmpty()) {
                     m_account_xpubs.insert(fingerprint, xpub);
                 }
@@ -1245,6 +1297,7 @@ void CreatePolicy::onNextClicked() {
 }
 
 void CreatePolicy::onNetworkChanged([[maybe_unused]] int index) {
+    refreshNetworkKeys();
     // The paths pick keys of the network: start over from one path over its keys.
     m_paths.clear();
     m_paths.append(defaultPath());
@@ -1288,6 +1341,9 @@ void CreatePolicy::onPathEdited() {
 }
 
 void CreatePolicy::onXpubRowClicked() {
+    if (!refreshNetworkKeys()) {
+        return;
+    }
     auto fingerprint = sender()->property(K_FINGERPRINT).toString();
     auto *keys = Host::get()->keys(MusigCreatorModule::get());
     if (keys == nullptr || busy(fingerprint)) {
@@ -1297,7 +1353,8 @@ void CreatePolicy::onXpubRowClicked() {
     // A connected USB device gives it with no window, while the others are asked too.
     if (auto entry = keyEntry(fingerprint); entry.has_value() && entry->on_device) {
         auto req = beginAsk(Ask::Xpub, fingerprint);
-        keys->xpubOnDevice(req, network(), fingerprint, accountPath());
+        keys->xpubOnDevice(req, account::toPublic<plugin::Network>(network()), fingerprint,
+                           accountPath());
         refreshXpubRows();
         return;
     }
@@ -1345,6 +1402,9 @@ void CreatePolicy::onBackupClicked() {
 }
 
 void CreatePolicy::onRegisterRowClicked() {
+    if (!refreshNetworkKeys()) {
+        return;
+    }
     auto fingerprint = sender()->property(K_FINGERPRINT).toString();
     auto *keys = Host::get()->keys(MusigCreatorModule::get());
     if (keys == nullptr || busy(fingerprint)) {
@@ -1356,7 +1416,8 @@ void CreatePolicy::onRegisterRowClicked() {
     refreshRegisterRows();
     // No window: the answer comes once the key's device has registered it, and may
     // come during the call.
-    keys->registerDescriptor(req, network(), fingerprint, m_descriptor);
+    keys->registerDescriptor(req, account::toPublic<plugin::Network>(network()), fingerprint,
+                             m_descriptor);
 }
 
 void CreatePolicy::onSkipToggled([[maybe_unused]] bool checked) {
@@ -1364,6 +1425,9 @@ void CreatePolicy::onSkipToggled([[maybe_unused]] bool checked) {
 }
 
 void CreatePolicy::onVerifyRowClicked() {
+    if (!refreshNetworkKeys()) {
+        return;
+    }
     auto fingerprint = sender()->property(K_FINGERPRINT).toString();
     auto *keys = Host::get()->keys(MusigCreatorModule::get());
     if (keys == nullptr || busy(fingerprint)) {
@@ -1375,7 +1439,7 @@ void CreatePolicy::onVerifyRowClicked() {
     // A connected USB device shows it with no window, while the others are asked too.
     if (auto entry = keyEntry(fingerprint); entry.has_value() && entry->on_device) {
         auto req = beginAsk(Ask::Verify, fingerprint);
-        keys->verifyOnDevice(req, network(),
+        keys->verifyOnDevice(req, account::toPublic<plugin::Network>(network()),
                              QString::fromStdString(std::string(m_address.descriptor)),
                              QString::fromStdString(std::string(m_address.path)),
                              QString::fromStdString(std::string(m_address.address)), fingerprint);
@@ -1552,6 +1616,7 @@ void CreatePolicy::onKeysCancelled(ReqId req_id) {
 }
 
 void CreatePolicy::refreshKeyRows() {
+    refreshNetworkKeys();
     switch (m_view) {
     case View::Xpubs:
         refreshXpubRows();

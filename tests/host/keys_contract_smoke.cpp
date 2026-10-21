@@ -1,8 +1,12 @@
 #include "AppController.h"
 #include "ExternalSigner.h"
+#include "KeysBoundaryProbe.h"
 #include "MainWindow.h"
 #include "MockPlugin.h"
+#include "account/Spending.h"
+#include "account/TransactionJob.h"
 #include "catalog/containers/Tabs.h"
+#include "host/CallerHandles.h"
 #include "host/Host.h"
 #include "modules/hwi/HwiSigner.h"
 #include "modules/keys/KeysModule.h"
@@ -15,10 +19,13 @@
 #include <QPointer>
 #include <QTabBar>
 #include <QToolButton>
+#include <array>
 #include <common.h>
 #include <memory>
 
 namespace smoke {
+void keysMetadataSmoke(keys::KeysModule &module);
+
 namespace {
 void require(bool condition, const char *message) {
     if (!condition) {
@@ -158,11 +165,167 @@ void signerCapabilities(keys::KeysModule &module) {
                 "unusable HWI records explicitly advertise no supported operation");
     }
 }
+
+template <typename Public> void bridgeValues(quint32 count) {
+    for (quint32 wire = 0; wire < count; ++wire) {
+        auto value = plugin::enumFromWire<Public>(wire);
+        require(value.has_value(), "every supported wire enum decodes");
+        auto bridge = account::toBridge(*value);
+        require(bridge.has_value(), "every supported enum has a bridge conversion");
+        require(account::toPublic<Public>(*bridge) == *value,
+                "bridge enum round-trip preserves value");
+    }
+    require(!account::toBridge(static_cast<Public>(count)).has_value(),
+            "bridge rejects unknown enum");
+}
+
+void publicEnums(keys::KeysModule &module) {
+    bridgeValues<plugin::Network>(4);
+    bridgeValues<plugin::KeyRouteKind>(5);
+    bridgeValues<plugin::SpendLockKind>(5);
+    bridgeValues<plugin::SpendMaturity>(3);
+    bridgeValues<plugin::SpendAvailability>(4);
+    bridgeValues<plugin::SpendCoinStatus>(5);
+    bridgeValues<plugin::SigningStage>(8);
+    bridgeValues<plugin::SigningProgress>(3);
+    bridgeValues<plugin::SpendError>(7);
+    auto previous = keys::KeysModule::network();
+    auto networks = std::array{std::pair{plugin::Network::Bitcoin, Network::Bitcoin},
+                               std::pair{plugin::Network::Testnet, Network::Testnet},
+                               std::pair{plugin::Network::Signet, Network::Signet},
+                               std::pair{plugin::Network::Regtest, Network::Regtest}};
+    auto routes = std::array{std::pair{plugin::KeyRouteKind::Unknown, KeyRouteKind::Unknown},
+                             std::pair{plugin::KeyRouteKind::Hot, KeyRouteKind::Hot},
+                             std::pair{plugin::KeyRouteKind::Usb, KeyRouteKind::Usb},
+                             std::pair{plugin::KeyRouteKind::Qr, KeyRouteKind::Qr},
+                             std::pair{plugin::KeyRouteKind::SdCard, KeyRouteKind::SdCard}};
+    for (const auto &[publicNetwork, bridgeNetwork] : networks) {
+        require(account::toBridge(publicNetwork) == bridgeNetwork,
+                "network names map explicitly, not by ordinal");
+        module.setNetwork(bridgeNetwork);
+        require(module.rust()
+                    ->add_key("00112233", std::to_string(static_cast<int>(bridgeNetwork)))
+                    .is_ok,
+                "each network stores an isolated key record");
+        auto result = module.bus()->keys(publicNetwork);
+        require(result.is_ok, "public metadata lookup succeeds");
+        auto entries = result.entries;
+        require(entries.size() == 1 &&
+                    entries.first().alias == QString::number(static_cast<int>(bridgeNetwork)),
+                "public lookup selects the requested network, not a fallback");
+        for (const auto &[publicRoute, bridgeRoute] : routes) {
+            require(account::toBridge(publicRoute) == bridgeRoute,
+                    "route names map explicitly, not by ordinal");
+            KeyInfo info;
+            info.fingerprint = "00112233";
+            if (bridgeRoute != KeyRouteKind::Unknown) {
+                info.routes.push_back(bridgeRoute);
+            }
+            auto entry = module.buildKeyEntry(info);
+            require(entry.route == publicRoute, "every route is exported with its public meaning");
+            require(entry.descriptor_route == (publicRoute == plugin::KeyRouteKind::Qr
+                                                   ? plugin::KeyRouteKind::Qr
+                                                   : plugin::KeyRouteKind::Unknown),
+                    "descriptor route remains QR or Unknown without a hot secret");
+        }
+        require(module.rust()->remove_key("00112233", true).is_ok,
+                "network fixture removes its key");
+    }
+    module.setNetwork(previous);
+}
+
+void invalidEnums(keys::KeysModule &module) {
+    keys::KeysBus bus(nullptr);
+    ErrorKindSpy errors;
+    QObject::connect(&bus, &IKeys::error, &errors, &ErrorKindSpy::onError, qontrol::UNIQUE);
+    auto invalid = static_cast<plugin::Network>(256);
+    auto previous = keys::KeysModule::network();
+    auto invalidResult = bus.keys(invalid);
+    require(!invalidResult.is_ok && invalidResult.kind == plugin::SignError::InvalidRequest &&
+                invalidResult.entries.empty(),
+            "invalid network lookup is a typed failure");
+    require(bus.cachedXpub(invalid, {}, {}).isEmpty(), "invalid cached lookup refuses");
+    require(bus.registrationHmac(invalid, {}, {}).isEmpty(), "invalid proof lookup refuses");
+    require(!bus.storeRegistrationHmac(invalid, {}, {}, {}), "invalid proof update refuses");
+    bus.sign(17, invalid, {}, {}, {}, {});
+    bus.signOnDevice(17, invalid, {}, {}, {});
+    bus.verifyAddress(17, invalid, {}, {}, {}, {});
+    bus.verifyOnDevice(17, invalid, {}, {}, {}, {});
+    bus.spDescriptor(17, invalid, {});
+    bus.xpub(17, invalid, {}, {});
+    bus.xpubOnDevice(17, invalid, {}, {});
+    bus.registerDescriptor(17, invalid, {}, {});
+    bus.checkDescriptorRegistered(17, invalid, {}, {});
+    require(errors.count() == 12 && errors.kind() == plugin::SignError::InvalidRequest &&
+                errors.reqId() == 17,
+            "all invalid-network operations emit a typed refusal before touching a module");
+    require(keys::KeysModule::network() == previous,
+            "invalid protocol values never select Regtest");
+    auto *host = dynamic_cast<HostImpl *>(Host::get());
+    require(host != nullptr, "caller handle uses the real host");
+    host::KeysHandle handle(host, &module, module.bus());
+    ErrorKindSpy handleErrors;
+    QObject::connect(&handle, &IKeys::error, &handleErrors, &ErrorKindSpy::onError,
+                     qontrol::UNIQUE);
+    auto reqId = handle.newRequest();
+    handle.xpub(reqId, invalid, {}, {});
+    require(handleErrors.count() == 1 && handleErrors.reqId() == reqId &&
+                handleErrors.kind() == plugin::SignError::InvalidRequest,
+            "caller handle refuses an invalid network before forwarding");
+    auto handleResult = handle.keys(invalid);
+    require(!handleResult.is_ok && handleResult.kind == plugin::SignError::InvalidRequest &&
+                handleResult.entries.empty() && handleErrors.count() == 1,
+            "synchronous caller lookup returns a typed error, not an empty successful list");
+    KeysBoundaryProbe probe;
+    QObject::connect(module.bus(), &IKeys::coordinationError, &probe,
+                     &KeysBoundaryProbe::onCoordinationError, qontrol::UNIQUE);
+    plugin::SigningRequest valid;
+    valid.inputs.append(plugin::SelectedInput{});
+    for (auto field : {0, 1, 2, 3, 4, 5, 6}) {
+        auto request = valid;
+        auto &variant = request.inputs.first().variant;
+        switch (field) {
+        case 0:
+            request.network = invalid;
+            break;
+        case 1:
+            request.stage = static_cast<plugin::SigningStage>(256);
+            break;
+        case 2:
+            request.inputs.first().network = invalid;
+            break;
+        case 3:
+            variant.absoluteLock.kind = static_cast<plugin::SpendLockKind>(256);
+            break;
+        case 4:
+            variant.relativeLock.kind = static_cast<plugin::SpendLockKind>(256);
+            break;
+        case 5:
+            variant.maturity = static_cast<plugin::SpendMaturity>(256);
+            break;
+        case 6:
+            variant.availability = static_cast<plugin::SpendAvailability>(256);
+            break;
+        }
+        require(!account::validRequest(request), "invalid nested enum fails request validation");
+        module.bus()->coordinate(91, request);
+        require(probe.answers == field + 1 && probe.request == 91 &&
+                    probe.kind == plugin::SpendError::InvalidRequest,
+                "invalid coordination request emits one typed error without allocating an attempt");
+        TransactionJob job(91, TransactionJob::Operation::Finalize, request);
+        job.start();
+        job.wait();
+        require(!job.result().is_ok && job.result().kind == SpendError::InvalidRequest,
+                "transaction service rejects invalid public enum before Rust");
+    }
+}
 } // namespace
 
 void keysContractSmoke(const QString &screenshots) {
     Theme::get()->apply();
     auto module = std::make_unique<keys::KeysModule>();
+    publicEnums(*module);
+    invalidEnums(*module);
     signerCapabilities(*module);
     auto *keysModule = module.get();
     AppController::get()->registerBuiltinPlugin(std::move(module));
@@ -300,6 +463,7 @@ void keysContractSmoke(const QString &screenshots) {
     host->closeTab(genericTab);
     selectedPage(tabs, bar, settings, true);
     QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    keysMetadataSmoke(*keysModule);
 }
 
 } // namespace smoke

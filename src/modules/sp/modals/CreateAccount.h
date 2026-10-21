@@ -106,6 +106,7 @@ private:
     qontrol::Column *m_keys_column = nullptr;
     QList<catalog::SelectRow *> m_key_rows;
     QList<KeyEntry> m_keys;
+    QString m_keys_error;
     QWidget *m_fetch_row = nullptr;
     catalog::Button *m_get_sp = nullptr;
     catalog::Button *m_get_taproot = nullptr;

@@ -1,6 +1,7 @@
 #include "account/views/Receive.h"
 
 #include "AppController.h"
+#include "account/InterfaceEnums.h"
 #include "catalog/containers/FoldSection.h"
 #include "catalog/containers/Separator.h"
 #include "catalog/panels/receive/AddressRow.h"
@@ -160,8 +161,8 @@ void Receive::showVerifyModal(const QString &address) {
 
     m_verify_req_id = keys->newRequest();
     // Returns once the flow has closed.
-    keys->verifyAddress(m_verify_req_id, m_backend->network(), descriptor, path, address,
-                        QString());
+    keys->verifyAddress(m_verify_req_id, account::toPublic<plugin::Network>(m_backend->network()),
+                        descriptor, path, address, QString());
 }
 
 void Receive::showAddressHistory(Section *section) {

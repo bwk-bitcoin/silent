@@ -190,6 +190,7 @@ protected:
     void showStep(int index);
     [[nodiscard]] auto network() const -> Network;
     [[nodiscard]] auto networkKeys() const -> QList<KeyEntry>;
+    auto refreshNetworkKeys() -> bool;
     // A first path over every key that signs MuSig2, two of them signing when there are
     // several.
     [[nodiscard]] auto defaultPath() const -> SpendPath;
@@ -236,6 +237,7 @@ private:
     View m_view = View::Paths;
     catalog::WizardSteps *m_steps = nullptr;
     catalog::Label *m_status_label = nullptr;
+    KeyListResult m_key_list;
 
     // Paths view
     catalog::ComboBox *m_network_combo = nullptr;

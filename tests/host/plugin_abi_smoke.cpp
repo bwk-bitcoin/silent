@@ -30,7 +30,7 @@ auto elfMetadataBytes(const QCborMap &map) -> QByteArray {
 }
 
 void metadataCandidateSmoke() {
-    auto expected = QStringLiteral("dev.silent.IPlugin/6.0");
+    auto expected = QStringLiteral("dev.silent.IPlugin/7.0");
     QCborMap root;
     root.insert(2, expected);
     auto regular = metadataBytes(root);
@@ -95,7 +95,7 @@ void metadataCandidateSmoke() {
     }
     oldRoot.insert(4, regular);
     if (pluginMetadataError(metadataBytes(oldRoot), expected).isEmpty()) {
-        qFatal("nested ABI 6 metadata must not override the ABI 4 root IID");
+        qFatal("nested ABI 7 metadata must not override the ABI 4 root IID");
     }
     QPluginMetaData::MagicHeader header;
     header.header.qt_minor_version = 6;
@@ -113,9 +113,9 @@ void metadataCandidateSmoke() {
 }
 
 void metadataRejectionSmoke(const QByteArray &bytes) {
-    auto expected = QStringLiteral("dev.silent.IPlugin/6.0");
+    auto expected = QStringLiteral("dev.silent.IPlugin/7.0");
     if (pluginMetadataError(bytes, QStringLiteral("dev.silent.IPlugin/4.0")).isEmpty()) {
-        qFatal("ABI 4 expectation must reject an ABI 6 library");
+        qFatal("ABI 4 expectation must reject an ABI 7 library");
     }
     QCborMap nested;
     nested.insert(QStringLiteral("IID"), expected);
@@ -185,8 +185,8 @@ void metadataRejectionSmoke(const QByteArray &bytes) {
 
 void pluginAbiSmoke() {
     metadataCandidateSmoke();
-    for (auto version : {2, 3, 4, 5, 6}) {
-        auto legacy = version != 6;
+    for (auto version : {2, 3, 4, 5, 6, 7}) {
+        auto legacy = version != 7;
         QTemporaryDir directory;
         if (!directory.isValid()) {
             qFatal("ABI fixture directory creation failed");
@@ -196,7 +196,7 @@ void pluginAbiSmoke() {
         auto hadSentinel = qEnvironmentVariableIsSet("SILENT_ABI_SENTINEL");
         qputenv("SILENT_ABI_SENTINEL", QFile::encodeName(sentinelPath));
         auto id = QStringLiteral("abi%1").arg(version);
-        auto library = QString::fromUtf8(SILENT_ABI6_FIXTURE_PATH);
+        auto library = QString::fromUtf8(SILENT_ABI7_FIXTURE_PATH);
         if (version == 2) {
             library = QString::fromUtf8(SILENT_ABI2_FIXTURE_PATH);
         } else if (version == 3) {
@@ -205,6 +205,8 @@ void pluginAbiSmoke() {
             library = QString::fromUtf8(SILENT_ABI4_FIXTURE_PATH);
         } else if (version == 5) {
             library = QString::fromUtf8(SILENT_ABI5_FIXTURE_PATH);
+        } else if (version == 6) {
+            library = QString::fromUtf8(SILENT_ABI6_FIXTURE_PATH);
         }
         auto libraryPath = QDir(directory.path()).filePath(QStringLiteral("lib%1.so").arg(id));
         if (!QFile::copy(library, libraryPath)) {
@@ -213,7 +215,7 @@ void pluginAbiSmoke() {
         if (!legacy) {
             QFile fixture(libraryPath);
             if (!fixture.open(QIODevice::ReadOnly)) {
-                qFatal("ABI 6 fixture read failed");
+                qFatal("ABI 7 fixture read failed");
             }
             metadataRejectionSmoke(fixture.readAll());
             if (QFile::exists(sentinelPath)) {
@@ -235,12 +237,12 @@ void pluginAbiSmoke() {
             registry.rescanDiscoveredPlugins();
             auto enabled = registry.setEnabled(id, true);
             if (enabled == legacy || registry.isPluginEnabled(id) == legacy) {
-                qFatal("registry must reject ABI 2/3/4/5 and accept ABI 6 binaries");
+                qFatal("registry must reject ABI 2/3/4/5/6 and accept ABI 7 binaries");
             }
             if (legacy &&
                 registry.pluginLoadError(id) !=
                     QStringLiteral(
-                        "incompatible Qt plugin root IID (expected dev.silent.IPlugin/6.0)")) {
+                        "incompatible Qt plugin root IID (expected dev.silent.IPlugin/7.0)")) {
                 qFatal("old ABI binary must fail at the metadata admission gate");
             }
             if (!registry.enabledModulesForLauncher().empty()) {
@@ -250,11 +252,11 @@ void pluginAbiSmoke() {
         QFile sentinel(sentinelPath);
         if (legacy) {
             if (sentinel.exists()) {
-                qFatal("ABI 2/3/4/5 rejection must run neither initializer nor constructor");
+                qFatal("ABI 2/3/4/5/6 rejection must run neither initializer nor constructor");
             }
         } else if (!sentinel.open(QIODevice::ReadOnly) ||
                    sentinel.readAll() != QByteArray("initializer\nconstructor\n")) {
-            qFatal("ABI 6 admission must run the library initializer and root constructor once");
+            qFatal("ABI 7 admission must run the library initializer and root constructor once");
         }
         if (hadSentinel) {
             qputenv("SILENT_ABI_SENTINEL", previousSentinel);

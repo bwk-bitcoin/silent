@@ -42,22 +42,23 @@ public:
     QList<QThread *> workers;
 };
 
-class DeferredKeys final : public IKeys {
+class DeferredKeys : public IKeys {
 public:
-    void coordinate(ReqId req_id, const plugin::SigningRequest &) override {
-        emit coordinationError(req_id, SpendError::Unsupported,
+    void coordinate(ReqId req_id, [[maybe_unused]] const plugin::SigningRequest &request) override {
+        emit coordinationError(req_id, plugin::SpendError::Unsupported,
                                QStringLiteral("deferred device mock has no coordination backend"));
     }
 
-    [[nodiscard]] auto keys([[maybe_unused]] Network network) const -> QList<KeyEntry> override {
-        return {};
+    [[nodiscard]] auto readKeys([[maybe_unused]] plugin::Network network) const
+        -> KeyListResult override {
+        return {.is_ok = true};
     }
 
     auto newRequest() -> ReqId override {
         return ++next_request;
     }
 
-    void sign(ReqId req_id, [[maybe_unused]] Network network, const QString &psbt_v2_hex,
+    void sign(ReqId req_id, [[maybe_unused]] plugin::Network network, const QString &psbt_v2_hex,
               [[maybe_unused]] const QStringList &descriptors,
               [[maybe_unused]] const QString &wallet_name,
               [[maybe_unused]] const QString &fingerprint) override {
@@ -66,67 +67,68 @@ public:
         ++requests;
     }
 
-    void signOnDevice([[maybe_unused]] ReqId req_id, [[maybe_unused]] Network network,
+    void signOnDevice([[maybe_unused]] ReqId req_id, [[maybe_unused]] plugin::Network network,
                       [[maybe_unused]] const QString &psbt_v2_hex,
                       [[maybe_unused]] const QString &descriptor,
                       [[maybe_unused]] const QString &fingerprint) override {
         qFatal("SP fixture must use the shared sign request");
     }
 
-    void verifyAddress([[maybe_unused]] ReqId req_id, [[maybe_unused]] Network network,
+    void verifyAddress([[maybe_unused]] ReqId req_id, [[maybe_unused]] plugin::Network network,
                        [[maybe_unused]] const QString &descriptor,
                        [[maybe_unused]] const QString &path,
                        [[maybe_unused]] const QString &address,
                        [[maybe_unused]] const QString &fingerprint) override {
     }
 
-    void verifyOnDevice([[maybe_unused]] ReqId req_id, [[maybe_unused]] Network network,
+    void verifyOnDevice([[maybe_unused]] ReqId req_id, [[maybe_unused]] plugin::Network network,
                         [[maybe_unused]] const QString &descriptor,
                         [[maybe_unused]] const QString &path,
                         [[maybe_unused]] const QString &address,
                         [[maybe_unused]] const QString &fingerprint) override {
     }
 
-    void spDescriptor([[maybe_unused]] ReqId req_id, [[maybe_unused]] Network network,
+    void spDescriptor([[maybe_unused]] ReqId req_id, [[maybe_unused]] plugin::Network network,
                       [[maybe_unused]] const QString &fingerprint) override {
     }
 
-    void xpub([[maybe_unused]] ReqId req_id, [[maybe_unused]] Network network,
+    void xpub([[maybe_unused]] ReqId req_id, [[maybe_unused]] plugin::Network network,
               [[maybe_unused]] const QString &fingerprint,
               [[maybe_unused]] const QString &path) override {
     }
 
-    void xpubOnDevice([[maybe_unused]] ReqId req_id, [[maybe_unused]] Network network,
+    void xpubOnDevice([[maybe_unused]] ReqId req_id, [[maybe_unused]] plugin::Network network,
                       [[maybe_unused]] const QString &fingerprint,
                       [[maybe_unused]] const QString &path) override {
     }
 
-    [[nodiscard]] auto cachedXpub([[maybe_unused]] Network network,
+    [[nodiscard]] auto cachedXpub([[maybe_unused]] plugin::Network network,
                                   [[maybe_unused]] const QString &fingerprint,
                                   [[maybe_unused]] const QString &path) const -> QString override {
         return {};
     }
 
-    [[nodiscard]] auto registrationHmac([[maybe_unused]] Network network,
+    [[nodiscard]] auto registrationHmac([[maybe_unused]] plugin::Network network,
                                         [[maybe_unused]] const QString &fingerprint,
                                         [[maybe_unused]] const QString &descriptor) const
         -> QString override {
         return {};
     }
 
-    auto storeRegistrationHmac([[maybe_unused]] Network network,
+    auto storeRegistrationHmac([[maybe_unused]] plugin::Network network,
                                [[maybe_unused]] const QString &fingerprint,
                                [[maybe_unused]] const QString &descriptor,
                                [[maybe_unused]] const QString &hmac) -> bool override {
         return false;
     }
 
-    void registerDescriptor([[maybe_unused]] ReqId req_id, [[maybe_unused]] Network network,
+    void registerDescriptor([[maybe_unused]] ReqId req_id, [[maybe_unused]] plugin::Network network,
                             [[maybe_unused]] const QString &fingerprint,
                             [[maybe_unused]] const QString &descriptor) override {
     }
 
-    void checkDescriptorRegistered([[maybe_unused]] ReqId req_id, [[maybe_unused]] Network network,
+    void checkDescriptorRegistered([[maybe_unused]] ReqId req_id,
+                                   [[maybe_unused]] plugin::Network network,
                                    [[maybe_unused]] const QString &fingerprint,
                                    [[maybe_unused]] const QString &descriptor) override {
     }

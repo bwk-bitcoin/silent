@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QString>
 #include <QWidget>
+#include <interfaces/keys.h>
 
 class MusigAccountController;
 
@@ -34,7 +35,7 @@ protected:
     void doConnect();
     void view();
     // The alias of each key the keys module knows on the account's network.
-    [[nodiscard]] auto keyAliases() const -> QHash<QString, QString>;
+    [[nodiscard]] static auto keyAliases(const QList<KeyEntry> &entries) -> QHash<QString, QString>;
 
 private:
     MusigAccountController *m_controller = nullptr;

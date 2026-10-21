@@ -1261,7 +1261,7 @@ void addSteps() {
                             ? QString()
                             : Host::get()
                                   ->keys(MusigCreatorModule::get())
-                                  ->registrationHmac(Network::Regtest, gFpB, gDescriptor);
+                                  ->registrationHmac(plugin::Network::Regtest, gFpB, gDescriptor);
             static const QRegularExpression c_hex64(QStringLiteral("^[0-9a-f]{64}$"));
             check(c_hex64.match(hmac).hasMatch(),
                   "the Ledger HMAC is stored (" + QString::number(hmac.size()) + " chars)");
