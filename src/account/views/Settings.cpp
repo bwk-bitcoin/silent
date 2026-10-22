@@ -15,7 +15,6 @@
 #include "views/utils.h"
 
 #include <QSizePolicy>
-#include <QThread>
 #include <QTimer>
 #include <Qontrol>
 #include <algorithm>
@@ -73,6 +72,11 @@ void Settings::init() {
         }
         loadSaved(serverRow);
         showSaved(serverRow);
+        auto error = m_backend->endpointError(endpoint);
+        if (!error.isEmpty()) {
+            showError(serverRow, mapBackendErrorSummary(m_backend->endpointErrorKind(endpoint)) +
+                                     QStringLiteral(" ") + error);
+        }
         m_rows.append(serverRow);
     }
 
@@ -108,6 +112,8 @@ void Settings::doConnect() {
     connect(m_backend, &AccountBackend::endpointRequestFinished, this,
             &Settings::onEndpointRequestFinished, qontrol::UNIQUE);
     connect(m_backend, &AccountBackend::endpointTipReady, this, &Settings::onEndpointTipReady,
+            qontrol::UNIQUE);
+    connect(m_backend, &AccountBackend::endpointInfoReady, this, &Settings::onBackendInfoReady,
             qontrol::UNIQUE);
     connect(m_height_timer, &QTimer::timeout, this, &Settings::onHeightTimeout, qontrol::UNIQUE);
 }
@@ -268,8 +274,9 @@ auto Settings::isDirty(const ServerRow &row) -> bool {
 }
 
 auto Settings::isBusy() const -> bool {
-    return std::ranges::any_of(
-        m_rows, [](const ServerRow &server_row) { return server_row.action_req != 0; });
+    return m_backend->endpointOperationsBusy() ||
+           std::ranges::any_of(
+               m_rows, [](const ServerRow &server_row) { return server_row.action_req != 0; });
 }
 
 void Settings::loadSaved(ServerRow &row) {
@@ -303,7 +310,7 @@ void Settings::refreshRow(const ServerRow &row) {
     bool dirty = isDirty(row);
     bool running = m_backend->isEndpointRunning(row.endpoint);
 
-    row.url->setEnabled(!testing);
+    row.url->setEnabled(!busy);
     // Test keeps its slot while hidden, Testing… takes it while the test runs.
     auto policy = row.test->sizePolicy();
     policy.setRetainSizeWhenHidden(!testing);
@@ -319,15 +326,15 @@ void Settings::refreshRow(const ServerRow &row) {
 
     if (row.ssl != nullptr) {
         bool ssl = row.ssl->isChecked();
-        row.ssl->setEnabled(!testing);
+        row.ssl->setEnabled(!busy);
         // The shown state follows SSL, the choice stays in verify_wanted.
         row.verify->setChecked(ssl && row.verify_wanted);
-        row.verify->setEnabled(!testing && ssl);
+        row.verify->setEnabled(!busy && ssl);
     }
 }
 
 void Settings::requestHeight(ServerRow &row) {
-    if (!m_backend->isEndpointRunning(row.endpoint)) {
+    if (m_backend->endpointOperationsBusy() || !m_backend->isEndpointRunning(row.endpoint)) {
         row.tip_req = 0;
         row.height->clear();
         return;
@@ -337,6 +344,9 @@ void Settings::requestHeight(ServerRow &row) {
 }
 
 void Settings::requestCapabilities() {
+    if (m_info_req != 0 || m_backend->endpointOperationsBusy()) {
+        return;
+    }
     auto *blindbit = row(Endpoint::Blindbit);
     if (blindbit == nullptr) {
         return;
@@ -347,15 +357,7 @@ void Settings::requestCapabilities() {
         return;
     }
     m_info_req = nextRequestId();
-    // The reply outlives the request even if the Settings view closes during the fetch.
-    auto *reply = new BackendInfoReply;
-    auto *worker =
-        QThread::create([reply, req = m_info_req, url = blindbit->saved_url.toStdString()]() {
-            emit reply->ready(req, ::get_backend_info(rust::String(url)));
-        });
-    connect(reply, &BackendInfoReply::ready, this, &Settings::onBackendInfoReady, qontrol::UNIQUE);
-    connect(worker, &QThread::finished, reply, &QObject::deleteLater, qontrol::UNIQUE);
-    m_backend->startWorker(worker);
+    m_backend->requestEndpointInfo(m_info_req, Endpoint::Blindbit);
 }
 
 void Settings::startAction(ServerRow &row, bool test) {
@@ -440,11 +442,32 @@ void Settings::onVerifyToggled(bool checked) {
 }
 
 void Settings::onEndpointStateChanged(Endpoint endpoint) {
-    refreshRows();
     auto *serverRow = row(endpoint);
-    if (serverRow != nullptr && isVisible()) {
-        requestHeight(*serverRow);
+    if (serverRow != nullptr) {
+        auto error = m_backend->endpointError(endpoint);
+        if (!error.isEmpty()) {
+            showError(*serverRow, mapBackendErrorSummary(m_backend->endpointErrorKind(endpoint)) +
+                                      QStringLiteral(" ") + error);
+        } else {
+            showError(*serverRow, QString());
+        }
+        bool dirty = isDirty(*serverRow);
+        loadSaved(*serverRow);
+        if (!dirty && serverRow->action_req == 0) {
+            showSaved(*serverRow);
+        }
+        if (m_backend->endpointOperationsBusy()) {
+            serverRow->tip_req = 0;
+            serverRow->height->clear();
+            m_info_req = 0;
+        } else if (isVisible()) {
+            requestHeight(*serverRow);
+        }
+        if (endpoint == Endpoint::Blindbit) {
+            requestCapabilities();
+        }
     }
+    refreshRows();
 }
 
 void Settings::onEndpointRequestFinished(uint64_t req_id, Endpoint endpoint,
@@ -463,7 +486,8 @@ void Settings::onEndpointRequestFinished(uint64_t req_id, Endpoint endpoint,
         }
     }
     if (!result.is_ok) {
-        showError(*serverRow, mapBackendErrorSummary(result.kind));
+        showError(*serverRow, mapBackendErrorSummary(result.kind) + QStringLiteral(" ") +
+                                  toQString(result.error));
     }
     refreshRows();
     if (isVisible()) {
@@ -485,8 +509,8 @@ void Settings::onEndpointTipReady(uint64_t req_id, Endpoint endpoint,
     serverRow->height->setText(TR("settings-height").arg(result.height));
 }
 
-void Settings::onBackendInfoReady(uint64_t req_id, const BackendInfo &info) {
-    if (req_id != m_info_req) {
+void Settings::onBackendInfoReady(uint64_t req_id, Endpoint endpoint, const BackendInfo &info) {
+    if (endpoint != Endpoint::Blindbit || req_id == 0 || req_id != m_info_req) {
         return;
     }
     m_info_req = 0;

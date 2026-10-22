@@ -1,10 +1,12 @@
 #include "modules/musig/MusigStatusBar.h"
 
+#include "account/RequestId.h"
 #include "catalog/StatusBarItem.h"
 #include "catalog/containers/Separator.h"
 #include "i18n/Tr.h"
 #include "modules/musig/MusigAccountController.h"
 #include "theme/Palette.h"
+#include "views/utils.h"
 
 #include <Qontrol>
 #include <common.h>
@@ -31,6 +33,8 @@ void MusigStatusBar::doConnect() {
             &MusigStatusBar::onEndpointStateChanged, qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::electrumUrlChanged, this,
             &MusigStatusBar::onReloadUrl, qontrol::UNIQUE);
+    connect(m_controller, &AccountBackend::endpointRequestFinished, this,
+            &MusigStatusBar::onEndpointRequestFinished, qontrol::UNIQUE);
 }
 
 void MusigStatusBar::view() {
@@ -52,8 +56,15 @@ void MusigStatusBar::onEndpointStateChanged(Endpoint endpoint) {
         return;
     }
     auto state = m_controller->electrumState();
-    m_electrum_item->setOn(state == MusigAccountController::ElectrumState::Connected ||
-                           state == MusigAccountController::ElectrumState::Connecting);
+    m_electrum_url = m_controller->endpointUrl(endpoint);
+    m_electrum_item->setToggleEnabled(!m_electrum_url.isEmpty() &&
+                                      !m_controller->endpointOperationsBusy());
+    m_electrum_item->setOn(m_controller->isEndpointRunning(endpoint));
+    if (!m_controller->accountLoadError().isEmpty() && !m_controller->hasAccountMetadata()) {
+        m_electrum_item->setLabel(mapBackendErrorSummary(BackendErrorKind::Storage));
+        m_electrum_item->setToolTip(m_controller->accountLoadError());
+        return;
+    }
     switch (state) {
     case MusigAccountController::ElectrumState::Disconnected:
         m_electrum_item->setLabel(m_electrum_url.isEmpty() ? TR("status-not-configured")
@@ -69,20 +80,32 @@ void MusigStatusBar::onEndpointStateChanged(Endpoint endpoint) {
         m_electrum_item->setLabel(TR("status-disconnecting"));
         break;
     }
+    auto error = m_controller->endpointError(endpoint);
+    m_electrum_item->setToolTip(error);
+    if (!error.isEmpty() && !m_controller->endpointOperationsBusy()) {
+        m_electrum_item->setLabel(
+            mapBackendErrorSummary(m_controller->endpointErrorKind(endpoint)));
+    }
 }
 
 void MusigStatusBar::onElectrumToggled(bool checked) {
-    if (checked) {
-        m_controller->startElectrum();
-    } else {
-        m_controller->stopElectrum();
-    }
-    onEndpointStateChanged(Endpoint::Electrum);
+    m_endpoint_req = account::nextRequestId();
+    m_controller->setEndpointConnected(m_endpoint_req, Endpoint::Electrum, checked);
 }
 
 void MusigStatusBar::onReloadUrl() {
-    m_electrum_url = m_controller->electrumUrl();
-    // Nothing to connect to without a url: the switch stays off until one is set.
-    m_electrum_item->setToggleEnabled(!m_electrum_url.isEmpty());
     onEndpointStateChanged(Endpoint::Electrum);
+}
+
+void MusigStatusBar::onEndpointRequestFinished(uint64_t req_id, Endpoint endpoint,
+                                               const EndpointResult &result) {
+    if (endpoint != Endpoint::Electrum || req_id == 0 || req_id != m_endpoint_req) {
+        return;
+    }
+    m_endpoint_req = 0;
+    onEndpointStateChanged(endpoint);
+    if (!result.is_ok && !m_controller->endpointOperationsBusy()) {
+        m_electrum_item->setLabel(mapBackendErrorSummary(result.kind));
+        m_electrum_item->setToolTip(QString::fromUtf8(result.error.data(), result.error.size()));
+    }
 }

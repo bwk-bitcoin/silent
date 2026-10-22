@@ -429,7 +429,7 @@ auto SignModal::keyEntries() const -> QHash<QString, KeyEntry> {
 
 auto SignModal::refreshKeys() -> bool {
     auto *keys = Host::get()->keys(MusigModule::get());
-    auto result = keys != nullptr
+    auto result = keys != nullptr && m_controller->hasAccountMetadata()
                       ? keys->keys(account::toPublic<plugin::Network>(m_controller->network()))
                       : KeyListResult{.error = TR("musig-send-no-keys")};
     m_key_entries.clear();

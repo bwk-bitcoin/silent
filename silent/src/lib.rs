@@ -1573,6 +1573,7 @@ mod ffi {
         fn retry_due(self: &mut EndpointRetry) -> bool;
         type SpEndpointChange;
         type MusigEndpointChange;
+        fn sp_startup_endpoint_change(account: Box<Account>) -> Box<SpEndpointChange>;
         fn sp_endpoint_change(
             account: Box<Account>,
             server: BackendServer,
@@ -1589,10 +1590,12 @@ mod ffi {
             connected: bool,
         ) -> Box<MusigEndpointChange>;
         fn endpoint_phase(self: &SpEndpointChange) -> EndpointPhase;
+        fn endpoint_server(self: &SpEndpointChange) -> BackendServer;
         fn endpoint_result(self: &SpEndpointChange) -> EndpointResult;
         fn prepare_endpoint(self: &mut SpEndpointChange);
         fn finish_endpoint_after_drain(self: &mut SpEndpointChange);
         fn endpoint_phase(self: &MusigEndpointChange) -> EndpointPhase;
+        fn endpoint_server(self: &MusigEndpointChange) -> BackendServer;
         fn endpoint_result(self: &MusigEndpointChange) -> EndpointResult;
         fn prepare_endpoint(self: &mut MusigEndpointChange);
         fn finish_endpoint_after_drain(self: &mut MusigEndpointChange);
@@ -1964,6 +1967,7 @@ mod ffi {
         /// Create a new account from an account name (loads config from file).
         /// Check is_ok() before use; get_error() for failure reason.
         fn new_account(account_name: String) -> Box<Account>;
+        fn new_account_offline(config: &Config) -> Box<Account>;
 
         /// Check if the account was created successfully.
         fn is_ok(self: &Account) -> bool;
@@ -2583,6 +2587,7 @@ mod ffi {
         /// Loads the account `account_name` (config plugin id "musig").
         /// Check is_ok() before use.
         fn new_musig_account(account_name: String) -> Box<MusigAccount>;
+        fn new_musig_account_offline(config: &Config) -> Box<MusigAccount>;
         fn is_ok(self: &MusigAccount) -> bool;
         fn get_error(self: &MusigAccount) -> String;
         fn name(self: &MusigAccount) -> String;
@@ -3208,7 +3213,9 @@ fn failed_psbt_file(error: String) -> ffi::PsbtFileResult {
 }
 
 // Re-export main types
-pub use account::{new_account, Account, NotificationReceiver, Poll, PsbtResult};
+pub use account::{
+    new_account, new_account_offline, Account, NotificationReceiver, Poll, PsbtResult,
+};
 pub use app_state::{
     app_active_theme, app_enabled_plugins, app_fee_preferences, app_language, app_last_endpoint,
     app_plugin_access, app_plugin_answers, app_plugin_grants, app_plugin_history,
@@ -3229,8 +3236,9 @@ pub use coordination::{
     transaction_finalize,
 };
 pub use endpoint::{
-    musig_endpoint_change, new_endpoint_retry, sp_endpoint_change, take_musig_endpoint_account,
-    take_sp_endpoint_account, EndpointRetry, MusigEndpointChange, SpEndpointChange,
+    musig_endpoint_change, new_endpoint_retry, sp_endpoint_change, sp_startup_endpoint_change,
+    take_musig_endpoint_account, take_sp_endpoint_account, EndpointRetry, MusigEndpointChange,
+    SpEndpointChange,
 };
 pub use error::{notification_error_kind, validation_error_kind};
 pub use feed::{new_feed_state, FeedState};
@@ -3287,7 +3295,7 @@ impl Default for ffi::BackendErrorKind {
 }
 pub use musig::{
     musig_descriptor_fingerprints, musig_first_receive_address, new_musig_account,
-    validate_musig_descriptor, MusigAccount, MUSIG_PLUGIN_ID,
+    new_musig_account_offline, validate_musig_descriptor, MusigAccount, MUSIG_PLUGIN_ID,
 };
 pub use plugin_bundle::{
     plugin_bundles, plugin_install, plugin_library, plugin_metadata, plugin_remove,

@@ -23,13 +23,6 @@ class QTimer;
 
 namespace account::view {
 
-class BackendInfoReply : public QObject {
-    Q_OBJECT
-
-signals:
-    void ready(uint64_t req_id, BackendInfo info);
-};
-
 // One row per server the account syncs from: a passing Test saves the server and
 // leaves it disconnected, Connect waits for a saved server. BlindBit's capabilities
 // under its row, then what the account adds below.
@@ -50,7 +43,7 @@ public slots:
     void onEndpointRequestFinished(uint64_t req_id, Endpoint endpoint,
                                    const EndpointResult &result);
     void onEndpointTipReady(uint64_t req_id, Endpoint endpoint, const ElectrumTipResult &result);
-    void onBackendInfoReady(uint64_t req_id, const BackendInfo &info);
+    void onBackendInfoReady(uint64_t req_id, Endpoint endpoint, const BackendInfo &info);
     void onHeightTimeout();
 
 protected:

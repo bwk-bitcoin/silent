@@ -1722,6 +1722,25 @@ fn convert_electrum_notification(notif: TxListenerNotif) -> Notification {
 
 // CXX FFI functions
 
+/// Open stored wallet state without starting network services.
+pub fn new_account_offline(config: &Config) -> Box<Account> {
+    match Account::new_inner_connected(config.clone(), false) {
+        Ok(inner) => Box::new(Account {
+            inner: Some(inner),
+            error: String::new(),
+            closed_name: None,
+        }),
+        Err(error) => {
+            log::error!("Failed to open account offline: {error}");
+            Box::new(Account {
+                inner: None,
+                error,
+                closed_name: Some(config.account_name.clone()),
+            })
+        }
+    }
+}
+
 /// Create a new account.
 pub fn new_account(account_name: String) -> Box<Account> {
     let config = match crate::config::Config::from_file(account_name) {

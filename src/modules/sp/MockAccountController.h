@@ -11,6 +11,8 @@ public:
     auto loadPanels() -> void override;
     auto getCoins() -> rust::Vec<RustCoin> override;
     auto getPaymentHistory() -> rust::Vec<RustTx> override;
+    auto network() -> Network override;
+    auto getDescriptor() -> rust::String override;
     auto getSpAddress() -> rust::String override;
     auto newSegwitAddr() -> rust::String override;
     auto newTaprootAddr() -> rust::String override;

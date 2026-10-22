@@ -41,6 +41,14 @@ auto dummyTx(const char *direction, const char *txid, uint64_t amount, uint32_t 
 MockAccountController::MockAccountController(AccountWidget *widget) : AccountController(widget) {
 }
 
+auto MockAccountController::network() -> Network {
+    return Network::Regtest;
+}
+
+auto MockAccountController::getDescriptor() -> rust::String {
+    return {};
+}
+
 auto MockAccountController::loadPanels() -> void {
     AccountController::loadPanels(); // builds and connects the views
 

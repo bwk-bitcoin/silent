@@ -7,7 +7,9 @@
 #include "modules/musig/SignModal.h"
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QKeyEvent>
+#include <QThread>
 #include <common.h>
 
 namespace smoke {
@@ -58,6 +60,13 @@ void musigResetSmoke() {
 
     // An unloaded controller needs no account fixture or device to check the real footer.
     MusigAccountController controller(QStringLiteral("missing-reset-smoke-account"), nullptr);
+    QElapsedTimer opening;
+    opening.start();
+    while (controller.accountLoading() && opening.elapsed() < 10000) {
+        QApplication::processEvents();
+        QThread::msleep(1);
+    }
+    require(!controller.accountLoading(), "missing account opening finishes safely");
     musig::SignModal signing(&controller);
     signing.show();
     QApplication::processEvents();

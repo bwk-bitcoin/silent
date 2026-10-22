@@ -254,8 +254,19 @@ void accountWidgetLifetime(HostImpl *host, PriceModule *module) {
         require(config->save().empty(), "save isolated Testnet lifetime account");
         auto *widget = new MusigAccountWidget(name);
         QPointer<MusigAccountController> controller = widget->controller();
+        QElapsedTimer opening;
+        opening.start();
+        while (controller->accountLoading() && opening.elapsed() < 30000) {
+            QApplication::processEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        require(!controller->accountLoading(), "asynchronous Testnet opening completes");
         require(controller->getAccount().has_value() && controller->getAccount().value()->is_ok(),
                 "real Testnet lifetime backend opens");
+        auto canonical = ::validate_musig_descriptor(rust::String(descriptor.toStdString()));
+        require(canonical.is_ok && controller->network() == Network::Testnet &&
+                    std::string(controller->getDescriptor()) == std::string(canonical.descriptor),
+                "initial panels use real Testnet metadata and the Rust-canonical descriptor");
         QList<QPointer<qontrol::Screen>> screens;
         for (const auto *key : {"history", "coins", "receive", "send", "psbt", "settings"}) {
             screens.append(controller->screen(QString::fromLatin1(key)).value());

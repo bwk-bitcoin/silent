@@ -3661,6 +3661,7 @@ private:
 #define CXXBRIDGE1_STRUCT_SpEndpointChange
 struct SpEndpointChange final : public ::rust::Opaque {
   ::EndpointPhase endpoint_phase() const noexcept;
+  ::BackendServer endpoint_server() const noexcept;
   ::EndpointResult endpoint_result() const noexcept;
   void prepare_endpoint() noexcept;
   void finish_endpoint_after_drain() noexcept;
@@ -3679,6 +3680,7 @@ private:
 #define CXXBRIDGE1_STRUCT_MusigEndpointChange
 struct MusigEndpointChange final : public ::rust::Opaque {
   ::EndpointPhase endpoint_phase() const noexcept;
+  ::BackendServer endpoint_server() const noexcept;
   ::EndpointResult endpoint_result() const noexcept;
   void prepare_endpoint() noexcept;
   void finish_endpoint_after_drain() noexcept;
@@ -3959,6 +3961,8 @@ private:
 
 ::rust::Box<::EndpointRetry> new_endpoint_retry() noexcept;
 
+::rust::Box<::SpEndpointChange> sp_startup_endpoint_change(::rust::Box<::Account> account) noexcept;
+
 ::rust::Box<::SpEndpointChange> sp_endpoint_change(::rust::Box<::Account> account, ::BackendServer server, ::rust::String url, bool verify, bool test, bool connected) noexcept;
 
 ::rust::Box<::MusigEndpointChange> musig_endpoint_change(::rust::Box<::MusigAccount> account, ::rust::String url, bool verify, bool test, bool connected) noexcept;
@@ -4217,6 +4221,8 @@ bool delete_config(::rust::String account_name) noexcept;
 // Check is_ok() before use; get_error() for failure reason.
 ::rust::Box<::Account> new_account(::rust::String account_name) noexcept;
 
+::rust::Box<::Account> new_account_offline(::Config const &config) noexcept;
+
 // Create the device service. Does not start polling.
 ::rust::Box<::HwiService> new_hwi_service(::Network network) noexcept;
 
@@ -4352,6 +4358,8 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 // Loads the account `account_name` (config plugin id "musig").
 // Check is_ok() before use.
 ::rust::Box<::MusigAccount> new_musig_account(::rust::String account_name) noexcept;
+
+::rust::Box<::MusigAccount> new_musig_account_offline(::Config const &config) noexcept;
 
 #ifdef __clang__
 #pragma clang diagnostic pop

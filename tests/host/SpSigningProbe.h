@@ -24,6 +24,14 @@ public:
         discardWorkers();
     }
 
+    auto network() -> Network override {
+        return getAccount().value()->network();
+    }
+
+    auto getDescriptor() -> rust::String override {
+        return getAccount().value()->descriptor();
+    }
+
     void startWorker(QThread *worker) override {
         workers.append(worker);
     }

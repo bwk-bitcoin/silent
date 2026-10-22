@@ -24,8 +24,10 @@ AccountWidget::AccountWidget([[maybe_unused]] const QString &account, QWidget *p
     m_controller = new AccountController(account, this);
 #endif
     initUI();
+#ifdef SILENT_MOCK_UI
     m_controller->loadPanels();
     m_controller->loadPanel("history");
+#endif
 }
 
 void AccountWidget::initUI() {
@@ -110,21 +112,10 @@ void AccountWidget::initUI() {
     m_status_bar = new StatusBar(m_controller, this);
 
     // Connect status bar signals
-    connect(m_controller, &AccountController::scannerStateChanged, m_status_bar,
-            &StatusBar::onUpdateConnectionState, qontrol::UNIQUE);
     connect(m_controller, &AccountController::scanProgress, m_status_bar,
             &StatusBar::onUpdateScanProgress, qontrol::UNIQUE);
     connect(m_controller, &AccountController::waitingForBlocks, m_status_bar,
             &StatusBar::onUpdateWaitingForBlocks, qontrol::UNIQUE);
-    connect(m_controller, &AccountController::scanError, m_status_bar, &StatusBar::onUpdateScanError,
-            qontrol::UNIQUE);
-    connect(m_controller, &AccountController::electrumConnected, m_status_bar,
-            &StatusBar::onElectrumConnected, qontrol::UNIQUE);
-    connect(m_controller, &AccountController::electrumDisconnected, m_status_bar,
-            &StatusBar::onElectrumDisconnected, qontrol::UNIQUE);
-
-    // Start scanner after all connections are established
-    m_controller->startScanner();
 
     // Create main vertical layout with content + status bar
     auto *mainCol = (new qontrol::Column)->push(contentWidget)->push(m_status_bar);

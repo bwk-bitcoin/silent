@@ -58,13 +58,7 @@ void MusigAccountController::init(const QString &account) {
         return;
     }
 
-    auto acc = ::new_musig_account(rust::String(account.toStdString()));
-    if (!acc->is_ok()) {
-        qCritical() << "MusigAccountController: failed to load account" << account
-                    << QString::fromStdString(std::string(acc->get_error().c_str()));
-        return;
-    }
-    m_account = std::make_optional(std::move(acc));
+    m_init = true;
     connect(m_reconnect, &account::ElectrumReconnect::reconnect, this,
             &MusigAccountController::onElectrumReconnect, qontrol::UNIQUE);
     connect(m_reconnect, &account::ElectrumReconnect::gaveUp, this,
@@ -76,27 +70,73 @@ void MusigAccountController::init(const QString &account) {
 
     // Notifications come from a blocking recv() on a dedicated thread.
     connect(this, &MusigAccountController::notificationReceived, this,
-            &MusigAccountController::handleNotification, qontrol::UNIQUE);
-    listenNotifications();
+            &MusigAccountController::onNotificationReceived, qontrol::UNIQUE);
+    m_loading_account = std::make_shared<std::optional<rust::Box<MusigAccount>>>();
+    auto *worker = accountLoadWorker(account, m_loading_account, ::new_musig_account_offline);
+    connect(worker, &QThread::finished, this, &MusigAccountController::onAccountLoaded,
+            qontrol::UNIQUE);
+    startWorker(worker);
+}
 
-    m_init = true;
+void MusigAccountController::onAccountLoaded() {
+    auto error = installLoadedConfig();
+    m_account = std::move(*m_loading_account);
+    m_loading_account = nullptr;
+    if (m_account.has_value() && !m_account.value()->is_ok()) {
+        auto failure = m_account.value()->get_error();
+        error = QString::fromUtf8(failure.data(), failure.size());
+    }
+    if (endpointsStopping()) {
+        finishAccountLoad(error);
+        stop();
+        return;
+    }
+    if (m_account.has_value() && m_account.value()->is_ok()) {
+        setAccountDescriptor(m_account.value()->descriptor());
+        listenNotifications();
+    }
+    if ((m_widget != nullptr || m_panels_requested) && hasAccountMetadata()) {
+        loadPanels();
+        loadPanel(m_requested_panel);
+        pollCoins();
+    }
+    finishAccountLoad(error);
+    if (!error.isEmpty()) {
+        reportEndpointFailure(Endpoint::Electrum, rust::String(error.toStdString()),
+                              BackendErrorKind::Other);
+    } else if (m_widget != nullptr && !endpointOperationsBusy() && !electrumUrl().isEmpty()) {
+        setEndpointConnected(0, Endpoint::Electrum, true);
+    }
 }
 
 void MusigAccountController::listenNotifications() {
     auto receiver = m_account.value()->take_receiver();
-    m_notif_thread = QThread::create([this, recv = std::move(receiver)]() {
-        while (true) {
-            auto poll = recv->recv();
-            if (!poll->is_some()) {
-                break;
+    m_notif_thread =
+        QThread::create([this, recv = std::move(receiver), generation = ++m_notif_generation]() {
+            while (true) {
+                auto poll = recv->recv();
+                if (!poll->is_some()) {
+                    break;
+                }
+                emit notificationReceived(generation, poll->get_notification());
             }
-            emit notificationReceived(poll->get_notification());
-        }
-    });
+        });
     m_notif_thread->start();
 }
 
 void MusigAccountController::loadPanels() {
+    m_panels_requested = true;
+    if (!hasAccountMetadata()) {
+        return;
+    }
+    if (!m_panels.contains("settings")) {
+        auto *panel = new qontrol::Panel(new account::view::Settings(this), "settings");
+        panel->setParent(this);
+        m_panels.insert("settings", panel);
+    }
+    if (m_panels.contains("history") || !m_account.has_value() || !m_account.value()->is_ok()) {
+        return;
+    }
     m_panels.insert("history", new qontrol::Panel(new account::view::History(this), "history"));
     m_panels.insert("coins", new qontrol::Panel(new account::view::Coins(this), "coins"));
     m_panels.insert("receive", new qontrol::Panel(new account::view::Receive(this), "receive"));
@@ -105,7 +145,6 @@ void MusigAccountController::loadPanels() {
     connect(this, &MusigAccountController::savedPsbtWarningChanged, send,
             &account::view::Send::onSavedWarningChanged, qontrol::UNIQUE);
     m_panels.insert("psbt", new qontrol::Panel(new musig::SavedPsbts(this), "psbt"));
-    m_panels.insert("settings", new qontrol::Panel(new account::view::Settings(this), "settings"));
     for (auto *panel : m_panels) {
         panel->setParent(this);
     }
@@ -156,22 +195,19 @@ auto MusigAccountController::newAddress([[maybe_unused]] AddressKind kind) -> QS
 }
 
 auto MusigAccountController::network() -> Network {
-    return m_account.has_value() ? m_account.value()->network() : Network::Regtest;
+    return accountConfig().get_network();
 }
 
 auto MusigAccountController::getDescriptor() -> rust::String {
-    if (m_account.has_value()) {
-        return m_account.value()->descriptor();
-    }
-    return {};
+    return accountDescriptor();
 }
 
 auto MusigAccountController::cosignerFingerprints() -> QStringList {
     QStringList out;
-    if (!m_account.has_value()) {
+    if (!hasAccountMetadata()) {
         return out;
     }
-    for (const auto &fingerprint : m_account.value()->cosigner_fingerprints()) {
+    for (const auto &fingerprint : ::musig_descriptor_fingerprints(getDescriptor())) {
         out.append(QString::fromStdString(std::string(fingerprint)));
     }
     return out;
@@ -194,44 +230,25 @@ auto MusigAccountController::endpointUrl([[maybe_unused]] Endpoint endpoint) -> 
 }
 
 auto MusigAccountController::verifiesCertificate() const -> bool {
-    return !m_account.has_value() || m_account.value()->verify_certificate();
+    return savedEndpointVerify();
 }
 
-auto MusigAccountController::isEndpointRunning([[maybe_unused]] Endpoint endpoint) const -> bool {
-    return m_electrum_state == ElectrumState::Connected;
+auto MusigAccountController::isEndpointRunning(Endpoint endpoint) const -> bool {
+    return endpoint == Endpoint::Electrum && !endpointsStopping() &&
+           m_electrum_state == ElectrumState::Connected;
 }
 
 auto MusigAccountController::electrumState() const -> ElectrumState {
-    if (m_endpoint_busy && !m_endpoint_test) {
+    if (endpointsStopping()) {
+        return ElectrumState::Disconnecting;
+    }
+    if (accountLoading()) {
+        return ElectrumState::Connecting;
+    }
+    if (endpointOperationsBusy() && !m_endpoint_test) {
         return m_endpoint_connect ? ElectrumState::Connecting : ElectrumState::Disconnecting;
     }
     return m_electrum_state;
-}
-
-auto MusigAccountController::startEndpoint([[maybe_unused]] Endpoint endpoint) -> bool {
-    if (!m_account.has_value() || m_endpoint_busy || m_stopping) {
-        return false;
-    }
-    setEndpointConnected(0, Endpoint::Electrum, true);
-    return true;
-}
-
-void MusigAccountController::stopEndpoint([[maybe_unused]] Endpoint endpoint) {
-    stopElectrum();
-}
-
-auto MusigAccountController::networkEditable() const -> bool {
-    return false;
-}
-
-auto MusigAccountController::saveSettings(const QHash<Endpoint, QString> &urls,
-                                          [[maybe_unused]] Network network) -> QString {
-    auto url = urls.value(Endpoint::Electrum);
-    auto result = setElectrumUrl(url);
-    if (!result.saved) {
-        return TR("musig-settings-save-failed");
-    }
-    return {};
 }
 
 auto MusigAccountController::module() -> IModule * {
@@ -254,10 +271,7 @@ void MusigAccountController::startWorker(QThread *worker) {
 }
 
 auto MusigAccountController::electrumUrl() -> QString {
-    if (m_account.has_value()) {
-        return QString::fromStdString(std::string(m_account.value()->electrum_url().c_str()));
-    }
-    return {};
+    return savedEndpointUrl(Endpoint::Electrum);
 }
 
 auto MusigAccountController::roundStatus() const -> MusigRoundStatus {
@@ -384,6 +398,7 @@ auto MusigAccountController::restartPending() const -> bool {
 // ===== Slots =====
 
 void MusigAccountController::loadPanel(const QString &name) {
+    m_requested_panel = name;
     auto *panel = m_panels.value(name);
     if (m_widget != nullptr && panel != nullptr) {
         m_widget->loadPanel(panel);
@@ -398,11 +413,16 @@ void MusigAccountController::pollCoins() {
     }
 }
 
+void MusigAccountController::onNotificationReceived(uint64_t generation, Notification notif) {
+    if (generation == m_notif_generation) {
+        handleNotification(std::move(notif));
+    }
+}
+
 void MusigAccountController::handleNotification(Notification notif) {
     if (m_endpoint_account != nullptr || m_stopping) {
-        if (m_endpoint_account != nullptr && (notif.flag == NotificationFlag::ElectrumError ||
-                                              notif.flag == NotificationFlag::ElectrumStopped)) {
-            m_endpoint_connection_lost = true;
+        if (m_endpoint_account != nullptr && !endpointsStopping()) {
+            m_endpoint_notifications.append(notif);
         }
         return;
     }
@@ -421,7 +441,9 @@ void MusigAccountController::handleNotification(Notification notif) {
         break;
     case NotificationFlag::ElectrumConnected:
         m_electrum_state = ElectrumState::Connected;
+        clearEndpointFailure(Endpoint::Electrum);
         m_reconnect->connected();
+        finishEndpointConnection(Endpoint::Electrum, true, rust::String(), BackendErrorKind::None);
         emit electrumConnected(QString::fromStdString(std::string(notif.payload.c_str())));
         emit endpointStateChanged(Endpoint::Electrum);
         break;
@@ -429,12 +451,17 @@ void MusigAccountController::handleNotification(Notification notif) {
         qWarning() << "musig: electrum:"
                    << QString::fromStdString(std::string(notif.payload.c_str()));
         m_electrum_state = ElectrumState::Disconnected;
+        reportEndpointFailure(Endpoint::Electrum, notif.payload, ::notification_error_kind(notif));
+        finishEndpointConnection(Endpoint::Electrum, false, notif.payload,
+                                 ::notification_error_kind(notif));
         m_reconnect->lost();
         emit electrumDisconnected();
         emit endpointStateChanged(Endpoint::Electrum);
         break;
     case NotificationFlag::ElectrumStopped:
         m_electrum_state = ElectrumState::Disconnected;
+        finishEndpointConnection(Endpoint::Electrum, false, rust::String("Electrum stopped"),
+                                 BackendErrorKind::Electrum);
         m_reconnect->lost();
         emit electrumDisconnected();
         emit endpointStateChanged(Endpoint::Electrum);
@@ -448,43 +475,15 @@ void MusigAccountController::updateCoinLabel(const QString &outpoint, const QStr
     editOutpointLabel(0, outpoint, label);
 }
 
-auto MusigAccountController::setElectrumUrl(const QString &url) -> MusigElectrumUrlResult {
-    if (!m_account.has_value()) {
-        return MusigElectrumUrlResult{.saved = false, .started = false};
-    }
-    // The old listener's stop is the url change, not a lost connection.
-    m_reconnect->stopped();
-    auto result = m_account.value()->set_electrum_url(rust::String(url.toStdString()));
-    if (!result.saved) {
-        qWarning() << "MusigAccountController: failed to save electrum url" << url;
-        return result;
-    }
-    m_electrum_state = result.started ? ElectrumState::Connecting : ElectrumState::Disconnected;
-    emit electrumUrlChanged();
-    if (!result.started) {
-        // No listener runs on this url, so none reports its state.
-        emit electrumDisconnected();
-    }
-    emit endpointStateChanged(Endpoint::Electrum);
-    return result;
-}
-
-void MusigAccountController::startElectrum() {
-    setEndpointConnected(0, Endpoint::Electrum, true);
-}
-
-void MusigAccountController::stopElectrum() {
-    // Stopped on purpose: not reconnected.
-    m_reconnect->stopped();
-    setEndpointConnected(0, Endpoint::Electrum, false);
-}
-
 void MusigAccountController::onElectrumReconnect() {
-    if (m_account.has_value() && !m_stopping && !m_endpoint_busy) {
-        qInfo() << "musig: electrum: reconnecting";
-        m_electrum_state = m_account.value()->start_electrum() ? ElectrumState::Connecting
-                                                               : ElectrumState::Disconnected;
-        emit endpointStateChanged(Endpoint::Electrum);
+    if (endpointsStopping()) {
+        return;
+    }
+    if (endpointOperationsBusy()) {
+        m_reconnect_pending = true;
+    } else if (m_account.has_value()) {
+        m_reconnect_pending = false;
+        changeEndpoint(0, Endpoint::Electrum, {}, true, false, true, true);
     }
 }
 
@@ -498,7 +497,8 @@ void MusigAccountController::onElectrumGaveUp(int losses) {
 }
 
 void MusigAccountController::stop() {
-    if (m_endpoint_busy) {
+    stopEndpointOperations();
+    if (m_endpoint_busy || accountLoading()) {
         m_stop_requested = true;
         return;
     }
@@ -512,6 +512,7 @@ void MusigAccountController::stop() {
         return;
     }
     m_stopping = true;
+    ++m_notif_generation;
     m_electrum_state = ElectrumState::Disconnected;
     emit endpointStateChanged(Endpoint::Electrum);
     cancelSigning();
@@ -916,14 +917,15 @@ void MusigAccountController::editOutpointLabel(uint64_t req_id, const QString &o
 }
 
 void MusigAccountController::requestEndpointTip(uint64_t req_id, Endpoint endpoint) {
-    if (endpoint != Endpoint::Electrum || !m_account.has_value() || !isEndpointRunning(endpoint)) {
+    if (endpoint != Endpoint::Electrum || !m_account.has_value() || endpointOperationsBusy() ||
+        !isEndpointRunning(endpoint)) {
         ElectrumTipResult result;
         result.is_ok = false;
         result.error = rust::String("Endpoint is disconnected or unsupported");
         emit endpointTipReady(req_id, endpoint, result);
         return;
     }
-    requestAccountEndpointTip(req_id, endpoint, toQString(m_account.value()->name()));
+    requestAccountEndpointTip(req_id, endpoint);
 }
 
 void MusigAccountController::testAndSaveEndpoint(uint64_t req_id, Endpoint endpoint,
@@ -937,26 +939,40 @@ void MusigAccountController::setEndpointConnected(uint64_t req_id, Endpoint endp
 }
 
 void MusigAccountController::changeEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
-                                            bool verify_certificate, bool test, bool connected) {
-    if (endpoint != Endpoint::Electrum || m_endpoint_busy || m_stopping || m_stop_requested ||
-        !m_account.has_value() || !m_sign_reqs.empty() || m_resetting || m_finalizing ||
-        m_broadcast_pending) {
+                                            bool verify_certificate, bool test, bool connected,
+                                            bool retry) {
+    if (endpoint != Endpoint::Electrum || endpointOperationsBusy() || m_stopping ||
+        m_stop_requested || !m_account.has_value() || !m_sign_reqs.empty() || m_resetting ||
+        m_finalizing || m_broadcast_pending) {
         EndpointResult result{};
         result.kind = BackendErrorKind::Other;
         result.is_ok = false;
         result.error = rust::String("Account is unavailable or signing is in progress");
+        if (endpointsStopping()) {
+            result.error = rust::String("Account is stopping");
+        } else if (endpointOperationsBusy()) {
+            result.error = rust::String("Endpoint operation is in progress");
+        }
         emit endpointRequestFinished(req_id, endpoint, result);
         return;
     }
     m_endpoint_busy = true;
-    m_endpoint_connection_lost = false;
-    m_endpoint_req_id = req_id;
+    m_endpoint_retry = retry;
+    m_endpoint_notifications.clear();
     m_endpoint = endpoint;
     m_endpoint_url = url;
     m_endpoint_verify = verify_certificate;
     m_endpoint_test = test;
     m_endpoint_connect = connected;
-    emit endpointStateChanged(Endpoint::Electrum);
+    if (!test && !connected) {
+        m_reconnect->stopped();
+        m_reconnect_pending = false;
+    }
+    auto operation = connected ? EndpointOperation::Connecting : EndpointOperation::Disconnecting;
+    if (test) {
+        operation = EndpointOperation::Testing;
+    }
+    beginEndpointOperation(req_id, endpoint, operation);
     if (m_storage_queue.empty()) {
         startEndpointChange();
     }
@@ -970,28 +986,14 @@ void MusigAccountController::startEndpointChange() {
     m_endpoint_replaced = std::make_shared<bool>(false);
     auto workers = std::move(m_workers);
     m_workers.clear();
-    auto *thread = QThread::create([account = m_endpoint_account, result = m_endpoint_result,
-                                    replaced = m_endpoint_replaced, workers, notif = m_notif_thread,
-                                    url = m_endpoint_url.toStdString(), verify = m_endpoint_verify,
-                                    test = m_endpoint_test, connected = m_endpoint_connect] {
-        for (auto *worker : workers) {
-            worker->wait();
-            worker->deleteLater();
-        }
-        auto change = ::musig_endpoint_change(std::move(account->value()), rust::String(url),
-                                              verify, test, connected);
-        change->prepare_endpoint();
-        if (change->endpoint_phase() == EndpointPhase::Draining) {
-            *replaced = true;
-            if (notif != nullptr) {
-                notif->wait();
-                notif->deleteLater();
-            }
-            change->finish_endpoint_after_drain();
-        }
-        *result = change->endpoint_result();
-        account->value() = ::take_musig_endpoint_account(std::move(change));
-    });
+    auto *thread = endpointChangeWorker(
+        m_endpoint_account, m_endpoint_result, m_endpoint_replaced, workers, m_notif_thread,
+        [url = m_endpoint_url.toStdString(), verify = m_endpoint_verify, test = m_endpoint_test,
+         connected = m_endpoint_connect](rust::Box<MusigAccount> account) {
+            return ::musig_endpoint_change(std::move(account), rust::String(url), verify, test,
+                                           connected);
+        },
+        ::take_musig_endpoint_account);
     connect(thread, &QThread::finished, this, &MusigAccountController::onEndpointFinished,
             qontrol::UNIQUE);
     startWorker(thread);
@@ -1001,8 +1003,21 @@ void MusigAccountController::onEndpointFinished() {
     m_account = std::move(*m_endpoint_account);
     m_endpoint_account = nullptr;
     m_endpoint_busy = false;
+    if (m_account.has_value() && m_account.value()->is_ok()) {
+        setAccountDescriptor(m_account.value()->descriptor());
+        setSavedEndpoint(Endpoint::Electrum, m_account.value()->electrum_url(),
+                         m_account.value()->verify_certificate());
+        if (m_panels_requested) {
+            loadPanels();
+        }
+    } else if (m_endpoint_result->saved) {
+        setSavedEndpoint(m_endpoint, m_endpoint_result->url, m_endpoint_result->verify_certificate);
+    }
     if (*m_endpoint_replaced) {
-        m_reconnect->stopped();
+        if (!m_endpoint_retry) {
+            m_reconnect->stopped();
+            m_reconnect_pending = false;
+        }
         m_notif_thread = nullptr;
         m_electrum_state = m_endpoint_result->connection_pending ? ElectrumState::Connecting
                                                                  : ElectrumState::Disconnected;
@@ -1011,18 +1026,29 @@ void MusigAccountController::onEndpointFinished() {
         }
         emit electrumDisconnected();
         emit electrumUrlChanged();
-    } else if (m_endpoint_connection_lost) {
-        m_electrum_state = ElectrumState::Disconnected;
-        m_reconnect->lost();
-        emit electrumDisconnected();
     }
     emit endpointStateChanged(Endpoint::Electrum);
-    emit endpointRequestFinished(m_endpoint_req_id, m_endpoint, *m_endpoint_result);
+    auto notifications = std::move(m_endpoint_notifications);
+    m_endpoint_notifications.clear();
+    bool replaced = *m_endpoint_replaced;
+    bool retry = m_endpoint_retry;
+    auto result = *m_endpoint_result;
+    finishEndpointOperation(result);
+    if (retry && !result.is_ok && !endpointsStopping()) {
+        m_reconnect->lost();
+    }
+    if (!replaced && !endpointsStopping()) {
+        for (const auto &notification : notifications) {
+            handleNotification(notification);
+        }
+    }
     if (!m_psbt_v2_hex.isEmpty()) {
         emit roundChanged(roundStatus());
     }
     if (m_stop_requested) {
         stop();
+    } else if (m_reconnect_pending && !endpointOperationsBusy()) {
+        onElectrumReconnect();
     }
 }
 

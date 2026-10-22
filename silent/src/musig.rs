@@ -70,6 +70,31 @@ const NOT_INITIALIZED: &str = "Account not initialized";
 const SP_RECIPIENT_UNSUPPORTED: &str =
     "silent payment recipients are not supported by this account";
 
+/// Open stored wallet state without starting network services.
+pub fn new_musig_account_offline(config: &Config) -> Box<MusigAccount> {
+    match MusigAccount::new_inner_connected(config.clone(), false) {
+        Ok(inner) => Box::new(MusigAccount {
+            inner: Some(inner),
+            error: String::new(),
+            closed_saved_psbts: None,
+            closed_name: None,
+            active: Mutex::new(None),
+        }),
+        Err(error) => {
+            log::error!("Failed to open account offline: {error}");
+            Box::new(MusigAccount {
+                inner: None,
+                error,
+                closed_saved_psbts: Some(Mutex::new(SavedPsbtStore::load(
+                    config.account_dir().join("saved_psbts.json"),
+                ))),
+                closed_name: Some(config.account_name.clone()),
+                active: Mutex::new(None),
+            })
+        }
+    }
+}
+
 pub fn new_musig_account(account_name: String) -> Box<MusigAccount> {
     let config = match Config::from_file(account_name) {
         Ok(c) => c,

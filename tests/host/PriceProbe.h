@@ -272,22 +272,6 @@ public:
         return false;
     }
 
-    auto startEndpoint([[maybe_unused]] Endpoint endpoint) -> bool override {
-        return false;
-    }
-
-    void stopEndpoint([[maybe_unused]] Endpoint endpoint) override {
-    }
-
-    [[nodiscard]] auto networkEditable() const -> bool override {
-        return false;
-    }
-
-    auto saveSettings([[maybe_unused]] const QHash<Endpoint, QString> &urls,
-                      [[maybe_unused]] Network network) -> QString override {
-        return {};
-    }
-
     auto settingsExtras() -> QWidget * override {
         return nullptr;
     }

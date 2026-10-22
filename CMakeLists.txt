@@ -259,6 +259,7 @@ set(SILENT_APP_SOURCES
     src/views/DashboardLayout.h
     src/views/DashboardLayout.cpp
     src/account/AccountBackend.h
+    src/account/AccountBackend.cpp
     src/account/Equality.h
     src/account/RequestId.h
     src/account/ElectrumReconnect.h

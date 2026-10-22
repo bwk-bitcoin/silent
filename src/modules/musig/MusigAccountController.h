@@ -51,11 +51,6 @@ public:
     auto endpointUrl(Endpoint endpoint) -> QString override;
     [[nodiscard]] auto verifiesCertificate() const -> bool override;
     [[nodiscard]] auto isEndpointRunning(Endpoint endpoint) const -> bool override;
-    auto startEndpoint(Endpoint endpoint) -> bool override;
-    void stopEndpoint(Endpoint endpoint) override;
-    [[nodiscard]] auto networkEditable() const -> bool override;
-    // Saves the Electrum url and stops the listener; the network is fixed.
-    auto saveSettings(const QHash<Endpoint, QString> &urls, Network network) -> QString override;
     // The descriptor, the cosigners and Delete.
     auto settingsExtras() -> QWidget * override;
     auto module() -> IModule * override;
@@ -101,7 +96,7 @@ signals:
     void electrumDisconnected();
     // The Electrum URL was saved.
     void electrumUrlChanged();
-    void notificationReceived(Notification notif);
+    void notificationReceived(uint64_t generation, Notification notif);
     // A prepared PSBT entered round 1.
     void prepared(QString psbt_v2_hex, QString txid);
     void sessionLoading();
@@ -132,10 +127,8 @@ public slots:
     void loadPanel(const QString &name);
     void pollCoins();
     void handleNotification(Notification notif);
+    void onNotificationReceived(uint64_t generation, Notification notif);
     void updateCoinLabel(const QString &outpoint, const QString &label) override;
-    auto setElectrumUrl(const QString &url) -> MusigElectrumUrlResult;
-    void startElectrum();
-    void stopElectrum();
     // A lost Electrum connection starts again.
     void onElectrumReconnect();
     // The reconnect gave up: the user is told, the connection stays down.
@@ -158,6 +151,7 @@ public slots:
     void onBroadcastResult(const TxResult &result);
     void onWorkerFinished();
     void onEndpointFinished();
+    void onAccountLoaded();
     void onRestartFinished();
     void onStorageFinished();
     void onSavedPsbtDeleteConfirmed(const QString &id);
@@ -186,7 +180,7 @@ protected:
     void completeSavedPsbtDeletion(const QString &id, const SavedPsbtMutation &result);
     void listenNotifications();
     void changeEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
-                        bool verify_certificate, bool test, bool connected);
+                        bool verify_certificate, bool test, bool connected, bool retry = false);
     void startEndpointChange();
 
 private:
@@ -195,6 +189,7 @@ private:
     MusigAccountWidget *m_widget = nullptr;
     std::optional<rust::Box<MusigAccount>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;
+    uint64_t m_notif_generation = 0;
     QList<QThread *> m_workers;
     ElectrumState m_electrum_state = ElectrumState::Disconnected;
     account::ElectrumReconnect *m_reconnect = new account::ElectrumReconnect(this);
@@ -229,15 +224,19 @@ private:
     std::uint64_t m_signing_generation = 0;
     std::uint64_t m_restart_generation = 0;
     bool m_init = false;
+    bool m_panels_requested = false;
+    QString m_requested_panel = QStringLiteral("history");
+    std::shared_ptr<std::optional<rust::Box<MusigAccount>>> m_loading_account;
     bool m_stopping = false;
     bool m_stop_requested = false;
     std::shared_ptr<std::optional<rust::Box<MusigAccount>>> m_endpoint_account;
     std::shared_ptr<EndpointResult> m_endpoint_result;
     std::shared_ptr<bool> m_endpoint_replaced;
-    uint64_t m_endpoint_req_id = 0;
     Endpoint m_endpoint = Endpoint::Electrum;
     bool m_endpoint_busy = false;
-    bool m_endpoint_connection_lost = false;
+    bool m_endpoint_retry = false;
+    bool m_reconnect_pending = false;
+    QList<Notification> m_endpoint_notifications;
     QString m_endpoint_url;
     bool m_endpoint_verify = true;
     bool m_endpoint_test = false;

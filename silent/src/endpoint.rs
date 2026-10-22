@@ -161,6 +161,19 @@ pub struct MusigEndpointChange {
     change: Change,
 }
 
+pub fn sp_startup_endpoint_change(account: Box<Account>) -> Box<SpEndpointChange> {
+    let connect = account.sub_account_count() > 0 && !account.electrum_url().is_empty();
+    let server = if connect {
+        BackendServer::Electrum
+    } else {
+        BackendServer::Blindbit
+    };
+    Box::new(SpEndpointChange {
+        account,
+        change: Change::new(server, String::new(), true, false, connect, true),
+    })
+}
+
 pub fn sp_endpoint_change(
     account: Box<Account>,
     server: BackendServer,
@@ -199,6 +212,9 @@ pub fn musig_endpoint_change(
 }
 
 impl SpEndpointChange {
+    pub fn endpoint_server(&self) -> BackendServer {
+        self.change.server
+    }
     pub fn endpoint_phase(&self) -> EndpointPhase {
         self.change.phase
     }
@@ -223,7 +239,14 @@ impl SpEndpointChange {
             return;
         }
         let mut result = self.account.reopen_backend(self.change.connect);
-        if self.account.is_ok() && self.change.resume && !self.account.start_scanner() {
+        result.connection_pending &= self.account.sub_account_count() > 0;
+        // Do not replace an earlier reopen error with the scanner error.
+        if self.account.is_ok()
+            && self.change.resume
+            && !self.account.start_scanner()
+            && result.is_ok
+        {
+            self.change.server = BackendServer::Blindbit;
             result.is_ok = false;
             result.kind = BackendErrorKind::Backend;
             result.error = "Backend reopened but scanner could not start".into();
@@ -233,6 +256,9 @@ impl SpEndpointChange {
 }
 
 impl MusigEndpointChange {
+    pub fn endpoint_server(&self) -> BackendServer {
+        BackendServer::Electrum
+    }
     pub fn endpoint_phase(&self) -> EndpointPhase {
         self.change.phase
     }

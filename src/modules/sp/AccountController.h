@@ -42,10 +42,6 @@ public:
     auto endpointUrl(Endpoint endpoint) -> QString override;
     [[nodiscard]] auto verifiesCertificate() const -> bool override;
     [[nodiscard]] auto isEndpointRunning(Endpoint endpoint) const -> bool override;
-    auto startEndpoint(Endpoint endpoint) -> bool override;
-    void stopEndpoint(Endpoint endpoint) override;
-    [[nodiscard]] auto networkEditable() const -> bool override;
-    auto saveSettings(const QHash<Endpoint, QString> &urls, Network network) -> QString override;
     auto settingsExtras() -> QWidget * override;
     auto module() -> IModule * override;
     auto simulateTx(TransactionTemplate tx) -> TransactionSimulation override;
@@ -67,11 +63,10 @@ public:
 signals:
     void newAddress(rust::String addr);
     void waitingForBlocks(uint32_t tip_height);
-    void scanError(rust::String error, BackendErrorKind kind);
     void scannerStateChanged(bool running);
     void electrumConnected(QString address);
     void electrumDisconnected();
-    void notificationReceived(Notification notif);
+    void notificationReceived(uint64_t generation, Notification notif);
     // Emitted once the background teardown is done and the notification thread
     // has exited, so the owner can safely delete the widget.
     void stopped();
@@ -81,11 +76,12 @@ public slots:
     auto insertPanel(qontrol::Panel *panel) -> void;
     auto pollCoins() -> void;
     auto handleNotification(Notification notif) -> void;
+    void onNotificationReceived(uint64_t generation, Notification notif);
     void updateCoinLabel(const QString &outpoint, const QString &label) override;
-    auto startScanner() -> void;
     auto stop() -> void;
     void onWorkerFinished();
     void onEndpointFinished();
+    void onAccountLoaded();
     // A lost Electrum connection starts again.
     void onElectrumReconnect();
     // The reconnect gave up: the user is told, the connection stays down.
@@ -98,10 +94,6 @@ public slots:
     auto receiveClicked() -> void;
     auto settingsClicked() -> void;
 
-    [[nodiscard]] auto isScannerRunning() const -> bool {
-        return m_scanner_running;
-    }
-
     [[nodiscard]] auto etaSecs() const -> uint64_t;
 
 protected:
@@ -109,7 +101,8 @@ protected:
     explicit AccountController(AccountWidget *widget);
     void listenNotifications();
     void changeEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
-                        bool verify_certificate, bool test, bool connected);
+                        bool verify_certificate, bool test, bool connected, bool retry = false,
+                        bool startup = false);
 
 private:
     QPointer<qontrol::Panel> m_current_panel;
@@ -117,9 +110,13 @@ private:
     AccountWidget *m_widget;
     std::optional<rust::Box<Account>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;
+    uint64_t m_notif_generation = 0;
     QList<QThread *> m_workers;
     rust::Box<SyncEstimator> m_estimator = new_sync_estimator();
     bool m_init = false;
+    bool m_panels_requested = false;
+    QString m_requested_panel = QStringLiteral("history");
+    std::shared_ptr<std::optional<rust::Box<Account>>> m_loading_account;
     bool m_stopping = false;
     bool m_scanner_running = false;
     bool m_electrum_running = false;
@@ -129,9 +126,12 @@ private:
     std::shared_ptr<std::optional<rust::Box<Account>>> m_endpoint_account;
     std::shared_ptr<EndpointResult> m_endpoint_result;
     std::shared_ptr<bool> m_endpoint_replaced;
-    uint64_t m_endpoint_req_id = 0;
     Endpoint m_endpoint = Endpoint::Electrum;
     bool m_endpoint_busy = false;
-    bool m_endpoint_connection_lost = false;
+    bool m_endpoint_retry = false;
+    bool m_endpoint_startup = false;
+    std::shared_ptr<BackendServer> m_endpoint_server;
+    bool m_reconnect_pending = false;
+    QList<Notification> m_endpoint_notifications;
     bool m_endpoint_stop_requested = false;
 };

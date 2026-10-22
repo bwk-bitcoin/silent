@@ -35,14 +35,6 @@ auto menuButton(const QString &text, const QIcon &icon) -> Button * {
 MusigAccountWidget::MusigAccountWidget(const QString &account, QWidget *parent) : QWidget(parent) {
     m_controller = new MusigAccountController(account, this);
     initUI();
-    m_controller->loadPanels();
-    m_controller->loadPanel("history");
-    // The views show the stored coins before the first notification.
-    m_controller->pollCoins();
-    // Endpoint replacement takes the account away while the worker runs.
-    if (!m_controller->electrumUrl().isEmpty()) {
-        m_controller->startElectrum();
-    }
 }
 
 MusigAccountWidget::~MusigAccountWidget() = default;

@@ -1,11 +1,10 @@
 #include "StatusBar.h"
 #include "AccountController.h"
+#include "account/RequestId.h"
 #include "catalog/StatusBarItem.h"
 #include "catalog/containers/Separator.h"
 #include "i18n/Tr.h"
 #include "views/utils.h"
-#include <QBrush>
-#include <QDebug>
 #include <common.h>
 
 static auto formatEta(uint64_t secs) -> QString {
@@ -25,28 +24,17 @@ StatusBar::StatusBar(AccountController *controller, QWidget *parent)
     : QWidget(parent),
       m_controller(controller) {
     initUI();
-    loadBlindbitUrl();
-    loadElectrumUrl();
-
-    // Set initial blindbit state
-    m_connected = m_controller->isScannerRunning();
-    onUpdateConnectionState(m_connected);
-
-    // Set initial electrum state (sub-accounts auto-start on construction). Only the
-    // segwit and taproot sub-accounts connect: without them nothing will.
-    if (m_electrum_url.isEmpty()) {
-        m_electrum_item->setLabel(TR("status-not-configured"));
-    } else if (!m_controller->hasSegwit() && !m_controller->hasTaproot()) {
-        m_electrum_item->setLabel(TR("status-electrum-unused"));
-    } else {
-        m_electrum_item->setLabel(TR("status-connecting"));
-    }
+    onReloadUrl();
 
     // Connect toggle signals
     connect(m_blindbit_item, &catalog::StatusBarItem::toggled, this, &StatusBar::onToggled,
             qontrol::UNIQUE);
     connect(m_electrum_item, &catalog::StatusBarItem::toggled, this, &StatusBar::onElectrumToggled,
             qontrol::UNIQUE);
+    connect(m_controller, &AccountBackend::endpointStateChanged, this,
+            &StatusBar::onEndpointStateChanged, qontrol::UNIQUE);
+    connect(m_controller, &AccountBackend::endpointRequestFinished, this,
+            &StatusBar::onEndpointRequestFinished, qontrol::UNIQUE);
 }
 
 void StatusBar::initUI() {
@@ -85,39 +73,7 @@ void StatusBar::initUI() {
     setLayout(mainCol->layout());
 }
 
-void StatusBar::loadBlindbitUrl() {
-    auto &accountOpt = m_controller->getAccount();
-    if (accountOpt.has_value()) {
-        auto accountName = accountOpt.value()->name();
-        auto config = config_from_file(accountName);
-        if (!config->is_ok()) {
-            qWarning() << "StatusBar: cannot load blindbit url for account"
-                       << QString::fromStdString(std::string(accountName.c_str())) << ":"
-                       << QString::fromStdString(std::string(config->get_error().c_str()));
-            return;
-        }
-        m_blindbit_url = QString::fromStdString(std::string(config->get_blindbit_url().c_str()));
-    }
-}
-
-void StatusBar::loadElectrumUrl() {
-    auto &accountOpt = m_controller->getAccount();
-    if (accountOpt.has_value()) {
-        auto accountName = accountOpt.value()->name();
-        auto config = config_from_file(accountName);
-        if (!config->is_ok()) {
-            qWarning() << "StatusBar: cannot load electrum url for account"
-                       << QString::fromStdString(std::string(accountName.c_str())) << ":"
-                       << QString::fromStdString(std::string(config->get_error().c_str()));
-            return;
-        }
-        m_electrum_url = QString::fromStdString(std::string(config->get_electrum_url().c_str()));
-    }
-}
-
 void StatusBar::onUpdateConnectionState(bool connected) {
-    m_connected = connected;
-
     m_blindbit_item->setOn(connected);
 
     if (connected) {
@@ -145,14 +101,7 @@ void StatusBar::onUpdateWaitingForBlocks(uint32_t tip_height) {
     m_blindbit_item->setLabel(TR("status-synced-watching").arg(tip_height));
 }
 
-void StatusBar::onUpdateScanError(rust::String error, BackendErrorKind kind) {
-    QString errorStr = QString::fromStdString(std::string(error.c_str()));
-    m_blindbit_item->setLabel(mapBackendErrorSummary(kind));
-}
-
 void StatusBar::onElectrumConnected(const QString &address) {
-    m_electrum_connected = true;
-
     m_electrum_item->setOn(true);
 
     m_electrum_item->setLabel(TR("status-connected-electrum").arg(address));
@@ -160,45 +109,83 @@ void StatusBar::onElectrumConnected(const QString &address) {
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void StatusBar::onElectrumDisconnected() {
-    m_electrum_connected = false;
-
     m_electrum_item->setOn(false);
 
     m_electrum_item->setLabel(TR("status-electrum-disconnected"));
 }
 
 void StatusBar::onReloadUrl() {
-    loadBlindbitUrl();
-    loadElectrumUrl();
+    onEndpointStateChanged(Endpoint::Blindbit);
+    onEndpointStateChanged(Endpoint::Electrum);
 }
 
 void StatusBar::onToggled(bool checked) {
-    auto &accountOpt = m_controller->getAccount();
-    if (!accountOpt.has_value()) {
-        return;
-    }
-
-    if (checked) {
-        m_blindbit_item->setLabel(TR("status-connecting"));
-        accountOpt.value()->start_scanner();
-    } else {
-        m_blindbit_item->setLabel(TR("status-disconnecting"));
-        accountOpt.value()->stop_scanner();
-    }
+    m_blindbit_req = account::nextRequestId();
+    m_controller->setEndpointConnected(m_blindbit_req, Endpoint::Blindbit, checked);
 }
 
 void StatusBar::onElectrumToggled(bool checked) {
-    auto &accountOpt = m_controller->getAccount();
-    if (!accountOpt.has_value()) {
+    m_electrum_req = account::nextRequestId();
+    m_controller->setEndpointConnected(m_electrum_req, Endpoint::Electrum, checked);
+}
+
+void StatusBar::onEndpointStateChanged(Endpoint endpoint) {
+    m_blindbit_url = m_controller->endpointUrl(Endpoint::Blindbit);
+    m_electrum_url = m_controller->endpointUrl(Endpoint::Electrum);
+    bool busy = m_controller->endpointOperationsBusy();
+    m_blindbit_item->setToggleEnabled(!busy && !m_blindbit_url.isEmpty());
+    m_electrum_item->setToggleEnabled(!busy && !m_electrum_url.isEmpty() &&
+                                      (m_controller->hasSegwit() || m_controller->hasTaproot()));
+    auto *item = endpoint == Endpoint::Blindbit ? m_blindbit_item : m_electrum_item;
+    auto error = m_controller->endpointError(endpoint);
+    auto operation = m_controller->endpointOperation(endpoint);
+    if (m_controller->accountLoading()) {
+        item->setOn(false);
+        item->setLabel(TR("status-connecting"));
         return;
     }
-
-    // Through the controller: a stop it is told of is not reconnected.
-    if (checked) {
-        m_electrum_item->setLabel(TR("status-connecting"));
-        m_controller->startEndpoint(Endpoint::Electrum);
+    if (!m_controller->accountLoadError().isEmpty() && !m_controller->hasAccountMetadata()) {
+        item->setOn(false);
+        item->setLabel(mapBackendErrorSummary(BackendErrorKind::Storage));
+        item->setToolTip(m_controller->accountLoadError());
+        return;
+    }
+    if (operation != EndpointOperation::Idle || m_controller->endpointsStopping()) {
+        error.clear();
+    }
+    item->setToolTip(error);
+    item->setOn(m_controller->isEndpointRunning(endpoint));
+    if (endpoint == Endpoint::Blindbit) {
+        onUpdateConnectionState(m_controller->isEndpointRunning(endpoint));
+    } else if (m_electrum_url.isEmpty()) {
+        item->setLabel(TR("status-not-configured"));
+    } else if (!m_controller->hasSegwit() && !m_controller->hasTaproot()) {
+        item->setLabel(TR("status-electrum-unused"));
+    } else if (m_controller->isEndpointRunning(endpoint)) {
+        onElectrumConnected(m_electrum_url);
     } else {
-        m_electrum_item->setLabel(TR("status-disconnecting"));
-        m_controller->stopEndpoint(Endpoint::Electrum);
+        onElectrumDisconnected();
+    }
+    if (m_controller->endpointsStopping() || operation == EndpointOperation::Disconnecting) {
+        item->setLabel(TR("status-disconnecting"));
+    } else if (operation == EndpointOperation::Connecting) {
+        item->setLabel(TR("status-connecting"));
+    } else if (!error.isEmpty()) {
+        item->setLabel(mapBackendErrorSummary(m_controller->endpointErrorKind(endpoint)));
+    }
+}
+
+void StatusBar::onEndpointRequestFinished(uint64_t req_id, Endpoint endpoint,
+                                          const EndpointResult &result) {
+    auto &req = endpoint == Endpoint::Blindbit ? m_blindbit_req : m_electrum_req;
+    if (req_id == 0 || req_id != req) {
+        return;
+    }
+    req = 0;
+    onEndpointStateChanged(endpoint);
+    if (!result.is_ok && !m_controller->endpointOperationsBusy()) {
+        auto *item = endpoint == Endpoint::Blindbit ? m_blindbit_item : m_electrum_item;
+        item->setLabel(mapBackendErrorSummary(result.kind));
+        item->setToolTip(QString::fromUtf8(result.error.data(), result.error.size()));
     }
 }
