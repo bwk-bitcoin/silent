@@ -4110,6 +4110,8 @@ void state_lock() noexcept;
 // sidecar beside it) into the state, replacing an earlier version of it.
 ::PluginInstallResult plugin_install(::rust::String path) noexcept;
 
+::rust::String plugin_admission(::rust::Slice<::std::uint8_t const> bytes, ::rust::String expected_iid, ::std::uint8_t qt_major, ::std::uint8_t qt_minor, ::std::uint8_t arch_requirements) noexcept;
+
 // Every installed plugin's sidecar, as JSON text.
 ::rust::Vec<::rust::String> plugin_bundles() noexcept;
 

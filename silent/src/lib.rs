@@ -19,6 +19,7 @@ pub mod image;
 pub mod keys;
 pub mod money;
 pub mod musig;
+pub mod plugin_admission;
 pub mod plugin_bundle;
 pub mod policy;
 pub mod saved_psbt;
@@ -1781,6 +1782,14 @@ mod ffi {
         /// sidecar beside it) into the state, replacing an earlier version of it.
         fn plugin_install(path: String) -> PluginInstallResult;
 
+        fn plugin_admission(
+            bytes: &[u8],
+            expected_iid: String,
+            qt_major: u8,
+            qt_minor: u8,
+            arch_requirements: u8,
+        ) -> String;
+
         /// Every installed plugin's sidecar, as JSON text.
         fn plugin_bundles() -> Vec<String>;
         fn plugin_metadata() -> Vec<PluginMetadata>;
@@ -3307,6 +3316,7 @@ pub use musig::{
     musig_descriptor_fingerprints, musig_first_receive_address, new_musig_account,
     new_musig_account_offline, validate_musig_descriptor, MusigAccount, MUSIG_PLUGIN_ID,
 };
+pub use plugin_admission::plugin_admission;
 pub use plugin_bundle::{
     plugin_bundles, plugin_install, plugin_library, plugin_metadata, plugin_remove,
 };

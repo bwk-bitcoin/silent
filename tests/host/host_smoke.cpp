@@ -12,30 +12,39 @@
 #include <cstdio>
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QList>
+#include <QMetaType>
 #include <QObject>
 #include <QPair>
 #include <QString>
 #include <QStringList>
+#include <QStringLiteral>
 #include <QThread>
 
-#include <Qontrol>
+#include <Qt>
+#include <QtContainerFwd>
+#include <QtCore/qtmetamacros.h>
 #include <algorithm>
 #include <common.h>
 #include <memory>
 #include <optional>
 #include <silent.h>
+#include <utility>
 
 #include <AppController.h>
 #include <MainWindow.h>
 #include <host/Host.h>
 #include <host/PluginRegistry.h>
 #include <i18n/I18nManager.h>
+#include <interfaces/enums.h>
+#include <interfaces/host.h>
 #include <interfaces/instance.h>
 #include <interfaces/module.h>
 #include <interfaces/signer.h>
+#include <interfaces/types.h>
 #include <modules/hwi/HwiSigner.h>
 #include <modules/keys/DeviceName.h>
 #include <modules/keys/KeysModule.h>
@@ -163,6 +172,7 @@ auto launcherLists(const PluginRegistry &registry, const IModule *module, const 
 
 namespace smoke {
 void pluginAbiSmoke();
+auto pluginGnuHashChild(const QString &path, bool expected_admission) -> int;
 void spSigningSmoke(const QString &name);
 void musigResetSmoke();
 void boundarySmoke();
@@ -178,6 +188,12 @@ auto main(int argc, char *argv[]) -> int {
     qRegisterMetaType<std::optional<ReqId>>();
     i18n::I18nManager::get()->init(&app);
     auto arguments = QApplication::arguments();
+#ifdef SILENT_ABI2_FIXTURE_PATH
+    if (arguments.size() == 4 && arguments.at(1) == QStringLiteral("--plugin-gnu-hash-child")) {
+        return smoke::pluginGnuHashChild(arguments.at(2),
+                                         arguments.at(3) == QStringLiteral("admit"));
+    }
+#endif
     if (arguments.size() == 3 && (arguments.at(1) == QStringLiteral("--external-spend") ||
                                   arguments.at(1) == QStringLiteral("--external-nonce-review") ||
                                   arguments.at(1) == QStringLiteral("--external-lifecycle"))) {

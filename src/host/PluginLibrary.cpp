@@ -2,16 +2,19 @@
 #include "PluginMetadata.h"
 #include "interfaces/module.h"
 
-#include <QCborMap>
-#include <QCborStreamReader>
-#include <QCborValue>
+#include <QObject>
+#include <QString>
+#include <QStringLiteral>
+#include <QtCore/qconfig.h>
 #include <QtPlugin>
+#include <QtTypes>
 #include <cstddef>
-#include <cstring>
-#include <utility>
+#include <cstdint>
+#include <silent.h>
 
 #ifdef Q_OS_LINUX
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #else
@@ -19,123 +22,25 @@
 #include <QPluginLoader>
 #endif
 
-namespace {
-struct PluginMetadataRecord {
-    QString iid;
-    qsizetype end = 0;
-    QString error;
-};
-
-auto readMetadataRecord(const QByteArray &bytes, qsizetype header_offset, qsizetype end_offset)
-    -> PluginMetadataRecord {
-    if (std::cmp_less_equal(end_offset - header_offset, sizeof(QPluginMetaData::Header))) {
-        return {.error = QStringLiteral("truncated Qt plugin metadata header")};
-    }
-    QPluginMetaData::Header header;
-    std::memcpy(&header, bytes.constData() + header_offset, sizeof(header));
-    if (header.version != QPluginMetaData::CurrentMetaDataVersion ||
-        header.qt_major_version != QT_VERSION_MAJOR || header.qt_minor_version > QT_VERSION_MINOR) {
-        return {.error = QStringLiteral("unsupported Qt plugin metadata version")};
-    }
-    auto payloadOffset = header_offset + static_cast<qsizetype>(sizeof(header));
-    QCborStreamReader reader(reinterpret_cast<const quint8 *>(bytes.constData() + payloadOffset),
-                             end_offset - payloadOffset);
-    auto metadata = QCborValue::fromCbor(reader);
-    if (reader.lastError() != QCborError::NoError || !metadata.isMap()) {
-        return {.error = QStringLiteral("invalid Qt plugin metadata CBOR")};
-    }
-    // Qt 6.6.3 qplugin_p.h: IID is integer key 2 in the root map, not MetaData.
-    constexpr qint64 c_iid_key = 2;
-    auto map = metadata.toMap();
-    int iidCount = 0;
-    QString iid;
-    for (auto it = map.constBegin(); it != map.constEnd(); ++it) {
-        if (it.key().isInteger() && it.key().toInteger() == c_iid_key) {
-            ++iidCount;
-            if (!it.value().isString()) {
-                return {.error = QStringLiteral("invalid Qt plugin root IID")};
-            }
-            iid = it.value().toString();
-        }
-    }
-    if (iidCount != 1) {
-        return {.error = QStringLiteral("missing or duplicate Qt plugin root IID")};
-    }
-    return {.iid = iid, .end = payloadOffset + reader.currentOffset()};
-}
-} // namespace
-
 auto pluginMetadataError(const QByteArray &bytes, const QString &expected_iid) -> QString {
-    // Qt 6.6.3 qplugin.h: ELF note payloads and PE/Mach-O magic headers.
-    auto magic = QByteArray(QPluginMetaData::MagicString, sizeof(QPluginMetaData::MagicString));
-    auto note = QByteArray(QPluginMetaData::ElfNoteHeader::NoteName,
-                           sizeof(QPluginMetaData::ElfNoteHeader::NoteName));
-    qsizetype offset = 0;
-    int recordCount = 0;
-    QString iid;
-    while (offset < bytes.size()) {
-        auto magicOffset = bytes.indexOf(magic, offset);
-        auto noteOffset = bytes.indexOf(note, offset);
-        if (magicOffset < 0 && noteOffset < 0) {
-            break;
-        }
-        auto isNote = noteOffset >= 0 && (magicOffset < 0 || noteOffset < magicOffset);
-        qsizetype headerOffset = magicOffset + magic.size();
-        qsizetype endOffset = bytes.size();
-        if (isNote) {
-            offset = noteOffset + note.size();
-            auto noteStart =
-                noteOffset - static_cast<qsizetype>(offsetof(QPluginMetaData::ElfNoteHeader, name));
-            constexpr auto c_header_offset =
-                static_cast<qsizetype>(offsetof(QPluginMetaData::ElfNoteHeader, header));
-            if (noteStart < 0 || bytes.size() - noteStart < c_header_offset) {
-                continue;
-            }
-            QPluginMetaData::ElfNoteHeader elfNote(0);
-            // Supported targets use native little-endian ELF note fields.
-            std::memcpy(&elfNote, bytes.constData() + noteStart, c_header_offset);
-            if (elfNote.n_namesz != sizeof(QPluginMetaData::ElfNoteHeader::NoteName) ||
-                elfNote.n_type != QPluginMetaData::ElfNoteHeader::NoteType) {
-                continue;
-            }
-            headerOffset = noteStart + c_header_offset;
-            if (std::cmp_greater(elfNote.n_descsz, bytes.size() - headerOffset)) {
-                return QStringLiteral("invalid Qt plugin metadata note");
-            }
-            endOffset = headerOffset + elfNote.n_descsz;
-        } else {
-            offset = headerOffset;
-            if (std::cmp_less(bytes.size() - headerOffset, sizeof(QPluginMetaData::Header))) {
-                continue;
-            }
-            QPluginMetaData::Header header;
-            std::memcpy(&header, bytes.constData() + headerOffset, sizeof(header));
-            if (header.version != QPluginMetaData::CurrentMetaDataVersion &&
-                header.qt_major_version != QT_VERSION_MAJOR) {
-                continue;
-            }
-        }
-        auto record = readMetadataRecord(bytes, headerOffset, endOffset);
-        if (!record.error.isEmpty()) {
-            return record.error;
-        }
-        if (isNote && record.end != endOffset) {
-            return QStringLiteral("invalid Qt plugin metadata descriptor size");
-        }
-        if (++recordCount > 1) {
-            return QStringLiteral("ambiguous Qt plugin metadata records");
-        }
-        iid = record.iid;
-        // Marker text inside validated metadata is data, not another record.
-        offset = isNote ? endOffset : record.end;
+    auto requirements = QPluginMetaData::archRequirements();
+#if defined(Q_PROCESSOR_X86_64) && (defined(Q_CC_GNU) || defined(Q_CC_CLANG))
+    // Test the CPU, not just the instruction set used to compile the host.
+    auto level = 1;
+    if (__builtin_cpu_supports("x86-64-v4")) {
+        level = 4;
+    } else if (__builtin_cpu_supports("x86-64-v3")) {
+        level = 3;
+    } else if (__builtin_cpu_supports("x86-64-v2")) {
+        level = 2;
     }
-    if (recordCount == 0) {
-        return QStringLiteral("missing or invalid Qt plugin metadata");
-    }
-    if (iid != expected_iid) {
-        return QStringLiteral("incompatible Qt plugin root IID (expected %1)").arg(expected_iid);
-    }
-    return {};
+    requirements = (requirements & 0x80) | level;
+#endif
+    auto error = ::plugin_admission(
+        rust::Slice<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(bytes.constData()),
+                                        bytes.size()),
+        rust::String(expected_iid.toStdString()), QT_VERSION_MAJOR, QT_VERSION_MINOR, requirements);
+    return QString::fromUtf8(error.data(), error.size());
 }
 
 PluginLibrary::~PluginLibrary() {
@@ -162,21 +67,26 @@ auto PluginLibrary::load(const QByteArray &bytes, const QString &name) -> bool {
     if (!m_error.isEmpty()) {
         return false;
     }
-    int fd = memfd_create(name.toUtf8().constData(), MFD_CLOEXEC);
+    int fd = memfd_create(name.toUtf8().constData(), MFD_CLOEXEC | MFD_ALLOW_SEALING);
     if (fd < 0) {
         m_error = QStringLiteral("memfd_create failed");
         return false;
     }
     qsizetype written = 0;
     while (written < bytes.size()) {
-        ssize_t n =
-            ::write(fd, bytes.constData() + written, static_cast<size_t>(bytes.size() - written));
+        ssize_t n = ::write(fd, bytes.constData() + written,
+                            static_cast<std::size_t>(bytes.size() - written));
         if (n <= 0) {
             ::close(fd);
             m_error = QStringLiteral("could not write the library to memory");
             return false;
         }
         written += n;
+    }
+    if (fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL) < 0) {
+        ::close(fd);
+        m_error = QStringLiteral("could not seal the admitted library bytes");
+        return false;
     }
     QByteArray path = QStringLiteral("/proc/self/fd/%1").arg(fd).toUtf8();
     m_handle = dlopen(path.constData(), RTLD_NOW | RTLD_LOCAL);

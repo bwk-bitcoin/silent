@@ -1315,8 +1315,13 @@ time. This keeps one Qt in the process so signals, meta-types, and singletons st
 unified. Consequences:
 
 - **Toolchain lock.** A plugin must be built against the **same Qt version and a
-  compatible compiler ABI** as the host. `QPluginLoader` enforces a build-key check
-  and refuses mismatched plugins (logged, not crashed).
+  compatible compiler ABI** as the host. Before loading code, Silent inspects native
+  ELF, PE or Mach-O metadata sections from the same bytes it hashes and loads.
+  Admission requires the current root plugin IID, Qt metadata format 1, the host's
+  Qt major and no newer Qt minor, supported CPU requirements, and on Windows a
+  matching debug/release build. This cannot verify the compiler ABI or prevent
+  crashes from a plugin that lies about compatibility. `qobject_cast<IPlugin *>`
+  remains a second gate before interface calls. In-process admission is not a sandbox.
 - **Boundary types are Qt/std only.** Everything crossing the host/plugin boundary
   uses C++ virtual interfaces and `QString`/`QList`/PODs/base64 strings, **never
   `rust::*` types.** A plugin may use Rust internally and bridge it with CXX
@@ -1328,6 +1333,62 @@ unified. Consequences:
   upstreamed into the host build) and ships with the next host release. Plugins are
   runtime-loadable, but the Qt surface is build-time-fixed. This is intentional for
   a security-sensitive wallet.
+
+### Non-executing import admission
+
+Rust importers use `plugin_admission::inspect(library_bytes, &host, Some(&manifest))`
+before replacing an installed bundle. `Compatibility` describes the root `iid`,
+`target_os` (`linux`, `windows`, `macos`), `target_arch` (`x86_64`, `aarch64`, `x86`),
+Qt major/minor and Qt `arch_requirements` byte (CPU level plus debug bit).
+The host supplies its supported build requirements; the manifest describes the
+plugin's actual requirements. The returned metadata must agree with every manifest
+field, not just be compatible with the host. Release/display and bundle-format
+versions are not ABI declarations. This API does no I/O, loading or construction,
+and returns no Qt plugin objects or host-bound user identifiers. The loader's CXX
+entry point delegates to the same reader. The encrypted installed-bundle reader
+is unchanged. ZIP import and manifest extraction belong to #69.
+
+Inspection bounds library size to 256 MiB, metadata sections to 1 MiB and native
+sections to 4096. Mach-O universal libraries select exactly one matching host slice.
+Missing, malformed and ambiguous metadata fail before loading. Marker text and
+complete records nested inside a CBOR value remain data, not independent records.
+Metadata must agree with the image's physical and virtual mappings, flags and
+alignment. An ELF Qt note must start at an actual `PT_NOTE` record boundary, not
+inside another note's descriptor. PE section mappings must fit the image/header
+bounds without physical or virtual overlaps. Mach-O sections must agree with their
+declaring load-command segments. Appending a current metadata record cannot rescue
+an inconsistent section pointer or replace the mapped metadata.
+Conflicting page mappings, PE sub-page section alignment and unaligned Mach-O
+segment starts are refused. A final Mach-O segment may have an unrounded size.
+ELF mappings must be consistent at their declared alignment, at least 4 KiB
+(64 KiB for AArch64); Mach-O uses 4 KiB on x86 and 16 KiB on AArch64.
+
+Both `qt_plugin_instance` and `qt_plugin_query_metadata_v2` must be defined exports
+into mapped executable function sections. ELF uses the `PT_DYNAMIC` symbol/string
+bindings and runtime GNU/SysV hash lookup; an imported name is not a definition.
+PE uses its export address/name tables; Mach-O uses its mapped dyld export trie.
+Required PE forwarders, Mach-O reexports/resolvers, ELF IFUNCs and versioned ELF Qt
+entry exports are unsupported and refused before loading. Mach-O files without a
+dyld export trie are also refused. Export inspection allows 65536 symbols, with
+1 MiB budgets for section/export names, ELF dynamic strings/hash windows and Mach-O tries.
+
+GNU hash bloom counts must be nonzero powers of two. Bloom shifts are limited to
+0 through 31 because GNU hashes are 32-bit on both ELF classes. The complete
+bloom/bucket/chain layout is bounded by the actual dynamic-symbol count. Every
+bucket start, chain terminator, symbol-name hash, bucket assignment and bloom
+membership is checked, including buckets not used by the Qt entries. A match on
+an early Qt symbol does not skip validation of the rest of the table. This is a
+GNU-table check, not a complete ELF loader validator.
+
+CBOR maps reject duplicate keys at every depth, including non-IID root fields,
+nested maps and maps inside arrays or tags. Decoding is bounded to nesting depth 32,
+16384 items (keys, values and tags included) and a 1 MiB input/string-byte budget.
+Declared collection lengths do not cause unbounded preallocation.
+
+The reported incompatible-plugin crash has not been reproduced: its binary and
+backtrace were not supplied. Out-of-process isolation remains separate work.
+These checks validate declarations and inspected native image ranges, not that
+arbitrary native entry code will truthfully return that metadata or execute safely.
 
 ## Plugin Translations (i18n)
 

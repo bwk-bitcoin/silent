@@ -6,6 +6,14 @@
 #include "interfaces/module.h"
 #endif
 
+#include <QList>
+#include <QMap>
+#include <QObject>
+#include <QString>
+#include <QStringLiteral>
+#include <QtCompilerDetection>
+#include <QtCore/qtmetamacros.h>
+#include <QtLogging>
 #include <cstdio>
 #include <cstdlib>
 
@@ -36,7 +44,13 @@ LibraryInitializer initializer;
 
 class Q_DECL_HIDDEN PluginAbiFixture final : public QObject, public IPlugin {
     Q_OBJECT
+#ifdef SILENT_ABI9_FIXTURE
+    Q_PLUGIN_METADATA(IID "dev.silent.IPlugin/9.0")
+#elif defined(SILENT_ABI8_FIXTURE)
+    Q_PLUGIN_METADATA(IID SILENT_IPlugin_IID FILE "PluginAbiFixture.json")
+#else
     Q_PLUGIN_METADATA(IID SILENT_IPlugin_IID)
+#endif
     Q_INTERFACES(IPlugin)
 
 public:
@@ -50,7 +64,7 @@ public:
     defined(SILENT_ABI6_FIXTURE) || defined(SILENT_ABI7_FIXTURE)
         qFatal("registry must reject old ABI before calling plugin virtual methods");
 #else
-        return {{QStringLiteral("id"), QStringLiteral("abi8")}};
+        return {{ QStringLiteral("id"), QStringLiteral("abi8") }};
 #endif
     }
 
