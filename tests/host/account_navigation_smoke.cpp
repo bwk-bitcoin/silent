@@ -19,18 +19,20 @@
 #include <QApplication>
 #include <QButtonGroup>
 #include <QElapsedTimer>
-#include <QFile>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
-#include <QTemporaryDir>
 #include <QThread>
 #include <QWidget>
 #include <Qontrol>
 #include <common.h>
 #include <functional>
-#include <silent.h>
 #include <type_traits>
+
+#ifdef SILENT_CUSTOM_WIDGET_FIXTURE
+#include "PluginBundleFixture.h"
+#include <QFile>
+#endif
 
 namespace smoke {
 namespace {
@@ -234,17 +236,11 @@ void openRemainingAccount(MainWindow &window, MenuTab &launcher, PluginRegistry 
 }
 
 void customWidget(MainWindow &window) {
-    QTemporaryDir directory;
-    require(directory.isValid(), "custom widget bundle directory");
-    require(QFile::copy(QString::fromUtf8(SILENT_CUSTOM_WIDGET_FIXTURE),
-                        directory.filePath(QStringLiteral("libcustom.widget.fixture.so"))),
-            "copy external widget fixture");
-    QFile sidecar(directory.filePath(QStringLiteral("custom.widget.fixture.json")));
-    QByteArray metadata = R"({"id":"custom.widget.fixture","name":"Custom widget fixture"})";
-    require(sidecar.open(QIODevice::WriteOnly) && sidecar.write(metadata) == metadata.size(),
-            "write fixture metadata");
-    sidecar.close();
-    require(::plugin_install(rust::String(directory.path().toStdString())).is_ok,
+    QFile library(QString::fromUtf8(SILENT_CUSTOM_WIDGET_FIXTURE));
+    require(library.open(QIODevice::ReadOnly), "read external widget fixture");
+    require(installBundle(QStringLiteral("custom.widget.fixture"),
+                          QStringLiteral("Custom widget fixture"), library.readAll())
+                .is_ok,
             "install SDK-only fixture");
     auto *registry = AppController::get()->pluginRegistry();
     registry->rescanDiscoveredPlugins();

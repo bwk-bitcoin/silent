@@ -22,7 +22,7 @@
 #include <QPluginLoader>
 #endif
 
-auto pluginMetadataError(const QByteArray &bytes, const QString &expected_iid) -> QString {
+auto hostArchRequirements() -> quint8 {
     auto requirements = QPluginMetaData::archRequirements();
 #if defined(Q_PROCESSOR_X86_64) && (defined(Q_CC_GNU) || defined(Q_CC_CLANG))
     // Test the CPU, not just the instruction set used to compile the host.
@@ -36,11 +36,21 @@ auto pluginMetadataError(const QByteArray &bytes, const QString &expected_iid) -
     }
     requirements = (requirements & 0x80) | level;
 #endif
+    return requirements;
+}
+
+auto pluginMetadataError(const QByteArray &bytes, const QString &expected_iid) -> QString {
     auto error = ::plugin_admission(
         rust::Slice<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(bytes.constData()),
                                         bytes.size()),
-        rust::String(expected_iid.toStdString()), QT_VERSION_MAJOR, QT_VERSION_MINOR, requirements);
+        rust::String(expected_iid.toStdString()), QT_VERSION_MAJOR, QT_VERSION_MINOR,
+        hostArchRequirements());
     return QString::fromUtf8(error.data(), error.size());
+}
+
+auto installPluginBundle(const QString &path) -> PluginInstallResult {
+    return ::plugin_install(rust::String(path.toStdString()), rust::String(SILENT_IPlugin_IID),
+                            QT_VERSION_MAJOR, QT_VERSION_MINOR, hostArchRequirements());
 }
 
 PluginLibrary::~PluginLibrary() {

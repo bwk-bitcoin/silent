@@ -1,10 +1,10 @@
+#include "PluginBundleFixture.h"
 #include "host/PluginLibrary.h"
 #include "host/PluginMetadata.h"
 #include "host/PluginRegistry.h"
 #include <QCborMap>
 #include <QCborValue>
 #include <QCoreApplication>
-#include <QDir>
 #include <QFile>
 #include <QIODevice>
 #include <QJsonDocument>
@@ -597,6 +597,64 @@ void metadataRejectionSmoke(const QByteArray &bytes, const QString &sentinel_pat
         }
     }
 }
+
+const QString ABI8_ID = QStringLiteral("abi8");
+
+auto abiFixture(int version) -> QByteArray {
+    switch (version) {
+    case 2:
+        return fixtureBytes(SILENT_ABI2_FIXTURE_PATH);
+    case 3:
+        return fixtureBytes(SILENT_ABI3_FIXTURE_PATH);
+    case 4:
+        return fixtureBytes(SILENT_ABI4_FIXTURE_PATH);
+    case 5:
+        return fixtureBytes(SILENT_ABI5_FIXTURE_PATH);
+    case 6:
+        return fixtureBytes(SILENT_ABI6_FIXTURE_PATH);
+    case 7:
+        return fixtureBytes(SILENT_ABI7_FIXTURE_PATH);
+    case 9:
+        return fixtureBytes(SILENT_ABI9_FIXTURE_PATH);
+    default:
+        qFatal("no ABI %d fixture", version);
+    }
+}
+
+auto installedLibrary(const QString &plugin_id) -> QByteArray {
+    auto opened = ::plugin_library(rust::String(plugin_id.toStdString()));
+    if (!opened.is_ok) {
+        qFatal("installed ABI fixture open failed: %s", opened.error.c_str());
+    }
+    return {reinterpret_cast<const char *>(opened.library.data()),
+            static_cast<qsizetype>(opened.library.size())};
+}
+
+// Refusal by both the loader and importer must preserve the installed ABI 8 bytes.
+void incompatibleImportSmoke(int version, const QByteArray &installed,
+                             const QString &sentinel_path) {
+    auto bytes = abiFixture(version);
+    auto found = QStringLiteral("found dev.silent.IPlugin/%1.0").arg(version);
+    rejectWithoutExecution(bytes, sentinel_path, QStringLiteral("expected dev.silent.IPlugin/8.0"));
+    rejectWithoutExecution(bytes, sentinel_path, found);
+    auto declared = installBundle(ABI8_ID, QStringLiteral("ABI fixture"), bytes);
+    if (declared.is_ok || declared.error.empty()) {
+        qFatal("the import must refuse an ABI %d library declaring its own IID", version);
+    }
+    auto claimed =
+        installBundle(ABI8_ID, QStringLiteral("ABI fixture"), bytes, hostCompatibility());
+    if (claimed.is_ok ||
+        !QString::fromUtf8(claimed.error.data(), claimed.error.size()).contains(found)) {
+        qFatal("the import must refuse an ABI %d library claiming this host, found: %s", version,
+               claimed.error.c_str());
+    }
+    if (installedLibrary(ABI8_ID) != installed) {
+        qFatal("a refused ABI %d import must leave the installed plugin as it was", version);
+    }
+    if (QFile::exists(sentinel_path)) {
+        qFatal("a refused ABI %d import must run neither initializer nor constructor", version);
+    }
+}
 } // namespace
 
 auto pluginGnuHashChild(const QString &path, bool expected_admission) -> int {
@@ -626,102 +684,100 @@ auto pluginGnuHashChild(const QString &path, bool expected_admission) -> int {
     return 0;
 }
 
+// Legacy installed bundles bypassed import admission, so enabling still needs its own gate.
+void legacyPluginAbiSmoke(const QString &plugin_id) {
+    auto sentinelPath = QString::fromLocal8Bit(qgetenv("SILENT_ABI_SENTINEL"));
+    if (sentinelPath.isEmpty() || QFile::exists(sentinelPath)) {
+        qFatal("legacy ABI smoke needs a fresh execution sentinel");
+    }
+    PluginRegistry registry;
+    registry.rescanDiscoveredPlugins();
+    if (registry.isPluginEnabled(plugin_id) ||
+        registry.pluginName(plugin_id) != QStringLiteral("ABI fixture") ||
+        registry.pluginVersion(plugin_id) != QStringLiteral("1.0.0") ||
+        registry.pluginDescription(plugin_id) != QStringLiteral("Legacy ABI fixture")) {
+        qFatal("the legacy bundle must be listed disabled from its sidecar");
+    }
+    if (registry.setEnabled(plugin_id, true) || registry.isPluginEnabled(plugin_id)) {
+        qFatal("registry must refuse an incompatible ABI library sealed by an earlier Silent");
+    }
+    auto error = registry.pluginLoadError(plugin_id);
+    if (!error.contains(QStringLiteral("expected dev.silent.IPlugin/8.0")) ||
+        !error.contains(QStringLiteral("found dev.silent.IPlugin/"))) {
+        qFatal("incompatible legacy library must fail at the metadata admission gate: %s",
+               qPrintable(error));
+    }
+    if (registry.pluginName(plugin_id) != QStringLiteral("ABI fixture") ||
+        registry.pluginVersion(plugin_id) != QStringLiteral("1.0.0") ||
+        registry.pluginDescription(plugin_id) != QStringLiteral("Legacy ABI fixture")) {
+        qFatal("a refused legacy plugin must retain its sidecar metadata");
+    }
+    if (!registry.enabledModulesForLauncher().empty()) {
+        qFatal("a refused legacy library must register no modules");
+    }
+    if (QFile::exists(sentinelPath)) {
+        qFatal("legacy ABI refusal must run neither initializer nor constructor");
+    }
+    std::fprintf(stdout, "legacy plugin ABI refused: %s\n", qPrintable(error));
+}
+
 void pluginAbiSmoke() {
     metadataCandidateSmoke();
-    for (auto version : {2, 3, 4, 5, 6, 7, 8, 9}) {
-        auto legacy = version != 8;
-        QTemporaryDir directory;
-        if (!directory.isValid()) {
-            qFatal("ABI fixture directory creation failed");
+    QTemporaryDir directory;
+    if (!directory.isValid()) {
+        qFatal("ABI fixture directory creation failed");
+    }
+    auto sentinelPath = directory.filePath(QStringLiteral("execution-sentinel"));
+    auto previousSentinel = qgetenv("SILENT_ABI_SENTINEL");
+    auto hadSentinel = qEnvironmentVariableIsSet("SILENT_ABI_SENTINEL");
+    qputenv("SILENT_ABI_SENTINEL", QFile::encodeName(sentinelPath));
+    auto bytes = fixtureBytes(SILENT_ABI8_FIXTURE_PATH);
+    metadataRejectionSmoke(bytes, sentinelPath);
+    metadataMappingRejectionSmoke(bytes, sentinelPath);
+    entryExportRejectionSmoke(bytes, sentinelPath);
+    gnuHashChildSmoke(bytes);
+    duplicateKeysRejectionSmoke(sentinelPath);
+    redirectedSectionRejectionSmoke(fixtureBytes(SILENT_ABI7_FIXTURE_PATH), sentinelPath);
+    if (QFile::exists(sentinelPath)) {
+        qFatal("rejected metadata must run neither initializer nor constructor");
+    }
+    auto installed = installBundle(ABI8_ID, QStringLiteral("ABI fixture"), bytes);
+    if (!installed.is_ok) {
+        qFatal("ABI fixture install failed: %s", installed.error.c_str());
+    }
+    if (QFile::exists(sentinelPath)) {
+        qFatal("importing an ABI 8 library must run neither initializer nor constructor");
+    }
+    if (installedLibrary(ABI8_ID) != bytes) {
+        qFatal("the import must seal the ABI 8 library bytes as they are");
+    }
+    for (auto version : {2, 3, 4, 5, 6, 7, 9}) {
+        incompatibleImportSmoke(version, bytes, sentinelPath);
+    }
+    {
+        PluginRegistry registry;
+        registry.rescanDiscoveredPlugins();
+        if (!registry.setEnabled(ABI8_ID, true) || !registry.isPluginEnabled(ABI8_ID)) {
+            qFatal("registry must accept the installed ABI 8 library: %s",
+                   qPrintable(registry.pluginLoadError(ABI8_ID)));
         }
-        auto sentinelPath = directory.filePath(QStringLiteral("execution-sentinel"));
-        auto previousSentinel = qgetenv("SILENT_ABI_SENTINEL");
-        auto hadSentinel = qEnvironmentVariableIsSet("SILENT_ABI_SENTINEL");
-        qputenv("SILENT_ABI_SENTINEL", QFile::encodeName(sentinelPath));
-        auto id = QStringLiteral("abi%1").arg(version);
-        auto library = QString::fromUtf8(SILENT_ABI8_FIXTURE_PATH);
-        if (version == 2) {
-            library = QString::fromUtf8(SILENT_ABI2_FIXTURE_PATH);
-        } else if (version == 3) {
-            library = QString::fromUtf8(SILENT_ABI3_FIXTURE_PATH);
-        } else if (version == 4) {
-            library = QString::fromUtf8(SILENT_ABI4_FIXTURE_PATH);
-        } else if (version == 5) {
-            library = QString::fromUtf8(SILENT_ABI5_FIXTURE_PATH);
-        } else if (version == 6) {
-            library = QString::fromUtf8(SILENT_ABI6_FIXTURE_PATH);
-        } else if (version == 7) {
-            library = QString::fromUtf8(SILENT_ABI7_FIXTURE_PATH);
-        } else if (version == 9) {
-            library = QString::fromUtf8(SILENT_ABI9_FIXTURE_PATH);
+        if (!registry.enabledModulesForLauncher().empty()) {
+            qFatal("ABI fixture must register no modules or feed instances");
         }
-        auto libraryPath = QDir(directory.path()).filePath(QStringLiteral("lib%1.so").arg(id));
-        if (!QFile::copy(library, libraryPath)) {
-            qFatal("ABI fixture library copy failed");
-        }
-        if (!legacy) {
-            QFile fixture(libraryPath);
-            if (!fixture.open(QIODevice::ReadOnly)) {
-                qFatal("ABI 8 fixture read failed");
-            }
-            auto bytes = fixture.readAll();
-            metadataRejectionSmoke(bytes, sentinelPath);
-            metadataMappingRejectionSmoke(bytes, sentinelPath);
-            entryExportRejectionSmoke(bytes, sentinelPath);
-            gnuHashChildSmoke(bytes);
-            duplicateKeysRejectionSmoke(sentinelPath);
-            if (QFile::exists(sentinelPath)) {
-                qFatal("rejected metadata must run neither initializer nor constructor");
-            }
-        }
-        if (version == 7) {
-            redirectedSectionRejectionSmoke(fixtureBytes(SILENT_ABI7_FIXTURE_PATH), sentinelPath);
-        }
-        QFile metadata(QDir(directory.path()).filePath(id + QStringLiteral(".json")));
-        auto json = QStringLiteral("{\"id\":\"%1\",\"name\":\"ABI fixture\"}").arg(id).toUtf8();
-        if (!metadata.open(QIODevice::WriteOnly) || metadata.write(json) != json.size()) {
-            qFatal("ABI fixture sidecar write failed");
-        }
-        metadata.close();
-        auto installed = ::plugin_install(rust::String(directory.path().toStdString()));
-        if (!installed.is_ok) {
-            qFatal("ABI fixture install failed: %s", installed.error.c_str());
-        }
-        {
-            PluginRegistry registry;
-            registry.rescanDiscoveredPlugins();
-            auto enabled = registry.setEnabled(id, true);
-            if (enabled == legacy || registry.isPluginEnabled(id) == legacy) {
-                qFatal("registry must reject ABI 2/3/4/5/6/7/9 and accept ABI 8 binaries");
-            }
-            if (legacy && (!registry.pluginLoadError(id).contains(
-                               QStringLiteral("expected dev.silent.IPlugin/8.0")) ||
-                           !registry.pluginLoadError(id).contains(
-                               QStringLiteral("found dev.silent.IPlugin/%1.0").arg(version)))) {
-                qFatal("incompatible ABI binary must fail at the metadata admission gate");
-            }
-            if (!registry.enabledModulesForLauncher().empty()) {
-                qFatal("ABI fixture must register no modules or feed instances");
-            }
-        }
-        QFile sentinel(sentinelPath);
-        if (legacy) {
-            if (sentinel.exists()) {
-                qFatal("ABI 2/3/4/5/6/7/9 rejection must run neither initializer nor constructor");
-            }
-        } else if (!sentinel.open(QIODevice::ReadOnly) ||
-                   sentinel.readAll() != QByteArray("initializer\nconstructor\n")) {
-            qFatal("ABI 8 admission must run the library initializer and root constructor once");
-        }
-        if (hadSentinel) {
-            qputenv("SILENT_ABI_SENTINEL", previousSentinel);
-        } else {
-            qunsetenv("SILENT_ABI_SENTINEL");
-        }
-        auto error = ::plugin_remove(rust::String(id.toStdString()));
-        if (!error.empty()) {
-            qFatal("ABI fixture removal failed: %s", error.c_str());
-        }
+    }
+    QFile sentinel(sentinelPath);
+    if (!sentinel.open(QIODevice::ReadOnly) ||
+        sentinel.readAll() != QByteArray("initializer\nconstructor\n")) {
+        qFatal("ABI 8 admission must run the library initializer and root constructor once");
+    }
+    if (hadSentinel) {
+        qputenv("SILENT_ABI_SENTINEL", previousSentinel);
+    } else {
+        qunsetenv("SILENT_ABI_SENTINEL");
+    }
+    auto error = ::plugin_remove(rust::String(ABI8_ID.toStdString()));
+    if (!error.empty()) {
+        qFatal("ABI fixture removal failed: %s", error.c_str());
     }
 }
 

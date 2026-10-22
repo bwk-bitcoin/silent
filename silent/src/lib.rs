@@ -1778,9 +1778,16 @@ mod ffi {
         /// error, empty on success.
         fn state_unlock_with_password(password: String) -> String;
 
-        /// Seals the plugin dropped at `path` (its folder, or its library with the
-        /// sidecar beside it) into the state, replacing an earlier version of it.
-        fn plugin_install(path: String) -> PluginInstallResult;
+        /// Seals the plugin bundle dropped at `path`, whatever its file name, into the
+        /// state once its library is admitted for the host, as `plugin_admission`,
+        /// replacing an earlier version of it.
+        fn plugin_install(
+            path: String,
+            expected_iid: String,
+            qt_major: u8,
+            qt_minor: u8,
+            arch_requirements: u8,
+        ) -> PluginInstallResult;
 
         fn plugin_admission(
             bytes: &[u8],

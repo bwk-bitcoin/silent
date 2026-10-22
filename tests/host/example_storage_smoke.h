@@ -39,9 +39,9 @@ private:
     QStringList m_deletion_errors;
 };
 
-// Drives the real external example plugin built in `directory` through a legacy state
+// Imports the real external example plugin ZIP at `bundle` and drives a legacy state
 // migration and its asynchronous storage. HOME holds the unlocked app state and the
 // example plugin's legacy blob, seeded before the run.
-void exampleStorageSmoke(const QString &directory);
+void exampleStorageSmoke(const QString &bundle);
 
 } // namespace smoke

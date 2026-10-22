@@ -5,6 +5,7 @@
 #include "theme/Palette.h"
 #include <QHash>
 #include <QList>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -14,6 +15,7 @@ class QDragEnterEvent;
 class QDropEvent;
 class QEvent;
 class QHideEvent;
+class QThread;
 
 namespace catalog {
 class Button;
@@ -50,12 +52,17 @@ public:
     explicit AppSettings(QWidget *parent = nullptr);
     ~AppSettings() override;
 
+signals:
+    // The dropped bundles sealed into the state, by plugin id, and why the others were not.
+    void bundlesImported(const QStringList &plugin_ids, const QStringList &errors);
+
 public slots:
     void onThemeSelectionChanged(int index);
     void onLanguageSelectionChanged(int index);
     void onPluginToggled(bool enabled);
     void onPluginAccessClicked();
     void onPluginsChanged();
+    void onBundlesImported(const QStringList &plugin_ids, const QStringList &errors);
     void onOpenSectionClicked();
     void onHostSettingsSectionsChanged();
     void onHostInstanceChanged(const QString &id);
@@ -148,6 +155,8 @@ private:
     catalog::Notice *m_plugin_notice = nullptr;
     catalog::Label *m_plugin_result = nullptr;
     qontrol::Column *m_plugins_column = nullptr;
+    // Seals the dropped bundles off the GUI thread; no other drop is taken meanwhile.
+    QPointer<QThread> m_import_worker;
 
     catalog::Separator *m_extensions_separator = nullptr;
     catalog::Section *m_extensions = nullptr;

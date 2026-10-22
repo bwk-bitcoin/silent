@@ -1,14 +1,23 @@
 //! External plugins, kept in the app state like everything else (ws-plaude/silent#41).
 //!
-//! A plugin enters only through `install`, from the folder or the library the user
-//! dropped in the app: its sidecar, its library and its translation catalogs are
-//! read once and sealed together into one bundle, `plugins/<opaque>.bip138`. Nothing
-//! else under `~/.silent/plugins/` is ever read, so a library swapped on disk is not
-//! loaded: the host loads the bytes `library` opens, the ones it hashes.
+//! A plugin enters only through `install`, from the bundle the user dropped in the
+//! app, whatever its file name (ws-plaude/silent#69). The bundle is a ZIP holding a
+//! root `manifest.json`, one library under `payload/` and the translation catalogs
+//! under `i18n/` the manifest declares, nothing else. It is read in memory, its
+//! library admitted without running it, then sealed into one installed bundle,
+//! `plugins/<opaque>.bip138`. Nothing else under `~/.silent/plugins/` is ever read, so
+//! a library swapped on disk is not loaded: the host loads the bytes `library`
+//! opens, the ones it hashes.
 
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -20,18 +29,40 @@ use crate::{
         PluginCatalog, PluginInstallResult, PluginLibraryResult, PluginMetadata,
         PluginMetadataField, PluginMetadataKind,
     },
+    plugin_admission::{self, Compatibility},
+    plugin_bundle::archive::Archive,
     state_crypt::{self, SEALED_EXTENSION},
 };
+
+#[path = "plugin_zip.rs"]
+mod archive;
 
 /// Where the sealed bundles live.
 pub const PLUGINS_DIR: &str = "plugins";
 const BUNDLE_VERSION: u32 = 1;
 
+const FORMAT_VERSION: u32 = 1;
+const MANIFEST: &str = "manifest.json";
+const PAYLOAD_DIR: &str = "payload/";
+const CATALOG_DIR: &str = "i18n/";
+const CATALOG_PREFIX: &str = "silent_";
+const CATALOG_SUFFIX: &str = ".lang";
+
+const MAX_MANIFEST_BYTES: usize = 64 * 1024;
+const MAX_LIBRARY_BYTES: usize = 256 * 1024 * 1024;
+const MAX_CATALOG_BYTES: usize = 1024 * 1024;
+const MAX_TRANSLATIONS: usize = 64;
+const MAX_ENTRIES: usize = 2 + MAX_TRANSLATIONS;
+/// The library plus room for the manifest and the catalogs.
+const MAX_DECODED_BYTES: u64 = MAX_LIBRARY_BYTES as u64 + 16 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES: u64 = MAX_DECODED_BYTES;
+const MAX_TEXT_BYTES: usize = 4096;
+
 /// One installed plugin, as sealed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Bundle {
     version: u32,
-    /// The sidecar, as the plugin ships it: its `id`, `name`, `version`...
+    /// The manifest, as the plugin ships it: its `id`, `name`, `version`...
     sidecar: serde_json::Map<String, serde_json::Value>,
     /// The library's file name, for its type (`.so`, `.dylib`, `.dll`).
     library_name: String,
@@ -50,22 +81,219 @@ pub struct Opened {
     pub catalogs: Vec<(String, String)>,
 }
 
-fn library_suffix() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "dylib"
-    } else if cfg!(target_os = "windows") {
-        "dll"
-    } else {
-        "so"
+/// The bundle's `manifest.json`. Duplicate and unknown keys are refused at every
+/// depth: every object is a typed struct.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Manifest {
+    format_version: u32,
+    id: String,
+    name: String,
+    version: String,
+    description: String,
+    author: String,
+    capabilities: Vec<String>,
+    entry: ManifestEntry,
+    /// Archive paths of the catalogs, `i18n/silent_<locale>.lang`.
+    translations: Vec<String>,
+}
+
+/// How the host runs the plugin: only an in-process library for now, other kinds
+/// are refused.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ManifestEntry {
+    Native {
+        /// Archive path of the library, `payload/<file name>`.
+        library: String,
+        compatibility: ManifestCompatibility,
+    },
+}
+
+/// `Compatibility` as the manifest declares it, unknown keys refused.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestCompatibility {
+    iid: String,
+    target_os: String,
+    target_arch: String,
+    qt_major: u8,
+    qt_minor: u8,
+    arch_requirements: u8,
+}
+
+impl From<ManifestCompatibility> for Compatibility {
+    fn from(declared: ManifestCompatibility) -> Self {
+        Compatibility {
+            iid: declared.iid,
+            target_os: declared.target_os,
+            target_arch: declared.target_arch,
+            qt_major: declared.qt_major,
+            qt_minor: declared.qt_minor,
+            arch_requirements: declared.arch_requirements,
+        }
     }
 }
 
-fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && !id.starts_with('.')
-        && id
+fn library_suffix(target_os: &str) -> Option<&'static str> {
+    match target_os {
+        "linux" => Some(".so"),
+        "windows" => Some(".dll"),
+        "macos" => Some(".dylib"),
+        _ => None,
+    }
+}
+
+/// A plugin id, a library file name or a catalog locale.
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
+fn check_text(field: &str, text: &str) -> Result<(), String> {
+    if text.is_empty()
+        || text.trim() != text
+        || text.len() > MAX_TEXT_BYTES
+        || text.chars().any(char::is_control)
+    {
+        return Err(format!("invalid manifest {field}"));
+    }
+    Ok(())
+}
+
+fn check_unique(field: &str, items: &[String]) -> Result<(), String> {
+    for (index, item) in items.iter().enumerate() {
+        if items[..index].contains(item) {
+            return Err(format!("duplicate manifest {field} '{item}'"));
+        }
+    }
+    Ok(())
+}
+
+fn check_compatibility(library: &str, declared: &ManifestCompatibility) -> Result<(), String> {
+    check_text("entry IID", &declared.iid)?;
+    let suffix = library_suffix(&declared.target_os)
+        .ok_or_else(|| format!("unsupported manifest target OS '{}'", declared.target_os))?;
+    if !matches!(declared.target_arch.as_str(), "x86_64" | "aarch64" | "x86") {
+        return Err(format!(
+            "unsupported manifest target architecture '{}'",
+            declared.target_arch
+        ));
+    }
+    let file = library.strip_prefix(PAYLOAD_DIR).unwrap_or_default();
+    if !valid_name(file) || !file.ends_with(suffix) {
+        return Err(format!(
+            "manifest library '{library}' is not payload/<file name>{suffix}"
+        ));
+    }
+    Ok(())
+}
+
+impl Manifest {
+    /// Reads and checks the manifest of `archive`, before anything else is decoded.
+    fn read(archive: &Archive) -> Result<Self, String> {
+        let entry = archive
+            .entry(MANIFEST)
+            .ok_or_else(|| format!("no {MANIFEST} at the bundle root"))?;
+        let manifest: Manifest = serde_json::from_slice(&entry.decode(MAX_MANIFEST_BYTES)?)
+            .map_err(|e| format!("invalid {MANIFEST}: {e}"))?;
+        manifest.check()?;
+        Ok(manifest)
+    }
+
+    fn check(&self) -> Result<(), String> {
+        if self.format_version != FORMAT_VERSION {
+            return Err(format!(
+                "unsupported bundle format version {}, expected {FORMAT_VERSION}",
+                self.format_version
+            ));
+        }
+        if !valid_name(&self.id) {
+            return Err(format!("invalid plugin id '{}'", self.id));
+        }
+        for (field, text) in [
+            ("name", &self.name),
+            ("version", &self.version),
+            ("description", &self.description),
+            ("author", &self.author),
+        ] {
+            check_text(field, text)?;
+        }
+        for capability in &self.capabilities {
+            check_text("capability", capability)?;
+        }
+        check_unique("capability", &self.capabilities)?;
+        if self.translations.len() > MAX_TRANSLATIONS {
+            return Err(format!(
+                "more than {MAX_TRANSLATIONS} manifest translations"
+            ));
+        }
+        for path in &self.translations {
+            let locale = path
+                .strip_prefix(CATALOG_DIR)
+                .and_then(|name| name.strip_prefix(CATALOG_PREFIX))
+                .and_then(|name| name.strip_suffix(CATALOG_SUFFIX))
+                .unwrap_or_default();
+            if !valid_name(locale) {
+                return Err(format!(
+                    "manifest translation '{path}' is not i18n/silent_<locale>.lang"
+                ));
+            }
+        }
+        check_unique("translation", &self.translations)?;
+        let ManifestEntry::Native {
+            library,
+            compatibility,
+        } = &self.entry;
+        check_compatibility(library, compatibility)
+    }
+
+    /// Refuses any archive entry besides the manifest and the entries it declares.
+    fn check_undeclared(&self, archive: &Archive) -> Result<(), String> {
+        let ManifestEntry::Native { library, .. } = &self.entry;
+        for entry in &archive.entries {
+            let declared = entry.name == MANIFEST
+                || entry.name == library
+                || self.translations.iter().any(|path| path == entry.name);
+            if !declared {
+                return Err(format!("undeclared bundle entry '{}'", entry.name));
+            }
+        }
+        Ok(())
+    }
+
+    /// Decodes the declared entries of `archive` and admits the library for `host`
+    /// against the declared compatibility, without running it.
+    fn bundle(&self, archive: &Archive, host: &Compatibility) -> Result<Bundle, String> {
+        self.check_undeclared(archive)?;
+        let ManifestEntry::Native {
+            library,
+            compatibility,
+        } = &self.entry;
+        let library_name = library.trim_start_matches(PAYLOAD_DIR).to_string();
+        let library = archive.decode(library, MAX_LIBRARY_BYTES)?;
+        let mut catalogs = BTreeMap::new();
+        for path in &self.translations {
+            let text = String::from_utf8(archive.decode(path, MAX_CATALOG_BYTES)?)
+                .map_err(|_| format!("'{path}' is not UTF-8 text"))?;
+            catalogs.insert(path.trim_start_matches(CATALOG_DIR).to_string(), text);
+        }
+        plugin_admission::inspect(&library, host, Some(&compatibility.clone().into()))?;
+        let sidecar = match serde_json::to_value(self).map_err(|e| e.to_string())? {
+            serde_json::Value::Object(sidecar) => sidecar,
+            _ => return Err("manifest is not a JSON object".into()),
+        };
+        Ok(Bundle {
+            version: BUNDLE_VERSION,
+            sidecar,
+            library_name,
+            library: BASE64_STANDARD.encode(library),
+            catalogs,
+        })
+    }
 }
 
 fn bundle_path(id: &str) -> Result<PathBuf, String> {
@@ -75,14 +303,6 @@ fn bundle_path(id: &str) -> Result<PathBuf, String> {
     )))
 }
 
-fn read_sidecar(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let text = fs::read_to_string(path).ok()?;
-    match serde_json::from_str::<serde_json::Value>(&text).ok()? {
-        serde_json::Value::Object(map) => Some(map),
-        _ => None,
-    }
-}
-
 fn sidecar_id(sidecar: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
     sidecar
         .get("id")
@@ -90,123 +310,57 @@ fn sidecar_id(sidecar: &serde_json::Map<String, serde_json::Value>) -> Option<St
         .map(|id| id.trim().to_string())
 }
 
-/// The sidecar of the plugin in `dir`: `<dir name>.json` first, else the only JSON
-/// file there that names an id.
-fn find_sidecar(
-    dir: &Path,
-) -> Result<(PathBuf, serde_json::Map<String, serde_json::Value>), String> {
-    let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    let named = dir.join(format!("{name}.json"));
-    if let Some(sidecar) = read_sidecar(&named) {
-        if sidecar_id(&sidecar).is_some() {
-            return Ok((named, sidecar));
-        }
+/// The bytes of the file at `path`, at most `MAX_ARCHIVE_BYTES`.
+fn read_archive(path: &Path) -> Result<Vec<u8>, String> {
+    let at = |e: std::io::Error| format!("{}: {e}", path.display());
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    // Opening a FIFO blocks until a writer comes: never wait, check the opened handle.
+    #[cfg(unix)]
+    options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    let file = options.open(path).map_err(at)?;
+    let metadata = file.metadata().map_err(at)?;
+    if !metadata.is_file() {
+        return Err(format!("{} is not a plugin bundle file", path.display()));
     }
-    let mut found = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
-        if let Some(sidecar) = read_sidecar(&path) {
-            if sidecar_id(&sidecar).is_some() {
-                found.push((path, sidecar));
-            }
-        }
+    let too_large = || {
+        format!(
+            "{} exceeds the {MAX_ARCHIVE_BYTES} byte bundle limit",
+            path.display()
+        )
+    };
+    if metadata.len() > MAX_ARCHIVE_BYTES {
+        return Err(too_large());
     }
-    match found.len() {
-        1 => Ok(found.remove(0)),
-        0 => Err(format!("no plugin metadata file in {}", dir.display())),
-        _ => Err(format!(
-            "several plugin metadata files in {}",
-            dir.display()
-        )),
+    // A file growing while read is still cut at the limit.
+    let mut bytes = Vec::new();
+    file.take(MAX_ARCHIVE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(at)?;
+    if bytes.len() as u64 > MAX_ARCHIVE_BYTES {
+        return Err(too_large());
     }
+    Ok(bytes)
 }
 
-/// The library the sidecar names, else `lib<id>.<suffix>` (`<id>.dll`), else the only
-/// library in `dir`.
-fn find_library(
-    dir: &Path,
-    id: &str,
-    sidecar: &serde_json::Map<String, serde_json::Value>,
-) -> Result<PathBuf, String> {
-    if let Some(name) = sidecar.get("library").and_then(|l| l.as_str()) {
-        let path = dir.join(name.trim());
-        if path.is_file() {
-            return Ok(path);
-        }
+/// Seals the plugin bundle at `path` into the state once its library is admitted for
+/// `host`, replacing an earlier version of the same id. Answers its id. Nothing is
+/// written when any check fails.
+pub fn install(path: &Path, host: &Compatibility) -> Result<String, String> {
+    let bytes = read_archive(path)?;
+    let in_bundle = |e: String| format!("{}: {e}", path.display());
+    let archive = Archive::parse(&bytes, MAX_ENTRIES).map_err(in_bundle)?;
+    let declared: u64 = archive.entries.iter().map(|entry| entry.size).sum();
+    if declared > MAX_DECODED_BYTES {
+        return Err(in_bundle(format!(
+            "bundle declares {declared} decoded bytes, over its {MAX_DECODED_BYTES} byte limit"
+        )));
     }
-    let default = if cfg!(target_os = "windows") {
-        format!("{id}.dll")
-    } else {
-        format!("lib{id}.{}", library_suffix())
-    };
-    if dir.join(&default).is_file() {
-        return Ok(dir.join(default));
-    }
-    let libraries: Vec<PathBuf> = fs::read_dir(dir)
-        .map_err(|e| format!("{}: {e}", dir.display()))?
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some(library_suffix()))
-        .collect();
-    match libraries.as_slice() {
-        [library] => Ok(library.clone()),
-        [] => Err(format!("no plugin library in {}", dir.display())),
-        _ => Err(format!("several plugin libraries in {}", dir.display())),
-    }
-}
-
-/// Seals the plugin at `dropped` (its folder, or its library with the sidecar beside
-/// it) into the state, replacing an earlier version of the same id. Answers its id.
-pub fn install(dropped: &Path) -> Result<String, String> {
-    let (dir, dropped_library) = if dropped.is_dir() {
-        (dropped.to_path_buf(), None)
-    } else if dropped.is_file() {
-        let dir = dropped
-            .parent()
-            .ok_or_else(|| format!("{} has no folder", dropped.display()))?;
-        (dir.to_path_buf(), Some(dropped.to_path_buf()))
-    } else {
-        return Err(format!("{} is not a file or a folder", dropped.display()));
-    };
-    let (_, sidecar) = find_sidecar(&dir)?;
-    let id = sidecar_id(&sidecar).unwrap_or_default();
-    if !valid_id(&id) {
-        return Err(format!("invalid plugin id '{id}'"));
-    }
-    let library_path = match dropped_library {
-        Some(library) => library,
-        None => find_library(&dir, &id, &sidecar)?,
-    };
-    let library =
-        fs::read(&library_path).map_err(|e| format!("{}: {e}", library_path.display()))?;
-    let mut catalogs = BTreeMap::new();
-    if let Ok(entries) = fs::read_dir(dir.join("i18n")) {
-        for path in entries.flatten().map(|entry| entry.path()) {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with("silent_") && name.ends_with(".lang") {
-                if let Ok(text) = fs::read_to_string(&path) {
-                    catalogs.insert(name.to_string(), text);
-                }
-            }
-        }
-    }
-    let bundle = Bundle {
-        version: BUNDLE_VERSION,
-        sidecar,
-        library_name: library_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default()
-            .to_string(),
-        library: BASE64_STANDARD.encode(library),
-        catalogs,
-    };
+    let manifest = Manifest::read(&archive).map_err(in_bundle)?;
+    let bundle = manifest.bundle(&archive, host).map_err(in_bundle)?;
     let text = serde_json::to_string(&bundle).map_err(|e| e.to_string())?;
-    state_crypt::write_state(&bundle_path(&id)?, &text)?;
-    Ok(id)
+    state_crypt::write_state(&bundle_path(&manifest.id)?, &text)?;
+    Ok(manifest.id)
 }
 
 fn read_bundle(path: &Path) -> Result<Bundle, String> {
@@ -307,7 +461,7 @@ pub fn plugin_metadata() -> Vec<PluginMetadata> {
 
 /// The library and catalogs of the plugin `id`.
 pub fn open(id: &str) -> Result<Opened, String> {
-    if !valid_id(id) {
+    if !valid_name(id) {
         return Err(format!("invalid plugin id '{id}'"));
     }
     let bundle = read_bundle(&bundle_path(id)?)?;
@@ -333,8 +487,22 @@ pub fn remove(id: &str) -> Result<(), String> {
 
 // ===== Bridge =====
 
-pub fn plugin_install(path: String) -> PluginInstallResult {
-    match install(Path::new(&path)) {
+pub fn plugin_install(
+    path: String,
+    expected_iid: String,
+    qt_major: u8,
+    qt_minor: u8,
+    arch_requirements: u8,
+) -> PluginInstallResult {
+    let host = Compatibility {
+        iid: expected_iid,
+        target_os: std::env::consts::OS.into(),
+        target_arch: std::env::consts::ARCH.into(),
+        qt_major,
+        qt_minor,
+        arch_requirements,
+    };
+    match install(Path::new(&path), &host) {
         Ok(plugin_id) => PluginInstallResult {
             is_ok: true,
             plugin_id,

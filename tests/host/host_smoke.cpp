@@ -173,6 +173,7 @@ auto launcherLists(const PluginRegistry &registry, const IModule *module, const 
 namespace smoke {
 void pluginAbiSmoke();
 auto pluginGnuHashChild(const QString &path, bool expected_admission) -> int;
+void legacyPluginAbiSmoke(const QString &plugin_id);
 void spSigningSmoke(const QString &name);
 void musigResetSmoke();
 void boundarySmoke();
@@ -180,6 +181,7 @@ void endpointSmoke();
 void navigationSmoke();
 void deletionSmoke();
 void keysContractSmoke(const QString &screenshots);
+void pluginBundleSmoke(const QString &bundle);
 } // namespace smoke
 
 auto main(int argc, char *argv[]) -> int {
@@ -275,6 +277,12 @@ auto main(int argc, char *argv[]) -> int {
         std::fprintf(stdout, "Example storage smoke: OK\n");
         return gOk ? 0 : 1;
     }
+    if (arguments.size() == 3 && arguments.at(1) == QStringLiteral("--plugin-bundle")) {
+        Theme::init();
+        smoke::pluginBundleSmoke(arguments.at(2));
+        std::fprintf(stdout, "Plugin bundle smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
     if (arguments.contains(QStringLiteral("--account-navigation"))) {
         Theme::init();
         smoke::navigationSmoke();
@@ -313,6 +321,11 @@ auto main(int argc, char *argv[]) -> int {
         return gOk ? 0 : 1;
     }
 #ifdef SILENT_ABI2_FIXTURE_PATH
+    if (arguments.size() == 3 && arguments.at(1) == QStringLiteral("--legacy-plugin-abi")) {
+        smoke::legacyPluginAbiSmoke(arguments.at(2));
+        std::fprintf(stdout, "legacy plugin ABI smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
     if (arguments.contains(QStringLiteral("--plugin-abi"))) {
         smoke::pluginAbiSmoke();
         std::fprintf(stdout, "plugin ABI smoke: OK\n");
@@ -578,8 +591,8 @@ auto main(int argc, char *argv[]) -> int {
     int changedBeforeFlush = spy.count();
     Host::get()->refreshLauncher();
     module->flush();
-    check(launcherLists(registry, module, QStringLiteral("inst-1")),
-          "a deferred relist answer should still list inst-1");
+    check(!launcherLists(registry, module, QStringLiteral("inst-1")),
+          "a deferred relist answer must not restore the account deleted earlier");
     check(spy.count() > changedBeforeFlush,
           "a deferred relist answer should be applied, not parked");
 

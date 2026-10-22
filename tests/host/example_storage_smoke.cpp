@@ -5,6 +5,7 @@
 #include "MockPlugin.h"
 #include "StorageProbe.h"
 #include "host/Host.h"
+#include "host/PluginMetadata.h"
 #include "host/PluginRegistry.h"
 #include <QApplication>
 #include <QByteArray>
@@ -15,7 +16,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMap>
-#include <QPluginLoader>
 #include <QThread>
 #include <QTimer>
 #include <algorithm>
@@ -63,28 +63,26 @@ auto legacyBlobs() -> QMap<QString, QByteArray> {
     return blobs;
 }
 
-auto sha256(const QString &path) -> QString {
-    QFile file(path);
-    require(file.open(QIODevice::ReadOnly), "the example library opens");
+auto sha256(const QByteArray &library) -> QString {
     return QString::fromLatin1(
-        QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256).toHex());
+        QCryptographicHash::hash(library, QCryptographicHash::Sha256).toHex());
 }
 
-// The library declares the current plugin ABI, read without loading it.
-void requireBinaryAbi(const QString &library) {
-    QPluginLoader loader(library);
-    require(loader.metaData().value(QStringLiteral("IID")).toString() ==
-                QLatin1String(SILENT_IPlugin_IID),
-            "the example library declares plugin ABI 8");
-}
-
-void install(const QString &directory) {
-    auto installed = ::plugin_install(rust::String(directory.toStdString()));
+void install(const QString &bundle) {
+    auto installed = installPluginBundle(bundle);
     if (!installed.is_ok) {
         qFatal("example storage smoke: install failed: %s", installed.error.c_str());
     }
     require(QString::fromStdString(std::string(installed.plugin_id)) == PLUGIN_ID,
             "the installed bundle is the example plugin");
+}
+
+// The library the importer sealed, the bytes the host loads and grants by hash.
+auto installedLibrary() -> QByteArray {
+    auto opened = ::plugin_library(rust::String(PLUGIN_ID.toStdString()));
+    require(opened.is_ok, "the installed example library opens");
+    return {reinterpret_cast<const char *>(opened.library.data()),
+            static_cast<qsizetype>(opened.library.size())};
 }
 
 // Answered before the plugin's first storage request, so the host asks nothing.
@@ -301,17 +299,18 @@ void ExampleInstancesProbe::onAccountDeleted([[maybe_unused]] ReqId req_id, cons
     m_deletion_errors.append(error);
 }
 
-void exampleStorageSmoke(const QString &directory) {
+void exampleStorageSmoke(const QString &bundle) {
     auto *host = Host::get();
     auto *registry = AppController::get()->pluginRegistry();
     require(host != nullptr && registry != nullptr, "the host and its plugin registry exist");
 
     auto blobs = legacyBlobs();
     require(blobs.size() == 1, "the seeding step left the example plugin's legacy blob");
-    auto library = QDir(directory).filePath(QStringLiteral("libexample.so"));
-    requireBinaryAbi(library);
+    install(bundle);
+    auto library = installedLibrary();
+    require(pluginMetadataError(library, QStringLiteral(SILENT_IPlugin_IID)).isEmpty(),
+            "the sealed example library declares plugin ABI 8, read without loading it");
     auto hash = sha256(library);
-    install(directory);
     allowSavedData(hash);
     // Any prompt means the preloaded grant was missed: it is denied, and the load fails.
     StoragePrompts prompts;

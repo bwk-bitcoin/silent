@@ -26,6 +26,7 @@
 #include "catalog/inputs/Toggle.h"
 #include "host/Host.h"
 #include "host/PluginAccess.h"
+#include "host/PluginMetadata.h"
 #include "host/PluginRegistry.h"
 #include "i18n/I18nManager.h"
 #include "i18n/Tr.h"
@@ -41,6 +42,7 @@
 #include <QHideEvent>
 #include <QLabel>
 #include <QMimeData>
+#include <QThread>
 #include <QUrl>
 #include <QVariant>
 #include <Qontrol>
@@ -98,6 +100,10 @@ AppSettings::AppSettings(QWidget *parent) : QWidget(parent) {
 }
 
 AppSettings::~AppSettings() {
+    // Its result is never delivered to a deleted page, but the import is not cut short.
+    if (m_import_worker != nullptr) {
+        m_import_worker->wait();
+    }
     closeFlow();
 }
 
@@ -207,6 +213,8 @@ void AppSettings::connectMain() {
         connect(m_plugin_registry, &PluginRegistry::enabledPluginsChanged, this,
                 &AppSettings::onPluginsChanged, qontrol::UNIQUE);
     }
+    connect(this, &AppSettings::bundlesImported, this, &AppSettings::onBundlesImported,
+            qontrol::UNIQUE);
     if (m_host_events != nullptr) {
         connect(m_host_events, &HostEvents::settingSectionsChanged, this,
                 &AppSettings::onHostSettingsSectionsChanged, qontrol::UNIQUE);
@@ -721,34 +729,60 @@ void AppSettings::onLanguageSelectionChanged(int index) {
 }
 
 void AppSettings::dragEnterEvent(QDragEnterEvent *event) {
-    if (m_flow == nullptr && event->mimeData()->hasUrls()) {
+    if (m_flow == nullptr && m_import_worker == nullptr && event->mimeData()->hasUrls()) {
         event->acceptProposedAction();
     }
 }
 
-// Each dropped folder or library is sealed into the state: the plugin is listed,
-// off, until turned on.
+// Each dropped bundle is sealed into the state off the GUI thread: the plugin is
+// listed, off, until turned on.
 void AppSettings::dropEvent(QDropEvent *event) {
-    if (m_flow != nullptr || m_plugin_registry == nullptr || !event->mimeData()->hasUrls()) {
+    if (m_flow != nullptr || m_import_worker != nullptr || m_plugin_registry == nullptr ||
+        !event->mimeData()->hasUrls()) {
         return;
     }
     event->acceptProposedAction();
     m_plugin_notice->setVisible(false);
     m_plugin_result->setVisible(false);
+    QStringList paths;
+    for (const auto &url : event->mimeData()->urls()) {
+        if (url.isLocalFile()) {
+            paths.append(url.toLocalFile());
+        }
+    }
+    if (paths.isEmpty()) {
+        return;
+    }
+    m_import_worker = QThread::create([this, paths] {
+        QStringList ids;
+        QStringList errors;
+        for (const auto &path : paths) {
+            auto result = installPluginBundle(path);
+            if (result.is_ok) {
+                ids.append(QString::fromUtf8(result.plugin_id.data(), result.plugin_id.size()));
+            } else {
+                errors.append(QString::fromUtf8(result.error.data(), result.error.size()));
+            }
+        }
+        emit bundlesImported(ids, errors);
+    });
+    connect(m_import_worker, &QThread::finished, m_import_worker, &QThread::deleteLater,
+            qontrol::UNIQUE);
+    m_import_worker->start();
+}
+
+void AppSettings::onBundlesImported(const QStringList &plugin_ids, const QStringList &errors) {
+    if (m_plugin_registry == nullptr) {
+        return;
+    }
+    if (!errors.isEmpty()) {
+        m_plugin_notice->setTitle(TR("settings-plugin-add-failed"));
+        m_plugin_notice->setText(errors.join(QLatin1Char('\n')));
+        m_plugin_notice->setVisible(true);
+    }
     QStringList added;
     QStringList updated;
-    for (const auto &url : event->mimeData()->urls()) {
-        if (!url.isLocalFile()) {
-            continue;
-        }
-        auto result = ::plugin_install(rust::String(url.toLocalFile().toStdString()));
-        if (!result.is_ok) {
-            m_plugin_notice->setTitle(TR("settings-plugin-add-failed"));
-            m_plugin_notice->setText(QString::fromStdString(std::string(result.error)));
-            m_plugin_notice->setVisible(true);
-            continue;
-        }
-        QString id = QString::fromStdString(std::string(result.plugin_id));
+    for (const auto &id : plugin_ids) {
         (m_plugin_registry->isPluginEnabled(id) ? updated : added).append(id);
     }
     m_plugin_registry->rescanDiscoveredPlugins();

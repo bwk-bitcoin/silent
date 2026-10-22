@@ -4106,9 +4106,10 @@ void state_lock() noexcept;
 // error, empty on success.
 ::rust::String state_unlock_with_password(::rust::String password) noexcept;
 
-// Seals the plugin dropped at `path` (its folder, or its library with the
-// sidecar beside it) into the state, replacing an earlier version of it.
-::PluginInstallResult plugin_install(::rust::String path) noexcept;
+// Seals the plugin bundle dropped at `path`, whatever its file name, into the
+// state once its library is admitted for the host, as `plugin_admission`,
+// replacing an earlier version of it.
+::PluginInstallResult plugin_install(::rust::String path, ::rust::String expected_iid, ::std::uint8_t qt_major, ::std::uint8_t qt_minor, ::std::uint8_t arch_requirements) noexcept;
 
 ::rust::String plugin_admission(::rust::Slice<::std::uint8_t const> bytes, ::rust::String expected_iid, ::std::uint8_t qt_major, ::std::uint8_t qt_minor, ::std::uint8_t arch_requirements) noexcept;
 

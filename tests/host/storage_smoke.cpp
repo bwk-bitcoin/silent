@@ -20,13 +20,12 @@
 #undef private
 
 #ifdef SILENT_STORAGE_FIXTURE
+#include "PluginBundleFixture.h"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
-#include <QJsonDocument>
-#include <QTemporaryDir>
 #include <QTimer>
 #include <QVariant>
 #include <string>
@@ -285,21 +284,7 @@ auto sha256(const QByteArray &bytes) -> QString {
 }
 
 void installFixture(const QString &plugin_id, const QByteArray &library) {
-    QTemporaryDir directory;
-    require(directory.isValid(), "fixture bundle directory");
-    QFile binary(QDir(directory.path()).filePath(QStringLiteral("lib%1.so").arg(plugin_id)));
-    require(binary.open(QIODevice::WriteOnly) && binary.write(library) == library.size(),
-            "fixture library copy");
-    binary.close();
-    QFile sidecar(QDir(directory.path()).filePath(plugin_id + QStringLiteral(".json")));
-    auto json =
-        QJsonDocument(QJsonObject{{QStringLiteral("id"), plugin_id},
-                                  {QStringLiteral("name"), QStringLiteral("Storage fixture")}})
-            .toJson();
-    require(sidecar.open(QIODevice::WriteOnly) && sidecar.write(json) == json.size(),
-            "fixture sidecar write");
-    sidecar.close();
-    auto installed = ::plugin_install(rust::String(directory.path().toStdString()));
+    auto installed = installBundle(plugin_id, QStringLiteral("Storage fixture"), library);
     if (!installed.is_ok) {
         qFatal("storage smoke: fixture install failed: %s", installed.error.c_str());
     }

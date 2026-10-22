@@ -1096,7 +1096,7 @@ settings-section-belongs
 settings-plugin-not-silent => "This library is not a Silent plugin."
 
 settings-plugin-drop
-=> "Drop a plugin's folder, or its library with its metadata file beside it, on this window to add it. Built-in modules are not listed here.";;
+=> "Drop a plugin ZIP bundle on this window to add it. Any filename or extension is accepted; loose libraries, JSON files and folders are not. Built-in modules are not listed here.";;
 
 settings-plugin-add-failed => "Could not add the plugin"
 

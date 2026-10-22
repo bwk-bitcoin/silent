@@ -1,8 +1,8 @@
 # Silent Plugin System
 
 Silent is extensible through plugins. External logic (new account kinds, data
-feeds, extra tabs, settings sections, themes) can be loaded at runtime from a
-plugins folder without rebuilding the app.
+feeds, extra tabs, settings sections, themes) can be imported as a single ZIP bundle
+and enabled at runtime without rebuilding the app.
 
 This document describes the architecture and the contract a plugin author works
 against. It is the design reference; implementation lands incrementally.
@@ -12,8 +12,8 @@ against. It is the design reference; implementation lands incrementally.
 There is **no taxonomy of module "types".** There are three levels and a single
 invariant:
 
-- **Plugin**: the loaded **library** (`.so`/`.dll`/`.dylib`) plus its sidecar
-  metadata. A plugin **contains one or more modules** and exposes them to the host
+- **Plugin**: a bundle containing a native **library** (`.so`/`.dll`/`.dylib`),
+  manifest metadata and optional translations. A plugin **contains one or more modules** and exposes them to the host
   (`modules() -> [IModule*]`). It is the unit of distribution, discovery, and
   enable/disable; it is not itself a module.
 - **Module** (`IModule`): a unit of functionality inside a plugin. It owns its
@@ -88,52 +88,151 @@ either way.
 - **Built-in**: shipped in mainline Silent, **statically linked** into the binary
   (e.g. the Silent Payments module). Trusted, always enabled. Registered via
   `Q_IMPORT_PLUGIN`.
-- **External (a plugin)**: a **library + metadata** loaded at runtime from
-  `~/.silent/plugins/`. One plugin **contains one or more modules**. Disabled by
+- **External (a plugin)**: an imported bundle encrypted in the application's state
+  under `~/.silent/plugins/`. One plugin **contains one or more modules**. Disabled by
   default; the user enables the plugin, which brings up all of its modules.
 
-## Distribution Unit: Library + Metadata
+## Distribution unit: one ZIP bundle
 
-Every external plugin ships as **two files**:
+Distribute one ZIP file. `.silent` is a conventional filename suffix, not a format
+requirement. The importer detects ZIP contents; the same bytes work with a renamed
+or extensionless filename. Drop the bundle on Settings to import it. Directories,
+loose native libraries and standalone JSON files are rejected even when matching
+sidecars are nearby. The distributable is not encrypted with a user's installation
+key.
 
+The ZIP has a fixed root manifest and declared payload paths:
+
+```text
+manifest.json
+payload/libmyplugin.so
+i18n/silent_en.lang          # optional
+i18n/silent_fr.lang          # optional
 ```
-~/.silent/plugins/
-  myplugin/
-    libmyplugin.so          # the library
-    myplugin.json           # sidecar metadata (id, name, version, capabilities...)
-    i18n/
-      silent_en.lang        # optional translations (see below)
-      silent_fr.lang
+
+Only declared files are allowed. Do not include directory records, source files,
+sidecars, links, or alternate libraries. A Windows bundle names a `.dll`; a macOS
+bundle names a `.dylib`. Build one bundle for each supported native target.
+
+The manifest is a strict typed JSON object. Example for a Linux x86-64 library
+built with Qt 6.8 and baseline x86-64 requirements:
+
+```json
+{
+  "format_version": 1,
+  "id": "myplugin",
+  "name": "My plugin",
+  "version": "0.1.0",
+  "description": "Example plugin",
+  "author": "Plugin author",
+  "capabilities": ["feed"],
+  "entry": {
+    "kind": "native",
+    "library": "payload/libmyplugin.so",
+    "compatibility": {
+      "iid": "dev.silent.IPlugin/8.0",
+      "target_os": "linux",
+      "target_arch": "x86_64",
+      "qt_major": 6,
+      "qt_minor": 8,
+      "arch_requirements": 1
+    }
+  },
+  "translations": ["i18n/silent_en.lang", "i18n/silent_fr.lang"]
+}
 ```
+
+Use the actual build's Qt version and embedded architecture requirements, not the
+example values. `format_version` versions the container contract, `version` is a
+display/release version, and `iid` versions the public plugin ABI. They are separate.
+All fields are required; the two arrays may be empty. Unknown fields, duplicate
+JSON keys, invalid field types, unsupported entry kinds and incompatible platforms
+are rejected. `entry.kind` is currently only `native`. A future process entry can
+use the same outer container; no process runner or OS sandbox is implemented here.
+
+Import reads the manifest and library without loading plugin code. Native admission
+checks the exact payload bytes against the host's actual Qt/build capabilities and
+requires manifest/library agreement before replacing encrypted installed data.
+Duplicate or case-ambiguous names, traversal, absolute paths, backslashes, links,
+missing files and undeclared extra entries fail. Archive input and decoded data are
+bounded; no archive paths are extracted to the host filesystem. Supported ZIP
+entries use stored or deflate compression. ZIP64, encryption, multi-disk archives,
+archive comments, overlapping records, local/central header disagreement and
+unaccounted leading/trailing bytes are rejected.
+
+The importer accepts at most 272 MiB of input, 66 entries, a 64 KiB manifest,
+a 256 MiB native library and 64 translation catalogs of at most 1 MiB each.
+Total decoded data is limited to 272 MiB. Decompression output is bounded while
+reading and must match each entry's declared size and CRC; a forged small size
+does not permit an unbounded decoded stream. Manifest text fields are limited
+to 4096 bytes and cannot be empty, padded or contain control characters.
+
+The installed format remains encrypted bundle version 1 under an opaque filename
+in `~/.silent/plugins/`, sealed with the existing application state key. Compatible
+old installed bundles remain readable. Import replaces only the plugin bundle,
+not its #60 private logical storage or per-library-hash grants. A changed library
+hash gets its own grant decisions. An invalid replacement leaves the installed
+bundle unchanged. If a plugin is already running, the new library is used after
+disabling and enabling it; import itself never loads code.
+
+For a manual package, `zip -X -D myplugin.silent manifest.json payload/libmyplugin.so
+i18n/silent_en.lang` omits directory records. Prefer the producer's CMake bundle
+target, which also derives compatibility from the actual built library.
+
+With `SILENT_BUILD_HOST_SMOKE=ON`, the real importer/registry consumer accepts one
+producer bundle per run. Give it an isolated HOME and run offscreen:
+
+```sh
+HOME=<empty-test-home> QT_QPA_PLATFORM=offscreen build/host_smoke \
+  --plugin-bundle <producer-bundle>
+```
+
+It checks metadata before enable, the actual loaded library and feed capabilities,
+translations, renamed/extensionless reimport, enabled/disabled replacement and
+invalid replacement. The example's separate legacy-state/storage consumer runs with
+`SILENT_HOST_SMOKE=<absolute-host-smoke> SILENT_EXAMPLE_PLUGIN=<absolute-example-bundle>
+cargo test --manifest-path silent/Cargo.toml --test storage_example -- --ignored`.
+
+The legacy installed-format gate has a separate driver:
+`SILENT_HOST_SMOKE=<absolute-host-smoke> cargo test --manifest-path silent/Cargo.toml
+--test plugin_legacy_abi -- --ignored`. It seeds encrypted version 1 bundles for
+ABIs 2 through 7 and 9, then verifies registry refusal, expected/found diagnostics,
+retained metadata and absence of initializer/constructor side effects.
 
 ### Out-of-tree Plugin Repo Pattern
 
-Plugin projects are expected to live in their own repositories and consume Silent as
-a git submodule.
+Plugin projects live in their own repositories and build against a pinned snapshot
+of Silent's public SDK. The example, fee and fiat producers vendor this small
+closure rather than an application checkout or generated Rust/CXX headers.
 
 Recommended layout:
 
 ```text
 my-plugin-repo/
   CMakeLists.txt
-  plugins/
-    myplugin/
-      CMakeLists.txt
-      MyPlugin.cpp
-      myplugin.json
-      i18n/
-        silent_en.lang
-  third_party/
-    silent/                 # git submodule
+  src/
+    MyPlugin.cpp
+    myplugin.json            # build-time source metadata, packaged into manifest.json
+    i18n/
+      silent_en.lang
+  scripts/
+    bundle.py
+    verify-sdk.py
+  sdk/
+    SHA256SUMS
+    include/src/interfaces/
+    include/src/theme/
 ```
 
 The plugin build includes headers from:
 
 ```text
-third_party/silent/src
+sdk/include/src
 ```
 
-Reference implementation (pin to a tag/commit when stabilized):
+The local reference producer is `~/silent-plugin`. Its SDK records host commit
+`53a5b96` and checks every copied public file against the committed source. The
+public upstream repository is:
 
 ```text
 https://github.com/pythcoiner/silent-plugin
@@ -143,33 +242,36 @@ https://github.com/pythcoiner/silent-plugin
 
 An out-of-tree plugin repo follows this baseline:
 
-- Put plugin source under `src/` (or `plugins/<id>/` as shown above).
-- Vendor Silent as a git **submodule** (not a symlink); the layout above uses
-  `third_party/silent`, a plain `lib/silent` submodule works the same way.
-- Consume the interface headers from the submodule, e.g.
-  `third_party/silent/src/interfaces/*`.
+- Put plugin source under `src/` or `cpp/`.
+- Pin the complete public SDK header closure and record its source commit and file
+  checksums. Copy all public `src/interfaces/*.h` and their public dependencies,
+  not just `module.h` or an updated IID string. Do not vendor Rust build targets.
+- Consume the headers from `sdk/include/src`. Use the producer's SDK verifier
+  against the committed host checkout when refreshing the snapshot.
+- Public implementation files needed for Windows import discovery are part of the
+  snapshot too. Compile them only for export-symbol discovery, not into the plugin.
 - i18n: author `.lang` sources; do not treat JSON as the source of truth. When JSON
   is needed it is generated at build / pre-compile time. See [I18N.md](I18N.md).
 - Build: provide a reproducible Nix build target whose naming aligns with Silent's.
 
-The host **reads the sidecar metadata before the library is ever loaded.** This
+The host **reads the installed manifest metadata before the library is ever loaded.** This
 read-before-load ordering is the load-time boundary: a disabled plugin is
 *discovered* (its metadata is listed in Settings) but its library is **never
 `dlopen`'d** and **no plugin code runs** until the user enables it.
 
-> The metadata format is defined now and is forward-compatible. How metadata may
-> later be *used for trust* (hashing the library, verifying a signature against a
-> trusted key set) is intentionally out of scope for the initial implementation.
-> Only the `library + metadata` structure and the read-first ordering are fixed.
+The manifest remains available for metadata display while disabled or after a
+load failure. Packaging and admission checks do not prove that native code is
+truthful or safe, and do not replace the public ABI contract or the second
+`qobject_cast` gate at enable time.
 
 ## Lifecycle: Discover, Enable, Activate
 
-1. **Discover.** On startup the host scans `~/.silent/plugins/`, reads each sidecar
-   metadata file, and lists every plugin in global Settings. Newly discovered
+1. **Discover.** On startup the host scans the encrypted installed bundles under
+   `~/.silent/plugins/`, reads their metadata and lists every plugin in global Settings. Newly imported
    plugins are **disabled by default**. Discovery is metadata-only (no `dlopen`),
    so it is cheap and side-effect free. A **Rescan** button in global Settings
-   re-runs it on demand: a plugin dropped into the folder while the app is running
-   shows up without a restart. Rescan only updates the discovered list; it never
+   re-runs it on demand. Dropping a ZIP bundle on Settings imports it and refreshes
+   the list without a restart. Rescan only updates the discovered list; it never
    loads or unloads code or changes the enabled state of plugins already present.
 2. **Enable** (user action in Settings). The host `dlopen`s the library
    (`QPluginLoader::load()`) and asks the plugin for its modules
@@ -1345,8 +1447,9 @@ plugin's actual requirements. The returned metadata must agree with every manife
 field, not just be compatible with the host. Release/display and bundle-format
 versions are not ABI declarations. This API does no I/O, loading or construction,
 and returns no Qt plugin objects or host-bound user identifiers. The loader's CXX
-entry point delegates to the same reader. The encrypted installed-bundle reader
-is unchanged. ZIP import and manifest extraction belong to #69.
+entry point delegates to the same reader. ZIP import validates the manifest and
+passes the declared compatibility to this reader before encrypted replacement.
+The encrypted installed-bundle reader is unchanged.
 
 Inspection bounds library size to 256 MiB, metadata sections to 1 MiB and native
 sections to 4096. Mach-O universal libraries select exactly one matching host slice.
@@ -1417,6 +1520,7 @@ Modules reuse Silent's existing `.lang` translation system (see
    `widget()`, toggles via `&QCheckBox::toggled`.
 3. Build against the plugin SDK headers; link no Qt of your own; match the host Qt
    version/toolchain.
-4. Ship `library + <id>.json` metadata (plus optional `i18n/*.lang`) under
-   `~/.silent/plugins/<id>/`.
+4. Ship one ZIP bundle with `manifest.json`, the declared `payload/` library and
+   optional declared `i18n/*.lang` catalogs. Import this file through Settings;
+   do not copy loose files into the installation directory.
 5. The plugin installs disabled; enable it from global Settings.

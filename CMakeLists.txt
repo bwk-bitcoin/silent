@@ -658,6 +658,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/ExternalStorageConsumer.cpp
         tests/host/example_storage_smoke.cpp
         tests/host/example_storage_smoke.h
+        tests/host/plugin_bundle_smoke.cpp
         tests/host/price_feed_smoke.cpp
         tests/host/sp_signing_smoke.cpp
         tests/host/musig_reset_smoke.cpp
