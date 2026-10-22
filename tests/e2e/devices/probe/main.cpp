@@ -69,6 +69,7 @@
 #include "state/DeviceUnlock.h"
 #include "state/StateSetup.h"
 #include "state/UnlockDevices.h"
+#include "state/statesetup/DeviceFlow.h"
 #include "theme/Theme.h"
 #include "views/modals/AccountType.h"
 #undef private
@@ -1896,11 +1897,12 @@ auto openStateWithColdcard() -> bool {
     setup->show();
     shot("00a-state-setup-choice");
     emit setup->m_device_choice->clicked();
+    auto *flow = qobject_cast<state::DeviceFlow *>(setup->m_flow);
 
     QString coldcardId;
     QString coldcardFp;
     bool seen = waitFor(60000, [&] {
-        for (const auto &device : setup->m_devices->devices()) {
+        for (const auto &device : flow->m_devices->devices()) {
             QString kind = QString::fromStdString(std::string(device.kind));
             if (kind.startsWith(QStringLiteral("coldcard")) &&
                 device.state == HwiDeviceState::Supported) {
@@ -1915,14 +1917,14 @@ auto openStateWithColdcard() -> bool {
     if (!seen) {
         return false;
     }
-    for (auto *row : setup->m_device_rows->findChildren<catalog::SelectRow *>()) {
+    for (auto *row : flow->m_device_rows->findChildren<catalog::SelectRow *>()) {
         if (row->property("deviceId").toString() == coldcardId) {
             emit row->clicked();
         }
     }
-    check(setup->m_device_continue->isEnabled(), "state setup: Continue once picked");
+    check(flow->m_device_continue->isEnabled(), "state setup: Continue once picked");
     shot("00b-state-setup-device");
-    setup->m_device_continue->click();
+    flow->m_device_continue->click();
     bool created = waitFor(60000, [&] { return !setup->isVisible(); });
     check(created && setup->result() == QDialog::Accepted,
           "state setup: created with the Coldcard key");

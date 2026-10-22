@@ -116,7 +116,7 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 /// Held while a request reads or replaces a tree, by every session.
 static OPERATIONS: Mutex<()> = Mutex::new(());
 
-fn lock_file(file: &File) -> Result<(), ErrorCode> {
+pub(crate) fn lock_file(file: &File) -> Result<(), ErrorCode> {
     file.try_lock_exclusive().map_err(|error| {
         if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
             ErrorCode::Busy
@@ -128,7 +128,7 @@ fn lock_file(file: &File) -> Result<(), ErrorCode> {
 
 /// The typed failure a response carries in `error`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ErrorCode {
+pub(crate) enum ErrorCode {
     Locked,
     Denied,
     Revoked,

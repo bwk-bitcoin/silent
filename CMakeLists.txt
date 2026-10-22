@@ -295,6 +295,10 @@ set(SILENT_APP_SOURCES
     src/state/StateGate.cpp
     src/state/StateSetup.h
     src/state/StateSetup.cpp
+    src/state/statesetup/DeviceFlow.h
+    src/state/statesetup/DeviceFlow.cpp
+    src/state/statesetup/PasswordFlow.h
+    src/state/statesetup/PasswordFlow.cpp
     src/state/UnlockDevices.h
     src/state/UnlockDevices.cpp
     src/views/modals/AccountType.cpp

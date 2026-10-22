@@ -11,8 +11,8 @@
 //! to the key at setup, which proves a key is the right one; for a device key, its
 //! BIP138 envelope carries the device path among the derivation paths BIP138 keeps
 //! readable, so the app knows which xpub to ask for. A password key is sealed in
-//! `unlock.key` with Argon2id and XChaCha20-Poly1305: its presence is what tells a
-//! password from a device. Every other state file goes through `read_state` and
+//! `unlock.key` with Argon2id and XChaCha20-Poly1305. The check's derivation metadata
+//! distinguishes the two modes. Every other state file goes through `read_state` and
 //! `write_state`, which refuse to run locked and refuse a file found in clear.
 
 use std::{
@@ -51,10 +51,15 @@ use zeroize::Zeroizing;
 use crate::{
     config::datadir,
     ffi::{StateIndexResult, StateUnlockInfo},
-    keys::{
-        crypto::{self, Password},
-        record::SecretEnvelope,
-    },
+    keys::crypto::Password,
+    state_crypt::setup::UnlockState,
+};
+
+mod setup;
+
+pub use crate::state_crypt::setup::{
+    create_with_device, create_with_password, device_unlock_path, unlock_kind, unlock_with_device,
+    unlock_with_password,
 };
 
 /// The password key, sealed under the password.
@@ -114,33 +119,6 @@ pub fn draw_index() -> Result<u32, String> {
     let mut bytes = [0u8; 4];
     getrandom::getrandom(&mut bytes).map_err(|e| e.to_string())?;
     Ok(u32::from_le_bytes(bytes) & 0x7fff_ffff)
-}
-
-/// How the state unlocks, `None` before it is created: with a password when its
-/// sealed key is on disk, else with a device.
-pub fn unlock_kind() -> Option<UnlockKind> {
-    if !datadir().join(CHECK_FILE).exists() {
-        return None;
-    }
-    Some(if datadir().join(KEY_FILE).exists() {
-        UnlockKind::Password
-    } else {
-        UnlockKind::Device
-    })
-}
-
-/// The path to ask the device for its key at: in the check envelope, readable
-/// without the key.
-pub fn device_unlock_path() -> Result<DerivationPath, String> {
-    let path = datadir().join(CHECK_FILE);
-    let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let metadata = bip138::EncryptedMetadata::from_encrypted_payload(&bytes)
-        .map_err(|e| format!("{}: {e:?}", path.display()))?;
-    metadata
-        .derivation_paths
-        .into_iter()
-        .next()
-        .ok_or_else(|| format!("{} names no device path", path.display()))
 }
 
 /// What bwk writes (each account's stores, its sub-accounts, the header cache) goes
@@ -571,25 +549,6 @@ fn durable_write_checkpoint(stage: DurableWriteStage) -> std::io::Result<()> {
     })
 }
 
-fn write_clear(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    }
-    fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-/// Creates the state's check file for `key`, the device path in its clear part for
-/// a device key, and unlocks with it.
-fn create(key: PublicKey, device_path: Option<DerivationPath>) -> Result<(), String> {
-    if datadir().join(CHECK_FILE).exists() {
-        return Err("the app state already has an unlock key".to_string());
-    }
-    let check = seal_with(key, CHECK_TEXT, device_path.clone())?;
-    write_clear(&datadir().join(CHECK_FILE), &check)?;
-    set_key(Some(key), device_path);
-    Ok(())
-}
-
 /// Checks `key` against the check file sealed at setup, and unlocks with it.
 fn unlock_with(key: PublicKey, device_path: Option<DerivationPath>) -> Result<(), String> {
     let path = datadir().join(CHECK_FILE);
@@ -601,46 +560,6 @@ fn unlock_with(key: PublicKey, device_path: Option<DerivationPath>) -> Result<()
         }
         _ => Err("this key does not open the app state".to_string()),
     }
-}
-
-/// Creates the state unlocked by the device whose xpub at `device_path(index)` is
-/// `xpub`. The xpub is never written.
-pub fn create_with_device(index: u32, xpub: &str) -> Result<(), String> {
-    create(xpub_key(xpub)?, Some(device_path(index)?))
-}
-
-/// Creates the state unlocked by `password`: a random key, sealed under it.
-/// Blocks on Argon2id: call it off the GUI thread.
-pub fn create_with_password(password: Password) -> Result<(), String> {
-    let mut secret = Zeroizing::new([0u8; 32]);
-    let secret_key = loop {
-        getrandom::getrandom(secret.as_mut()).map_err(|e| e.to_string())?;
-        if let Ok(secret_key) = SecretKey::from_slice(secret.as_ref()) {
-            break secret_key;
-        }
-    };
-    let key = PublicKey::from_secret_key(&Secp256k1::new(), &secret_key);
-    let envelope =
-        crypto::seal_with_aad(&key.serialize(), KEY_AAD, password).map_err(|e| e.to_string())?;
-    let sealed = serde_json::to_string_pretty(&envelope).map_err(|e| e.to_string())?;
-    write_clear(&datadir().join(KEY_FILE), sealed.as_bytes())?;
-    create(key, None)
-}
-
-/// Unlocks with the device's xpub at `device_unlock_path()`.
-pub fn unlock_with_device(xpub: &str) -> Result<(), String> {
-    unlock_with(xpub_key(xpub)?, Some(device_unlock_path()?))
-}
-
-/// Unlocks with `password`. Blocks on Argon2id: call it off the GUI thread.
-pub fn unlock_with_password(password: Password) -> Result<(), String> {
-    let path = datadir().join(KEY_FILE);
-    let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let envelope: SecretEnvelope =
-        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    let bytes = crypto::open_with_aad(&envelope, KEY_AAD, password).map_err(|e| e.to_string())?;
-    let key = PublicKey::from_slice(&bytes).map_err(|e| e.to_string())?;
-    unlock_with(key, None)
 }
 
 /// A state file left in clear, `None` when every one is sealed. An unencrypted
@@ -715,22 +634,31 @@ fn error_of(result: Result<(), String>) -> String {
 }
 
 pub fn state_unlock_info() -> StateUnlockInfo {
-    let kind = unlock_kind();
-    let device = kind == Some(UnlockKind::Device);
-    let path = if device {
-        device_unlock_path().map(|path| format!("m/{path}"))
-    } else {
-        Ok(String::new())
-    };
-    let (path, error) = match path {
-        Ok(path) => (path, String::new()),
-        Err(error) => (String::new(), error),
-    };
-    StateUnlockInfo {
-        exists: kind.is_some(),
-        device,
-        path,
-        error,
+    match setup::unlock_state() {
+        Ok(UnlockState::Empty) => StateUnlockInfo {
+            exists: false,
+            device: false,
+            path: String::new(),
+            error: String::new(),
+        },
+        Ok(UnlockState::Password) => StateUnlockInfo {
+            exists: true,
+            device: false,
+            path: String::new(),
+            error: String::new(),
+        },
+        Ok(UnlockState::Device(path)) => StateUnlockInfo {
+            exists: true,
+            device: true,
+            path: format!("m/{path}"),
+            error: String::new(),
+        },
+        Err(error) => StateUnlockInfo {
+            exists: false,
+            device: false,
+            path: String::new(),
+            error,
+        },
     }
 }
 

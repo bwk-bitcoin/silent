@@ -33,7 +33,7 @@ fn the_state_opens_with_its_unlock_key_only() {
     let file = base.join("account").join("config.bip138");
 
     // Nothing created yet: locked, nothing can be written.
-    assert_eq!(state_crypt::unlock_kind(), None);
+    assert_eq!(state_crypt::unlock_kind().expect("read empty state"), None);
     assert!(!state_crypt::is_unlocked());
     assert!(state_crypt::write_state(&file, "{}").is_err(), "locked");
     assert!(
@@ -47,7 +47,10 @@ fn the_state_opens_with_its_unlock_key_only() {
 
     // A password key.
     state_crypt::create_with_password(Password::new("correct horse".into())).unwrap();
-    assert_eq!(state_crypt::unlock_kind(), Some(UnlockKind::Password));
+    assert_eq!(
+        state_crypt::unlock_kind().expect("read password state"),
+        Some(UnlockKind::Password)
+    );
     let secret = Zeroizing::new(vec![7; 102]);
     let inner = state_crypt::seal_secret(secret.clone(), b"root").expect("seal inner secret");
     let second = state_crypt::seal_secret(secret.clone(), b"root").expect("seal fresh nonce");
@@ -122,7 +125,10 @@ fn the_state_opens_with_its_unlock_key_only() {
         state_crypt::open_secret(&inner, b"root").is_err(),
         "different state key cannot authenticate inner secret"
     );
-    assert_eq!(state_crypt::unlock_kind(), Some(UnlockKind::Device));
+    assert_eq!(
+        state_crypt::unlock_kind().expect("read device state"),
+        Some(UnlockKind::Device)
+    );
     // The path is readable without the key, the rest is not: nothing else in clear.
     assert_eq!(
         state_crypt::device_unlock_path().unwrap(),
