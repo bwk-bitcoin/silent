@@ -13,8 +13,7 @@
 
 namespace catalog {
 class Button;
-class FieldNote;
-class Input;
+class EndpointRow;
 class Label;
 class Toggle;
 } // namespace catalog
@@ -31,6 +30,7 @@ class Settings : public qontrol::Screen {
 
 public:
     explicit Settings(AccountBackend *backend);
+    ~Settings() override;
 
 public slots:
     void onTestClicked();
@@ -50,15 +50,11 @@ protected:
     struct ServerRow {
         Endpoint endpoint = Endpoint::Electrum;
         catalog::Label *label = nullptr;
-        catalog::Input *url = nullptr;
+        catalog::EndpointRow *field = nullptr;
         // "Height N" while connected, empty otherwise.
         catalog::Label *height = nullptr;
-        catalog::Button *test = nullptr;
-        catalog::Button *testing = nullptr;
         catalog::Button *connect = nullptr;
         catalog::Button *disconnect = nullptr;
-        // Why the last test, connect or disconnect failed.
-        catalog::FieldNote *note = nullptr;
         // Electrum only.
         catalog::Toggle *ssl = nullptr;
         catalog::Toggle *verify = nullptr;
@@ -69,6 +65,8 @@ protected:
         // The test, connect or disconnect in flight, 0 when none.
         uint64_t action_req = 0;
         bool testing_req = false;
+        uint64_t draft_revision = 0;
+        uint64_t action_revision = 0;
         uint64_t tip_req = 0;
     };
 

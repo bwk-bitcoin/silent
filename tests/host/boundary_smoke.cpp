@@ -134,6 +134,12 @@ template <typename Predicate> void waitFor(Predicate predicate, const char *mess
     require(predicate(), message);
 }
 
+void editEndpoint(catalog::Input *input, const QString &text) {
+    input->selectAll();
+    QKeyEvent event(QEvent::KeyPress, Qt::Key_unknown, Qt::NoModifier, text);
+    QApplication::sendEvent(input, &event);
+}
+
 struct SoftwareKey {
     QString fingerprint;
     QString sp;
@@ -327,6 +333,42 @@ void spCreation(const SoftwareKey &key, SignalSpy &launcher) {
                    view.m_electrum.state() != catalog::EndpointRow::State::Testing;
         },
         "SP endpoint fixture finishes");
+    require(view.m_blindbit.state() == catalog::EndpointRow::State::Failed &&
+                view.m_blindbit.input()->text() == QStringLiteral("http://127.0.0.1:1") &&
+                !view.m_blindbit.note()->isHidden() &&
+                view.m_electrum.state() == catalog::EndpointRow::State::Failed &&
+                view.m_electrum.input()->text() == QStringLiteral("invalid-endpoint") &&
+                !view.m_electrum.note()->isHidden(),
+            "failed SP endpoint tests share the Failed state and keep their URLs");
+    editEndpoint(view.m_electrum.input(), QStringLiteral("tcp://127.0.0.1:1"));
+    require(view.m_electrum.state() == catalog::EndpointRow::State::Untested &&
+                view.m_electrum.note()->isHidden() && view.m_electrum.testButton()->isEnabled(),
+            "an edit returns the failed SP endpoint to untested");
+    view.m_electrum.input()->selectAll();
+    QKeyEvent erase(QEvent::KeyPress, Qt::Key_Backspace, Qt::NoModifier);
+    QApplication::sendEvent(view.m_electrum.input(), &erase);
+    require(view.m_electrum.input()->text().isEmpty() &&
+                view.m_electrum.state() == catalog::EndpointRow::State::Untested &&
+                !view.m_electrum.testButton()->isEnabled(),
+            "an empty SP endpoint is untested and cannot be tested");
+#ifdef Q_OS_UNIX
+    {
+        EndpointPeer peer(1, false, true);
+        editEndpoint(view.m_electrum.input(), peer.url());
+        view.m_electrum.testButton()->click();
+        require(view.m_electrum.state() == catalog::EndpointRow::State::Testing &&
+                    view.m_electrum.testButton()->isHidden() && view.m_electrum.note()->isHidden(),
+                "a running SP endpoint test presents Testing");
+        waitFor([&peer] { return peer.waiting(); }, "SP endpoint test reaches real peer");
+        peer.release();
+        waitFor([&view] { return view.m_electrum.state() != catalog::EndpointRow::State::Testing; },
+                "SP endpoint test completes");
+        require(view.m_electrum.state() == catalog::EndpointRow::State::Ok &&
+                    view.m_electrum.input()->text().endsWith(peer.url().mid(6)) &&
+                    view.m_electrum.note()->isHidden() && !view.m_electrum.testButton()->isHidden(),
+                "a passing SP endpoint test presents Ok and keeps the tested URL");
+    }
+#endif
     view.m_name_input->setText(QStringLiteral("boundary-sp"));
     view.m_electrum.input()->setText(QStringLiteral("tcp://127.0.0.1:1"));
     auto before = launcher.count();
@@ -616,6 +658,191 @@ void endpointWorkerPresentation() {
             "endpoint fixture shutdown drains its new receiver");
 }
 
+struct EndpointRequest {
+    uint64_t id = 0;
+    Endpoint endpoint = Endpoint::Electrum;
+    QString url;
+    bool verify = true;
+};
+
+// The real controller, with Test/save completed by the test instead of a live server.
+template <typename Controller> class ControlledEndpointTest final : public Controller {
+public:
+    explicit ControlledEndpointTest(const QString &account_name)
+        : Controller(account_name, nullptr),
+          name(account_name) {
+    }
+
+    void testAndSaveEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
+                             bool verify_certificate) override {
+        this->beginEndpointOperation(req_id, endpoint, EndpointOperation::Testing);
+        request = EndpointRequest{
+            .id = req_id, .endpoint = endpoint, .url = url, .verify = verify_certificate};
+    }
+
+    [[nodiscard]] auto pending(uint64_t req_id, const QString &url, bool verify) const -> bool {
+        return request.has_value() && request->id == req_id &&
+               request->endpoint == Endpoint::Electrum && request->url == url &&
+               request->verify == verify && this->endpointOperationsBusy();
+    }
+
+    // Persists the requested tuple and finishes the operation as a passing Test.
+    void completeTest() {
+        require(request.has_value(), "a controlled Test is pending");
+        auto tested = *request;
+        request.reset();
+        auto config = ::config_from_file(rust::String(name.toStdString()));
+        config->set_electrum_url(rust::String(tested.url.toStdString()));
+        config->set_verify_certificate(tested.verify);
+        require(config->save().empty(), "controlled Test persists the tested endpoint");
+        rust::String url(tested.url.toStdString());
+        this->setSavedEndpoint(tested.endpoint, url, tested.verify);
+        EndpointResult result{};
+        result.kind = BackendErrorKind::None;
+        result.is_ok = true;
+        result.saved = true;
+        result.url = url;
+        result.verify_certificate = tested.verify;
+        this->finishEndpointOperation(result);
+    }
+
+    QString name;
+    std::optional<EndpointRequest> request;
+};
+
+// `tester` saves `verify` for the SSL server `observer` holds as tested.
+template <typename Controller>
+void changeSavedVerify(ControlledEndpointTest<Controller> &controller,
+                       account::view::Settings::ServerRow *tester,
+                       account::view::Settings::ServerRow *observer, const QString &url,
+                       bool verify) {
+    require(observer->field->state() == catalog::EndpointRow::State::Ok &&
+                tester->field->input()->text() == url && tester->ssl->isChecked() &&
+                tester->verify_wanted != verify,
+            "both views hold the saved SSL server before the certificate change");
+    tester->verify->click();
+    require(tester->verify_wanted == verify && tester->field->testButton()->isEnabled() &&
+                tester->field->state() == catalog::EndpointRow::State::Untested,
+            "the certificate choice is a new draft to test");
+    auto revision = observer->draft_revision;
+    tester->field->testButton()->click();
+    auto requestId = tester->action_req;
+    require(requestId != 0 && controller.pending(requestId, url, verify) &&
+                tester->field->state() == catalog::EndpointRow::State::Testing &&
+                controller.verifiesCertificate() != verify,
+            "the Test requests the SSL URL with the new certificate choice");
+    require(observer->field->state() == catalog::EndpointRow::State::Ok &&
+                observer->draft_revision == revision && observer->saved_verify != verify,
+            "a pending Test leaves the observer's saved tuple and result alone");
+    controller.completeTest();
+    require(tester->action_req == 0 && tester->field->state() == catalog::EndpointRow::State::Ok &&
+                tester->saved_url == url && tester->saved_verify == verify,
+            "the tester presents Ok for the saved tuple");
+    require(controller.endpointUrl(Endpoint::Electrum) == url &&
+                controller.verifiesCertificate() == verify &&
+                ::config_from_file(rust::String(controller.name.toStdString()))
+                        ->get_verify_certificate() == verify,
+            "the backend and the account config hold the new certificate choice");
+    require(observer->field->state() == catalog::EndpointRow::State::Untested &&
+                observer->draft_revision == revision + 1 && observer->saved_url == url &&
+                observer->saved_verify == verify && observer->field->input()->text() == url &&
+                observer->ssl->isChecked() && observer->verify_wanted == verify &&
+                observer->verify->isChecked() == verify,
+            "the observer shows the saved certificate choice and its result is invalidated");
+}
+
+template <typename Controller> void savedEndpointObservers(const QString &name) {
+    ControlledEndpointTest<Controller> controller(name);
+    waitFor([&controller] { return !controller.accountLoading(); },
+            "controlled endpoint fixture opens offline");
+    AccountBackend *backend = &controller;
+    account::view::Settings first(backend);
+    account::view::Settings second(backend);
+    auto *row = first.row(Endpoint::Electrum);
+    auto *other = second.row(Endpoint::Electrum);
+    require(row != nullptr && other != nullptr && !first.isVisible() && !second.isVisible() &&
+                backend->endpointUrl(Endpoint::Electrum).isEmpty(),
+            "two hidden Settings views observe one offline backend");
+    EndpointSpy replies;
+    SignalSpy stopped;
+    QObject::connect(backend, &AccountBackend::endpointRequestFinished, &replies,
+                     &EndpointSpy::onFinished, qontrol::UNIQUE);
+    QObject::connect(&controller, &Controller::stopped, &stopped, &SignalSpy::onSignal,
+                     qontrol::UNIQUE);
+
+    auto ssl = QStringLiteral("ssl://localhost:50002");
+    editEndpoint(row->field->input(), ssl);
+    require(row->ssl->isChecked() && row->verify_wanted,
+            "an SSL draft checks the certificate by default");
+    row->field->testButton()->click();
+    auto firstId = row->action_req;
+    require(firstId != 0 && controller.pending(firstId, ssl, true) &&
+                backend->endpointUrl(Endpoint::Electrum).isEmpty(),
+            "the first view's SSL Test is pending without saving");
+    controller.completeTest();
+    require(replies.ids.last() == firstId &&
+                row->field->state() == catalog::EndpointRow::State::Ok &&
+                other->field->state() == catalog::EndpointRow::State::Untested &&
+                other->field->input()->text() == ssl && other->verify->isChecked() &&
+                backend->verifiesCertificate(),
+            "the first view saves the SSL server with its certificate checked");
+
+    changeSavedVerify(controller, other, row, ssl, false);
+    changeSavedVerify(controller, row, other, ssl, true);
+
+    auto rowRevision = row->draft_revision;
+    auto otherRevision = other->draft_revision;
+    emit backend->endpointStateChanged(Endpoint::Electrum);
+    emit backend->endpointStateChanged(Endpoint::Electrum);
+    require(row->draft_revision == rowRevision && other->draft_revision == otherRevision &&
+                row->field->state() == catalog::EndpointRow::State::Ok &&
+                other->field->state() == catalog::EndpointRow::State::Untested &&
+                row->field->input()->text() == ssl && other->field->input()->text() == ssl,
+            "notifications of an unchanged saved tuple invalidate no view");
+
+    auto plain = QStringLiteral("tcp://localhost:50001");
+    rowRevision = row->draft_revision;
+    editEndpoint(other->field->input(), plain);
+    require(!other->ssl->isChecked() && other->field->input()->text() == plain,
+            "a plaintext draft turns SSL off");
+    other->field->testButton()->click();
+    auto plainId = other->action_req;
+    require(plainId != 0 && controller.pending(plainId, plain, true),
+            "a plaintext Test asks for the certificate check it cannot use");
+    controller.completeTest();
+    require(other->field->state() == catalog::EndpointRow::State::Ok &&
+                row->field->input()->text() == plain && !row->ssl->isChecked() &&
+                row->field->state() == catalog::EndpointRow::State::Untested &&
+                row->draft_revision == rowRevision + 1 && row->saved_verify,
+            "a URL-only saved change invalidates the observer's earlier success");
+    rowRevision = row->draft_revision;
+    otherRevision = other->draft_revision;
+    uint64_t requestId = 65001;
+    for (bool verify : {false, true}) {
+        backend->testAndSaveEndpoint(requestId, Endpoint::Electrum, plain, verify);
+        require(controller.pending(requestId, plain, verify),
+                "a backend Test of the raw choice is pending");
+        controller.completeTest();
+        require(replies.ids.last() == requestId && backend->verifiesCertificate() == verify &&
+                    backend->endpointUrl(Endpoint::Electrum) == plain,
+                "the backend saves the plaintext server with its raw certificate choice");
+        require(row->saved_verify && other->saved_verify && row->draft_revision == rowRevision &&
+                    other->draft_revision == otherRevision &&
+                    other->field->state() == catalog::EndpointRow::State::Ok &&
+                    row->field->state() == catalog::EndpointRow::State::Untested &&
+                    row->field->input()->text() == plain && other->field->input()->text() == plain,
+                "a raw certificate change on a plaintext server invalidates no view");
+        ++requestId;
+    }
+
+    controller.stop();
+    waitFor([&stopped] { return stopped.count() == 1; }, "controlled endpoint fixture drains");
+    auto config = ::config_from_file(rust::String(name.toStdString()));
+    config->set_electrum_url(rust::String());
+    config->set_verify_certificate(true);
+    require(config->save().empty(), "controlled endpoint fixture is offline again");
+}
+
 #ifdef Q_OS_UNIX
 void musigEndpointStatusPresentation() {
     auto config = ::config_from_file("boundary-policy");
@@ -673,12 +900,6 @@ void musigEndpointStatusPresentation() {
             "MuSig status fixture drains its receiver");
 }
 
-void editEndpoint(catalog::Input *input, const QString &text) {
-    input->selectAll();
-    QKeyEvent event(QEvent::KeyPress, Qt::Key_unknown, Qt::NoModifier, text);
-    QApplication::sendEvent(input, &event);
-}
-
 template <typename Controller, typename Bar> void endpointInteractions(const QString &name) {
     Controller controller(name, nullptr);
     waitFor([&controller] { return !controller.accountLoading(); },
@@ -708,8 +929,8 @@ template <typename Controller, typename Bar> void endpointInteractions(const QSt
     auto oldGeneration = controller.m_notif_generation;
 
     EndpointPeer peer(3, true, true);
-    editEndpoint(row->url, peer.url());
-    row->test->click();
+    editEndpoint(row->field->input(), peer.url());
+    row->field->testButton()->click();
     auto testId = row->action_req;
     require(testId != 0 && backend->endpointOperationsBusy() && !toggle->isEnabled() &&
                 !other->connect->isEnabled(),
@@ -719,14 +940,32 @@ template <typename Controller, typename Bar> void endpointInteractions(const QSt
                 !replies.results[0].connection_pending &&
                 !backend->isEndpointRunning(Endpoint::Electrum),
             "Test/save completes offline, not as a connected dispatch");
-    require(row->saved_url == peer.url().mid(6) && other->url->text() == row->saved_url &&
+    require(row->saved_url == peer.url().mid(6) &&
+                other->field->input()->text() == row->saved_url &&
                 backend->endpointUrl(Endpoint::Electrum) == row->saved_url && toggle->isEnabled(),
             "saved URL reaches both Settings views and the status control");
+    require(row->field->state() == catalog::EndpointRow::State::Ok &&
+                row->field->note()->isHidden() &&
+                other->field->state() == catalog::EndpointRow::State::Untested,
+            "the tested view presents Ok, the observer shows the saved URL untested");
+    require(!row->field->testButton()->isEnabled() && row->connect->isEnabled(),
+            "the saved tuple offers Connect without another destructive Test");
+    row->ssl->click();
+    require(row->field->state() == catalog::EndpointRow::State::Untested &&
+                !row->connect->isEnabled() && row->field->testButton()->isEnabled(),
+            "changing SSL invalidates a successful test and requires testing the new tuple");
+    row->ssl->click();
+    editEndpoint(row->field->input(), QStringLiteral(" "));
+    require(row->field->state() == catalog::EndpointRow::State::Untested &&
+                !row->field->testButton()->isEnabled() && row->field->note()->isHidden(),
+            "an empty Settings draft is untested and cannot be tested");
+    editEndpoint(row->field->input(), row->saved_url);
 
     // A second successful Test leaves the same saved URL available to both initiators.
     backend->testAndSaveEndpoint(64001, Endpoint::Electrum, peer.url(), true);
     waitFor([&replies] { return replies.ids.size() == 2; }, "second public Test/save completes");
     require(replies.results[1].is_ok, "second successful Test remains offline");
+    auto testState = row->field->state();
     row->connect->click();
     auto connectId = row->action_req;
     waitFor([&peer] { return peer.waiting(); }, "Connect reaches the held failing handshake");
@@ -749,11 +988,13 @@ template <typename Controller, typename Bar> void endpointInteractions(const QSt
                 !backend->endpointOperationsBusy() &&
                 !backend->isEndpointRunning(Endpoint::Electrum),
             "actual post-dispatch failure releases busy and leaves backend offline");
-    require(!row->note->isHidden() &&
-                hasText(*row->note,
+    require(!row->field->note()->isHidden() &&
+                hasText(*row->field->note(),
                         mapBackendErrorSummary(backend->endpointErrorKind(Endpoint::Electrum)) +
                             QStringLiteral(" ") + backend->endpointError(Endpoint::Electrum)),
             "Settings displays the actual operation failure");
+    require(row->field->state() == testState,
+            "a connection failure does not change the earlier test result");
     require(toggle->isEnabled() && !toggle->isChecked(),
             "failed Connect restores actual off toggle");
 
@@ -790,19 +1031,78 @@ template <typename Controller, typename Bar> void endpointInteractions(const QSt
     {
         EndpointPeer failedTest(1, true, true);
         auto saved = backend->endpointUrl(Endpoint::Electrum);
-        editEndpoint(row->url, failedTest.url());
-        row->test->click();
+        editEndpoint(row->field->input(), failedTest.url());
+        row->field->testButton()->click();
         auto failedId = row->action_req;
         waitFor([&failedTest] { return failedTest.waiting(); }, "failed Test reaches real peer");
         require(backend->endpointUrl(Endpoint::Electrum) == saved && !toggle->isEnabled(),
                 "candidate Test does not overwrite saved endpoint while pending");
+        require(row->field->state() == catalog::EndpointRow::State::Testing &&
+                    row->field->testButton()->isHidden() && !row->field->input()->isEnabled(),
+                "pending Settings Test presents Testing with the draft locked");
         failedTest.release();
         waitFor([&row] { return row->action_req == 0; }, "failed Test completes");
         require(replies.ids.last() == failedId && !replies.results.last().is_ok &&
                     !replies.results.last().saved &&
                     backend->endpointUrl(Endpoint::Electrum) == saved &&
-                    row->url->text() == failedTest.url() && !row->note->isHidden(),
+                    row->field->input()->text() == failedTest.url() &&
+                    !row->field->note()->isHidden() &&
+                    row->field->state() == catalog::EndpointRow::State::Failed,
                 "failed Test keeps saved endpoint, candidate draft and visible failure");
+        row->field->setError(QStringLiteral("connection failed"));
+        require(row->field->state() == catalog::EndpointRow::State::Failed &&
+                    hasText(*row->field->note(), QStringLiteral("connection failed")),
+                "a connection error can be shown without replacing the failed test state");
+        row->field->setError(QString());
+        require(!row->field->note()->isHidden() &&
+                    hasText(*row->field->note(),
+                            mapBackendErrorSummary(replies.results.last().kind) +
+                                QStringLiteral(" ") +
+                                QString::fromUtf8(replies.results.last().error.data(),
+                                                  replies.results.last().error.size())),
+                "clearing a connection error restores the failed test explanation");
+        auto revision = row->draft_revision;
+        row->ssl->click();
+        require(row->field->state() == catalog::EndpointRow::State::Untested &&
+                    row->field->note()->isHidden() &&
+                    row->field->input()->text() ==
+                        QStringLiteral("ssl://") + failedTest.url().mid(6) &&
+                    row->draft_revision == revision + 1,
+                "SSL toggle turns the failed draft into an untested SSL candidate");
+        require(row->verify->isEnabled() && row->verify->isChecked(),
+                "an SSL candidate offers certificate verification");
+        row->verify->click();
+        require(row->field->state() == catalog::EndpointRow::State::Untested &&
+                    !row->verify_wanted && row->draft_revision == revision + 2 &&
+                    row->field->input()->text() ==
+                        QStringLiteral("ssl://") + failedTest.url().mid(6),
+                "certificate choice is a new untested draft of the same URL");
+    }
+    {
+        EndpointPeer late(1, false, true);
+        editEndpoint(row->field->input(), late.url());
+        row->field->testButton()->click();
+        auto lateId = row->action_req;
+        waitFor([&late] { return late.waiting(); }, "superseded Test reaches real peer");
+        require(lateId != 0 && !row->ssl->isChecked() &&
+                    row->field->state() == catalog::EndpointRow::State::Testing,
+                "plaintext candidate Test is pending");
+        // The input is locked while busy: the newer draft arrives as an edit signal.
+        auto newer = QStringLiteral("tcp://127.0.0.1:2");
+        row->field->input()->setText(newer);
+        emit row->field->input()->textEdited(newer);
+        require(backend->endpointOperationsBusy() && row->action_req == lateId &&
+                    row->field->state() == catalog::EndpointRow::State::Untested,
+                "a newer draft supersedes the pending Test while the backend is busy");
+        late.release();
+        waitFor([&row] { return row->action_req == 0; }, "superseded Test completes");
+        require(replies.ids.last() == lateId && replies.results.last().is_ok &&
+                    replies.results.last().saved &&
+                    backend->endpointUrl(Endpoint::Electrum) == late.url().mid(6) &&
+                    row->field->input()->text() == newer &&
+                    row->field->state() == catalog::EndpointRow::State::Untested &&
+                    row->field->note()->isHidden(),
+                "late completion saves its endpoint without overwriting the newer draft");
     }
     controller.stop();
     waitFor([&stopped] { return stopped.count() == 1; }, "interaction fixture drains on shutdown");
@@ -828,8 +1128,8 @@ template <typename Controller, typename Bar> void endpointShutdown(const QString
     backend->startWorker(QThread::create([gate] { gate->acquire(); }));
     EndpointPeer peer(1, false, true);
     auto *row = settings->row(Endpoint::Electrum);
-    editEndpoint(row->url, peer.url());
-    row->test->click();
+    editEndpoint(row->field->input(), peer.url());
+    row->field->testButton()->click();
     auto requestId = row->action_req;
     auto oldGeneration = controller.m_notif_generation;
     delete settings;
@@ -937,8 +1237,8 @@ void caughtUpBlindbitConnection() {
     StatusBar bar(&controller);
     settings.show();
     auto *row = settings.row(Endpoint::Blindbit);
-    editEndpoint(row->url, peer.url());
-    row->test->click();
+    editEndpoint(row->field->input(), peer.url());
+    row->field->testButton()->click();
     waitFor([&row] { return row->action_req == 0; }, "caught-up BlindBit Test/save completes");
     require(replies.results.last().is_ok && replies.results.last().saved,
             "caught-up server is tested and saved offline");
@@ -1071,7 +1371,7 @@ void asynchronousAccountStartup(const QString &source, const QString &name, cons
     auto *row = settings->row(Endpoint::Electrum);
     require(
         row != nullptr && row->saved_url == blocked.url() && !controller->verifiesCertificate() &&
-            !row->url->isEnabled() && replies.ids.size() == 1,
+            !row->field->input()->isEnabled() && replies.ids.size() == 1,
         "saved endpoint and certificate choice are present during startup, before any completion");
     blocked.release();
     waitFor(
@@ -1086,19 +1386,19 @@ void asynchronousAccountStartup(const QString &source, const QString &name, cons
             controller->getAccount().has_value() && controller->getAccount().value()->is_ok() &&
             controller->network() == Network::Signet &&
             std::string(controller->getDescriptor()) == std::string(descriptor) &&
-            row->url->isEnabled() && !row->note->isHidden(),
+            row->field->input()->isEnabled() && !row->field->note()->isHidden(),
         "failed startup retains the named offline account and usable Settings with real metadata");
     {
         EndpointPeer repaired;
-        editEndpoint(row->url, repaired.url());
-        row->test->click();
+        editEndpoint(row->field->input(), repaired.url());
+        row->field->testButton()->click();
         auto repairId = row->action_req;
         waitFor([&row] { return row->action_req == 0; },
                 "Settings repairs initial endpoint failure");
         require(repairId != 0 && replies.ids.last() == repairId && replies.results.last().is_ok &&
                     replies.results.last().saved && !replies.results.last().connection_pending &&
                     controller->endpointError(Endpoint::Electrum).isEmpty() &&
-                    row->note->isHidden() && row->connect->isEnabled() &&
+                    row->field->note()->isHidden() && row->connect->isEnabled() &&
                     controller->network() == Network::Signet,
                 "fresh public Test/save succeeds after startup failure without losing identity or "
                 "metadata");
@@ -1180,6 +1480,8 @@ void navigationSmoke() {
 
 void endpointSmoke() {
     prepareEndpointAccounts();
+    savedEndpointObservers<AccountController>(QStringLiteral("boundary-sp"));
+    savedEndpointObservers<MusigAccountController>(QStringLiteral("boundary-policy"));
 #ifdef Q_OS_UNIX
     endpointInteractions<AccountController, StatusBar>(QStringLiteral("boundary-sp"));
     endpointInteractions<MusigAccountController, MusigStatusBar>(QStringLiteral("boundary-policy"));

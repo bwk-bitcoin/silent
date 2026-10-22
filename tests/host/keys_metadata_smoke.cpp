@@ -14,11 +14,15 @@
 #include "modules/musig/MusigPlugin.h"
 #include "modules/sp/SpPlugin.h"
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QThread>
 #include <algorithm>
 #include <common.h>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <silent.h>
+#include <string>
 
 #define private public
 #define protected public
@@ -76,7 +80,7 @@ auto hasMetadataError(QWidget *widget) -> bool {
     });
 }
 
-void malformedViews() {
+void malformedViews(MusigAccountController &controller) {
     modal::CreateAccount create;
     create.show();
     QApplication::processEvents();
@@ -103,7 +107,6 @@ void malformedViews() {
             "invalid metadata cannot advance policy creation");
     policy.reject();
 
-    MusigAccountController controller(QStringLiteral("missing-metadata-account"), nullptr);
     musig::modal::RegisterDescriptor registration(&controller);
     registration.show();
     QApplication::processEvents();
@@ -150,6 +153,34 @@ void keysMetadataSmoke(keys::KeysModule &module) {
     KeysBoundaryProbe coordination;
     QObject::connect(&handle, &IKeys::coordinationError, &coordination,
                      &KeysBoundaryProbe::onCoordinationError, qontrol::UNIQUE);
+    auto accountDescriptor =
+        QStringLiteral("tr(musig("
+                       "tpubDEGU7K8ab62XbG1bKoCnHDtUx44DxVKyAQVS96EN1EUVTQRW2KnFEvTtm"
+                       "nUJSonudSK8HcXTexf56Kir1JzoQAzFRHfvNLEcqV7KxUHZVYa,"
+                       "tpubDDzMtUDKwjvTehAmAfwYiBGzUFDcF8AyEaJf78JhQam5knvsGTgqF7Vvh"
+                       "uuDZLYityND66FG88sS3q28Yi5Ysumvx5DfMgdm6nc6zntvpHM"
+                       ")/<0;1>/*)");
+    auto name = QStringLiteral("smoke-keys-metadata-account");
+    auto config = ::new_config(rust::String(name.toStdString()), Network::Testnet,
+                               rust::String(accountDescriptor.toStdString()), rust::String(""),
+                               rust::String(""), 546, rust::String("musig"));
+    require(config->save().empty(), "save isolated Testnet MuSig account");
+    MusigAccountController controller(name, nullptr);
+    QElapsedTimer opening;
+    opening.start();
+    while (controller.accountLoading() && opening.elapsed() < 30000) {
+        QApplication::processEvents();
+        QThread::msleep(1);
+    }
+    require(!controller.accountLoading(), "asynchronous MuSig opening completes");
+    require(controller.accountLoadError().isEmpty() && !controller.endpointOperationsBusy() &&
+                controller.hasAccountMetadata() && controller.getAccount().has_value() &&
+                controller.getAccount().value()->is_ok(),
+            "real offline MuSig account opens with its metadata");
+    auto canonical = ::validate_musig_descriptor(rust::String(accountDescriptor.toStdString()));
+    require(canonical.is_ok && controller.network() == Network::Testnet &&
+                std::string(controller.getDescriptor()) == std::string(canonical.descriptor),
+            "loaded controller retains the saved Testnet network and Rust-canonical descriptor");
     for (auto invalid : {256U, std::numeric_limits<std::uint32_t>::max()}) {
         for (bool descriptor : {false, true}) {
             auto malformed = valid;
@@ -183,10 +214,22 @@ void keysMetadataSmoke(keys::KeysModule &module) {
             require(coordination.answers == previousCoordination + 1 &&
                         coordination.kind == plugin::SpendError::InvalidRequest,
                     "coordination refuses malformed metadata before dispatch");
-            malformedViews();
+            malformedViews(controller);
             require(provider.dispatches() == 0, "no signing or registration reaches the provider");
         }
     }
+    SignalSpy stopped;
+    QObject::connect(&controller, &MusigAccountController::stopped, &stopped, &SignalSpy::onSignal,
+                     qontrol::UNIQUE);
+    controller.stop();
+    QElapsedTimer stopping;
+    stopping.start();
+    while (stopped.count() == 0 && stopping.elapsed() < 30000) {
+        QApplication::processEvents();
+        QThread::msleep(1);
+    }
+    require(stopped.count() == 1, "MuSig account shutdown drains its receiver");
+    require(::delete_config(rust::String(name.toStdString())), "remove MuSig test account");
     provider.setEntries({valid});
     require(handle.keys(plugin::Network::Regtest).is_ok, "valid metadata recovers after rejection");
     host->setKeys(module.bus(), &module);

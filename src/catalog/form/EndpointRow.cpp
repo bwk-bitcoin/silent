@@ -11,7 +11,7 @@
 
 namespace catalog {
 
-EndpointRow::EndpointRow() {
+EndpointRow::EndpointRow(QWidget *right_controls) {
     m_input = new Input(InputRole::Mono);
     m_test = btnTest();
     m_testing = btnTesting();
@@ -20,12 +20,17 @@ EndpointRow::EndpointRow() {
     m_mark = new ValidationMark;
     m_note = new FieldNote(QString(), FieldNote::Tone::Error);
     m_note->setVisible(false);
-    m_control = (new qontrol::Row)
-                    ->spacing(resolve(Spacing::XS))
-                    ->push(m_input, 1)
-                    ->push(m_test)
-                    ->push(m_testing)
-                    ->push(m_mark);
+    auto *control = (new qontrol::Row)
+                        ->spacing(resolve(Spacing::XS))
+                        ->push(m_input, 1)
+                        ->push(m_test)
+                        ->push(m_testing)
+                        ->push(m_mark);
+    if (right_controls != nullptr) {
+        control->push(right_controls);
+    }
+    m_control = control;
+    setState(State::Untested);
 }
 
 auto EndpointRow::control() const -> QWidget * {
@@ -50,10 +55,11 @@ auto EndpointRow::state() const -> State {
 
 void EndpointRow::setState(State state, const QString &error) {
     m_state = state;
+    m_error = error;
     bool testing = state == State::Testing;
     m_test->setVisible(!testing);
     m_testing->setVisible(testing);
-    m_test->setEnabled(!m_input->text().trimmed().isEmpty());
+    updateTestAvailability();
     switch (state) {
     case State::Ok:
         m_mark->setState(ValidationMark::State::Valid);
@@ -66,8 +72,24 @@ void EndpointRow::setState(State state, const QString &error) {
         m_mark->setState(ValidationMark::State::None);
         break;
     }
-    m_note->setText(error);
-    m_note->setVisible(state == State::Failed && !error.isEmpty());
+    setError(QString());
+}
+
+void EndpointRow::setError(const QString &error) {
+    auto text = error.isEmpty() && m_state == State::Failed ? m_error : error;
+    m_note->setText(text);
+    m_note->setVisible(!text.isEmpty());
+}
+
+void EndpointRow::setAvailable(bool available, bool test_available) {
+    m_available = available;
+    m_test_available = test_available;
+    m_input->setEnabled(available);
+    updateTestAvailability();
+}
+
+void EndpointRow::updateTestAvailability() {
+    m_test->setEnabled(m_available && m_test_available && !m_input->text().trimmed().isEmpty());
 }
 
 } // namespace catalog

@@ -6,6 +6,7 @@
 #include "catalog/display/Badge.h"
 #include "catalog/display/InfoTip.h"
 #include "catalog/display/Label.h"
+#include "catalog/form/EndpointRow.h"
 #include "catalog/form/Field.h"
 #include "catalog/form/FieldNote.h"
 #include "catalog/inputs/Input.h"
@@ -45,27 +46,33 @@ Settings::Settings(AccountBackend *backend) : m_backend(backend) {
     requestCapabilities();
 }
 
+Settings::~Settings() {
+    for (const auto &serverRow : m_rows) {
+        delete serverRow.field;
+    }
+}
+
 void Settings::init() {
     for (auto endpoint : m_backend->endpoints()) {
         ServerRow serverRow;
         serverRow.endpoint = endpoint;
         serverRow.label = new catalog::Label(catalog::LabelRole::Eyebrow);
         serverRow.label->setTone(catalog::LabelTone::Muted);
-        serverRow.url = new catalog::Input;
         serverRow.height = new catalog::Label(catalog::LabelRole::Mono);
         serverRow.height->setTone(catalog::LabelTone::Secondary);
         // A fixed slot, so stacked rows' inputs share one width.
         serverRow.height->setFixedWidth(resolve(Size::XS));
-        serverRow.test = catalog::btnTest();
-        serverRow.testing = catalog::btnTesting();
-        serverRow.testing->setEnabled(false);
         bool blindbit = endpoint == Endpoint::Blindbit;
         serverRow.connect =
             blindbit ? catalog::btnConnectBlindbit() : catalog::btnConnectElectrum();
         serverRow.disconnect =
             blindbit ? catalog::btnDisconnectBlindbit() : catalog::btnDisconnectElectrum();
-        serverRow.note = new catalog::FieldNote(QString(), catalog::FieldNote::Tone::Error);
-        serverRow.note->setVisible(false);
+        auto *controls = (new qontrol::Row)
+                             ->spacing(resolve(Spacing::S))
+                             ->push(serverRow.height)
+                             ->push(serverRow.connect)
+                             ->push(serverRow.disconnect);
+        serverRow.field = new catalog::EndpointRow(controls);
         if (!blindbit) {
             serverRow.ssl = new catalog::Toggle;
             serverRow.verify = new catalog::Toggle;
@@ -92,10 +99,10 @@ void Settings::init() {
 
 void Settings::doConnect() {
     for (const auto &serverRow : m_rows) {
-        connect(serverRow.url, &QLineEdit::textEdited, this, &Settings::onUrlEdited,
+        connect(serverRow.field->input(), &QLineEdit::textEdited, this, &Settings::onUrlEdited,
                 qontrol::UNIQUE);
-        connect(serverRow.test, &QPushButton::clicked, this, &Settings::onTestClicked,
-                qontrol::UNIQUE);
+        connect(serverRow.field->testButton(), &QPushButton::clicked, this,
+                &Settings::onTestClicked, qontrol::UNIQUE);
         connect(serverRow.connect, &QPushButton::clicked, this, &Settings::onConnectClicked,
                 qontrol::UNIQUE);
         connect(serverRow.disconnect, &QPushButton::clicked, this, &Settings::onDisconnectClicked,
@@ -164,26 +171,18 @@ void Settings::hideEvent(QHideEvent *event) {
 void Settings::retranslateUi() {
     for (const auto &serverRow : m_rows) {
         serverRow.label->setText(label(serverRow.endpoint));
-        serverRow.url->setPlaceholderText(serverRow.endpoint == Endpoint::Blindbit
-                                              ? TR("settings-placeholder-blindbit")
-                                              : TR("settings-placeholder-electrum"));
+        serverRow.field->input()->setPlaceholderText(serverRow.endpoint == Endpoint::Blindbit
+                                                         ? TR("settings-placeholder-blindbit")
+                                                         : TR("settings-placeholder-electrum"));
     }
 }
 
 auto Settings::viewRow(const ServerRow &row) -> QWidget * {
-    auto *control = (new qontrol::Row)
-                        ->spacing(resolve(Spacing::S))
-                        ->push(row.url, 1)
-                        ->push(row.height)
-                        ->push(row.test)
-                        ->push(row.testing)
-                        ->push(row.connect)
-                        ->push(row.disconnect);
     auto *server = (new qontrol::Column)
                        ->spacing(resolve(Spacing::XS))
                        ->push(row.label)
-                       ->push(control)
-                       ->push(row.note);
+                       ->push(row.field->control())
+                       ->push(row.field->note());
     if (row.ssl == nullptr) {
         return server;
     }
@@ -206,9 +205,9 @@ auto Settings::viewRow(const ServerRow &row) -> QWidget * {
 
 auto Settings::rowOf(const QObject *widget) -> ServerRow * {
     for (auto &serverRow : m_rows) {
-        if (serverRow.url == widget || serverRow.test == widget || serverRow.connect == widget ||
-            serverRow.disconnect == widget || serverRow.ssl == widget ||
-            serverRow.verify == widget) {
+        if (serverRow.field->input() == widget || serverRow.field->testButton() == widget ||
+            serverRow.connect == widget || serverRow.disconnect == widget ||
+            serverRow.ssl == widget || serverRow.verify == widget) {
             return &serverRow;
         }
     }
@@ -244,7 +243,7 @@ auto Settings::networkName(Network network) -> QString {
 }
 
 auto Settings::candidateUrl(const ServerRow &row) -> QString {
-    auto address = row.url->text().trimmed();
+    auto address = row.field->input()->text().trimmed();
     if (row.ssl != nullptr && row.ssl->isChecked() && !address.isEmpty() &&
         !address.contains(K_SCHEME_SEPARATOR)) {
         return K_SSL_SCHEME + address;
@@ -286,7 +285,7 @@ void Settings::loadSaved(ServerRow &row) {
 }
 
 void Settings::showSaved(ServerRow &row) {
-    row.url->setText(row.saved_url);
+    row.field->input()->setText(row.saved_url);
     if (row.ssl != nullptr) {
         row.ssl->setChecked(row.saved_url.startsWith(K_SSL_SCHEME));
         row.verify_wanted = row.saved_verify;
@@ -294,8 +293,7 @@ void Settings::showSaved(ServerRow &row) {
 }
 
 void Settings::showError(const ServerRow &row, const QString &error) {
-    row.note->setText(error);
-    row.note->setVisible(!error.isEmpty());
+    row.field->setError(error);
 }
 
 void Settings::refreshRows() {
@@ -306,18 +304,10 @@ void Settings::refreshRows() {
 
 void Settings::refreshRow(const ServerRow &row) {
     bool busy = isBusy();
-    bool testing = row.action_req != 0 && row.testing_req;
     bool dirty = isDirty(row);
     bool running = m_backend->isEndpointRunning(row.endpoint);
 
-    row.url->setEnabled(!busy);
-    // Test keeps its slot while hidden, Testing… takes it while the test runs.
-    auto policy = row.test->sizePolicy();
-    policy.setRetainSizeWhenHidden(!testing);
-    row.test->setSizePolicy(policy);
-    row.test->setVisible(!testing && dirty);
-    row.test->setEnabled(!busy);
-    row.testing->setVisible(testing);
+    row.field->setAvailable(!busy, dirty);
 
     row.connect->setVisible(!running);
     row.disconnect->setVisible(running);
@@ -363,6 +353,10 @@ void Settings::requestCapabilities() {
 void Settings::startAction(ServerRow &row, bool test) {
     row.action_req = nextRequestId();
     row.testing_req = test;
+    row.action_revision = row.draft_revision;
+    if (test) {
+        row.field->setState(catalog::EndpointRow::State::Testing);
+    }
     showError(row, QString());
     refreshRows();
 }
@@ -402,8 +396,10 @@ void Settings::onUrlEdited() {
     if (serverRow == nullptr) {
         return;
     }
+    ++serverRow->draft_revision;
+    serverRow->field->setState(catalog::EndpointRow::State::Untested);
     if (serverRow->ssl != nullptr) {
-        auto url = serverRow->url->text().trimmed();
+        auto url = serverRow->field->input()->text().trimmed();
         if (url.startsWith(K_SSL_SCHEME)) {
             serverRow->ssl->setChecked(true);
         } else if (url.startsWith(K_TCP_SCHEME)) {
@@ -420,12 +416,14 @@ void Settings::onSslToggled(bool checked) {
         return;
     }
     // Another scheme: the server is tested again under it.
-    auto bare = serverRow->url->text().trimmed();
+    ++serverRow->draft_revision;
+    serverRow->field->setState(catalog::EndpointRow::State::Untested);
+    auto bare = serverRow->field->input()->text().trimmed();
     if (bare.contains(K_SCHEME_SEPARATOR)) {
         bare = bare.section(K_SCHEME_SEPARATOR, 1);
     }
     if (!bare.isEmpty()) {
-        serverRow->url->setText((checked ? K_SSL_SCHEME : K_TCP_SCHEME) + bare);
+        serverRow->field->input()->setText((checked ? K_SSL_SCHEME : K_TCP_SCHEME) + bare);
     }
     showError(*serverRow, QString());
     refreshRow(*serverRow);
@@ -437,6 +435,8 @@ void Settings::onVerifyToggled(bool checked) {
         return;
     }
     serverRow->verify_wanted = checked;
+    ++serverRow->draft_revision;
+    serverRow->field->setState(catalog::EndpointRow::State::Untested);
     showError(*serverRow, QString());
     refreshRow(*serverRow);
 }
@@ -444,17 +444,23 @@ void Settings::onVerifyToggled(bool checked) {
 void Settings::onEndpointStateChanged(Endpoint endpoint) {
     auto *serverRow = row(endpoint);
     if (serverRow != nullptr) {
+        bool dirty = isDirty(*serverRow);
+        auto savedUrl = serverRow->saved_url;
+        bool savedVerify = serverRow->saved_verify;
+        loadSaved(*serverRow);
+        if (!dirty && serverRow->action_req == 0) {
+            if (savedUrl != serverRow->saved_url || savedVerify != serverRow->saved_verify) {
+                ++serverRow->draft_revision;
+                serverRow->field->setState(catalog::EndpointRow::State::Untested);
+            }
+            showSaved(*serverRow);
+        }
         auto error = m_backend->endpointError(endpoint);
-        if (!error.isEmpty()) {
+        if (!error.isEmpty() && !serverRow->testing_req) {
             showError(*serverRow, mapBackendErrorSummary(m_backend->endpointErrorKind(endpoint)) +
                                       QStringLiteral(" ") + error);
         } else {
             showError(*serverRow, QString());
-        }
-        bool dirty = isDirty(*serverRow);
-        loadSaved(*serverRow);
-        if (!dirty && serverRow->action_req == 0) {
-            showSaved(*serverRow);
         }
         if (m_backend->endpointOperationsBusy()) {
             serverRow->tip_req = 0;
@@ -476,16 +482,30 @@ void Settings::onEndpointRequestFinished(uint64_t req_id, Endpoint endpoint,
     if (serverRow == nullptr || req_id == 0 || serverRow->action_req != req_id) {
         return;
     }
+    bool tested = serverRow->testing_req;
+    bool current = serverRow->action_revision == serverRow->draft_revision;
     serverRow->action_req = 0;
     serverRow->testing_req = false;
     loadSaved(*serverRow);
+    if (tested) {
+        showError(*serverRow, QString());
+    }
     if (result.saved) {
-        showSaved(*serverRow);
+        if (current) {
+            showSaved(*serverRow);
+        }
         if (endpoint == Endpoint::Blindbit) {
             requestCapabilities();
         }
     }
-    if (!result.is_ok) {
+    if (tested && current) {
+        serverRow->field->setState(
+            result.is_ok && result.saved ? catalog::EndpointRow::State::Ok
+                                         : catalog::EndpointRow::State::Failed,
+            result.is_ok ? QString()
+                         : mapBackendErrorSummary(result.kind) + QStringLiteral(" ") +
+                               toQString(result.error));
+    } else if (!tested && !result.is_ok) {
         showError(*serverRow, mapBackendErrorSummary(result.kind) + QStringLiteral(" ") +
                                   toQString(result.error));
     }
