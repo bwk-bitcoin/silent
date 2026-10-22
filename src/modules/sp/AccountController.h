@@ -2,10 +2,9 @@
 
 #include "account/AccountBackend.h"
 #include "account/ElectrumReconnect.h"
+#include "account/PanelCollection.h"
 
-#include <QHash>
 #include <QList>
-#include <QPointer>
 #include <QString>
 #include <QThread>
 #include <Qontrol>
@@ -105,8 +104,7 @@ protected:
                         bool startup = false);
 
 private:
-    QPointer<qontrol::Panel> m_current_panel;
-    QHash<QString, qontrol::Panel *> m_panels;
+    account::PanelCollection m_panels{this};
     AccountWidget *m_widget;
     std::optional<rust::Box<Account>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;

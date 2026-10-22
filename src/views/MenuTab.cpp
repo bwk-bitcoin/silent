@@ -165,38 +165,43 @@ void MenuTab::ensureModuleConnections() {
         return;
     }
 
-    auto modules = controller->pluginRegistry()->enabledModulesForLauncher();
+    QList<QPointer<IModule>> modules;
+    for (auto *module : controller->pluginRegistry()->enabledModulesForLauncher()) {
+        modules.append(module);
+    }
     if (modules == m_modules) {
         return;
     }
 
-    for (auto *module : m_modules) {
+    for (const auto &module : m_modules) {
         if (module == nullptr) {
             continue;
         }
-        disconnect(module, &IModule::instances, this, &MenuTab::onModuleInstances);
+        disconnect(module.data(), &IModule::instances, this, &MenuTab::onModuleInstances);
     }
 
     m_modules = modules;
     m_pending_list.clear();
     m_sync_list_responses.clear();
     m_items_by_module.clear();
-    for (auto *module : m_modules) {
+    for (const auto &module : m_modules) {
         if (module == nullptr) {
             continue;
         }
-        connect(module, &IModule::instances, this, &MenuTab::onModuleInstances, qontrol::UNIQUE);
+        connect(module.data(), &IModule::instances, this, &MenuTab::onModuleInstances,
+                qontrol::UNIQUE);
     }
 }
 
 void MenuTab::onRefreshLauncherItems() {
     ensureModuleConnections();
-    for (auto *module : m_modules) {
+    auto modules = m_modules;
+    for (const auto &module : modules) {
         if (module == nullptr) {
             continue;
         }
         ReqId reqId = module->list();
-        if (reqId == 0) {
+        if (module == nullptr || reqId == 0) {
             continue;
         }
         m_pending_list.insert(module, reqId);
@@ -255,7 +260,10 @@ void MenuTab::rebuildRows() {
     m_creators.clear();
 
     // Launcher module order, so the built-in creators keep the plugin order (sp first).
-    for (auto *module : m_modules) {
+    for (const auto &module : m_modules) {
+        if (module == nullptr) {
+            continue;
+        }
         for (const auto &item : m_items_by_module.value(module)) {
             QString id = item.first.trimmed();
             bool isCreator = PluginRegistry::isCreatorInstanceId(id);

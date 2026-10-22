@@ -47,10 +47,7 @@ MusigAccountController::MusigAccountController(const QString &account, MusigAcco
 }
 
 MusigAccountController::~MusigAccountController() {
-    // A panel only observes its screen, which a layout may have reparented.
-    for (auto *panel : m_panels) {
-        delete panel->screen();
-    }
+    m_panels.clear();
 }
 
 void MusigAccountController::init(const QString &account) {
@@ -131,31 +128,23 @@ void MusigAccountController::loadPanels() {
     }
     if (!m_panels.contains("settings")) {
         auto *panel = new qontrol::Panel(new account::view::Settings(this), "settings");
-        panel->setParent(this);
-        m_panels.insert("settings", panel);
+        m_panels.insert(panel);
     }
     if (m_panels.contains("history") || !m_account.has_value() || !m_account.value()->is_ok()) {
         return;
     }
-    m_panels.insert("history", new qontrol::Panel(new account::view::History(this), "history"));
-    m_panels.insert("coins", new qontrol::Panel(new account::view::Coins(this), "coins"));
-    m_panels.insert("receive", new qontrol::Panel(new account::view::Receive(this), "receive"));
+    m_panels.insert(new qontrol::Panel(new account::view::History(this), "history"));
+    m_panels.insert(new qontrol::Panel(new account::view::Coins(this), "coins"));
+    m_panels.insert(new qontrol::Panel(new account::view::Receive(this), "receive"));
     auto *send = new account::view::Send(this);
-    m_panels.insert("send", new qontrol::Panel(send, "send"));
+    m_panels.insert(new qontrol::Panel(send, "send"));
     connect(this, &MusigAccountController::savedPsbtWarningChanged, send,
             &account::view::Send::onSavedWarningChanged, qontrol::UNIQUE);
-    m_panels.insert("psbt", new qontrol::Panel(new musig::SavedPsbts(this), "psbt"));
-    for (auto *panel : m_panels) {
-        panel->setParent(this);
-    }
+    m_panels.insert(new qontrol::Panel(new musig::SavedPsbts(this), "psbt"));
 }
 
 auto MusigAccountController::screen(const QString &screen) -> std::optional<qontrol::Screen *> {
-    auto *panel = m_panels.value(screen);
-    if (panel != nullptr) {
-        return std::optional(panel->screen());
-    }
-    return std::nullopt;
+    return m_panels.screen(screen);
 }
 
 auto MusigAccountController::getAccount() -> std::optional<rust::Box<MusigAccount>> & {

@@ -82,10 +82,7 @@ void AccountController::onAccountLoaded() {
 }
 
 AccountController::~AccountController() {
-    // A panel only observes its screen, which a layout may have reparented.
-    for (auto *panel : m_panels) {
-        delete panel->screen();
-    }
+    m_panels.clear();
 }
 
 void AccountController::listenNotifications() {
@@ -113,16 +110,11 @@ auto AccountController::loadPanel(const QString &name) -> void {
 }
 
 auto AccountController::insertPanel(qontrol::Panel *panel) -> void {
-    panel->setParent(this);
-    m_panels.insert(panel->name(), panel);
+    m_panels.insert(panel);
 }
 
 auto AccountController::screen(const QString &screen) -> std::optional<qontrol::Screen *> {
-    auto *panel = m_panels.value(screen);
-    if (panel != nullptr) {
-        return std::optional(panel->screen());
-    }
-    return std::nullopt;
+    return m_panels.screen(screen);
 }
 
 auto AccountController::pollCoins() -> void {
@@ -267,25 +259,10 @@ auto AccountController::loadPanels() -> void {
         (m_init && (!m_account.has_value() || !m_account.value()->is_ok()))) {
         return;
     }
-    // Create History screen panel
-    auto *historyScreen = new account::view::History(this);
-    auto *historyPanel = new qontrol::Panel(historyScreen, "history");
-    this->insertPanel(historyPanel);
-
-    // Create Coins screen panel
-    auto *coinsScreen = new account::view::Coins(this);
-    auto *coinsPanel = new qontrol::Panel(coinsScreen, "coins");
-    this->insertPanel(coinsPanel);
-
-    // Create Receive screen panel
-    auto *receiveScreen = new account::view::Receive(this);
-    auto *receivePanel = new qontrol::Panel(receiveScreen, "receive");
-    this->insertPanel(receivePanel);
-
-    // Create Send screen panel
-    auto *sendScreen = new account::view::Send(this);
-    auto *sendPanel = new qontrol::Panel(sendScreen, "send");
-    this->insertPanel(sendPanel);
+    insertPanel(new qontrol::Panel(new account::view::History(this), "history"));
+    insertPanel(new qontrol::Panel(new account::view::Coins(this), "coins"));
+    insertPanel(new qontrol::Panel(new account::view::Receive(this), "receive"));
+    insertPanel(new qontrol::Panel(new account::view::Send(this), "send"));
 }
 
 auto AccountController::historyClicked() -> void {

@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QList>
 #include <QPair>
+#include <QPointer>
 #include <QSet>
 #include <QString>
 #include <QWidget>
@@ -63,7 +64,7 @@ private:
     qontrol::Column *m_accounts_column = nullptr;
     QList<QWidget *> m_rows;
     QSet<QString> m_sp_accounts;
-    QList<IModule *> m_modules;
+    QList<QPointer<IModule>> m_modules;
     QHash<IModule *, ReqId> m_pending_list;
     QHash<IModule *, QPair<ReqId, QList<QPair<QString, QString>>>> m_sync_list_responses;
     QHash<IModule *, QList<QPair<QString, QString>>> m_items_by_module;
@@ -71,7 +72,7 @@ private:
     // The built-in creators, then the external plugins' ones, as the account type modal
     // lists them.
     QList<PluginRegistry::CreatorLauncher> m_creators;
-    IModule *m_pending_delete_module = nullptr;
+    QPointer<IModule> m_pending_delete_module;
     QString m_pending_delete_id;
     Host *m_host = nullptr;
     HostEvents *m_host_events = nullptr;

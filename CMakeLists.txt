@@ -260,6 +260,10 @@ set(SILENT_APP_SOURCES
     src/views/DashboardLayout.cpp
     src/account/AccountBackend.h
     src/account/AccountBackend.cpp
+    src/account/AccountShell.h
+    src/account/AccountShell.cpp
+    src/account/PanelCollection.h
+    src/account/PanelCollection.cpp
     src/account/Equality.h
     src/account/RequestId.h
     src/account/ElectrumReconnect.h
@@ -619,6 +623,13 @@ if(SILENT_BUILD_HOST_SMOKE)
             $<TARGET_PROPERTY:Qt6::Core,INTERFACE_INCLUDE_DIRECTORIES>)
         target_compile_definitions(storage_fixture PRIVATE
             $<TARGET_PROPERTY:Qt6::Core,INTERFACE_COMPILE_DEFINITIONS>)
+        qt_add_library(custom_widget_fixture MODULE tests/host/CustomWidgetPlugin.cpp)
+        add_dependencies(custom_widget_fixture RunBeforeBuild)
+        target_link_libraries(custom_widget_fixture PRIVATE silent_interfaces)
+        target_include_directories(custom_widget_fixture PRIVATE
+            $<TARGET_PROPERTY:Qt6::Widgets,INTERFACE_INCLUDE_DIRECTORIES>)
+        target_compile_definitions(custom_widget_fixture PRIVATE
+            $<TARGET_PROPERTY:Qt6::Widgets,INTERFACE_COMPILE_DEFINITIONS>)
     endif()
 
     qt_add_executable(${SMOKE}
@@ -638,6 +649,8 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/sp_signing_smoke.cpp
         tests/host/musig_reset_smoke.cpp
         tests/host/boundary_smoke.cpp
+        tests/host/account_navigation_smoke.cpp
+        tests/host/account_navigation_smoke.h
         tests/host/keys_contract_smoke.cpp
         tests/host/storage_smoke.cpp
         ${SILENT_APP_SOURCES}
@@ -662,6 +675,11 @@ if(SILENT_BUILD_HOST_SMOKE)
         add_dependencies(${SMOKE} storage_fixture)
         target_compile_definitions(${SMOKE} PRIVATE
             SILENT_STORAGE_FIXTURE="$<TARGET_FILE:storage_fixture>")
+    endif()
+    if(TARGET custom_widget_fixture)
+        add_dependencies(${SMOKE} custom_widget_fixture)
+        target_compile_definitions(${SMOKE} PRIVATE
+            SILENT_CUSTOM_WIDGET_FIXTURE="$<TARGET_FILE:custom_widget_fixture>")
     endif()
 
     # The catalogs, so TR() returns real text.

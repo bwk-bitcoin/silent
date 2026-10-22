@@ -1,14 +1,17 @@
 #pragma once
 
-#include <QHash>
-#include <QPointer>
 #include <QString>
 #include <QWidget>
-#include <Qontrol>
 
 class MusigAccountController;
-class MusigStatusBar;
-class QAbstractButton;
+
+namespace account {
+class AccountShell;
+}
+
+namespace qontrol {
+class Panel;
+}
 
 // Tab content: menu and panel container.
 class MusigAccountWidget : public QWidget {
@@ -25,9 +28,5 @@ protected:
 
 private:
     MusigAccountController *m_controller = nullptr;
-    qontrol::Column *m_menu = nullptr;
-    QWidget *m_screen_container = nullptr;
-    QPointer<qontrol::Panel> m_current_panel;
-    MusigStatusBar *m_status_bar = nullptr;
-    QHash<QString, QAbstractButton *> m_menu_buttons;
+    account::AccountShell *m_shell = nullptr;
 };

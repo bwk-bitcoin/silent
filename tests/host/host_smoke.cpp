@@ -167,6 +167,7 @@ void spSigningSmoke(const QString &name);
 void musigResetSmoke();
 void boundarySmoke();
 void endpointSmoke();
+void navigationSmoke();
 void keysContractSmoke(const QString &screenshots);
 } // namespace smoke
 
@@ -255,6 +256,12 @@ auto main(int argc, char *argv[]) -> int {
         AppController::get()->registerBuiltinPlugin(std::make_unique<smoke::MockPlugin>());
         smoke::exampleStorageSmoke(arguments.at(2));
         std::fprintf(stdout, "Example storage smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.contains(QStringLiteral("--account-navigation"))) {
+        Theme::init();
+        smoke::navigationSmoke();
+        std::fprintf(stdout, "Account navigation smoke: OK\n");
         return gOk ? 0 : 1;
     }
     if (arguments.contains(QStringLiteral("--endpoints"))) {

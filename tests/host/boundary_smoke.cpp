@@ -1,5 +1,6 @@
 #include "MockPlugin.h"
 #include "PriceProbe.h"
+#include "account_navigation_smoke.h"
 
 #include "AppController.h"
 #include "account/ElectrumReconnect.h"
@@ -1149,7 +1150,8 @@ void boundarySmoke() {
     retryPresentation();
 }
 
-void endpointSmoke() {
+namespace {
+void prepareEndpointAccounts() {
     ::app_set_last_endpoint(BackendServer::Blindbit, Network::Regtest, "http://127.0.0.1:1");
     ::app_set_last_endpoint(BackendServer::Electrum, Network::Regtest, "invalid-endpoint");
     AppController::get()->registerBuiltinPlugin(std::make_unique<SpPlugin>());
@@ -1168,6 +1170,16 @@ void endpointSmoke() {
     auto policy = ::config_from_file("boundary-policy");
     policy->set_electrum_url(rust::String());
     require(policy->save().empty(), "MuSig endpoint fixture starts offline");
+}
+} // namespace
+
+void navigationSmoke() {
+    prepareEndpointAccounts();
+    accountNavigationSmoke();
+}
+
+void endpointSmoke() {
+    prepareEndpointAccounts();
 #ifdef Q_OS_UNIX
     endpointInteractions<AccountController, StatusBar>(QStringLiteral("boundary-sp"));
     endpointInteractions<MusigAccountController, MusigStatusBar>(QStringLiteral("boundary-policy"));

@@ -1,11 +1,16 @@
 #pragma once
 
-#include <QPointer>
 #include <QWidget>
-#include <Qontrol>
 
 class AccountController;
-class StatusBar;
+
+namespace account {
+class AccountShell;
+}
+
+namespace qontrol {
+class Panel;
+}
 
 class AccountWidget : public QWidget {
     Q_OBJECT
@@ -15,15 +20,12 @@ public:
     ~AccountWidget() override;
 
     auto controller() -> AccountController *;
-    auto loadPanel(qontrol::Panel *panel) -> void;
+    void loadPanel(qontrol::Panel *panel);
 
 protected:
-    auto initUI() -> void;
+    void initUI();
 
 private:
     AccountController *m_controller = nullptr;
-    qontrol::Column *m_menu = nullptr;
-    QWidget *m_screen_container = nullptr;
-    QPointer<qontrol::Panel> m_current_panel;
-    StatusBar *m_status_bar = nullptr;
+    account::AccountShell *m_shell = nullptr;
 };

@@ -2,6 +2,7 @@
 
 #include "account/AccountBackend.h"
 #include "account/ElectrumReconnect.h"
+#include "account/PanelCollection.h"
 #include "interfaces/types.h"
 
 #include <QHash>
@@ -184,8 +185,7 @@ protected:
     void startEndpointChange();
 
 private:
-    QPointer<qontrol::Panel> m_current_panel;
-    QHash<QString, qontrol::Panel *> m_panels;
+    account::PanelCollection m_panels{this};
     MusigAccountWidget *m_widget = nullptr;
     std::optional<rust::Box<MusigAccount>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;
