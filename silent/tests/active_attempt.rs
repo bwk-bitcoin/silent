@@ -1,7 +1,6 @@
 mod common;
 
 use std::{
-    fs,
     io::{BufRead, BufReader, Write},
     net::TcpListener,
     str::FromStr,
@@ -376,10 +375,7 @@ fn archive_write_failure_does_not_clear_required_restart_fence() {
         fixture.account.require_active_restart().reset_pending,
         "Rust requires restart after session loss"
     );
-    let path = fixture.config.account_dir().join("saved_psbts.json");
-    let backup = path.with_extension("review58-backup");
-    fs::rename(&path, &backup).expect("retain persisted attempt");
-    fs::create_dir(&path).expect("block durable archive replacement");
+    common::logical::block_file(&fixture.config, "saved_psbts.json");
     let failed = fixture.account.reset_active_attempt();
     assert!(
         !failed.is_ok && failed.reset_pending,
@@ -418,8 +414,7 @@ fn archive_write_failure_does_not_clear_required_restart_fence() {
         progress.psbt_v2_hex,
         "refused progress cannot mutate active bytes"
     );
-    fs::remove_dir(&path).expect("remove archive blocker");
-    fs::rename(&backup, &path).expect("restore persisted attempt");
+    common::logical::restore_file(&fixture.config, "saved_psbts.json");
     let reset = fixture.account.reset_active_attempt();
     assert!(
         reset.is_ok && !reset.reset_pending,
@@ -470,9 +465,11 @@ fn fresh_endpoint_command_recovers_closed_musig_account_and_active_attempt() {
         "initial command closes the live account"
     );
     while receiver.recv().is_some() {}
-    let path = fixture.config.config_path();
-    let backup = path.with_extension("review58-config-backup");
-    fs::rename(&path, &backup).expect("retain isolated MuSig config");
+    common::logical::rename(
+        &fixture.config,
+        "config.json",
+        "review58-config-backup.json",
+    );
     failed.finish_endpoint_after_drain();
     assert!(
         !failed.endpoint_result().is_ok,
@@ -490,7 +487,11 @@ fn fresh_endpoint_command_recovers_closed_musig_account_and_active_attempt() {
         before.psbt_v2_hex,
         "closed account retains active RAM progress"
     );
-    fs::rename(&backup, &path).expect("restore isolated MuSig config");
+    common::logical::rename(
+        &fixture.config,
+        "review58-config-backup.json",
+        "config.json",
+    );
     let peer = version_peer();
     let mut retry = silent::musig_endpoint_change(closed, peer.url, true, true, false);
     retry.prepare_endpoint();

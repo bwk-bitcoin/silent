@@ -3193,6 +3193,7 @@ struct Account final : public ::rust::Opaque {
 
   ::EndpointResult reopen_backend(bool connect_electrum) noexcept;
   void close_backend() noexcept;
+  ::rust::String shutdown_backend() noexcept;
   ::RustTxDetails tx_details(::rust::Str txid, bool allow_network) const noexcept;
   ::LabelEditResult update_tx_label(::rust::String txid, ::rust::String label) const noexcept;
 
@@ -3865,6 +3866,7 @@ struct MusigAccount final : public ::rust::Opaque {
   ::LabelEditResult update_tx_label(::rust::String txid, ::rust::String label) const noexcept;
   ::EndpointResult reopen_backend(bool connect_electrum) noexcept;
   void close_backend() noexcept;
+  ::rust::String shutdown_backend() noexcept;
   ::AddressVerifyInfo address_verify_info(::rust::Str address) const noexcept;
   ::TransactionSimulation simulate_transaction(::TransactionTemplate tx_template) const noexcept;
 
@@ -4207,7 +4209,13 @@ void app_set_plugin_access(::PluginAccess access) noexcept;
 ::rust::Vec<::rust::String> list_module_configs(::rust::Str plugin_id) noexcept;
 
 // Delete an account's data from disk.
-bool delete_config(::rust::String account_name) noexcept;
+::rust::String sp_account_delete_check(::rust::String name) noexcept;
+
+::rust::String musig_account_delete_check(::rust::String name) noexcept;
+
+::rust::String delete_sp_account(::rust::String name) noexcept;
+
+::rust::String delete_musig_account(::rust::String name) noexcept;
 
 // The segwit sub-account descriptor of a key, from its xpub at 84'/coin'/0'.
 // Empty when the fingerprint or the xpub is invalid.

@@ -2,7 +2,7 @@
 //!
 //! Wraps bwk-sp::Config with CXX-compatible interface for C++ bindings.
 
-use std::{fs, path::PathBuf, str::FromStr, sync::OnceLock};
+use std::{path::PathBuf, str::FromStr, sync::OnceLock};
 
 use bitcoin::{
     bip32::{ChildNumber, Fingerprint, Xpub},
@@ -24,12 +24,12 @@ use bwk_sp::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    account_storage::{AccountStorage, Factory},
     ffi::{AccountCreationResult, BackendServer, MusigCreationRequest, Network, SpCreationRequest},
-    state_crypt,
 };
 
-/// An account's config, sealed in its directory.
-pub const CONFIG_FILE: &str = "config.bip138";
+/// An account's config file inside its encrypted logical storage subtree.
+pub const CONFIG_FILE: &str = "config.json";
 
 /// Internal Network type for serialization (since CXX enums don't support Serde).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -180,20 +180,40 @@ impl Config {
 
     /// Load Config from file.
     pub fn from_file(account_name: String) -> Result<Self, ConfigError> {
-        let path = Self::config_path_for_account(&account_name);
-        let content = state_crypt::read_state(&path)
-            .map_err(|e| ConfigError::Io(format!("failed to read config: {e}")))?
-            .ok_or_else(|| {
-                ConfigError::Io(format!(
-                    "failed to read config: {} not found",
-                    path.display()
-                ))
-            })?;
-        let mut config: Config = serde_json::from_str(&content)
-            .map_err(|e| ConfigError::Parse(format!("failed to parse config: {e}")))?;
-        config.account_name = account_name;
-        config.data_dir = datadir();
-        Ok(config)
+        let mut found = None;
+        let mut failures = Vec::new();
+        for plugin in ["sp", "musig"] {
+            let storage =
+                AccountStorage::named(datadir(), plugin, &account_name).map_err(ConfigError::Io)?;
+            let bytes = match storage.read(CONFIG_FILE) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    failures.push(format!("{plugin}: {error}"));
+                    continue;
+                }
+            };
+            if let Some(bytes) = bytes {
+                let mut config: Config = serde_json::from_slice(&bytes)
+                    .map_err(|e| ConfigError::Parse(e.to_string()))?;
+                if config.account_name != account_name
+                    || config.plugin_id != plugin
+                    || found.is_some()
+                {
+                    return Err(ConfigError::Parse(
+                        "ambiguous or invalid account identity".into(),
+                    ));
+                }
+                config.data_dir = datadir();
+                found = Some(config);
+            }
+        }
+        found.ok_or_else(|| {
+            ConfigError::Io(if failures.is_empty() {
+                "account not found".into()
+            } else {
+                failures.join("; ")
+            })
+        })
     }
 
     /// Save Config to file.
@@ -215,13 +235,10 @@ impl Config {
 
     /// Save Config to file, reporting a failed write.
     pub(crate) fn write_file(&self) -> Result<(), String> {
-        let path = self.config_path();
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let content =
-            serde_json::to_string_pretty(self).map_err(|e| format!("failed to serialize: {e}"))?;
-        state_crypt::write_state(&path, &content).map_err(|e| format!("failed to write: {e}"))
+        let storage = AccountStorage::open(self)?;
+        storage.create()?;
+        let content = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
+        storage.write("config.json", content, false)
     }
 
     /// Check if the config was loaded successfully.
@@ -234,37 +251,11 @@ impl Config {
         self.load_error.clone().unwrap_or_default()
     }
 
-    /// The account's directory name: opaque, so the account name is not written in
-    /// clear on disk. It is also the account name bwk is given, which names its stores
-    /// and sub-accounts after it. Needs the state unlocked.
-    pub fn dir_name(&self) -> Result<String, String> {
-        Self::dir_name_for(&self.account_name)
-    }
-
-    fn dir_name_for(account_name: &str) -> Result<String, String> {
-        state_crypt::opaque_name("account", account_name)
-    }
-
-    /// Get account directory path. Locked, it names no account: nothing can be read
-    /// or written there.
-    pub fn account_dir(&self) -> PathBuf {
-        self.data_dir
-            .join(self.dir_name().unwrap_or_else(|_| "locked".to_string()))
-    }
-
-    /// Get config file path.
-    pub fn config_path(&self) -> PathBuf {
-        self.account_dir().join(CONFIG_FILE)
-    }
-
-    /// Get config file path for a specific account.
-    fn config_path_for_account(account_name: &str) -> PathBuf {
-        let dir = Self::dir_name_for(account_name).unwrap_or_else(|_| "locked".to_string());
-        datadir().join(dir).join(CONFIG_FILE)
-    }
-
     /// Convert to bwk-sp::Config.
     pub fn to_sp_config(&self) -> Result<SpConfig, String> {
+        if self.plugin_id != "sp" {
+            return Err("not a Silent Payments account".into());
+        }
         let descriptor = SpDescriptor::from_str(&self.descriptor)
             .map_err(|e| format!("invalid SP descriptor: {e}"))?;
         let has_spend_secret = descriptor
@@ -275,7 +266,7 @@ impl Config {
             return Err(crate::keys::error::Error::SpSpendDescriptor.to_string());
         }
         let mut config = SpConfig::from_descriptor(
-            self.dir_name()?,
+            self.account_name.clone(),
             self.network.into(),
             descriptor,
             self.blindbit_url.clone(),
@@ -313,6 +304,7 @@ impl Config {
             });
         }
 
+        config.backend_factory = Some(Factory::configured(self)?);
         Ok(config.with_persistence(Some(bwk_sp::bwk::persist::PersistenceKind::default())))
     }
 
@@ -413,8 +405,7 @@ impl Config {
 
     /// The bwk::Account config of a musig account (plugin id "musig").
     ///
-    /// The bwk stores sit next to this `config.json` (`dir_name` empty), and bwk's
-    /// default config store writes nothing, so it never overwrites this file.
+    /// Wallet and header stores use the module's logical storage factory.
     pub fn to_musig_config(&self) -> Result<bwk::config::Config, String> {
         if self.plugin_id != crate::musig::MUSIG_PLUGIN_ID {
             return Err(format!(
@@ -424,7 +415,7 @@ impl Config {
         }
         let mut config = bwk::config::Config::new_from_descriptor(
             None,
-            self.dir_name()?,
+            self.account_name.clone(),
             self.network.into(),
             &self.descriptor,
             self.data_dir.clone(),
@@ -443,6 +434,7 @@ impl Config {
             }
         }
 
+        config.scanner.backend_factory = Some(Factory::configured(self)?);
         Ok(config)
     }
 }
@@ -512,7 +504,7 @@ fn maybe_create_dir(dir: &PathBuf) {
         }
 
         #[cfg(not(unix))]
-        if let Err(e) = fs::create_dir_all(dir) {
+        if let Err(e) = std::fs::create_dir_all(dir) {
             log::error!("failed to create directory {}: {e}", dir.display());
         }
     }
@@ -655,28 +647,24 @@ fn descriptor_key_network(key: &DescriptorPublicKey, network: bitcoin::NetworkKi
 fn persist_creation(config: Config) -> AccountCreationResult {
     let create = || -> Result<(), String> {
         validate_creation(&config)?;
-        let dir = config.data_dir.join(config.dir_name()?);
-        let mut builder = fs::DirBuilder::new();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        // Exclusive reservation prevents two creators overwriting the same account.
-        builder
-            .create(&dir)
-            .map_err(|e| format!("cannot create account: {e}"))?;
-        let error = config.save();
-        if !error.is_empty() {
-            // Only this operation's new directory is eligible for cleanup.
-            let temp = config.config_path().with_extension("tmp");
-            if temp.exists() {
-                fs::remove_file(temp).map_err(|e| format!("{error}; cleanup: {e}"))?;
+        // Built-in IDs share the host's global instance namespace.
+        let reservation =
+            AccountStorage::named(config.data_dir.clone(), "sp", &config.account_name)?;
+        let _lease = reservation.lease()?;
+        for module in ["sp", "musig"] {
+            let existing =
+                AccountStorage::named(config.data_dir.clone(), module, &config.account_name)?;
+            if existing.read(CONFIG_FILE)?.is_some() {
+                return Err("already_exists".into());
             }
-            fs::remove_dir(&dir).map_err(|e| format!("{error}; cleanup: {e}"))?;
-            return Err(error);
         }
-        Ok(())
+        let storage = AccountStorage::open(&config)?;
+        storage.create()?;
+        storage.write(
+            "config.json",
+            serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?,
+            true,
+        )
     };
     if let Err(error) = create() {
         return AccountCreationResult {
@@ -798,15 +786,10 @@ fn sub_account_descriptor(script: &str, fingerprint: &str, xpub: &str, network: 
 
 /// Delete an account's data from disk.
 pub fn delete_config(account_name: String) -> bool {
-    let data_dir = datadir();
-    let dir_name = match Config::dir_name_for(&account_name) {
-        Ok(dir_name) => dir_name,
-        Err(e) => {
-            log::error!("failed to delete account '{account_name}': {e}");
-            return false;
-        }
-    };
-    match SpConfig::delete_account_dir(&data_dir, &dir_name) {
+    match Config::from_file(account_name.clone())
+        .map_err(|e| e.to_string())
+        .and_then(|config| crate::account_storage::delete_owned(&config.plugin_id, &account_name))
+    {
         Ok(()) => true,
         Err(e) => {
             log::error!("failed to delete account '{account_name}': {e}");
@@ -847,28 +830,14 @@ pub fn list_module_configs(plugin_id: &str) -> Vec<String> {
 }
 
 fn discover_configs(plugin_id: Option<&str>) -> Vec<String> {
-    let path = datadir();
     let mut out = vec![];
-    if let Ok(folders) = fs::read_dir(path) {
-        for entry in folders.flatten() {
-            if let Ok(md) = entry.metadata() {
-                if md.is_dir() {
-                    // The directory is opaque: the account's name is in its config.
-                    let path = entry.path().join(CONFIG_FILE);
-                    let Ok(Some(content)) = state_crypt::read_state(&path) else {
-                        continue;
-                    };
-                    let Ok(config) = serde_json::from_str::<Config>(&content) else {
-                        continue;
-                    };
-                    if plugin_id.is_none_or(|plugin_id| config.plugin_id == plugin_id)
-                        && Config::dir_name_for(&config.account_name).ok().as_deref()
-                            == entry.file_name().to_str()
-                    {
-                        out.push(config.account_name);
-                    }
-                }
-            }
+    for plugin in ["sp", "musig"]
+        .into_iter()
+        .filter(|plugin| plugin_id.is_none_or(|id| id == *plugin))
+    {
+        match AccountStorage::configs(datadir(), plugin) {
+            Ok(configs) => out.extend(configs.into_iter().map(|config| config.account_name)),
+            Err(error) => log::error!("account discovery {plugin}: {error}"),
         }
     }
     out

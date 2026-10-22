@@ -53,9 +53,7 @@ public slots:
     auto createAccount(const QString &name, const QString &descriptor, Network network,
                        const QString &blindbit_url, const QString &electrum_url) -> void;
     auto openAccount(const QString &name) -> void;
-    auto deleteAccount(const QString &name) -> void;
     void showKeysTab();
-    auto onDeleteConfirmed(const QString &account) -> void;
     auto onHostInstanceRemoved(const QString &id) -> void;
     auto onHostInstanceRegistered(const QString &id) -> void;
     auto onRegtestDefaultsReady(const QString &blindbit) -> void;

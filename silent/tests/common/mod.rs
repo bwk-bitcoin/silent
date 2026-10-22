@@ -4,6 +4,8 @@
 
 #![allow(dead_code)]
 
+pub mod logical;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
@@ -111,10 +113,7 @@ pub fn isolated_state() {
 
 /// Cleanup test account directory.
 pub fn cleanup_test_account(account_name: &str) {
-    let config = Config::from_file(account_name.to_string()).ok();
-    if let Some(cfg) = config {
-        let _ = std::fs::remove_dir_all(cfg.account_dir());
-    }
+    silent::delete_config(account_name.to_string());
 }
 
 // ===== Sync Helpers =====

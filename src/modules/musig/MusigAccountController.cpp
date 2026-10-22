@@ -177,7 +177,7 @@ auto MusigAccountController::addressKinds() -> QList<AddressKind> {
 }
 
 auto MusigAccountController::newAddress([[maybe_unused]] AddressKind kind) -> QString {
-    if (m_account.has_value()) {
+    if (m_account.has_value() && !accountDeletionPending() && !endpointsStopping()) {
         return toQString(m_account.value()->new_addr());
     }
     return {};
@@ -253,6 +253,14 @@ auto MusigAccountController::sendSigning() -> account::SendSigning * {
 }
 
 void MusigAccountController::startWorker(QThread *worker) {
+    if (m_stopping || endpointsStopping() || accountDeletionPending()) {
+        worker->deleteLater();
+        return;
+    }
+    startAcceptedWorker(worker);
+}
+
+void MusigAccountController::startAcceptedWorker(QThread *worker) {
     m_workers.append(worker);
     connect(worker, &QThread::finished, this, &MusigAccountController::onWorkerFinished,
             qontrol::UNIQUE);
@@ -508,7 +516,7 @@ void MusigAccountController::stop() {
     m_reconnect->stopped();
 
     if (!m_account.has_value() && m_workers.isEmpty()) {
-        emit stopped();
+        onShutdownDrained({});
         return;
     }
 
@@ -524,27 +532,11 @@ void MusigAccountController::stop() {
     auto workers = std::move(m_workers);
     m_workers.clear();
 
-    auto *teardown = QThread::create([acc = std::move(account), notif, workers]() mutable {
-        for (auto *worker : workers) {
-            worker->wait();
-            worker->deleteLater();
-        }
-        if (acc.has_value()) {
-            acc.value()->stop_electrum();
-            acc.reset(); // drop the account, disconnecting the channel
-        }
-        if (notif != nullptr) {
-            notif->wait();
-            notif->deleteLater();
-        }
-    });
-    connect(teardown, &QThread::finished, this, &MusigAccountController::stopped, qontrol::UNIQUE);
-    connect(teardown, &QThread::finished, teardown, &QThread::deleteLater);
-    teardown->start();
+    drainAccount(std::move(account), notif, workers);
 }
 
 auto MusigAccountController::simulateTx(TransactionTemplate tx) -> TransactionSimulation {
-    if (m_account.has_value()) {
+    if (m_account.has_value() && !accountDeletionPending() && !endpointsStopping()) {
         return m_account.value()->simulate_transaction(std::move(tx));
     }
     TransactionSimulation simulation{};
@@ -554,7 +546,8 @@ auto MusigAccountController::simulateTx(TransactionTemplate tx) -> TransactionSi
 }
 
 void MusigAccountController::prepareTransaction(TransactionTemplate tx, MusigSpendLeaf spend) {
-    if (!m_account.has_value() || m_endpoint_busy) {
+    if (!m_account.has_value() || m_endpoint_busy || endpointsStopping() ||
+        accountDeletionPending()) {
         emit prepareFailed(TR("send-no-account-loaded"));
         return;
     }
@@ -855,7 +848,7 @@ void MusigAccountController::setSaveWarning(const QString &message) {
 
 void MusigAccountController::enqueueStorage(std::function<void()> work,
                                             std::function<void()> done) {
-    if (m_stopping || m_stop_requested || !m_account.has_value()) {
+    if (m_stopping || m_stop_requested || accountDeletionPending() || !m_account.has_value()) {
         return;
     }
     m_storage_queue.push_back({std::move(work), std::move(done)});
@@ -869,7 +862,7 @@ void MusigAccountController::startStorage() {
     m_storage_thread = QThread::create(m_storage_queue.front().work);
     connect(m_storage_thread, &QThread::finished, this, &MusigAccountController::onStorageFinished,
             qontrol::UNIQUE);
-    startWorker(m_storage_thread);
+    startAcceptedWorker(m_storage_thread);
 }
 
 void MusigAccountController::onStorageFinished() {

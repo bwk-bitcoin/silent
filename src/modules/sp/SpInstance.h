@@ -4,8 +4,9 @@
 
 #include "interfaces/host.h"
 
-#include <memory>
+#include <QPointer>
 #include <QString>
+#include <memory>
 
 class AccountController;
 class AccountWidget;
@@ -20,6 +21,7 @@ public:
 
     [[nodiscard]] QString id() const override;
     void stop() override;
+    [[nodiscard]] auto backend() const -> AccountController *;
 
     IAccount *account() override;
     IFeed *feed() override;
@@ -29,7 +31,7 @@ public:
 private:
     QString m_id;
     AccountWidget *m_account_widget = nullptr;
-    AccountController *m_account_controller = nullptr;
+    QPointer<AccountController> m_account_controller;
 
     std::unique_ptr<IAccount> m_account;
     std::unique_ptr<IFeed> m_feed;

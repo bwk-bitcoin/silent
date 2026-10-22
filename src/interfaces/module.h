@@ -33,12 +33,15 @@ public:
     virtual ReqId autoStart() = 0;
     virtual void startInstance(const QString &id) = 0;
 
-    // Optional teardown hook. The module owns its persistence, so when the host
-    // deletes an instance it asks the owning module to drop that instance's
-    // on-disk state. The host removes the live instance and its pushed UI itself;
-    // modules that persist instances override this to delete their stored state.
-    // Default: no-op (nothing persisted).
+    // Runtime release only. Tab close and plugin unload must preserve saved data.
     virtual void deleteInstance(const QString & /*id*/) {
+    }
+
+    // Explicit confirmed deletion. Record the nonzero request ID before dispatch:
+    // refusal may answer inside this call. Empty error means shutdown, backend
+    // destruction and authorized storage removal all completed successfully.
+    virtual void deleteAccount(ReqId req_id, const QString &id) {
+        emit accountDeleted(req_id, id, QStringLiteral("Account deletion is not supported"));
     }
 
     // The host tells every module whether signing devices must be polled; it is on
@@ -49,12 +52,13 @@ public:
     }
 
 signals:
+    void accountDeleted(ReqId req_id, QString id, QString error);
     void instances(ReqId req_id, QList<QPair<QString, QString>> instances);
     void autoStart(ReqId req_id, QStringList ids);
     void error(std::optional<ReqId> req_id, QString message);
 };
 
-#define SILENT_IPlugin_IID "dev.silent.IPlugin/7.0"
+#define SILENT_IPlugin_IID "dev.silent.IPlugin/8.0"
 Q_DECLARE_INTERFACE(IPlugin, SILENT_IPlugin_IID)
 
-#define SILENT_IModule_IID "dev.silent.IModule/1.0"
+#define SILENT_IModule_IID "dev.silent.IModule/2.0"

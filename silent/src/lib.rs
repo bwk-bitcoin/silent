@@ -3,6 +3,7 @@
 //! This library provides C++ bindings for the bwk-sp Silent Payment implementation.
 
 pub mod account;
+mod account_storage;
 pub mod app_state;
 pub mod backup;
 pub mod bbqr;
@@ -1885,7 +1886,10 @@ mod ffi {
         fn list_module_configs(plugin_id: &str) -> Vec<String>;
 
         /// Delete an account's data from disk.
-        fn delete_config(account_name: String) -> bool;
+        fn sp_account_delete_check(name: String) -> String;
+        fn musig_account_delete_check(name: String) -> String;
+        fn delete_sp_account(name: String) -> String;
+        fn delete_musig_account(name: String) -> String;
 
         /// The segwit sub-account descriptor of a key, from its xpub at 84'/coin'/0'.
         /// Empty when the fingerprint or the xpub is invalid.
@@ -2041,6 +2045,7 @@ mod ffi {
         fn payment_history(self: &Account) -> Vec<RustTx>;
         fn reopen_backend(self: &mut Account, connect_electrum: bool) -> EndpointResult;
         fn close_backend(self: &mut Account);
+        fn shutdown_backend(self: &mut Account) -> String;
         fn tx_details(self: &Account, txid: &str, allow_network: bool) -> RustTxDetails;
         fn update_tx_label(self: &Account, txid: String, label: String) -> LabelEditResult;
 
@@ -2624,6 +2629,7 @@ mod ffi {
         fn update_tx_label(self: &MusigAccount, txid: String, label: String) -> LabelEditResult;
         fn reopen_backend(self: &mut MusigAccount, connect_electrum: bool) -> EndpointResult;
         fn close_backend(self: &mut MusigAccount);
+        fn shutdown_backend(self: &mut MusigAccount) -> String;
         fn address_verify_info(self: &MusigAccount, address: &str) -> AddressVerifyInfo;
 
         fn simulate_transaction(
@@ -3213,6 +3219,10 @@ fn failed_psbt_file(error: String) -> ffi::PsbtFileResult {
 }
 
 // Re-export main types
+pub use account_storage::{
+    delete_musig_account, delete_sp_account, musig_account_delete_check, sp_account_delete_check,
+};
+
 pub use account::{
     new_account, new_account_offline, Account, NotificationReceiver, Poll, PsbtResult,
 };

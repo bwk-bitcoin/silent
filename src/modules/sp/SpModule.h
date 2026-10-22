@@ -1,7 +1,7 @@
 #pragma once
 
+#include "account/AccountModule.h"
 #include "interfaces/instance.h"
-#include "interfaces/module.h"
 
 #include <memory>
 #include <vector>
@@ -9,7 +9,7 @@
 // Plugin id of a silent payments account's config.
 inline constexpr auto SP_PLUGIN_ID = "sp";
 
-class SpModule final : public IModule {
+class SpModule final : public account::AccountModule {
     Q_OBJECT
 
 public:

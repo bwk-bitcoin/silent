@@ -66,9 +66,6 @@ signals:
     void electrumConnected(QString address);
     void electrumDisconnected();
     void notificationReceived(uint64_t generation, Notification notif);
-    // Emitted once the background teardown is done and the notification thread
-    // has exited, so the owner can safely delete the widget.
-    void stopped();
 
 public slots:
     auto loadPanel(const QString &name) -> void;

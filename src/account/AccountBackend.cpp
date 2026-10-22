@@ -2,18 +2,38 @@
 
 #include "metatypes.h"
 
+#include <QWidget>
 #include <Qontrol>
 #include <common.h>
 
 AccountBackend::AccountBackend(QObject *parent) : QObject(parent) {
+    connect(this, &AccountBackend::shutdownDrained, this, &AccountBackend::onShutdownDrained,
+            qontrol::UNIQUE);
     connect(this, &AccountBackend::endpointTipFetched, this, &AccountBackend::onEndpointTipFetched,
             qontrol::UNIQUE);
     connect(this, &AccountBackend::endpointInfoFetched, this,
             &AccountBackend::onEndpointInfoFetched, qontrol::UNIQUE);
 }
 
+void AccountBackend::onShutdownDrained(const QString &error) {
+    emit shutdownFinished(error);
+    emit stopped();
+}
+
 auto AccountBackend::endpointOperationsBusy() const -> bool {
-    return m_account_loading || m_endpoints_stopping || m_operation != EndpointOperation::Idle;
+    return m_deletion_pending || m_account_loading || m_endpoints_stopping ||
+           m_operation != EndpointOperation::Idle;
+}
+
+void AccountBackend::setAccountDeletionPending(bool pending) {
+    m_deletion_pending = pending;
+    if (auto *widget = qobject_cast<QWidget *>(parent()); widget != nullptr) {
+        widget->setEnabled(!pending);
+    }
+}
+
+auto AccountBackend::accountDeletionPending() const -> bool {
+    return m_deletion_pending;
 }
 
 auto AccountBackend::accountLoading() const -> bool {

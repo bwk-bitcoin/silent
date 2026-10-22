@@ -73,16 +73,13 @@ fn test_multiple_accounts_independent_state() {
     assert_eq!(config1.get_network(), Network::Regtest);
     assert_eq!(config2.get_network(), Network::Signet);
     assert_ne!(config1.get_blindbit_url(), config2.get_blindbit_url());
-    assert_ne!(config1.config_path(), config2.config_path());
+    assert_ne!(
+        common::logical::path(&config1, "config.json"),
+        common::logical::path(&config2, "config.json")
+    );
     // The account directories are opaque: the names are not on disk in clear.
-    assert!(!config1
-        .config_path()
-        .to_string_lossy()
-        .contains(&account1_name));
-    assert!(!config2
-        .config_path()
-        .to_string_lossy()
-        .contains(&account2_name));
+    assert!(!common::logical::path(&config1, "config.json").contains(&account1_name));
+    assert!(!common::logical::path(&config2, "config.json").contains(&account2_name));
 
     cleanup_test_account(&account1_name);
     cleanup_test_account(&account2_name);

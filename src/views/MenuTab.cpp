@@ -4,6 +4,7 @@
 #include "catalog/ClearRows.h"
 #include "catalog/Variants.h"
 #include "catalog/display/Label.h"
+#include "catalog/feedback/MessageModal.h"
 #include "host/Host.h"
 #include "host/PluginRegistry.h"
 #include "i18n/Tr.h"
@@ -45,6 +46,8 @@ void MenuTab::doConnect() {
     if (controller != nullptr && controller->pluginRegistry() != nullptr) {
         connect(controller->pluginRegistry(), &PluginRegistry::enabledPluginsChanged, this,
                 &MenuTab::onPluginRegistryChanged, qontrol::UNIQUE);
+        connect(controller->pluginRegistry(), &PluginRegistry::accountDeletionFinished, this,
+                &MenuTab::onAccountDeletionFinished, qontrol::UNIQUE);
     }
     if (m_host_events != nullptr) {
         connect(m_host_events, &HostEvents::instanceRegistered, this,
@@ -91,11 +94,6 @@ void MenuTab::onTrashClicked() {
         return;
     }
     auto name = btn->property("accountName").toString();
-    if (!btn->property("external").toBool()) {
-        AppController::get()->deleteAccount(name);
-        return;
-    }
-
     auto modulePtr = btn->property("modulePtr").toULongLong();
     // NOLINTNEXTLINE(performance-no-int-to-ptr)
     auto *module = reinterpret_cast<IModule *>(modulePtr);
@@ -105,19 +103,29 @@ void MenuTab::onTrashClicked() {
     m_pending_delete_module = module;
     m_pending_delete_id = name;
     auto *modal = new modal::ConfirmDelete(name);
-    connect(modal, &modal::ConfirmDelete::confirmed, this, &MenuTab::onExternalDeleteConfirmed,
+    connect(modal, &modal::ConfirmDelete::confirmed, this, &MenuTab::onDeleteConfirmed,
             qontrol::UNIQUE);
     AppController::execModal(modal);
 }
 
-void MenuTab::onExternalDeleteConfirmed(const QString &name) {
+void MenuTab::onDeleteConfirmed(const QString &name) {
     auto *controller = AppController::get();
     auto *registry = controller != nullptr ? controller->pluginRegistry() : nullptr;
-    if (registry != nullptr && m_pending_delete_module != nullptr && name == m_pending_delete_id) {
+    if (registry != nullptr && name == m_pending_delete_id) {
         registry->deleteInstance(m_pending_delete_module, name);
     }
     m_pending_delete_module = nullptr;
     m_pending_delete_id.clear();
+}
+
+void MenuTab::onAccountDeletionFinished(IModule *module, const QString &id, const QString &error) {
+    Q_UNUSED(module);
+    if (!error.isEmpty()) {
+        rebuildRows();
+        AppController::execModal(new catalog::MessageModal(
+            TR("common-error"),
+            TR("delete-wallet-title") + QStringLiteral(": ") + id + QLatin1Char('\n') + error));
+    }
 }
 
 void MenuTab::view() {
@@ -151,11 +159,7 @@ void MenuTab::clearRows() {
     m_rows.clear();
 }
 
-void MenuTab::onAccountList(const QList<QString> &accounts) {
-    m_sp_accounts.clear();
-    for (const auto &account : accounts) {
-        m_sp_accounts.insert(account);
-    }
+void MenuTab::onAccountList([[maybe_unused]] const QList<QString> &accounts) {
     onRefreshLauncherItems();
 }
 
@@ -236,7 +240,9 @@ void MenuTab::applyModuleInstances(IModule *module, ReqId req_id,
 }
 
 void MenuTab::onHostInstanceChanged(const QString &id) {
-    Q_UNUSED(id);
+    if (AppController::get()->pluginRegistry()->accountDeletionPending(id)) {
+        return;
+    }
     AppController::get()->listAccounts();
     onRefreshLauncherItems();
 }
@@ -272,8 +278,6 @@ void MenuTab::rebuildRows() {
                 continue;
             }
 
-            bool isBuiltin = registry != nullptr && registry->isBuiltinModule(module);
-
             LauncherEntry entry;
             entry.module = module;
             entry.id = id;
@@ -281,10 +285,7 @@ void MenuTab::rebuildRows() {
             if (entry.name.isEmpty()) {
                 entry.name = entry.id;
             }
-            entry.external = !isBuiltin;
-            // Built-in (SP) accounts keep their existing delete path; every external
-            // non-creator entry is a persisted instance the owning module can delete.
-            entry.canDelete = isBuiltin ? m_sp_accounts.contains(entry.id) : !isCreator;
+            entry.canDelete = !isCreator;
 
             if (isCreator) {
                 m_creators.append({.module = module, .id = entry.id, .name = entry.name});
@@ -307,7 +308,6 @@ void MenuTab::rebuildRows() {
         if (entry.canDelete) {
             auto *trashBtn = catalog::btnDeleteWallet();
             trashBtn->setProperty("accountName", entry.id);
-            trashBtn->setProperty("external", entry.external);
             trashBtn->setProperty("modulePtr",
                                   QVariant::fromValue(reinterpret_cast<qulonglong>(entry.module)));
             connect(trashBtn, &QPushButton::clicked, this, &MenuTab::onTrashClicked,

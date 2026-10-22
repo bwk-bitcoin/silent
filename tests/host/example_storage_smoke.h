@@ -5,6 +5,7 @@
 #include <QPair>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 #include <interfaces/module.h>
 #include <interfaces/types.h>
 
@@ -25,13 +26,17 @@ public:
     // The index of the first answer from `after` on that lists `id`, or that does not
     // when `listed` is false, waiting for it.
     auto waitForListing(const QString &id, bool listed, qsizetype after) -> qsizetype;
+    [[nodiscard]] auto deletionCount() const -> qsizetype;
+    auto waitForDeletion(qsizetype index) -> QString;
 
 public slots:
     void onInstances(ReqId req_id, const ExampleInstances &instances);
+    void onAccountDeleted(ReqId req_id, const QString &id, const QString &error);
 
 private:
     QPointer<IModule> m_module;
     QList<ExampleInstances> m_answers;
+    QStringList m_deletion_errors;
 };
 
 // Drives the real external example plugin built in `directory` through a legacy state

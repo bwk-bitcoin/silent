@@ -121,8 +121,6 @@ signals:
     void savedPsbtWarningChanged(QString message);
     void savedPsbtDeleteConfirmationNeeded(QString id);
     void sessionCleared();
-    // Background teardown done, the owner may delete the widget.
-    void stopped();
 
 public slots:
     void loadPanel(const QString &name);
@@ -165,6 +163,7 @@ public slots:
     void settingsClicked();
 
 protected:
+    void startAcceptedWorker(QThread *worker);
     // Listens to the keys module and allocates the request of a round's signature, null
     // when no round can be signed now.
     // A request of `fingerprint`'s key allocated, null when none can be sent now (no

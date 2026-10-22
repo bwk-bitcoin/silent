@@ -116,8 +116,10 @@ void SpAccount::onControllerBalanceUpdate(uint64_t balance) {
 }
 
 bool SpAccount::accountReady(ReqId req_id) {
-    if (m_controller == nullptr || !m_controller->getAccount().has_value()) {
-        emit error(req_id, QStringLiteral("SP account not initialized"));
+    if (m_controller == nullptr || m_controller->accountDeletionPending() ||
+        !m_controller->getAccount().has_value() || !m_controller->getAccount().value()->is_ok()) {
+        emit error(req_id == 0 ? std::nullopt : std::optional<ReqId>(req_id),
+                   QStringLiteral("SP account is unavailable"));
         return false;
     }
     return true;
@@ -133,9 +135,7 @@ ReqId SpAccount::nextReqId() {
 
 void SpAccount::emitCoins(ReqId req_id) {
     QList<plugin::Coin> out;
-    if (m_controller == nullptr || !m_controller->getAccount().has_value()) {
-        emit error(req_id == 0 ? std::nullopt : std::optional<ReqId>(req_id),
-                   QStringLiteral("SP account controller missing"));
+    if (!accountReady(req_id)) {
         return;
     }
 
@@ -153,9 +153,7 @@ void SpAccount::emitCoins(ReqId req_id) {
 }
 
 void SpAccount::emitBalance(ReqId req_id) {
-    if (m_controller == nullptr || !m_controller->getAccount().has_value()) {
-        emit error(req_id == 0 ? std::nullopt : std::optional<ReqId>(req_id),
-                   QStringLiteral("SP account not initialized"));
+    if (!accountReady(req_id)) {
         return;
     }
 

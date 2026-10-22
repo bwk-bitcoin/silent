@@ -168,6 +168,7 @@ void musigResetSmoke();
 void boundarySmoke();
 void endpointSmoke();
 void navigationSmoke();
+void deletionSmoke();
 void keysContractSmoke(const QString &screenshots);
 } // namespace smoke
 
@@ -270,6 +271,13 @@ auto main(int argc, char *argv[]) -> int {
         std::fprintf(stdout, "Endpoint smoke: OK\n");
         return gOk ? 0 : 1;
     }
+    if (arguments.contains(QStringLiteral("--account-deletion"))) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::deletionSmoke();
+        std::fprintf(stdout, "Account deletion smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
     if (arguments.contains(QStringLiteral("--rust-boundary"))) {
         Theme::init();
         smoke::boundarySmoke();
@@ -363,6 +371,8 @@ auto main(int argc, char *argv[]) -> int {
 
     // ===== deleteInstance: dropped, stopped, no leak =====
     registry.deleteInstance(module, QStringLiteral("inst-1"));
+    QApplication::processEvents();
+    module->flush();
     check(hostInstanceCount() == baselineInstances,
           "host instance count should return to baseline after delete");
     check(!hostHasInstance(QStringLiteral("inst-1")),
@@ -370,7 +380,7 @@ auto main(int argc, char *argv[]) -> int {
     check(mockInstance != nullptr && mockInstance->wasStopped(),
           "instance stop() should have been called on delete");
     check(module->deletedIds().contains(QStringLiteral("inst-1")),
-          "owning module deleteInstance should have been invoked");
+          "owning module confirmed persisted deletion should have been invoked");
     check(spy.count() > afterListCount,
           "enabledPluginsChanged should fire again on deleteInstance");
 
@@ -694,8 +704,9 @@ auto main(int argc, char *argv[]) -> int {
     check(hostInstanceCount() == musigInstancesBefore && !hostHasInstance(spAccount),
           "starting an sp account from the musig module should register no instance");
 
-    check(::delete_config(rust::String(spAccount.toStdString())), "the sp config should delete");
-    check(::delete_config(rust::String(musigAccount.toStdString())),
+    check(::delete_sp_account(rust::String(spAccount.toStdString())).empty(),
+          "the sp config should delete");
+    check(::delete_musig_account(rust::String(musigAccount.toStdString())).empty(),
           "the musig config should delete");
 
     // ===== musig creator lists its create entry only =====

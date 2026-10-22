@@ -331,23 +331,57 @@ bool PluginRegistry::startLauncherInstance(IModule *module, const QString &insta
 }
 
 void PluginRegistry::deleteInstance(IModule *module, const QString &instance_id) {
-    QString trimmedId = instance_id.trimmed();
-    if (trimmedId.isEmpty()) {
+    auto known = m_launcher_instances.value(module);
+    auto owns = std::ranges::any_of(
+        known, [&instance_id](const auto &item) { return item.first == instance_id; });
+    auto *host = dynamic_cast<HostImpl *>(Host::get());
+    if (host != nullptr && host->instanceOwner(instance_id) != nullptr &&
+        host->instanceOwner(instance_id) != module) {
+        owns = false;
+    }
+    if (!m_module_owner.contains(module) || !owns || isCreatorInstanceId(instance_id) ||
+        instance_id.isEmpty()) {
+        emit accountDeletionFinished(module, instance_id,
+                                     QStringLiteral("Unknown module/account identity"));
         return;
     }
-
-    // removeInstance stops the instance and ignores an id the host does not hold.
-    if (auto *hostImpl = dynamic_cast<HostImpl *>(Host::get()); hostImpl != nullptr) {
-        hostImpl->removeInstance(trimmedId);
+    if (m_pending_deletions.value(module).values().contains(instance_id)) {
+        emit accountDeletionFinished(module, instance_id,
+                                     QStringLiteral("Account deletion is already pending"));
+        return;
     }
-    m_instance_owner_by_id.remove(trimmedId);
-
-    // The module owns its persistence: ask it to drop the stored state.
-    if (module != nullptr) {
-        module->deleteInstance(trimmedId);
+    if (++m_delete_req_id == 0) {
+        ++m_delete_req_id;
     }
+    m_pending_deletions[module].insert(m_delete_req_id, instance_id);
+    module->deleteAccount(m_delete_req_id, instance_id);
+}
 
-    emit enabledPluginsChanged();
+void PluginRegistry::onAccountDeleted(ReqId req_id, const QString &id, const QString &error) {
+    auto *module = qobject_cast<IModule *>(sender());
+    if (!m_pending_deletions.contains(module) ||
+        !m_pending_deletions.value(module).contains(req_id) ||
+        m_pending_deletions.value(module).value(req_id) != id) {
+        return;
+    }
+    m_pending_deletions[module].remove(req_id);
+    if (m_pending_deletions.value(module).isEmpty()) {
+        m_pending_deletions.remove(module);
+    }
+    if (error.isEmpty()) {
+        if (auto *host = dynamic_cast<HostImpl *>(Host::get());
+            host != nullptr && host->instanceOwner(id) == module) {
+            host->removeInstance(id);
+        }
+        requestModuleInstances(module);
+    }
+    emit accountDeletionFinished(module, id, error);
+}
+
+auto PluginRegistry::accountDeletionPending(const QString &id) const -> bool {
+    return std::ranges::any_of(m_pending_deletions, [&id](const auto &requests) {
+        return requests.values().contains(id);
+    });
 }
 
 bool PluginRegistry::isPluginEnabled(const QString &plugin_id) const {
@@ -751,6 +785,12 @@ bool PluginRegistry::disablePlugin(const QString &plugin_id) {
     }
 
     auto &record = *recordIt;
+    for (auto *module : record.modules) {
+        if (m_pending_deletions.contains(module)) {
+            qWarning() << "Plugin has pending account deletion:" << plugin_id;
+            return false;
+        }
+    }
     if (record.plugin == nullptr) {
         bool unloaded = unloadPlugin(plugin_id);
         if (!unloaded) {
@@ -840,6 +880,9 @@ void PluginRegistry::activateModule(IModule *module, const QString &plugin_id) {
     connect(module, QOverload<ReqId, QStringList>::of(&IModule::autoStart), this,
             &PluginRegistry::onModuleAutoStart, qontrol::UNIQUE);
     connect(module, &IModule::error, this, &PluginRegistry::onModuleError, qontrol::UNIQUE);
+    connect(module, &IModule::accountDeleted, this, &PluginRegistry::onAccountDeleted,
+            // Leave plugin code's stack before completion can permit library unload.
+            static_cast<Qt::ConnectionType>(qontrol::UNIQUE | Qt::QueuedConnection));
 
     ReqId autoReqId = module->autoStart();
     if (autoReqId != 0) {
@@ -876,6 +919,7 @@ void PluginRegistry::deactivateModule(IModule *module) {
     disconnect(module, QOverload<ReqId, QStringList>::of(&IModule::autoStart), this,
                &PluginRegistry::onModuleAutoStart);
     disconnect(module, &IModule::error, this, &PluginRegistry::onModuleError);
+    disconnect(module, &IModule::accountDeleted, this, &PluginRegistry::onAccountDeleted);
 
     m_pending_list_requests.remove(module);
     m_pending_auto_start_requests.remove(module);
@@ -902,6 +946,12 @@ bool PluginRegistry::startOwnedInstance(IModule *module, const QString &instance
     QString trimmedInstanceId = instance_id.trimmed();
     if (!m_module_owner.contains(module) || trimmedInstanceId.isEmpty()) {
         return false;
+    }
+
+    for (const auto &requests : m_pending_deletions) {
+        if (requests.values().contains(trimmedInstanceId)) {
+            return false;
+        }
     }
 
     module->startInstance(trimmedInstanceId);

@@ -2,6 +2,7 @@
 
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
+#include "modules/musig/MusigAccountController.h"
 #include "modules/musig/MusigInstance.h"
 
 #include <QDebug>
@@ -19,7 +20,7 @@ namespace {
 MusigModule *gMusigModule = nullptr;
 } // namespace
 
-MusigModule::MusigModule() : IModule(nullptr) {
+MusigModule::MusigModule() : AccountModule(::musig_account_delete_check, ::delete_musig_account) {
     gMusigModule = this;
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
             &MusigModule::onInstanceRemoved, qontrol::UNIQUE);
@@ -60,18 +61,23 @@ auto MusigModule::autoStart() -> ReqId {
 }
 
 void MusigModule::startInstance(const QString &id) {
+    if (accountUnavailable(id)) {
+        emit error(std::nullopt, QStringLiteral("Account is open, closing or pending deletion"));
+        return;
+    }
     if (!isMusigAccount(id)) {
         emit error(std::nullopt, TR("musig-instance-not-found").arg(id));
         return;
     }
 
     auto instance = std::make_unique<MusigInstance>(id);
+    watchAccount(id, instance->backend());
     Host::get()->registerInstance(id, instance.get(), this);
     m_instances.push_back(std::move(instance));
 }
 
 void MusigModule::deleteInstance(const QString &id) {
-    // MusigInstance::stop already closed the tab; the on-disk delete is AppController's.
+    // AccountModule retains the closing backend's completion independently of the tab.
     std::erase_if(m_instances, [&id](const std::unique_ptr<IInstance> &instance) {
         return instance != nullptr && instance->id() == id;
     });

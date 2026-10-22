@@ -50,6 +50,7 @@ public:
     [[nodiscard]] QList<CreatorLauncher> externalCreatorLaunchers() const;
     bool startLauncherInstance(IModule *module, const QString &instance_id);
     void deleteInstance(IModule *module, const QString &instance_id);
+    [[nodiscard]] auto accountDeletionPending(const QString &id) const -> bool;
     // Calls list() on every active module and applies each answer through
     // applyModuleInstances, the path activateModule uses.
     void relistModules();
@@ -67,8 +68,10 @@ public:
 
 signals:
     void enabledPluginsChanged();
+    void accountDeletionFinished(IModule *module, QString id, QString error);
 
 private slots:
+    void onAccountDeleted(ReqId req_id, const QString &id, const QString &error);
     void onModuleInstances(ReqId req_id, QList<QPair<QString, QString>> instances);
     void onModuleAutoStart(ReqId req_id, QStringList ids);
     void onModuleError(std::optional<ReqId> req_id, const QString &message);
@@ -151,4 +154,6 @@ private:
     QHash<IModule *, QPair<ReqId, QList<QPair<QString, QString>>>> m_sync_list_responses;
     QHash<IModule *, QPair<ReqId, QStringList>> m_sync_auto_start_responses;
     bool m_signer_polling = false;
+    QHash<IModule *, QHash<ReqId, QString>> m_pending_deletions;
+    ReqId m_delete_req_id = 0;
 };

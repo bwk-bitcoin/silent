@@ -234,7 +234,9 @@ public:
             ReqId reqId = m_list_req_id;
             m_list_req_id = 0;
             QList<QPair<QString, QString>> instances;
-            instances.append({QStringLiteral("inst-1"), QStringLiteral("Instance One")});
+            if (!m_deleted_ids.contains(QStringLiteral("inst-1"))) {
+                instances.append({QStringLiteral("inst-1"), QStringLiteral("Instance One")});
+            }
             emit IModule::instances(reqId, instances);
         }
     }
@@ -272,7 +274,13 @@ public:
     }
 
     void deleteInstance(const QString &id) override {
-        m_deleted_ids.append(id.trimmed());
+        Q_UNUSED(id);
+    }
+
+    void deleteAccount(ReqId req_id, const QString &id) override {
+        Host::get()->removeInstance(id, this);
+        m_deleted_ids.append(id);
+        emit accountDeleted(req_id, id, {});
     }
 
     // The host's side of the switch: every enabled module is told, whether or not it

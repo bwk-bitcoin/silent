@@ -6,7 +6,6 @@
 #include "interfaces/module.h"
 #include "interfaces/theme.h"
 #include "theme/Theme.h"
-#include "views/modals/ConfirmDelete.h"
 #include <algorithm>
 #include <common.h>
 #include <qlogging.h>
@@ -234,32 +233,17 @@ auto AppController::openAccount(const QString &name) -> void {
     listAccounts();
 }
 
-// NOLINTNEXTLINE(readability-make-member-function-const)
-auto AppController::deleteAccount(const QString &name) -> void {
-    auto *modal = new modal::ConfirmDelete(name);
-    connect(modal, &modal::ConfirmDelete::confirmed, this, &AppController::onDeleteConfirmed,
-            qontrol::UNIQUE);
-    AppController::execModal(modal);
-}
-
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void AppController::showKeysTab() {
     Host::get()->showInstanceTab(QStringLiteral("keys"));
 }
 
-auto AppController::onDeleteConfirmed(const QString &account) -> void {
-    if (isAccountOpen(account)) {
-        removeAccount(account);
-    }
-    if (!delete_config(rust::String(account.toStdString()))) {
-        qCritical() << "Failed to delete account:" << account;
-    }
-    listAccounts();
-}
-
 auto AppController::onHostInstanceRemoved(const QString &id) -> void {
     m_open_accounts.remove(id);
     applyPersistedThemeAtStartup();
+    if (m_plugin_registry != nullptr && m_plugin_registry->accountDeletionPending(id)) {
+        return;
+    }
     // The launcher dims open accounts: a closed one comes back to reopen.
     listAccounts();
 }

@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeSet,
     str::FromStr,
-    sync::{mpsc, Mutex, MutexGuard},
+    sync::{mpsc, Arc, Mutex, MutexGuard},
 };
 
 use bitcoin::consensus::encode::{deserialize_hex, serialize_hex};
@@ -26,6 +26,7 @@ use crate::{
         broadcast_via_electrum, convert_notification, parse_outpoint, psbt_validation, rust_txs,
         NotificationReceiver, Poll, PsbtResult, TemplateError,
     },
+    account_storage::{AccountStorage, Factory},
     config::{parse_electrum_url, Config},
     ffi::{
         AddressVerifyInfo, CoinState, MusigAttemptSnapshot, MusigCosignerStatus,
@@ -49,11 +50,13 @@ pub struct MusigAccount {
     error: String,
     closed_saved_psbts: Option<Mutex<SavedPsbtStore>>,
     closed_name: Option<String>,
+    pending_flush_error: String,
     active: Mutex<Option<MusigAttemptSnapshot>>,
 }
 
 struct MusigAccountInner {
     account: BwkAccount,
+    factory: Arc<Factory>,
     receiver: Option<mpsc::Receiver<BwkNotification>>,
     config: Config,
     saved_psbts: Mutex<SavedPsbtStore>,
@@ -78,6 +81,7 @@ pub fn new_musig_account_offline(config: &Config) -> Box<MusigAccount> {
             error: String::new(),
             closed_saved_psbts: None,
             closed_name: None,
+            pending_flush_error: String::new(),
             active: Mutex::new(None),
         }),
         Err(error) => {
@@ -85,10 +89,9 @@ pub fn new_musig_account_offline(config: &Config) -> Box<MusigAccount> {
             Box::new(MusigAccount {
                 inner: None,
                 error,
-                closed_saved_psbts: Some(Mutex::new(SavedPsbtStore::load(
-                    config.account_dir().join("saved_psbts.json"),
-                ))),
+                closed_saved_psbts: None,
                 closed_name: Some(config.account_name.clone()),
+                pending_flush_error: String::new(),
                 active: Mutex::new(None),
             })
         }
@@ -106,6 +109,7 @@ pub fn new_musig_account(account_name: String) -> Box<MusigAccount> {
                 error,
                 closed_saved_psbts: None,
                 closed_name: None,
+                pending_flush_error: String::new(),
                 active: Mutex::new(None),
             });
         }
@@ -116,6 +120,7 @@ pub fn new_musig_account(account_name: String) -> Box<MusigAccount> {
             error: String::new(),
             closed_saved_psbts: None,
             closed_name: None,
+            pending_flush_error: String::new(),
             active: Mutex::new(None),
         }),
         Err(e) => {
@@ -126,6 +131,7 @@ pub fn new_musig_account(account_name: String) -> Box<MusigAccount> {
                 error,
                 closed_saved_psbts: None,
                 closed_name: None,
+                pending_flush_error: String::new(),
                 active: Mutex::new(None),
             })
         }
@@ -208,28 +214,93 @@ impl MusigAccount {
     fn new_inner_connected(config: Config, connect: bool) -> Result<MusigAccountInner, String> {
         let mut musig_config = config.to_musig_config()?;
         musig_config.scanner.set_stay_offline(!connect);
-        let mut account = BwkAccount::try_new(musig_config).map_err(|e| e.to_string())?;
+        let factory = Factory::open(&config)?;
+        let config_store = factory.config_store();
+        let mut account =
+            BwkAccount::try_with_backend_factory(musig_config, factory.clone(), config_store, None)
+                .map_err(|e| e.to_string())?;
         let receiver = account.receiver();
-        let saved_psbts = Mutex::new(SavedPsbtStore::load(
-            config.account_dir().join("saved_psbts.json"),
+        let saved_psbts = Mutex::new(SavedPsbtStore::load_logical(
+            AccountStorage::open(&config)?,
+            factory.clone(),
         ));
         Ok(MusigAccountInner {
             account,
+            factory,
             receiver,
             config,
             saved_psbts,
         })
     }
 
+    pub fn shutdown_backend(&mut self) -> String {
+        let Some(mut old) = self.inner.take() else {
+            let error = self
+                .closed_saved_psbts
+                .as_ref()
+                .map(|store| store.lock().unwrap_or_else(|e| e.into_inner()).persist())
+                .unwrap_or_default();
+            return if self.pending_flush_error.is_empty() {
+                error
+            } else {
+                self.pending_flush_error.clone()
+            };
+        };
+        old.account.stop_electrum();
+        let mut error = old
+            .account
+            .try_persist()
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        let saved_error = old
+            .saved_psbts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .persist();
+        if error.is_empty() {
+            error = saved_error;
+        }
+        old.factory.begin_shutdown();
+        drop(old.account);
+        if let Some(receiver) = old.receiver {
+            while receiver.recv().is_ok() {}
+        }
+        old.factory.wait_for_backends();
+        if !self.pending_flush_error.is_empty() {
+            self.pending_flush_error.clone()
+        } else if error.is_empty() {
+            old.factory.failure()
+        } else {
+            error
+        }
+    }
+
     /// Header workers can outlive account drop; drain the taken receiver before reopening.
     pub fn close_backend(&mut self) {
         if let Some(mut old) = self.inner.take() {
             self.closed_name = Some(old.config.account_name);
-            self.closed_saved_psbts = Some(old.saved_psbts);
             old.account.stop_electrum();
+            if let Err(error) = old.account.try_persist() {
+                self.pending_flush_error = error.to_string();
+            }
+            let saved_error = old
+                .saved_psbts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .persist();
+            if self.pending_flush_error.is_empty() {
+                self.pending_flush_error = saved_error;
+            }
+            self.closed_saved_psbts = Some(old.saved_psbts);
+            old.factory.begin_shutdown();
             drop(old.account);
             if let Some(receiver) = old.receiver {
                 while receiver.recv().is_ok() {}
+            }
+            old.factory.wait_for_backends();
+            if self.pending_flush_error.is_empty() {
+                self.pending_flush_error = old.factory.failure();
             }
         }
     }
@@ -244,6 +315,13 @@ impl MusigAccount {
     /// Called after workers and the old notification receiver have drained.
     pub fn reopen_backend(&mut self, connect_electrum: bool) -> crate::ffi::EndpointResult {
         self.close_backend();
+        if !self.pending_flush_error.is_empty() {
+            return crate::ffi::EndpointResult {
+                kind: crate::ffi::BackendErrorKind::Storage,
+                error: self.pending_flush_error.clone(),
+                ..Default::default()
+            };
+        }
         let mut failure_kind = crate::ffi::BackendErrorKind::Other;
         let result = (|| {
             let name = self.closed_name.as_ref().ok_or(NOT_INITIALIZED)?.clone();
@@ -264,10 +342,13 @@ impl MusigAccount {
                     }
                     Err(error) => return Err(error),
                 };
-            inner.saved_psbts = self
-                .closed_saved_psbts
-                .take()
-                .ok_or("Saved PSBT state missing during reopen")?;
+            // A startup failure has no cached store; use the freshly loaded state.
+            inner.saved_psbts = self.closed_saved_psbts.take().unwrap_or(inner.saved_psbts);
+            inner
+                .saved_psbts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .bind_factory(inner.factory.clone());
             self.inner = Some(inner);
             self.closed_name = None;
             self.error.clear();
@@ -308,7 +389,11 @@ impl MusigAccount {
     }
 
     pub fn get_error(&self) -> String {
-        self.error.clone()
+        if self.pending_flush_error.is_empty() {
+            self.error.clone()
+        } else {
+            self.pending_flush_error.clone()
+        }
     }
 
     pub fn name(&self) -> String {
@@ -1497,8 +1582,8 @@ mod tests {
         Amount, OutPoint, Psbt, PublicKey, Transaction, TxIn, TxOut, Txid,
     };
     use bwk::{
-        account::Account as BwkAccount, bwk_descriptor::descriptor::Descriptor,
-        bwk_sign::hot_signer::HotSigner, bwk_tx::bwk_psbt::PsbtV2,
+        bwk_descriptor::descriptor::Descriptor, bwk_sign::hot_signer::HotSigner,
+        bwk_tx::bwk_psbt::PsbtV2,
     };
     use temp_dir::TempDir;
 
@@ -1523,6 +1608,7 @@ mod tests {
             error: String::new(),
             closed_saved_psbts: None,
             closed_name: None,
+            pending_flush_error: String::new(),
             active: Mutex::new(None),
         }
     }
@@ -1547,8 +1633,8 @@ mod tests {
         );
         config.plugin_id = "musig".into();
         config.data_dir = directory.path().to_path_buf();
-        let mut backend: BwkAccount =
-            BwkAccount::try_new(config.to_musig_config().expect("config")).expect("backend");
+        let mut seeded = offline_account(config.clone());
+        let backend = &mut seeded.inner.as_mut().expect("seed backend").account;
         let receive = backend.scanner_mut().new_recv_addr();
         let funding = Transaction {
             version: Version::TWO,
@@ -1563,7 +1649,11 @@ mod tests {
             }],
         };
         backend.scanner().record_unconfirmed_spend(&funding);
-        drop(backend);
+        assert!(
+            seeded.shutdown_backend().is_empty(),
+            "seed wallet state is durable"
+        );
+        drop(seeded);
         let mut account = offline_account(config);
         let outpoint = OutPoint::new(funding.compute_txid(), 0).to_string();
         let leaves = account.spend_leaves(vec![outpoint.clone()]);

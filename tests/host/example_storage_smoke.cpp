@@ -2,6 +2,7 @@
 
 #include "AppController.h"
 #include "ExternalStorageConsumer.h"
+#include "MockPlugin.h"
 #include "StorageProbe.h"
 #include "host/Host.h"
 #include "host/PluginRegistry.h"
@@ -74,7 +75,7 @@ void requireBinaryAbi(const QString &library) {
     QPluginLoader loader(library);
     require(loader.metaData().value(QStringLiteral("IID")).toString() ==
                 QLatin1String(SILENT_IPlugin_IID),
-            "the example library declares plugin ABI 7");
+            "the example library declares plugin ABI 8");
 }
 
 void install(const QString &directory) {
@@ -114,8 +115,8 @@ void requireLoadedAbi(PluginRegistry *registry) {
         }
         auto *object = dynamic_cast<QObject *>(plugin);
         require(object != nullptr && object->qt_metacast(SILENT_IPlugin_IID) != nullptr &&
-                    object->qt_metacast("dev.silent.IPlugin/6.0") == nullptr,
-                "the loaded example plugin exposes ABI 7 only");
+                    object->qt_metacast("dev.silent.IPlugin/7.0") == nullptr,
+                "the loaded example plugin exposes ABI 8 only");
         return;
     }
     qFatal("example storage smoke: the example plugin is not loaded");
@@ -166,12 +167,48 @@ void requireMigratedState(Host *host, IModule *module) {
 void deleteLegacy(ExampleInstancesProbe &probe, PluginRegistry *registry, Host *host,
                   IModule *module) {
     auto before = probe.count();
-    module->deleteInstance(LEGACY_ID);
+    auto deletions = probe.deletionCount();
+    registry->deleteInstance(module, LEGACY_ID);
+    require(probe.deletionCount() == deletions, "accepted deletion waits for storage completion");
+    require(probe.waitForDeletion(deletions).isEmpty(),
+            "the public module reports deletion success");
     probe.waitForListing(LEGACY_ID, false, before);
     require(!lists(registry->launcherInstancesForModule(module), LEGACY_ID),
             "the launcher drops the deleted account");
     require(readState(host, module, QStringLiteral("example-deleted")) == EMPTY_STATE,
             "the confirmed write leaves the plugin's empty schema");
+}
+
+void deniedDeletion(ExampleInstancesProbe &probe, PluginRegistry *registry, Host *host,
+                    IModule *module, const QString &hash) {
+    auto answers = ::app_plugin_answers(rust::String(PLUGIN_ID.toStdString()),
+                                        rust::String(hash.toStdString()));
+    answers.state = PluginGrant::Denied;
+    ::app_set_plugin_access(answers);
+    require(::app_plugin_answers(rust::String(PLUGIN_ID.toStdString()),
+                                 rust::String(hash.toStdString()))
+                    .state == PluginGrant::Denied,
+            "revoke Saved Data before explicit deletion");
+    SignalSpy refresh;
+    QObject::connect(host->events(), &HostEvents::launcherRefreshRequested, &refresh,
+                     &SignalSpy::onSignal, qontrol::UNIQUE);
+    auto before = probe.deletionCount();
+    registry->deleteInstance(module, LEGACY_ID);
+    require(!registry->setEnabled(PLUGIN_ID, false), "a pending deletion pins the plugin library");
+    require(probe.waitForDeletion(before) == QStringLiteral("denied"),
+            "external deletion carries the exact storage denial");
+    QElapsedTimer timer;
+    timer.start();
+    while (registry->accountDeletionPending(LEGACY_ID) && timer.elapsed() < TIMEOUT_MS) {
+        QApplication::processEvents();
+        QThread::msleep(1);
+    }
+    require(!registry->accountDeletionPending(LEGACY_ID),
+            "failed deletion releases its correlated request");
+    require(refresh.count() == 0 && lists(registry->launcherInstancesForModule(module), LEGACY_ID),
+            "failed external deletion never refreshes or removes the discovered account");
+    allowSavedData(hash);
+    requireMigratedState(host, module);
 }
 
 // A reloaded plugin reads the file again and finds no account: the kept legacy blob is
@@ -194,10 +231,15 @@ void reload(ExampleInstancesProbe &probe, PluginRegistry *registry, Host *host) 
 void ExampleInstancesProbe::attach(IModule *module) {
     if (m_module != nullptr) {
         disconnect(m_module, &IModule::instances, this, &ExampleInstancesProbe::onInstances);
+        disconnect(m_module, &IModule::accountDeleted, this,
+                   &ExampleInstancesProbe::onAccountDeleted);
     }
     m_module = module;
     m_answers.clear();
+    m_deletion_errors.clear();
     connect(module, &IModule::instances, this, &ExampleInstancesProbe::onInstances,
+            qontrol::UNIQUE);
+    connect(module, &IModule::accountDeleted, this, &ExampleInstancesProbe::onAccountDeleted,
             qontrol::UNIQUE);
 }
 
@@ -238,6 +280,27 @@ void ExampleInstancesProbe::onInstances([[maybe_unused]] ReqId req_id,
     m_answers.append(instances);
 }
 
+auto ExampleInstancesProbe::deletionCount() const -> qsizetype {
+    return m_deletion_errors.size();
+}
+
+auto ExampleInstancesProbe::waitForDeletion(qsizetype index) -> QString {
+    QElapsedTimer timer;
+    timer.start();
+    while (m_deletion_errors.size() <= index && timer.elapsed() < TIMEOUT_MS) {
+        QApplication::processEvents();
+        QThread::msleep(1);
+    }
+    require(m_deletion_errors.size() > index, "public module deletion result arrives");
+    return m_deletion_errors.at(index);
+}
+
+void ExampleInstancesProbe::onAccountDeleted([[maybe_unused]] ReqId req_id, const QString &id,
+                                             const QString &error) {
+    require(id == LEGACY_ID, "public deletion result preserves account identity");
+    m_deletion_errors.append(error);
+}
+
 void exampleStorageSmoke(const QString &directory) {
     auto *host = Host::get();
     auto *registry = AppController::get()->pluginRegistry();
@@ -271,6 +334,16 @@ void exampleStorageSmoke(const QString &directory) {
     discoverLegacy(probe, registry, module);
     requireMigratedState(host, module);
     require(legacyBlobs() == blobs, "the migration keeps the legacy blob as it was");
+    module->deleteInstance(LEGACY_ID);
+    requireMigratedState(host, module);
+    require(registry->setEnabled(PLUGIN_ID, false),
+            "ordinary plugin unload preserves account data");
+    require(registry->setEnabled(PLUGIN_ID, true), "plugin reloads after ordinary runtime cleanup");
+    module = exampleModule(registry);
+    probe.attach(module);
+    discoverLegacy(probe, registry, module);
+    requireMigratedState(host, module);
+    deniedDeletion(probe, registry, host, module, hash);
     deleteLegacy(probe, registry, host, module);
     reload(probe, registry, host);
     require(legacyBlobs() == blobs, "the legacy blob is never overwritten");

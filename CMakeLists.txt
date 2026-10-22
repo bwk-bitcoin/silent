@@ -260,6 +260,8 @@ set(SILENT_APP_SOURCES
     src/views/DashboardLayout.cpp
     src/account/AccountBackend.h
     src/account/AccountBackend.cpp
+    src/account/AccountModule.h
+    src/account/AccountModule.cpp
     src/account/AccountShell.h
     src/account/AccountShell.cpp
     src/account/PanelCollection.h
@@ -594,7 +596,7 @@ if(SILENT_BUILD_HOST_SMOKE)
     set(SMOKE host_smoke)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        foreach(ABI_VERSION 2 3 4 5 6 7)
+        foreach(ABI_VERSION 2 3 4 5 6 7 8)
             qt_add_library(plugin_abi${ABI_VERSION}_fixture MODULE tests/host/PluginAbiFixture.cpp)
             add_dependencies(plugin_abi${ABI_VERSION}_fixture RunBeforeBuild)
             target_link_libraries(plugin_abi${ABI_VERSION}_fixture PRIVATE silent_interfaces)
@@ -608,6 +610,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         target_compile_definitions(plugin_abi4_fixture PRIVATE SILENT_ABI4_FIXTURE)
         target_compile_definitions(plugin_abi5_fixture PRIVATE SILENT_ABI5_FIXTURE)
         target_compile_definitions(plugin_abi6_fixture PRIVATE SILENT_ABI6_FIXTURE)
+        target_compile_definitions(plugin_abi7_fixture PRIVATE SILENT_ABI7_FIXTURE)
         qt_add_library(price_feed_fixture MODULE tests/host/PriceFeedPlugin.cpp)
         add_dependencies(price_feed_fixture RunBeforeBuild)
         # Like real plugins, use Qt headers but resolve Qt symbols from the host.
@@ -661,7 +664,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         SILENT_KEYS_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/host/fixtures")
     if(TARGET price_feed_fixture)
         target_sources(${SMOKE} PRIVATE tests/host/plugin_abi_smoke.cpp)
-        add_dependencies(${SMOKE} price_feed_fixture plugin_abi2_fixture plugin_abi3_fixture plugin_abi4_fixture plugin_abi5_fixture plugin_abi6_fixture plugin_abi7_fixture)
+        add_dependencies(${SMOKE} price_feed_fixture plugin_abi2_fixture plugin_abi3_fixture plugin_abi4_fixture plugin_abi5_fixture plugin_abi6_fixture plugin_abi7_fixture plugin_abi8_fixture)
         target_compile_definitions(${SMOKE} PRIVATE
             SILENT_ABI2_FIXTURE_PATH="$<TARGET_FILE:plugin_abi2_fixture>"
             SILENT_ABI3_FIXTURE_PATH="$<TARGET_FILE:plugin_abi3_fixture>"
@@ -669,6 +672,7 @@ if(SILENT_BUILD_HOST_SMOKE)
             SILENT_ABI5_FIXTURE_PATH="$<TARGET_FILE:plugin_abi5_fixture>"
             SILENT_ABI6_FIXTURE_PATH="$<TARGET_FILE:plugin_abi6_fixture>"
             SILENT_ABI7_FIXTURE_PATH="$<TARGET_FILE:plugin_abi7_fixture>"
+            SILENT_ABI8_FIXTURE_PATH="$<TARGET_FILE:plugin_abi8_fixture>"
             SILENT_PRICE_FEED_FIXTURE="$<TARGET_FILE:price_feed_fixture>")
     endif()
     if(TARGET storage_fixture)

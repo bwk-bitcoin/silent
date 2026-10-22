@@ -444,9 +444,7 @@ fn endpoint_command_owns_test_save_close_drain_and_reopen_order() {
         false,
     );
     missing_config.prepare_endpoint();
-    let path = config.config_path();
-    let backup = path.with_extension("endpoint-backup");
-    fs::rename(&path, &backup).expect("retain isolated account config");
+    common::logical::rename(&config, "config.json", "endpoint-backup.json");
     missing_config.finish_endpoint_after_drain();
     assert!(
         !missing_config.endpoint_result().is_ok,
@@ -457,7 +455,7 @@ fn endpoint_command_owns_test_save_close_drain_and_reopen_order() {
         BackendErrorKind::Storage,
         "config read failure retains its source category"
     );
-    fs::rename(&backup, &path).expect("restore isolated account config");
+    common::logical::rename(&config, "endpoint-backup.json", "config.json");
     let account = silent::take_sp_endpoint_account(missing_config);
     assert!(!account.is_ok(), "failed reopen leaves a closed account");
     let mut retry = silent::sp_endpoint_change(

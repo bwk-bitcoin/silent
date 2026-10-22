@@ -3,6 +3,7 @@
 #include "interfaces/host.h"
 #include "interfaces/instance.h"
 
+#include <QPointer>
 #include <QString>
 #include <memory>
 
@@ -14,6 +15,7 @@ public:
     explicit MusigInstance(QString id);
     [[nodiscard]] auto id() const -> QString override;
     void stop() override;
+    [[nodiscard]] auto backend() const -> MusigAccountController *;
     auto account() -> IAccount * override;
     auto feed() -> IFeed * override;           // nullptr
     auto signer() -> ISigner * override;       // nullptr
@@ -22,7 +24,7 @@ public:
 private:
     QString m_id;
     MusigAccountWidget *m_account_widget = nullptr;
-    MusigAccountController *m_account_controller = nullptr;
+    QPointer<MusigAccountController> m_account_controller;
     std::unique_ptr<IAccount> m_account;
     Host::TabId m_tab_id = 0;
     bool m_stopped = false;

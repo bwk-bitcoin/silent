@@ -1,5 +1,6 @@
 #include "SpModule.h"
 
+#include "AccountController.h"
 #include "AppController.h"
 #include "SpInstance.h"
 #include "i18n/Tr.h"
@@ -19,7 +20,7 @@ const QString K_CREATE_INSTANCE_ID = QStringLiteral("sp.create");
 SpModule *gSpModule = nullptr;
 } // namespace
 
-SpModule::SpModule() : IModule(nullptr) {
+SpModule::SpModule() : AccountModule(::sp_account_delete_check, ::delete_sp_account) {
     gSpModule = this;
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this, &SpModule::onInstanceRemoved,
             qontrol::UNIQUE);
@@ -74,6 +75,10 @@ ReqId SpModule::autoStart() {
 }
 
 void SpModule::startInstance(const QString &id) {
+    if (accountUnavailable(id)) {
+        emit error(std::nullopt, QStringLiteral("Account is open, closing or pending deletion"));
+        return;
+    }
     if (id == K_CREATE_INSTANCE_ID) {
         AppController::execModal(new modal::CreateAccount);
         return;
@@ -85,13 +90,13 @@ void SpModule::startInstance(const QString &id) {
     }
 
     auto instance = std::make_unique<SpInstance>(id);
+    watchAccount(id, instance->backend());
     Host::get()->registerInstance(id, instance.get(), this);
     m_instances.push_back(std::move(instance));
 }
 
 void SpModule::deleteInstance(const QString &id) {
-    // The host owns the tab UI and SpInstance::stop already closed its tab, so
-    // the instance is fully stopped here. Erase the owning unique_ptr.
+    // AccountModule retains the closing backend's completion independently of the tab.
     std::erase_if(m_instances, [&id](const std::unique_ptr<IInstance> &instance) {
         return instance != nullptr && instance->id() == id;
     });

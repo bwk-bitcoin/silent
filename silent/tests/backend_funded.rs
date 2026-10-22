@@ -390,8 +390,8 @@ fn funded_details_labels_dates_and_password_reopen_for_both_backends() {
     sp.stop_scanner();
     drop(sp);
 
-    assert_sealed_files(&config.account_dir());
-    assert_sealed_files(&sp_config.account_dir());
+    assert_sealed_files(&common::logical::root(&config));
+    assert_sealed_files(&common::logical::root(&sp_config));
     state_crypt::lock();
     assert!(
         !config_from_file(musig_name.clone()).is_ok(),

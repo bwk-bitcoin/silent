@@ -16,7 +16,10 @@ class InertFeed final : public IFeed {
 public:
     using IFeed::IFeed;
 
-    [[nodiscard]] bool implemented() const override { return false; }
+    [[nodiscard]] bool implemented() const override {
+        return false;
+    }
+
     ReqId raw(const QByteArray &request) override {
         Q_UNUSED(request);
         return 0;
@@ -31,36 +34,71 @@ public:
         return {};
     }
 
-    [[nodiscard]] bool implemented() const override { return false; }
-    [[nodiscard]] QString id() const override { return QString(); }
-    [[nodiscard]] QString fingerprint() const override { return QString(); }
-    [[nodiscard]] QString walletName() const override { return QString(); }
-    [[nodiscard]] QString brand() const override { return QString(); }
-    [[nodiscard]] QString model() const override { return QString(); }
-    [[nodiscard]] QString serial() const override { return QString(); }
+    [[nodiscard]] bool implemented() const override {
+        return false;
+    }
+
+    [[nodiscard]] QString id() const override {
+        return QString();
+    }
+
+    [[nodiscard]] QString fingerprint() const override {
+        return QString();
+    }
+
+    [[nodiscard]] QString walletName() const override {
+        return QString();
+    }
+
+    [[nodiscard]] QString brand() const override {
+        return QString();
+    }
+
+    [[nodiscard]] QString model() const override {
+        return QString();
+    }
+
+    [[nodiscard]] QString serial() const override {
+        return QString();
+    }
+
     [[nodiscard]] plugin::SignerState state() const override {
         return plugin::SignerState::Unsupported;
     }
-    [[nodiscard]] QString stateDetail() const override { return QString(); }
-    ReqId init() override { return 0; }
-    ReqId info() override { return 0; }
+
+    [[nodiscard]] QString stateDetail() const override {
+        return QString();
+    }
+
+    ReqId init() override {
+        return 0;
+    }
+
+    ReqId info() override {
+        return 0;
+    }
+
     ReqId getXpub(const QString &path) override {
         Q_UNUSED(path);
         return 0;
     }
+
     ReqId isDescriptorRegistered(const QString &descriptor) override {
         Q_UNUSED(descriptor);
         return 0;
     }
+
     ReqId registerDescriptor(const QString &descriptor) override {
         Q_UNUSED(descriptor);
         return 0;
     }
+
     ReqId signWithDescriptor(const QString &psbt_base64, const QString &descriptor) override {
         Q_UNUSED(psbt_base64);
         Q_UNUSED(descriptor);
         return 0;
     }
+
     ReqId displayAddress(const QString &descriptor, const QString &path,
                          const QString &address) override {
         Q_UNUSED(descriptor);
@@ -68,6 +106,7 @@ public:
         Q_UNUSED(address);
         return 0;
     }
+
     ReqId raw(const QByteArray &request) override {
         Q_UNUSED(request);
         return 0;
@@ -78,12 +117,19 @@ class InertThemeProvider final : public IThemeProvider {
 public:
     using IThemeProvider::IThemeProvider;
 
-    [[nodiscard]] bool implemented() const override { return false; }
-    ReqId themes() override { return 0; }
+    [[nodiscard]] bool implemented() const override {
+        return false;
+    }
+
+    ReqId themes() override {
+        return 0;
+    }
+
     ReqId palette(const QString &name) override {
         Q_UNUSED(name);
         return 0;
     }
+
     ReqId raw(const QByteArray &request) override {
         Q_UNUSED(request);
         return 0;
@@ -114,6 +160,10 @@ QString SpInstance::id() const {
     return m_id;
 }
 
+auto SpInstance::backend() const -> AccountController * {
+    return m_account_controller.data();
+}
+
 void SpInstance::stop() {
     if (m_stopped) {
         return;
@@ -140,7 +190,6 @@ void SpInstance::stop() {
     // The widget now owns its own teardown; drop our non-owning references.
     m_account.reset();
     m_account_widget = nullptr;
-    m_account_controller = nullptr;
 }
 
 IAccount *SpInstance::account() {

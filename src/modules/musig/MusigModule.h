@@ -1,7 +1,7 @@
 #pragma once
 
+#include "account/AccountModule.h"
 #include "interfaces/instance.h"
-#include "interfaces/module.h"
 
 #include <QMap>
 #include <QString>
@@ -12,7 +12,7 @@
 inline constexpr auto MUSIG_PLUGIN_ID = "musig";
 
 // One instance per config whose plugin id is MUSIG_PLUGIN_ID.
-class MusigModule final : public IModule {
+class MusigModule final : public account::AccountModule {
     Q_OBJECT
 
 public:

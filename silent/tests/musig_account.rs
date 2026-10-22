@@ -3,7 +3,6 @@
 
 mod common;
 
-use std::os::unix::fs::PermissionsExt;
 use std::str::FromStr;
 
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpriv, Xpub};
@@ -118,10 +117,9 @@ fn musig_config_to_bwk_config() {
         musig_config.as_ref().err()
     );
     let musig_config = musig_config.unwrap();
-    assert_eq!(
-        musig_config.scanner.account_dir(),
-        config.account_dir(),
-        "bwk stores should sit in the silent account directory"
+    assert!(
+        musig_config.scanner.backend_factory.is_some(),
+        "bwk receives the caller-owned logical storage factory"
     );
 
     cleanup_test_account(&account_name);
@@ -311,14 +309,9 @@ fn musig_account_without_electrum_url_stays_offline() {
         "a cleared url should not start on the old host"
     );
 
-    // A read-only account directory makes the write fail: the config is written to
-    // a temporary file there, then renamed over the old one.
-    let account_dir = config.account_dir();
-    let read_only = std::fs::Permissions::from_mode(0o555);
-    std::fs::set_permissions(&account_dir, read_only).expect("make account dir read-only");
+    common::logical::block_file(&config, "config.json");
     let unwritable = account.set_electrum_url(UNREACHABLE_ELECTRUM_URL.to_string());
-    let writable = std::fs::Permissions::from_mode(0o755);
-    std::fs::set_permissions(&account_dir, writable).expect("make account dir writable again");
+    common::logical::restore_file(&config, "config.json");
     assert!(
         !unwritable.saved && !unwritable.started,
         "a failed config write is not saved and starts nothing"

@@ -112,8 +112,9 @@ void MusigAccountAdapter::onControllerBalanceUpdate([[maybe_unused]] uint64_t ba
 }
 
 auto MusigAccountAdapter::accountReady(ReqId req_id) -> bool {
-    if (m_controller == nullptr || !m_controller->getAccount().has_value()) {
-        emit error(req_id, QStringLiteral("MuSig2 account not initialized"));
+    if (m_controller == nullptr || m_controller->accountDeletionPending() ||
+        !m_controller->getAccount().has_value() || !m_controller->getAccount().value()->is_ok()) {
+        emit error(requestOf(req_id), QStringLiteral("MuSig2 account is unavailable"));
         return false;
     }
     return true;
@@ -128,8 +129,7 @@ auto MusigAccountAdapter::nextReqId() -> ReqId {
 }
 
 void MusigAccountAdapter::emitCoins(ReqId req_id) {
-    if (m_controller == nullptr || !m_controller->getAccount().has_value()) {
-        emit error(requestOf(req_id), QStringLiteral("MuSig2 account controller missing"));
+    if (!accountReady(req_id)) {
         return;
     }
     QList<plugin::Coin> out;
@@ -146,8 +146,7 @@ void MusigAccountAdapter::emitCoins(ReqId req_id) {
 }
 
 void MusigAccountAdapter::emitBalance(ReqId req_id) {
-    if (m_controller == nullptr || !m_controller->getAccount().has_value()) {
-        emit error(requestOf(req_id), QStringLiteral("MuSig2 account not initialized"));
+    if (!accountReady(req_id)) {
         return;
     }
     auto state = m_controller->getAccount().value()->spendable_coins();

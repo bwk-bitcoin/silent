@@ -3,6 +3,7 @@
 #include "account_navigation_smoke.h"
 
 #include "AppController.h"
+#include "MainWindow.h"
 #include "account/ElectrumReconnect.h"
 #include "catalog/Button.h"
 #include "catalog/SelectRow.h"
@@ -13,22 +14,35 @@
 #include "catalog/inputs/Input.h"
 #include "catalog/inputs/Toggle.h"
 #include "host/Host.h"
+#include "host/PluginRegistry.h"
 #include "i18n/Tr.h"
+#include "interfaces/account.h"
 #include "modules/keys/KeysModule.h"
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigPlugin.h"
 #include "modules/musig/MusigStatusBar.h"
 #include "modules/sp/AccountWidget.h"
 #include "modules/sp/SpPlugin.h"
+#include "views/MenuTab.h"
+#include "views/modals/ConfirmDelete.h"
 #include "views/utils.h"
 
 #include <QApplication>
+#include <QCursor>
+#include <QDialog>
+#include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
+#include <QLabel>
+#include <QMap>
+#include <QPointer>
+#include <QPushButton>
+#include <QScreen>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
@@ -67,6 +81,163 @@
 
 namespace smoke {
 namespace {
+
+void require(bool condition, const char *message);
+
+void captureDeletionWindow(MainWindow &window, const QString &path) {
+    auto *screen = window.screen();
+    require(screen != nullptr, "the private display has a screen");
+    QCursor::setPos(screen->geometry().topLeft());
+    auto shot = screen->grabWindow(window.winId());
+    require(!shot.isNull() && shot.save(path),
+            "whole visible window including its native modal is captured");
+}
+
+class DialogExposure {
+public:
+    auto ready(QDialog *dialog) -> bool {
+        if (m_dialog != dialog) {
+            m_dialog = dialog;
+            m_visible.start();
+            return false;
+        }
+        return m_visible.hasExpired(100);
+    }
+
+private:
+    QPointer<QDialog> m_dialog;
+    QElapsedTimer m_visible;
+};
+
+class DeleteConfirmationDriver final : public QObject {
+    Q_OBJECT
+
+public:
+    explicit DeleteConfirmationDriver(MainWindow &window) : m_window(window) {
+        connect(&m_timer, &QTimer::timeout, this, &DeleteConfirmationDriver::onTick,
+                qontrol::UNIQUE);
+        m_timer.start(5);
+    }
+
+    void confirmDelete() {
+        m_confirm = true;
+    }
+
+    [[nodiscard]] auto seen() const -> int {
+        return m_seen;
+    }
+
+    [[nodiscard]] auto text() const -> const QString & {
+        return m_text;
+    }
+
+public slots:
+
+    void onTick() {
+        auto *dialog = qobject_cast<modal::ConfirmDelete *>(QApplication::activeModalWidget());
+        if (dialog == nullptr) {
+            return;
+        }
+        auto shots = qEnvironmentVariable("SILENT_DELETION_SHOTS");
+        if (!shots.isEmpty() && !m_exposure.ready(dialog)) {
+            return;
+        }
+        ++m_seen;
+        for (auto *label : dialog->findChildren<QLabel *>()) {
+            m_text += label->text();
+        }
+        if (!shots.isEmpty()) {
+            captureDeletionWindow(m_window,
+                                  shots + (m_confirm ? QStringLiteral("/confirmation-delete.png")
+                                                     : QStringLiteral("/confirmation-cancel.png")));
+        }
+        if (!m_confirm) {
+            dialog->reject();
+            return;
+        }
+        for (auto *button : dialog->findChildren<QPushButton *>()) {
+            if (button->text() == TR("common-delete")) {
+                button->click();
+                return;
+            }
+        }
+        qFatal("deletion confirmation has no Delete action");
+    }
+
+private:
+    MainWindow &m_window;
+    bool m_confirm = false;
+    int m_seen = 0;
+    QString m_text;
+    DialogExposure m_exposure;
+    QTimer m_timer;
+};
+
+class DeletionSpy final : public QObject {
+    Q_OBJECT
+
+public:
+    QStringList ids;
+    QStringList errors;
+    QMap<ReqId, QString> account_errors;
+
+public slots:
+
+    void onFinished(IModule *module, const QString &id, const QString &error) {
+        Q_UNUSED(module);
+        ids.append(id);
+        errors.append(error);
+    }
+
+    void onAccountError(std::optional<ReqId> req_id, const QString &error) {
+        if (req_id.has_value()) {
+            account_errors.insert(*req_id, error);
+        }
+    }
+};
+
+class DeletionErrorObserver final : public QObject {
+    Q_OBJECT
+
+public:
+    explicit DeletionErrorObserver(MainWindow &window) : m_window(window) {
+        connect(&m_timer, &QTimer::timeout, this, &DeletionErrorObserver::onTick, qontrol::UNIQUE);
+        m_timer.start(5);
+    }
+
+    [[nodiscard]] auto messages() const -> const QStringList & {
+        return m_messages;
+    }
+
+public slots:
+
+    void onTick() {
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (dialog == nullptr) {
+            return;
+        }
+        auto shots = qEnvironmentVariable("SILENT_DELETION_SHOTS");
+        if (!shots.isEmpty() && !m_exposure.ready(dialog)) {
+            return;
+        }
+        QStringList labels;
+        for (auto *label : dialog->findChildren<QLabel *>()) {
+            labels.append(label->text());
+        }
+        m_messages.append(labels.join(QStringLiteral(" ")));
+        if (!shots.isEmpty()) {
+            captureDeletionWindow(
+                m_window, shots + QStringLiteral("/delete-error-%1.png").arg(m_messages.size()));
+        }
+        dialog->accept();
+    }
+
+private:
+    MainWindow &m_window;
+    QStringList m_messages;
+    DialogExposure m_exposure;
+    QTimer m_timer;
+};
 
 class NumericProgressSpy final : public QObject {
     Q_OBJECT
@@ -1495,6 +1666,318 @@ void endpointSmoke() {
         QStringLiteral("boundary-policy"), QStringLiteral("startup-policy"),
         QStringLiteral("musig"));
 #endif
+}
+
+namespace {
+
+void copyDeletionAccount(const QString &source, const QString &name) {
+    auto original = ::config_from_file(rust::String(source.toStdString()));
+    require(original->is_ok(), "deletion source account exists");
+    auto config = ::new_config(rust::String(name.toStdString()), original->get_network(),
+                               original->get_descriptor(), original->get_blindbit_url(), {},
+                               original->get_dust_limit(), original->get_plugin_id());
+    config->set_segwit_descriptor(original->get_segwit_descriptor());
+    config->set_taproot_descriptor(original->get_taproot_descriptor());
+    require(config->save().empty(), "isolated logical deletion account is saved");
+}
+
+auto sharedDeletionState() -> QMap<QString, QByteArray> {
+    QMap<QString, QByteArray> files;
+    auto root = QDir::homePath() + QStringLiteral("/.silent");
+    for (const auto &folder : {QStringLiteral("keys"), QStringLiteral("musig-sessions")}) {
+        QDirIterator entries(root + QLatin1Char('/') + folder, QDir::Files,
+                             QDirIterator::Subdirectories);
+        while (entries.hasNext()) {
+            auto path = entries.next();
+            QFile file(path);
+            require(file.open(QIODevice::ReadOnly), "shared key/session fixture reads");
+            files.insert(path, file.readAll());
+        }
+    }
+    QFile unlock(root + QStringLiteral("/unlock.key"));
+    require(unlock.open(QIODevice::ReadOnly), "original application unlock key exists");
+    files.insert(unlock.fileName(), unlock.readAll());
+    return files;
+}
+
+void deletionConfirmation(MainWindow &window, IModule *module) {
+    auto name = QStringLiteral("delete-confirmation");
+    copyDeletionAccount("boundary-sp", name);
+    auto *registry = AppController::get()->pluginRegistry();
+    registry->relistModules();
+    auto *launcher = window.findChild<MenuTab *>();
+    require(launcher != nullptr, "the real launcher exists");
+    window.showTab(launcher);
+    auto trash = [&window, &name]() -> QPushButton * {
+        for (auto *button : window.findChildren<QPushButton *>()) {
+            if (button->property("accountName").toString() == name) {
+                return button;
+            }
+        }
+        return nullptr;
+    };
+    waitFor([&trash] { return trash() != nullptr; },
+            "generic launcher exposes the account trash action");
+    DeleteConfirmationDriver driver(window);
+    DeletionSpy results;
+    QObject::connect(registry, &PluginRegistry::accountDeletionFinished, &results,
+                     &DeletionSpy::onFinished, qontrol::UNIQUE);
+    trash()->click();
+    require(driver.seen() == 1 && driver.text().contains(name) && results.ids.empty(),
+            "the unchanged confirmation shows the stable identity and cancel dispatches nothing");
+    require(::config_from_file(rust::String(name.toStdString()))->is_ok(),
+            "cancel preserves persisted account data");
+    driver.confirmDelete();
+    trash()->click();
+    waitFor([&results] { return results.ids.size() == 1; },
+            "confirmed UI deletion completes through its owning module");
+    require(driver.seen() == 2 && results.ids.first() == name && results.errors.first().isEmpty(),
+            "one explicit confirmation produces one successful correlated result");
+    require(!::config_from_file(rust::String(name.toStdString()))->is_ok(),
+            "confirmed account was removed");
+    auto listed = registry->launcherInstancesForModule(module);
+    require(
+        std::ranges::none_of(listed, [&name](const auto &entry) { return entry.first == name; }),
+        "the UI result refreshes the owning module's discovery only after success");
+}
+
+template <typename Controller>
+auto deletionController(MainWindow &window, const QString &name) -> Controller * {
+    for (auto *controller : window.findChildren<Controller *>()) {
+        if (controller->property("logicalAccountId").toString() == name) {
+            return controller;
+        }
+    }
+    return nullptr;
+}
+
+template <typename Controller>
+void deletionCycle(MainWindow &window, IModule *module, const QString &source, const QString &name,
+                   bool close_first, bool wait_closed) {
+    copyDeletionAccount(source, name);
+    auto *registry = AppController::get()->pluginRegistry();
+    registry->relistModules();
+    require(registry->startLauncherInstance(module, name), "real account starts through registry");
+    auto *controller = deletionController<Controller>(window, name);
+    require(controller != nullptr, "real module-owned controller is tracked");
+    waitFor(
+        [controller] {
+            return !controller->accountLoading() && !controller->endpointOperationsBusy();
+        },
+        "real backend finishes opening and its offline startup transition");
+    require(controller->getAccount().has_value() && controller->getAccount().value()->is_ok(),
+            "real isolated backend opened");
+    std::binary_semaphore release(0);
+    std::atomic<bool> entered{false};
+    std::atomic<bool> written{false};
+    auto *account = &*controller->getAccount().value();
+    auto *worker = QThread::create([account, &release, &entered, &written] {
+        entered = true;
+        release.acquire();
+        auto result = account->update_coin_label(rust::String(std::string(64, '1') + ":0"),
+                                                 rust::String("delayed deletion label"));
+        require(result.is_ok, "real delayed label write succeeds before removal");
+        if constexpr (requires { account->retry_saved_psbts(); }) {
+            auto saved = account->retry_saved_psbts();
+            require(saved.is_ok && saved.save_error.empty(),
+                    "delayed real saved-PSBT persistence completes before removal");
+        }
+        written = true;
+    });
+    controller->startWorker(worker);
+    waitFor([&entered] { return entered.load(); }, "delayed real write entered");
+    if constexpr (requires { controller->retrySavedPsbts(); }) {
+        controller->retrySavedPsbts();
+        require(!controller->m_storage_queue.empty(),
+                "public saved-PSBT retry is accepted in the controller queue");
+    }
+    SignalSpy stopped;
+    QObject::connect(controller, &Controller::stopped, &stopped, &SignalSpy::onSignal,
+                     qontrol::UNIQUE);
+    if (close_first) {
+        Host::get()->removeInstance(name, module);
+        require(::config_from_file(rust::String(name.toStdString()))->is_ok(),
+                "ordinary tab close preserves config while backend is closing");
+    }
+    if (wait_closed) {
+        release.release();
+        waitFor([&stopped] { return stopped.count() == 1; }, "closed backend destruction barrier");
+        require(written.load(), "closed account flushed delayed work");
+    }
+    DeletionSpy results;
+    QObject::connect(registry, &PluginRegistry::accountDeletionFinished, &results,
+                     &DeletionSpy::onFinished, qontrol::UNIQUE);
+    QPointer<IAccount> publicAccount;
+    if (!close_first) {
+        for (auto *instance : dynamic_cast<HostImpl *>(Host::get())->liveInstances()) {
+            if (instance->id() == name) {
+                publicAccount = instance->account();
+            }
+        }
+        require(publicAccount != nullptr, "the real account exposes its public capability");
+        QObject::connect(publicAccount, &IAccount::error, &results, &DeletionSpy::onAccountError,
+                         qontrol::UNIQUE);
+    }
+    registry->deleteInstance(module, name);
+    if (publicAccount != nullptr) {
+        auto coins = publicAccount->coins();
+        auto balance = publicAccount->balance();
+        require(!results.account_errors.value(coins).isEmpty() &&
+                    !results.account_errors.value(balance).isEmpty(),
+                "pending deletion refuses new public account reads, not dummy data");
+    }
+    require(results.ids.empty(), "delete dispatch is not a success result");
+    if (!wait_closed) {
+        waitFor([controller] { return controller->endpointsStopping(); },
+                "owning module requests asynchronous shutdown");
+        require(results.ids.empty() && !written.load(), "deletion waits for the actual writer");
+        require(::config_from_file(rust::String(name.toStdString()))->is_ok(),
+                "storage remains until all workers and backend destruction finish");
+        require(!registry->startLauncherInstance(module, name), "pending deletion blocks reopen");
+        std::atomic<bool> lateWorker{false};
+        controller->startWorker(QThread::create([&lateWorker] { lateWorker = true; }));
+        QApplication::processEvents();
+        require(!lateWorker.load(), "pending deletion refuses a new public worker");
+        release.release();
+    }
+    waitFor([&results] { return results.ids.size() == 1; }, "persisted deletion completes");
+    require(results.ids.first() == name && results.errors.first().isEmpty(),
+            "one correlated successful deletion result");
+    require(written.load(), "outstanding persistence preceded deletion");
+    require(!::config_from_file(rust::String(name.toStdString()))->is_ok(),
+            "logical account removed");
+    require(::config_from_file(rust::String(source.toStdString()))->is_ok(),
+            "another account and its logical files survive");
+    QThread::msleep(80);
+    QApplication::processEvents();
+    require(!::config_from_file(rust::String(name.toStdString()))->is_ok(),
+            "no late worker recreates removed account state");
+}
+
+#ifdef Q_OS_UNIX
+template <typename Controller>
+void deletionShutdownFailure(MainWindow &window, IModule *module, const QString &source,
+                             const QString &name, const QString &plugin) {
+    copyDeletionAccount(source, name);
+    auto *registry = AppController::get()->pluginRegistry();
+    registry->relistModules();
+    require(registry->startLauncherInstance(module, name), "shutdown failure account starts");
+    auto *controller = deletionController<Controller>(window, name);
+    require(controller != nullptr, "shutdown failure uses the real controller");
+    waitFor(
+        [controller] {
+            return !controller->accountLoading() && !controller->endpointOperationsBusy();
+        },
+        "failure fixture opens offline");
+    std::binary_semaphore release(0);
+    std::atomic<bool> entered{false};
+    std::atomic<bool> failed{false};
+    auto *account = &*controller->getAccount().value();
+    controller->startWorker(QThread::create([account, &release, &entered, &failed] {
+        entered = true;
+        release.acquire();
+        auto result =
+            account->update_coin_label(rust::String(std::string(64, '2') + ":0"), "unsaved label");
+        failed = !result.is_ok && !result.error.empty();
+    }));
+    waitFor([&entered] { return entered.load(); }, "failure writer is pending");
+    DeletionSpy results;
+    SignalSpy refresh;
+    QObject::connect(registry, &PluginRegistry::accountDeletionFinished, &results,
+                     &DeletionSpy::onFinished, qontrol::UNIQUE);
+    QObject::connect(registry, &PluginRegistry::enabledPluginsChanged, &refresh,
+                     &SignalSpy::onSignal, qontrol::UNIQUE);
+    registry->deleteInstance(module, name);
+    waitFor([controller] { return controller->endpointsStopping(); },
+            "deletion passed validation and waits for shutdown");
+    auto root = QDir::homePath() + QStringLiteral("/.silent/") + plugin;
+    auto permissions = QFile::permissions(root);
+    require(QFile::setPermissions(root, QFileDevice::ReadOwner | QFileDevice::ExeOwner),
+            "deny actual shutdown persistence");
+    release.release();
+    waitFor([&results] { return results.ids.size() == 1; },
+            "failed persistence produces deletion result");
+    require(QFile::setPermissions(root, permissions), "restore storage after shutdown failure");
+    require(failed.load() && !results.errors.first().isEmpty(),
+            "pending persistence failure prevents persisted deletion");
+    require(refresh.count() == 0,
+            "failure does not refresh launcher discovery as successful deletion");
+    require(::config_from_file(rust::String(name.toStdString()))->is_ok(),
+            "shutdown failure preserves the account's persisted data");
+    auto listed = registry->launcherInstancesForModule(module);
+    require(std::ranges::any_of(listed, [&name](const auto &item) { return item.first == name; }),
+            "failed deletion remains in registry discovery");
+}
+#endif
+
+} // namespace
+
+void deletionSmoke() {
+    AppController::get()->initState();
+    MainWindow window;
+    AppController::get()->start(&window);
+    prepareEndpointAccounts();
+    window.resize(qEnvironmentVariableIsEmpty("SILENT_DELETION_SHOTS") ? 1440 : 1920,
+                  qEnvironmentVariableIsEmpty("SILENT_DELETION_SHOTS") ? 1000 : 1080);
+    window.show();
+    auto *sp = SpModule::get();
+    auto *musig = MusigModule::get();
+    require(sp != nullptr && musig != nullptr, "both owning modules exist");
+    auto history = QDir::homePath() + QStringLiteral("/.silent/musig-sessions");
+    require(QDir().mkpath(history), "isolated shared signing-history boundary exists");
+    QFile sentinel(history + QStringLiteral("/deletion-history-sentinel"));
+    require(sentinel.open(QIODevice::WriteOnly | QIODevice::NewOnly) &&
+                sentinel.write("shared history must survive account deletion") > 0,
+            "nonempty shared history sentinel is installed");
+    sentinel.close();
+    auto shared = sharedDeletionState();
+    deletionCycle<AccountController>(window, sp, "boundary-sp", "delete-sp-open", false, false);
+    deletionCycle<AccountController>(window, sp, "boundary-sp", "delete-sp-closing", true, false);
+    deletionCycle<AccountController>(window, sp, "boundary-sp", "delete-sp-closed", true, true);
+    deletionCycle<MusigAccountController>(window, musig, "boundary-policy", "delete-musig-open",
+                                          false, false);
+    deletionCycle<MusigAccountController>(window, musig, "boundary-policy", "delete-musig-closing",
+                                          true, false);
+    deletionCycle<MusigAccountController>(window, musig, "boundary-policy", "delete-musig-closed",
+                                          true, true);
+    deletionConfirmation(window, sp);
+    auto *registry = AppController::get()->pluginRegistry();
+    DeletionSpy results;
+    DeletionErrorObserver errors(window);
+    QObject::connect(registry, &PluginRegistry::accountDeletionFinished, &results,
+                     &DeletionSpy::onFinished, qontrol::UNIQUE);
+    registry->deleteInstance(musig, "boundary-sp");
+    require(results.ids.size() == 1 && !results.errors.first().isEmpty(),
+            "cross-module identity is refused without touching storage");
+    ::state_lock();
+    registry->deleteInstance(sp, "boundary-sp");
+    waitFor([&results] { return results.ids.size() == 2; }, "locked deletion answers");
+    require(!results.errors.last().isEmpty(), "locked storage is an explicit failure");
+    require(::state_unlock_with_password("host smoke").empty(), "same app unlock key is retained");
+    require(::config_from_file("boundary-sp")->is_ok(), "failed deletion stays discoverable");
+    require(errors.messages().size() == 2 &&
+                errors.messages().first().contains(QStringLiteral("identity")) &&
+                errors.messages().last().contains(QStringLiteral("locked")),
+            "the real generic shell displays both explicit deletion failures");
+#ifdef Q_OS_UNIX
+    auto root = QDir::homePath() + QStringLiteral("/.silent/sp");
+    auto permissions = QFile::permissions(root);
+    require(QFile::setPermissions(root, QFileDevice::ReadOwner | QFileDevice::ExeOwner),
+            "make isolated plugin storage read-only");
+    registry->deleteInstance(sp, "boundary-sp");
+    waitFor([&results] { return results.ids.size() == 3; }, "I/O deletion failure answers");
+    require(!results.errors.last().isEmpty(), "I/O failure is not deletion success");
+    require(QFile::setPermissions(root, permissions), "restore isolated storage");
+    require(::config_from_file("boundary-sp")->is_ok(), "I/O failure leaves account discoverable");
+#endif
+#ifdef Q_OS_UNIX
+    deletionShutdownFailure<AccountController>(window, sp, "boundary-sp", "delete-sp-failed-flush",
+                                               "sp");
+    deletionShutdownFailure<MusigAccountController>(window, musig, "boundary-policy",
+                                                    "delete-musig-failed-flush", "musig");
+#endif
+    require(sharedDeletionState() == shared, "deleting one account preserves shared keys, session "
+                                             "history and the exact application unlock key bytes");
 }
 
 } // namespace smoke

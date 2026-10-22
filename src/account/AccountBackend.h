@@ -68,6 +68,8 @@ public:
     [[nodiscard]] auto endpointErrorKind(Endpoint endpoint) const -> BackendErrorKind;
     [[nodiscard]] auto accountLoading() const -> bool;
     [[nodiscard]] auto accountLoadError() const -> QString;
+    void setAccountDeletionPending(bool pending);
+    [[nodiscard]] auto accountDeletionPending() const -> bool;
     [[nodiscard]] auto hasAccountMetadata() const -> bool;
     // What Settings shows below the endpoints, nullptr when nothing. Owned by the caller.
     virtual auto settingsExtras() -> QWidget * = 0;
@@ -91,6 +93,9 @@ public:
     virtual void setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) = 0;
 
 signals:
+    void stopped();
+    void shutdownFinished(QString error);
+    void shutdownDrained(QString error);
     void accountLoadFinished();
     void updateCoins(CoinState coins);
     void updateBalance(uint64_t balance);
@@ -111,6 +116,7 @@ signals:
                              BackendInfo info);
 
 public slots:
+    void onShutdownDrained(const QString &error);
     virtual void updateCoinLabel(const QString &outpoint, const QString &label) = 0;
     void onEndpointTipFetched(uint64_t req_id, uint64_t generation, Endpoint endpoint,
                               const ElectrumTipResult &result);
@@ -118,6 +124,32 @@ public slots:
                                const BackendInfo &info);
 
 protected:
+    template <typename T>
+    void drainAccount(std::optional<rust::Box<T>> account, QThread *notif,
+                      QList<QThread *> workers) {
+        auto *teardown = QThread::create(
+            [this, acc = std::move(account), notif, workers = std::move(workers)]() mutable {
+                for (auto *worker : workers) {
+                    worker->wait();
+                    worker->deleteLater();
+                }
+                QString error;
+                if (acc.has_value()) {
+                    auto failure = acc.value()->shutdown_backend();
+                    error = QString::fromUtf8(failure.data(), failure.size());
+                    acc.reset();
+                }
+                if (notif != nullptr) {
+                    notif->wait();
+                    notif->deleteLater();
+                }
+                emit shutdownDrained(error);
+            });
+        connect(teardown, &QThread::finished, teardown, &QThread::deleteLater,
+                Qt::UniqueConnection);
+        teardown->start();
+    }
+
     void beginEndpointOperation(uint64_t req_id, Endpoint endpoint, EndpointOperation operation);
     void finishEndpointOperation(const EndpointResult &result);
     void finishEndpointConnection(Endpoint endpoint, bool connected, const rust::String &error,
@@ -143,13 +175,13 @@ protected:
         m_account_loading = true;
         m_account_load_error.clear();
         m_loading_config = std::make_shared<std::optional<rust::Box<Config>>>();
-        return QThread::create(
-            [config = m_loading_config, account, open, name = name.toStdString()] {
-                config->emplace(::config_from_file(rust::String(name)));
-                if (config->value()->is_ok()) {
-                    account->emplace(open(*config->value()));
-                }
-            });
+        return QThread::create([config = m_loading_config, account = std::move(account), open,
+                                name = name.toStdString()] {
+            config->emplace(::config_from_file(rust::String(name)));
+            if (config->value()->is_ok()) {
+                account->emplace(open(*config->value()));
+            }
+        });
     }
 
     template <typename T, typename Create, typename Take>
@@ -158,33 +190,35 @@ protected:
                               std::shared_ptr<bool> replaced, QList<QThread *> workers,
                               QThread *notification_thread, Create create, Take take,
                               std::shared_ptr<BackendServer> server = nullptr) -> QThread * {
-        return QThread::create(
-            [account, result, replaced, workers, notification_thread, create, take, server] {
-                for (auto *worker : workers) {
-                    worker->wait();
-                    worker->deleteLater();
+        return QThread::create([account = std::move(account), result = std::move(result),
+                                replaced = std::move(replaced), workers = std::move(workers),
+                                notification_thread, create = std::move(create),
+                                take = std::move(take), server = std::move(server)] {
+            for (auto *worker : workers) {
+                worker->wait();
+                worker->deleteLater();
+            }
+            auto change = create(std::move(account->value()));
+            change->prepare_endpoint();
+            if (change->endpoint_phase() == EndpointPhase::Draining) {
+                *replaced = true;
+                if (notification_thread != nullptr) {
+                    notification_thread->wait();
+                    notification_thread->deleteLater();
                 }
-                auto change = create(std::move(account->value()));
-                change->prepare_endpoint();
-                if (change->endpoint_phase() == EndpointPhase::Draining) {
-                    *replaced = true;
-                    if (notification_thread != nullptr) {
-                        notification_thread->wait();
-                        notification_thread->deleteLater();
-                    }
-                    change->finish_endpoint_after_drain();
-                }
-                *result = change->endpoint_result();
-                if (server != nullptr) {
-                    *server = change->endpoint_server();
-                }
-                account->value() = take(std::move(change));
-            });
+                change->finish_endpoint_after_drain();
+            }
+            *result = change->endpoint_result();
+            if (server != nullptr) {
+                *server = change->endpoint_server();
+            }
+            account->value() = take(std::move(change));
+        });
     }
 
     template <typename T>
     void requestAccountTxDetails(uint64_t req_id, const QString &txid, T *account, bool online) {
-        if (account == nullptr) {
+        if (account == nullptr || endpointsStopping() || accountDeletionPending()) {
             RustTxDetails result;
             result.is_ok = false;
             result.error = rust::String("Account is not available");
@@ -199,7 +233,7 @@ protected:
     template <typename T>
     void editAccountLabel(uint64_t req_id, const QString &id, const QString &label, T *account,
                           bool transaction) {
-        if (account == nullptr) {
+        if (account == nullptr || endpointsStopping() || accountDeletionPending()) {
             emit labelEdited(req_id, false, QStringLiteral("Account is not available"));
             return;
         }
@@ -235,5 +269,6 @@ private:
     rust::String m_account_descriptor;
     std::shared_ptr<std::optional<rust::Box<Config>>> m_loading_config;
     bool m_account_loading = false;
+    bool m_deletion_pending = false;
     QString m_account_load_error;
 };

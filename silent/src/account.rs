@@ -2,8 +2,10 @@
 //!
 //! Wraps bwk-sp::Account with CXX-compatible interface for C++ bindings.
 
-use std::sync::mpsc;
-use std::time::Duration;
+use std::{
+    sync::{mpsc, Arc},
+    time::Duration,
+};
 
 use bwk_sp::account::recipient::SpRecipientAddress;
 use bwk_sp::account::{Account as SpAccount, ScanMode};
@@ -17,6 +19,7 @@ use bwk_sp::bwk_sign::miniscript::Descriptor as MiniscriptDescriptor;
 use bwk_sp::receiver::RecipientAddress;
 
 use crate::{
+    account_storage::Factory,
     config::Config,
     error::BackendFailure,
     ffi::{
@@ -31,6 +34,7 @@ pub(crate) const MSATS_PER_SAT: u64 = 1000;
 /// Valid account state (created successfully).
 struct AccountInner {
     account: SpAccount,
+    factory: Arc<Factory>,
     /// The account's name: bwk only knows its opaque directory name.
     name: String,
     receiver: Option<mpsc::Receiver<BwkNotification>>,
@@ -45,6 +49,7 @@ pub struct Account {
     inner: Option<AccountInner>,
     error: String,
     closed_name: Option<String>,
+    pending_flush_error: String,
 }
 
 /// The script of a sub-account, read off its descriptor.
@@ -72,6 +77,7 @@ impl Account {
             inner: Some(inner),
             error: String::new(),
             closed_name: None,
+            pending_flush_error: String::new(),
         })
     }
 
@@ -94,11 +100,21 @@ impl Account {
             runtime.electrum_url.clear();
         }
         let sp_config = runtime.to_sp_config()?;
-        let mut account = SpAccount::new(sp_config).map_err(|e| e.to_string())?;
+        let factory = Factory::open(&config)?;
+        let config_store = factory.config_store();
+        let mut account = SpAccount::with_backend_factory(
+            sp_config,
+            factory.clone(),
+            config_store,
+            None,
+            Default::default(),
+        )
+        .map_err(|e| e.to_string())?;
         let receiver = account.receiver();
 
         Ok(AccountInner {
             account,
+            factory,
             name: config.account_name.clone(),
             receiver,
             network,
@@ -107,15 +123,51 @@ impl Account {
         })
     }
 
+    pub fn shutdown_backend(&mut self) -> String {
+        let Some(mut old) = self.inner.take() else {
+            return self.pending_flush_error.clone();
+        };
+        old.account.stop_scanner();
+        old.account.stop_electrum();
+        let error = old
+            .account
+            .try_persist()
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        old.factory.begin_shutdown();
+        drop(old.account);
+        if let Some(receiver) = old.receiver {
+            while receiver.recv().is_ok() {}
+        }
+        old.factory.wait_for_backends();
+        let late_error = old.factory.failure();
+        if !self.pending_flush_error.is_empty() {
+            self.pending_flush_error.clone()
+        } else if error.is_empty() {
+            late_error
+        } else {
+            error
+        }
+    }
+
     /// Header workers can outlive account drop; drain the taken receiver before reopening.
     pub fn close_backend(&mut self) {
         if let Some(mut old) = self.inner.take() {
             self.closed_name = Some(old.name);
             old.account.stop_scanner();
             old.account.stop_electrum();
+            if let Err(error) = old.account.try_persist() {
+                self.pending_flush_error = error.to_string();
+            }
+            old.factory.begin_shutdown();
             drop(old.account);
             if let Some(receiver) = old.receiver {
                 while receiver.recv().is_ok() {}
+            }
+            old.factory.wait_for_backends();
+            if self.pending_flush_error.is_empty() {
+                self.pending_flush_error = old.factory.failure();
             }
         }
     }
@@ -130,6 +182,13 @@ impl Account {
     /// Called after workers and the old notification receiver have drained.
     pub fn reopen_backend(&mut self, connect_electrum: bool) -> crate::ffi::EndpointResult {
         self.close_backend();
+        if !self.pending_flush_error.is_empty() {
+            return crate::ffi::EndpointResult {
+                kind: BackendErrorKind::Storage,
+                error: self.pending_flush_error.clone(),
+                ..Default::default()
+            };
+        }
         let mut failure_kind = BackendErrorKind::Other;
         let result = (|| {
             let name = self
@@ -207,7 +266,11 @@ impl Account {
 
     /// Get error message (empty if is_ok).
     pub fn get_error(&self) -> String {
-        self.error.clone()
+        if self.pending_flush_error.is_empty() {
+            self.error.clone()
+        } else {
+            self.pending_flush_error.clone()
+        }
     }
 
     pub fn electrum_url(&self) -> String {
@@ -1729,6 +1792,7 @@ pub fn new_account_offline(config: &Config) -> Box<Account> {
             inner: Some(inner),
             error: String::new(),
             closed_name: None,
+            pending_flush_error: String::new(),
         }),
         Err(error) => {
             log::error!("Failed to open account offline: {error}");
@@ -1736,6 +1800,7 @@ pub fn new_account_offline(config: &Config) -> Box<Account> {
                 inner: None,
                 error,
                 closed_name: Some(config.account_name.clone()),
+                pending_flush_error: String::new(),
             })
         }
     }
@@ -1752,6 +1817,7 @@ pub fn new_account(account_name: String) -> Box<Account> {
                 inner: None,
                 error,
                 closed_name: None,
+                pending_flush_error: String::new(),
             });
         }
     };
@@ -1760,6 +1826,7 @@ pub fn new_account(account_name: String) -> Box<Account> {
             inner: Some(inner),
             error: String::new(),
             closed_name: None,
+            pending_flush_error: String::new(),
         }),
         Err(e) => {
             let error = format!("Failed to create account: {e}");
@@ -1768,6 +1835,7 @@ pub fn new_account(account_name: String) -> Box<Account> {
                 inner: None,
                 error,
                 closed_name: None,
+                pending_flush_error: String::new(),
             })
         }
     }

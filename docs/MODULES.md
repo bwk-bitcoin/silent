@@ -200,20 +200,73 @@ keeps no instance state. The module exposes:
   starts launcher/auto-start instances through the registry so each is **attributed to
   its owning plugin**; that ownership is what lets the host tear them down cleanly on
   disable.
-- `deleteInstance(id)`: drop an instance's **persisted state**. The host removes the
-  live instance and its pushed UI itself, then calls this so the module deletes its
-  own on-disk state (the module owns persistence). Default is a no-op for modules that
-  persist nothing. The launcher offers a delete (trash) affordance for a module's
-  startable instances; confirming it routes here.
+- `deleteInstance(id)`: release runtime ownership only. It must preserve saved data.
+- `deleteAccount(req_id, id)`: explicit persisted deletion after UI confirmation.
+  The registry supplies a nonzero request ID and records it before dispatch. The
+  module answers `accountDeleted(req_id, id, error)` exactly once, including refusal;
+  an empty error means success. The result may arrive inside the call. Default is
+  an explicit unsupported error, not successful no-op deletion.
 
 A module is **not limited to the host-driven path**: it may call
 `host->registerInstance(id, instance, this)` and `host->removeInstance(id, this)` at any
 time, for example one instance per connected device, registered on plug and dropped on
 unplug. Both calls are ownership-checked, so a module only ever drops its own instances,
 and an instance can retire itself with `host->retireInstance(this)`. Dropping an instance
-stops it and closes its pushed UI but **never touches persisted state**; `deleteInstance`
-stays the only thing that does. The module frees its own `IInstance` from its
+stops it and closes its pushed UI but **never touches persisted state**. Only confirmed
+`deleteAccount` removes saved data. The module frees its own `IInstance` from its
 `instanceRemoved` handler.
+
+### Account deletion and built-in logical persistence
+
+The launcher always sends the owning module and stable account ID through the
+registry. There is no built-in versus external persistence branch. The registry
+validates ownership against discovery and live registration, correlates completion,
+blocks reopen and plugin unload during deletion, and relists only after success.
+Failures are displayed and remain in the last discovered list.
+
+The owning module validates the stored identity, blocks new account operations,
+requests shutdown and waits for every accepted worker, queued persistence operation,
+notification receiver and Rust backend to finish. Host removal and a disappeared tab
+are not this barrier. SP/MuSig track closing controllers separately from live instances.
+Shutdown flush failures prevent removal. An account closed with a flush failure can
+be reopened to recover its saved state before another deletion attempt.
+
+SP and MuSig now store their account files through the #60 engine, beneath their
+private `sp` and `musig` logical roots. Each account owns
+`accounts/<sha256 of stable account ID>/`: `config.json`, `backend-config.json`,
+wallet row stores and account-owned header stores; MuSig also owns `saved_psbts.json`.
+SP's `sub-0`, `sub-1`, etc. keep the upstream descriptor indexes separate.
+Built-in creation reserves the global instance ID through an internal SP-context
+lifetime lease and refuses a config already present in either module; the module's
+payload is still written only to its own tree.
+The module's factory validates every upstream `BackendIdentity` and keeps opaque row
+bytes unchanged in versioned whole-file documents. `flush_batch` loads, changes and
+atomically replaces one complete logical store file under the storage engine's lock.
+Opaque row bytes are base64 strings, not expanded JSON integer arrays.
+The Rust config callbacks cannot overwrite Silent's separate config file.
+
+Trusted built-in Rust workers have fixed caller contexts for those two roots. They
+reuse #60 authorization, encryption, path checks, interprocess tree exclusion and
+durable publication. Private host-local logical lifetime leases preserve single-owner
+account use across processes; no physical path, native lock or encryption key is
+exposed by `IStorage`. Closing a factory fences reopen/recovery requests and drains
+all its backend objects before releasing ownership. Removal uses the same authorized
+logical recursive-remove operation as other storage clients, not a host account-path
+or deletion-specific filesystem API.
+Native lock/lease sentinels are storage-engine metadata, not account payload files.
+
+This is a bounded whole-file adapter, not a database filesystem or completed external
+SP/MuSig plugin deployment. A store file is limited to 1 MiB and a plugin tree to 4096
+entries and 16 MiB of encoded content. Larger wallet/header state returns an explicit
+storage failure; it is not truncated or redirected to a native database. The native
+built-in lifetime coordinator and its host-local leases are not an external IPC lease
+protocol. No OS sandbox or secure-erasure guarantee is claimed.
+
+Deleting an account removes only its logical subtree. It preserves other accounts,
+shared signer keys, nonce/session history and the application unlock key. Normal tab
+close, plugin disable and unload preserve account storage. The unreleased former
+built-in account layout is not migrated; #60's separate legacy external-plugin blob
+migration remains unchanged, including its no-overwrite and import-once behavior.
 
 (`meta()` is `IModule`'s only synchronous method: a hardcoded `const`, like a
 capability's `implemented()`. Everything else on a module is a request, `ReqId` +
@@ -587,10 +640,12 @@ public:
     virtual ReqId list()      = 0;          // -> instances(req, [(id, name)])
     virtual ReqId autoStart() = 0;          // -> autoStart(req, [id]) to start on load
     virtual void  startInstance(const QString &id) = 0;  // construct + register it
-    virtual void  deleteInstance(const QString &id) {}   // drop persisted state (default no-op)
+    virtual void  deleteInstance(const QString &id) {}   // runtime release only
+    virtual void  deleteAccount(ReqId req_id, const QString &id); // explicit deletion
     // the host's side of the polling switch; default no-op for modules that poll nothing
     virtual void  setSignerPolling(bool enabled) {}
 signals:
+    void accountDeleted(ReqId req_id, QString id, QString error);
     void instances(ReqId, QList<QPair<QString,QString>>);  // (id, name) it can start
     void autoStart(ReqId, QStringList);                    // ids to start immediately
     // error carries an OPTIONAL ReqId: set when the error answers a specific
@@ -1216,7 +1271,8 @@ they are not evidence of a supported funded signing combination.
 
 ## ABI & Linking Rules (Plugin Authors Must Read)
 
-The current plugin IID is `dev.silent.IPlugin/7.0`, the signer IID is
+The current plugin IID is `dev.silent.IPlugin/8.0`, the module IID is
+`dev.silent.IModule/2.0`, the signer IID is
 `dev.silent.ISigner/3.0`, the account IID is
 `dev.silent.IAccount/3.0`, the keys IID is `dev.silent.IKeys/3.0`, and the transaction
 service IID is `dev.silent.ITransactions/2.0`. The feed IID remains
@@ -1224,7 +1280,7 @@ service IID is `dev.silent.ITransactions/2.0`. The feed IID remains
 Rust types. This changes record layouts, signatures and callbacks. Rebuild plugins
 against this checkout and use `SILENT_IPlugin_IID` in plugin metadata. Include both
 `src` only for public interfaces; generated `lib/include` and CXX headers are not needed.
-Old 1.0 to 6.0 plugins are refused rather than
+Old 1.0 to 7.0 plugins are refused rather than
 called through incompatible vtables.
 
 `interfaces/enums.h` defines the shared `plugin::Network`, `plugin::KeyRouteKind`

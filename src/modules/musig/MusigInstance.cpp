@@ -28,6 +28,10 @@ auto MusigInstance::id() const -> QString {
     return m_id;
 }
 
+auto MusigInstance::backend() const -> MusigAccountController * {
+    return m_account_controller.data();
+}
+
 void MusigInstance::stop() {
     if (m_stopped) {
         return;
@@ -51,7 +55,6 @@ void MusigInstance::stop() {
 
     m_account.reset();
     m_account_widget = nullptr;
-    m_account_controller = nullptr;
 }
 
 auto MusigInstance::account() -> IAccount * {

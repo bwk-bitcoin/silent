@@ -229,7 +229,8 @@ void keysMetadataSmoke(keys::KeysModule &module) {
         QThread::msleep(1);
     }
     require(stopped.count() == 1, "MuSig account shutdown drains its receiver");
-    require(::delete_config(rust::String(name.toStdString())), "remove MuSig test account");
+    require(::delete_musig_account(rust::String(name.toStdString())).empty(),
+            "remove MuSig test account");
     provider.setEntries({valid});
     require(handle.keys(plugin::Network::Regtest).is_ok, "valid metadata recovers after rejection");
     host->setKeys(module.bus(), &module);

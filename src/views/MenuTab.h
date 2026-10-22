@@ -6,7 +6,6 @@
 #include <QList>
 #include <QPair>
 #include <QPointer>
-#include <QSet>
 #include <QString>
 #include <QWidget>
 
@@ -34,7 +33,8 @@ public slots:
     void onCreateClicked();
     void onItemClicked();
     void onTrashClicked();
-    void onExternalDeleteConfirmed(const QString &name);
+    void onDeleteConfirmed(const QString &name);
+    void onAccountDeletionFinished(IModule *module, const QString &id, const QString &error);
     void onModuleInstances(ReqId req_id, QList<QPair<QString, QString>> instances);
     void onHostInstanceChanged(const QString &id);
     void onHostSettingsChanged();
@@ -57,13 +57,11 @@ private:
         QString id;
         QString name;
         bool canDelete = false;
-        bool external = false;
     };
 
     catalog::Button *m_create_btn = nullptr;
     qontrol::Column *m_accounts_column = nullptr;
     QList<QWidget *> m_rows;
-    QSet<QString> m_sp_accounts;
     QList<QPointer<IModule>> m_modules;
     QHash<IModule *, ReqId> m_pending_list;
     QHash<IModule *, QPair<ReqId, QList<QPair<QString, QString>>>> m_sync_list_responses;

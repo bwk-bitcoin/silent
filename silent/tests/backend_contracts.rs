@@ -207,11 +207,8 @@ fn builder_previews_and_active_attempt_transitions_keep_unsaved_progress() {
         snapshot.error
     );
 
-    let path = config.account_dir().join("saved_psbts.json");
-    let previous = std::fs::read(&path).expect("persisted attempt");
-    let backup = path.with_extension("backup");
-    std::fs::rename(&path, &backup).expect("retain persisted attempt");
-    std::fs::create_dir(&path).expect("block save replacement");
+    let previous = common::logical::read(&config, "saved_psbts.json");
+    common::logical::block_file(&config, "saved_psbts.json");
     let snapshot = account.accept_signed_progress(&encoded(&second));
     assert!(
         snapshot.is_ok,
@@ -232,10 +229,9 @@ fn builder_previews_and_active_attempt_transitions_keep_unsaved_progress() {
         silent::MusigRound::PartialSigs,
         "both nonces in RAM"
     );
-    std::fs::remove_dir(&path).expect("remove test save blocker");
-    std::fs::rename(&backup, &path).expect("restore persisted file");
+    common::logical::restore_file(&config, "saved_psbts.json");
     assert_eq!(
-        std::fs::read(&path).expect("old file"),
+        common::logical::read(&config, "saved_psbts.json"),
         previous,
         "failed replacement left disk unchanged"
     );
@@ -260,8 +256,7 @@ fn builder_previews_and_active_attempt_transitions_keep_unsaved_progress() {
     signers[1]
         .sign_v2(&mut partial, policy)
         .expect("second partial signature");
-    std::fs::rename(&path, &backup).expect("retain pre-finalization file");
-    std::fs::create_dir(&path).expect("block finalization save");
+    common::logical::block_file(&config, "saved_psbts.json");
     let finalized = account.accept_signed_progress(&encoded(&partial));
     assert!(
         finalized.is_ok && finalized.finalize_error.is_empty(),
@@ -282,8 +277,7 @@ fn builder_previews_and_active_attempt_transitions_keep_unsaved_progress() {
         finalized.tx_hex,
         "finalized transaction is retained in RAM after save failure"
     );
-    std::fs::remove_dir(&path).expect("remove finalization save blocker");
-    std::fs::rename(&backup, &path).expect("restore pre-finalization file");
+    common::logical::restore_file(&config, "saved_psbts.json");
     assert!(
         account.retry_saved_psbts().save_error.is_empty(),
         "retry persists finalized RAM progress"
@@ -437,11 +431,12 @@ fn builder_previews_and_active_attempt_transitions_keep_unsaved_progress() {
 #[cfg(unix)]
 #[test]
 fn label_edits_report_failed_persistence_and_retry() {
-    use std::{fs, os::unix::fs::PermissionsExt, sync::Arc};
-
     use bwk::{
-        bwk_electrum::label_store::{LabelKey, LabelStore},
-        persist::{backend::json::JsonBackend, LABELS_STORE_KEY},
+        bwk_electrum::{
+            label_store::{LabelKey, LabelStore},
+            persistence::BackendKind,
+        },
+        persist::LABELS_STORE_KEY,
     };
 
     let _ = env_logger::builder().is_test(true).try_init();
@@ -506,26 +501,31 @@ fn label_edits_report_failed_persistence_and_retry() {
             }
         };
         edit("persisted", true);
-        let directory = config.account_dir();
-        let path =
-            bwk::persist::cipher::sealed_path(&directory.join(format!("{LABELS_STORE_KEY}.json")));
-        let original = fs::read(&path).expect("persisted encrypted labels");
-        let permissions = fs::metadata(&directory)
-            .expect("account directory")
-            .permissions();
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o500))
-            .expect("deny directory writes");
+        let file = if multikey {
+            "wallet/labels.json"
+        } else {
+            "sp/labels.json"
+        };
+        let original = common::logical::read(&config, file);
+        common::logical::block_file(&config, file);
         edit(value, false);
-        fs::set_permissions(&directory, permissions).expect("restore directory permissions");
+        common::logical::restore_file(&config, file);
         assert_eq!(
-            fs::read(&path).expect("labels after failure"),
+            common::logical::read(&config, file),
             original,
             "failed edits/deletions leave disk unchanged, multikey={multikey}"
         );
         edit(value, true);
         drop(musig);
         drop(sp);
-        let backend = Arc::new(JsonBackend::open(directory).expect("reopen backend"));
+        let backend = common::logical::backend(
+            &config,
+            if multikey {
+                BackendKind::Wallet
+            } else {
+                BackendKind::SilentPayment
+            },
+        );
         let labels =
             LabelStore::load_from_backend(backend, LABELS_STORE_KEY).expect("decode saved labels");
         assert_eq!(

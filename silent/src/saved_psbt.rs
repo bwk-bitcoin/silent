@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeSet,
-    path::PathBuf,
     str::FromStr,
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -10,14 +10,19 @@ use bwk::bwk_electrum::tx_store::TxEntry;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    account_storage::{AccountStorage, Factory},
     ffi::{
         MusigSpendLeaf, SavedPsbtAttempt, SavedPsbtEntry, SavedPsbtInput, SavedPsbtMutation,
         SavedPsbtRecord, TransactionTemplate,
     },
     keys::musig_sessions::attempt_id,
     musig::decode_psbt,
-    state_crypt,
 };
+
+#[cfg(test)]
+use crate::state_crypt;
+#[cfg(test)]
+use std::path::PathBuf;
 
 const VERSION: u32 = 1;
 
@@ -28,16 +33,42 @@ struct SavedPsbtStateInternal {
 }
 
 pub(crate) struct SavedPsbtStore {
-    path: PathBuf,
+    location: SavedPsbtLocation,
     records: Vec<SavedPsbtRecord>,
     load_error: String,
     save_error: String,
 }
 
+enum SavedPsbtLocation {
+    Logical {
+        storage: AccountStorage,
+        owner: Arc<Factory>,
+    },
+    #[cfg(test)]
+    File(PathBuf),
+}
+
 impl SavedPsbtStore {
+    #[cfg(test)]
     pub(crate) fn load(path: PathBuf) -> Self {
+        Self::load_location(SavedPsbtLocation::File(path))
+    }
+
+    pub(crate) fn load_logical(storage: AccountStorage, owner: Arc<Factory>) -> Self {
+        Self::load_location(SavedPsbtLocation::Logical { storage, owner })
+    }
+
+    pub(crate) fn bind_factory(&mut self, owner: Arc<Factory>) {
+        match &mut self.location {
+            SavedPsbtLocation::Logical { owner: current, .. } => *current = owner,
+            #[cfg(test)]
+            SavedPsbtLocation::File(_) => (),
+        }
+    }
+
+    fn load_location(location: SavedPsbtLocation) -> Self {
         let mut store = Self {
-            path,
+            location,
             records: Vec::new(),
             load_error: String::new(),
             save_error: String::new(),
@@ -52,10 +83,19 @@ impl SavedPsbtStore {
     }
 
     fn read(&mut self) -> Result<(), String> {
-        self.path
-            .try_exists()
-            .map_err(|e| format!("{}: {e}", self.path.display()))?;
-        let Some(text) = state_crypt::read_state(&self.path)? else {
+        let text = match &self.location {
+            SavedPsbtLocation::Logical { storage, .. } => storage
+                .read("saved_psbts.json")?
+                .map(String::from_utf8)
+                .transpose()
+                .map_err(|e| e.to_string())?,
+            #[cfg(test)]
+            SavedPsbtLocation::File(path) => {
+                path.try_exists().map_err(|e| e.to_string())?;
+                state_crypt::read_state(path)?
+            }
+        };
+        let Some(text) = text else {
             return Ok(());
         };
         let state: SavedPsbtStateInternal =
@@ -96,15 +136,26 @@ impl SavedPsbtStore {
         };
         let result = serde_json::to_string(&state)
             .map_err(|e| e.to_string())
-            .and_then(|text| {
-                if self
-                    .records
-                    .iter()
-                    .any(|record| !record.archived_attempts.is_empty())
-                {
-                    state_crypt::write_state_durable(&self.path, &text)
-                } else {
-                    state_crypt::write_state(&self.path, &text)
+            .and_then(|text| match &self.location {
+                SavedPsbtLocation::Logical { storage, owner } => {
+                    let _lease = if owner.is_closing() {
+                        Some(storage.lease()?)
+                    } else {
+                        None
+                    };
+                    storage.write("saved_psbts.json", text.into_bytes(), false)
+                }
+                #[cfg(test)]
+                SavedPsbtLocation::File(path) => {
+                    if self
+                        .records
+                        .iter()
+                        .any(|record| !record.archived_attempts.is_empty())
+                    {
+                        state_crypt::write_state_durable(path, &text)
+                    } else {
+                        state_crypt::write_state(path, &text)
+                    }
                 }
             });
         self.save_error = match result {

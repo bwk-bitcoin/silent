@@ -5,7 +5,15 @@
 
 mod common;
 
+use bwk::{
+    bwk_electrum::{
+        label_store::{encode_key, LabelKey},
+        persistence::BackendKind,
+    },
+    persist::{DB_VERSION, LABELS_STORE_KEY},
+};
 use bwk_utils::test as bwk_test;
+use serde_json::Value;
 use silent::{Account, Config, Network, NotificationFlag};
 use std::thread;
 use std::time::Duration;
@@ -95,7 +103,17 @@ fn test_sub_accounts_from_the_key_xpubs() {
 #[test]
 fn test_wallet_creation_from_descriptor() {
     let account_name = test_account_name();
-    let config = create_test_config(account_name.clone());
+    let mut config = create_test_config(account_name.clone());
+    let (fingerprint, xpub) = key_xpub("m/86'/1'/0'");
+    config.set_taproot_descriptor(silent::taproot_descriptor_for(
+        fingerprint,
+        xpub,
+        Network::Regtest,
+    ));
+    assert!(
+        config.save().is_empty(),
+        "persist the logical account config"
+    );
 
     assert_eq!(config.account_name, account_name);
     assert_eq!(config.get_network(), Network::Regtest);
@@ -108,35 +126,79 @@ fn test_wallet_creation_from_descriptor() {
     assert_eq!(account.name(), account_name);
     assert_eq!(account.balance(), 0);
 
-    // bwk's version file is sealed like its stores, never left in clear
-    // (ws-plaude/silent#37). It is stamped when the stores are first written, here as
-    // the account closes.
-    account.new_taproot_addr();
+    let sp_address = account.sp_address();
+    let first_address = account.new_taproot_addr();
+    assert!(
+        first_address.starts_with("bcrt1p"),
+        "real sub-account address"
+    );
+    let outpoint = format!("{}:0", "01".repeat(32))
+        .parse::<bitcoin::OutPoint>()
+        .expect("fixture outpoint");
+    let label = account.update_coin_label(outpoint.to_string(), "persisted creation label".into());
+    assert!(label.is_ok, "persist the real label: {}", label.error);
+    assert!(
+        account.shutdown_backend().is_empty(),
+        "flush and destroy the real backends"
+    );
     drop(account);
-    let mut versions = Vec::new();
-    let mut stack = vec![silent::config::datadir()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.file_stem().and_then(|s| s.to_str()) == Some("version") {
-                versions.push(path);
-            }
-        }
-    }
-    assert!(!versions.is_empty(), "bwk stamps a version");
-    for version in versions {
-        assert_eq!(
-            version.extension().and_then(|e| e.to_str()),
-            Some("bip138"),
-            "{} in clear",
-            version.display()
-        );
-        assert!(silent::state_crypt::is_sealed(
-            &std::fs::read(&version).unwrap()
-        ));
-    }
+
+    let file = "sp/labels.json";
+    let saved = common::logical::read(&config, file);
+    let mut document: Value = serde_json::from_slice(&saved).expect("logical row document");
+    assert_eq!(
+        document["version"], DB_VERSION,
+        "the actual store stamps its supported version"
+    );
+    let backend = common::logical::backend(&config, BackendKind::SilentPayment);
+    assert_eq!(
+        backend
+            .get_row(LABELS_STORE_KEY, &encode_key(&LabelKey::OutPoint(outpoint)))
+            .expect("fresh factory reads persisted bytes"),
+        Some(serde_json::to_vec("persisted creation label").expect("literal label bytes")),
+        "reopened byte-row backend preserves the serialized label"
+    );
+    drop(backend);
+
+    document["version"] = (DB_VERSION + 1).into();
+    let newer = serde_json::to_vec(&document).expect("future-version fixture");
+    common::logical::write(&config, file, &newer);
+    let refused = Account::new(config.clone());
+    assert!(
+        matches!(refused, Err(ref error) if error.contains("version")),
+        "the actual account factory must reject a future store version: {:?}",
+        refused.as_ref().err()
+    );
+    drop(refused);
+    assert_eq!(
+        common::logical::read(&config, file),
+        newer,
+        "refusal never rewrites newer data"
+    );
+    common::logical::write(&config, file, &saved);
+
+    let sealed = std::fs::read(common::logical::root(&config).join("tree.bip138"))
+        .expect("host-side encrypted backing");
+    assert!(
+        silent::state_crypt::is_sealed(&sealed),
+        "version metadata is encrypted with the store"
+    );
+    let mut reopened =
+        Account::new(Config::from_file(account_name.clone()).expect("reload logical config"))
+            .expect("actual account reopens through its factory");
+    assert_eq!(reopened.name(), account_name, "reopened identity");
+    assert_eq!(reopened.balance(), 0, "reopened empty balance");
+    assert_eq!(reopened.sp_address(), sp_address, "reopened SP receiver");
+    assert_ne!(
+        reopened.new_taproot_addr(),
+        first_address,
+        "reopened sub-account retains its derivation tip"
+    );
+    assert!(
+        reopened.shutdown_backend().is_empty(),
+        "reopened account shuts down cleanly"
+    );
+    drop(reopened);
 
     cleanup_test_account(&account_name);
 }
@@ -147,7 +209,10 @@ fn test_config_save_load_roundtrip() {
     let original_config = create_test_config(account_name.clone());
 
     original_config.to_file();
-    assert!(original_config.config_path().exists());
+    assert_eq!(
+        common::logical::read(&original_config, "config.json"),
+        serde_json::to_vec_pretty(&original_config).expect("serialized config")
+    );
 
     let loaded_config =
         Config::from_file(account_name.clone()).expect("Config should load successfully");

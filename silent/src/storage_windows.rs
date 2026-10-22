@@ -160,6 +160,23 @@ pub(crate) struct LockedRoot {
 }
 
 impl LockedRoot {
+    pub(crate) fn lease(&self, name: &str) -> Result<File, ErrorCode> {
+        let path = self.root.path.join(name);
+        let file = self
+            .root
+            .open(
+                name,
+                FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                FILE_OPEN_IF,
+                FILE_NON_DIRECTORY_FILE,
+            )
+            .map_err(|status| status.refused(&path))?;
+        refuse_reparse_point(&file, &path)?;
+        lock_file(&file)?;
+        Ok(file)
+    }
+
     pub(crate) fn open(
         data_dir: &Path,
         plugin_id: &str,

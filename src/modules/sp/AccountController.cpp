@@ -287,7 +287,7 @@ auto AccountController::settingsClicked() -> void {
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 auto AccountController::simulateTx(TransactionTemplate tx) -> TransactionSimulation {
-    if (m_account.has_value()) {
+    if (m_account.has_value() && !accountDeletionPending() && !endpointsStopping()) {
         return m_account.value()->simulate_transaction(std::move(tx));
     }
     qDebug() << "AccountController::simulateTx() m_account is None!";
@@ -313,7 +313,7 @@ auto AccountController::stop() -> void {
 
     if (!m_account.has_value() && m_workers.isEmpty()) {
         // Nothing to tear down (mock controller or never initialized).
-        emit stopped();
+        onShutdownDrained({});
         return;
     }
 
@@ -330,27 +330,14 @@ auto AccountController::stop() -> void {
     auto workers = std::move(m_workers);
     m_workers.clear();
 
-    auto *teardown = QThread::create([acc = std::move(account), notif, workers]() mutable {
-        for (auto *worker : workers) {
-            worker->wait();
-            worker->deleteLater();
-        }
-        if (acc.has_value()) {
-            acc.value()->stop_scanner();
-            acc.value()->stop_electrum();
-            acc.reset(); // drop the account, disconnecting the channel
-        }
-        if (notif != nullptr) {
-            notif->wait();
-            notif->deleteLater();
-        }
-    });
-    connect(teardown, &QThread::finished, this, &AccountController::stopped, qontrol::UNIQUE);
-    connect(teardown, &QThread::finished, teardown, &QThread::deleteLater);
-    teardown->start();
+    drainAccount(std::move(account), notif, workers);
 }
 
 void AccountController::startWorker(QThread *worker) {
+    if (m_stopping || endpointsStopping() || accountDeletionPending()) {
+        worker->deleteLater();
+        return;
+    }
     m_workers.append(worker);
     connect(worker, &QThread::finished, this, &AccountController::onWorkerFinished,
             qontrol::UNIQUE);
@@ -441,6 +428,9 @@ auto AccountController::addressKinds() -> QList<AddressKind> {
 }
 
 auto AccountController::newAddress(AddressKind kind) -> QString {
+    if (accountDeletionPending() || endpointsStopping()) {
+        return {};
+    }
     rust::String address;
     switch (kind) {
     case AddressKind::SilentPayment:

@@ -57,10 +57,10 @@ pub fn set_dust_limit(&mut self, limit: u64) {
   error on the Rust side with `log::error!()`.
   ```rust
   // FFI function
-  pub fn delete_config(account_name: String) -> bool {
-      match SpConfig::delete_account_dir(&data_dir, &account_name) {
+  pub fn persist_config(config: &Config) -> bool {
+      match config.write_file() {
           Ok(()) => true,
-          Err(e) => { log::error!("failed to delete: {e}"); false }
+          Err(e) => { log::error!("failed to save: {e}"); false }
       }
   }
   ```
@@ -98,14 +98,15 @@ pub fn set_dust_limit(&mut self, limit: u64) {
 
 ## Rust: Config File I/O (`silent/src/config.rs`)
 
-Configs are stored as pretty-printed JSON at `{data_dir}/{account_name}/config.json`.
+Built-in configs are pretty-printed JSON files inside their module-owned logical
+account subtree. See `docs/MODULES.md`, Account deletion and built-in logical persistence.
 
-- Linux: `~/.silent/<account>/`
-- Other OS: `{dirs::config_dir()}/Silent/<account>/`
-- Unix directories use `0o700` permissions (user-only access).
+- Rust workers use #60's encrypted plugin tree, not native account directories.
+- SP/MuSig wallet/header stores use the caller-owned bwk `BackendFactory`.
+- No physical paths or application keys cross the public storage contract.
 - `#[serde(skip)]` on runtime-only fields (`data_dir`).
 - Custom serde module (`network_serde`) for CXX enums that don't derive Serde.
-- Parent directories are created before any write.
+- Logical parent directories are created during account creation/opening.
 
 ## Rust: Notification Polling
 
@@ -403,17 +404,28 @@ never from the caller that showed the modal. This keeps the update in the signal
 chain where Qt manages lifetime and ordering correctly:
 ```cpp
 // good — slot does work then refreshes
-auto AppController::onDeleteConfirmed(const QString &account) -> void {
-    delete_config(rust::String(account.toStdString()));
-    listAccounts(); // refresh here
+void PluginRegistry::onAccountDeleted(ReqId req_id, const QString &id, const QString &error) {
+    auto *module = qobject_cast<IModule *>(sender());
+    if (!m_pending_deletions.contains(module) ||
+        !m_pending_deletions.value(module).contains(req_id) ||
+        m_pending_deletions.value(module).value(req_id) != id) {
+        return;
+    }
+    m_pending_deletions[module].remove(req_id);
+    if (m_pending_deletions.value(module).isEmpty()) {
+        m_pending_deletions.remove(module);
+    }
+    if (error.isEmpty()) {
+        requestModuleInstances(module); // refresh only on successful completion
+    }
 }
 
 // bad — caller refreshes after modal returns
-auto AppController::deleteAccount(const QString &name) -> void {
+void MenuTab::deleteAccount(const QString &name) {
     auto *modal = new ConfirmDelete(name);
-    connect(modal, &ConfirmDelete::confirmed, this, &AppController::onDeleteConfirmed);
+    connect(modal, &ConfirmDelete::confirmed, this, &MenuTab::onDeleteConfirmed);
     AppController::execModal(modal);
-    listAccounts(); // wrong: bypasses signal-slot chain
+    onRefreshLauncherItems(); // wrong: dispatch is not deletion completion
 }
 ```
 Never use `QTimer::singleShot(0, ...)` or `QMetaObject::invokeMethod(..., Qt::QueuedConnection)`
@@ -494,7 +506,7 @@ AppController::get();            // retrieve via dynamic_cast
 Never throw or catch exceptions. Rust FFI functions never return `Result` (see
 "Rust: Error Handling" above), so no CXX exceptions will be thrown. Check return
 values instead:
-- `bool` returns: check directly (`if (!delete_config(...)) { ... }`)
+- `bool` returns: check directly (`if (!config->is_ok()) { ... }`)
 - Struct returns: check `is_ok` field (`if (!result.is_ok) { ... }`)
 - Opaque types: check `is_ok()` method (`if (!account->is_ok()) { ... }`)
 
@@ -611,8 +623,10 @@ let account = Account::new(config).expect("...");
 cleanup_test_account(&account_name);
 ```
 
-**Cleanup:** `cleanup_test_account()` loads the config, calls `remove_dir_all()` on
-the account directory. Uses `.ok()` to tolerate missing state.
+**Cleanup:** drop every backend first, then remove only the account's logical subtree.
+The Rust test cleanup helper uses the same storage-backed deletion; it cannot remove
+an account while a live backend still owns it. Use public logical storage operations
+to inject missing/corrupt files in fixtures, not the former native account layout.
 
 **`#[ignore]` tests** require external infrastructure (BlindBit server, Bitcoin
 node). Run with `cargo test -- --ignored`.

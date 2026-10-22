@@ -318,7 +318,8 @@ void accountWidgetLifetime(HostImpl *host, PriceModule *module) {
         QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         QApplication::processEvents();
         require(host->feeSources().isEmpty(), "feed removal after widget destruction is safe");
-        require(::delete_config(rust::String(name.toStdString())), "remove lifetime test account");
+        require(::delete_musig_account(rust::String(name.toStdString())).empty(),
+                "remove lifetime test account");
     }
     host->selectFees(preferences);
 }

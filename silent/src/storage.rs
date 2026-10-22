@@ -1353,6 +1353,28 @@ mod disk {
     }
 
     impl LockedRoot {
+        pub(crate) fn lease(&self, name: &str) -> Result<File, ErrorCode> {
+            let file = openat(
+                &self.root,
+                name,
+                OFlags::RDWR
+                    | OFlags::CREATE
+                    | OFlags::NOFOLLOW
+                    | OFlags::CLOEXEC
+                    | OFlags::NONBLOCK,
+                Mode::RUSR | Mode::WUSR,
+            )
+            .map_err(std::io::Error::from)?;
+            let stat = fstat(&file).map_err(std::io::Error::from)?;
+            if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_nlink != 1
+            {
+                return Err(ErrorCode::Unavailable);
+            }
+            let file = File::from(file);
+            lock_file(&file)?;
+            Ok(file)
+        }
+
         pub(crate) fn open(
             data_dir: &Path,
             plugin_id: &str,
@@ -1510,13 +1532,16 @@ mod disk;
 
 #[cfg(not(any(unix, windows)))]
 mod disk {
-    use std::path::Path;
+    use std::{fs::File, path::Path};
 
     use crate::storage::ErrorCode;
 
     pub(crate) struct LockedRoot;
 
     impl LockedRoot {
+        pub(crate) fn lease(&self, _name: &str) -> Result<File, ErrorCode> {
+            Err(ErrorCode::Unavailable)
+        }
         pub(crate) fn open(
             _data_dir: &Path,
             _plugin_id: &str,
@@ -1629,6 +1654,164 @@ pub fn storage_delivery_error(session: u64, generation: u64) -> String {
         Some(session) => session.delivery_error(generation),
     };
     code.map(ErrorCode::as_str).unwrap_or_default().to_string()
+}
+
+/// Fixed host-owned callers, never selected from a plugin's claimed identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BuiltinCaller {
+    Sp,
+    Musig,
+}
+
+impl BuiltinCaller {
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            Self::Sp => "sp",
+            Self::Musig => "musig",
+        }
+    }
+}
+
+/// Synchronous built-in access to the same logical storage engine. Workers only.
+#[derive(Debug, Clone)]
+pub(crate) struct Client {
+    session: Arc<Session>,
+    _registration: Arc<ClientRegistration>,
+}
+
+#[derive(Debug)]
+struct ClientRegistration(u64);
+
+impl Drop for ClientRegistration {
+    fn drop(&mut self) {
+        storage_session_revoke(self.0);
+    }
+}
+
+impl Client {
+    /// Host-local lifetime exclusion for a logical entry, not a native plugin handle.
+    pub(crate) fn lease(&self, path: &str) -> Result<File, String> {
+        LogicalPath::parse_entry(path).map_err(|e| e.as_str().to_string())?;
+        let pending = self.pending()?;
+        let store =
+            Store::open_mut(&pending, &self.session.handle).map_err(|e| e.as_str().to_string())?;
+        let name = format!("{}.lease", state_crypt::opaque_name("storage-lease", path)?);
+        store
+            .root
+            .as_ref()
+            .ok_or("unavailable")?
+            .lease(&name)
+            .map_err(|e| e.as_str().to_string())
+    }
+    pub(crate) fn builtin(data_dir: PathBuf, caller: BuiltinCaller) -> Result<Self, String> {
+        let id = open_session(data_dir, caller.id().into(), String::new(), false);
+        let session = lookup(id).ok_or("unavailable")?;
+        Ok(Self {
+            session,
+            _registration: Arc::new(ClientRegistration(id)),
+        })
+    }
+
+    fn pending(&self) -> Result<Pending, String> {
+        Pending::register(
+            self.session.clone(),
+            NEXT_SESSION.fetch_add(1, Ordering::SeqCst).to_string(),
+        )
+        .map_err(|error| error.as_str().to_string())
+    }
+
+    pub(crate) fn read(&self, path: &str) -> Result<Option<Vec<u8>>, String> {
+        let pending = self.pending()?;
+        let result = read(&pending, &self.session.handle, path);
+        pending.authorize().map_err(|e| e.as_str().to_string())?;
+        match result {
+            Ok(Reply::Data(bytes)) => Ok(Some(bytes)),
+            Err(ErrorCode::NotFound) => Ok(None),
+            Err(error) => Err(error.as_str().into()),
+            _ => Err("invalid storage read result".into()),
+        }
+    }
+
+    pub(crate) fn mkdir(&self, path: &str) -> Result<(), String> {
+        let pending = self.pending()?;
+        match mkdir(&pending, &self.session.handle, path) {
+            Ok(_) => Ok(()),
+            Err(ErrorCode::AlreadyExists) => match inspect(&pending, &self.session.handle, path) {
+                Ok(Reply::Entry(entry)) if entry.kind.as_str() == "directory" => Ok(()),
+                Err(error) => Err(error.as_str().into()),
+                _ => Err("not_directory".into()),
+            },
+            Err(error) => Err(error.as_str().into()),
+        }
+    }
+
+    pub(crate) fn write(&self, path: &str, bytes: Vec<u8>, create: bool) -> Result<(), String> {
+        self.update(path, create, |_| Ok(bytes))
+    }
+
+    /// Keep load, caller transformation and whole-file replacement under one lock.
+    pub(crate) fn update(
+        &self,
+        path: &str,
+        create: bool,
+        update: impl FnOnce(Option<Vec<u8>>) -> Result<Vec<u8>, String>,
+    ) -> Result<(), String> {
+        let pending = self.pending()?;
+        let path = LogicalPath::parse_entry(path).map_err(|e| e.as_str().to_string())?;
+        let store =
+            Store::open_mut(&pending, &self.session.handle).map_err(|e| e.as_str().to_string())?;
+        let mut tree = store.load().map_err(|e| e.as_str().to_string())?;
+        let previous = match tree.read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(ErrorCode::NotFound) => None,
+            Err(error) => return Err(error.as_str().into()),
+        };
+        if create && previous.is_some() {
+            return Err("already_exists".into());
+        }
+        let bytes = update(previous)?;
+        if bytes.len() > MAX_FILE_BYTES {
+            return Err("too_large".into());
+        }
+        tree.write(
+            &path,
+            bytes,
+            if create {
+                WriteMode::Create
+            } else {
+                WriteMode::Upsert
+            },
+        )
+        .map_err(|e| e.as_str().to_string())?;
+        store.publish(&tree).map_err(|e| e.as_str().to_string())
+    }
+
+    pub(crate) fn list(&self, path: &str) -> Result<Vec<String>, String> {
+        let pending = self.pending()?;
+        let mut names = Vec::new();
+        let mut after = None;
+        loop {
+            match list(&pending, &self.session.handle, path, after.as_deref(), None) {
+                Ok(Reply::Listing(entries, next)) => {
+                    names.extend(entries.into_iter().map(|entry| entry.path.to_string()));
+                    if next.is_empty() {
+                        return Ok(names);
+                    }
+                    after = Some(next);
+                }
+                Err(ErrorCode::NotFound) => return Ok(names),
+                Err(error) => return Err(error.as_str().into()),
+                _ => return Err("invalid storage list result".into()),
+            }
+        }
+    }
+
+    pub(crate) fn remove(&self, path: &str) -> Result<(), String> {
+        let pending = self.pending()?;
+        remove(&pending, &self.session.handle, path, true)
+            .map(|_| ())
+            .map_err(|e| e.as_str().to_string())
+    }
 }
 
 #[cfg(all(test, unix))]
