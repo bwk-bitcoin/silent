@@ -28,6 +28,7 @@
 #include "views/utils.h"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QCursor>
 #include <QDialog>
 #include <QDir>
@@ -55,6 +56,7 @@
 #include <optional>
 #include <semaphore>
 #include <thread>
+#include <type_traits>
 
 #ifdef Q_OS_UNIX
 #include <arpa/inet.h>
@@ -835,6 +837,263 @@ struct EndpointRequest {
     QString url;
     bool verify = true;
 };
+
+class EndpointPresentationBackend final : public AccountBackend {
+public:
+    auto getCoins() -> rust::Vec<RustCoin> override {
+        return {};
+    }
+
+    auto getPaymentHistory() -> rust::Vec<RustTx> override {
+        return {};
+    }
+
+    auto network() -> Network override {
+        return Network::Regtest;
+    }
+
+    auto module() -> IModule * override {
+        return nullptr;
+    }
+
+    auto addressKinds() -> QList<AddressKind> override {
+        return {};
+    }
+
+    auto newAddress([[maybe_unused]] AddressKind kind) -> QString override {
+        return {};
+    }
+
+    auto addressVerifyInfo([[maybe_unused]] const QString &address) -> AddressVerifyInfo override {
+        return {};
+    }
+
+    auto endpoints() -> QList<Endpoint> override {
+        return {Endpoint::Blindbit, Endpoint::Electrum};
+    }
+
+    auto endpointUrl(Endpoint endpoint) -> QString override {
+        return endpoint == Endpoint::Electrum ? QStringLiteral("ssl://localhost:50002") : QString();
+    }
+
+    [[nodiscard]] auto verifiesCertificate() const -> bool override {
+        return true;
+    }
+
+    [[nodiscard]] auto isEndpointRunning([[maybe_unused]] Endpoint endpoint) const
+        -> bool override {
+        return running;
+    }
+
+    auto settingsExtras() -> QWidget * override {
+        return nullptr;
+    }
+
+    auto simulateTx([[maybe_unused]] TransactionTemplate tx) -> TransactionSimulation override {
+        return {};
+    }
+
+    auto sendSigning() -> account::SendSigning * override {
+        return nullptr;
+    }
+
+    void startWorker(QThread *worker) override {
+        delete worker;
+    }
+
+    void requestTxDetails([[maybe_unused]] uint64_t req_id,
+                          [[maybe_unused]] const QString &txid) override {
+    }
+
+    void editTxLabel([[maybe_unused]] uint64_t req_id, [[maybe_unused]] const QString &txid,
+                     [[maybe_unused]] const QString &label) override {
+    }
+
+    void editOutpointLabel([[maybe_unused]] uint64_t req_id,
+                           [[maybe_unused]] const QString &outpoint,
+                           [[maybe_unused]] const QString &label) override {
+    }
+
+    void requestEndpointTip([[maybe_unused]] uint64_t req_id,
+                            [[maybe_unused]] Endpoint endpoint) override {
+    }
+
+    void testAndSaveEndpoint([[maybe_unused]] uint64_t req_id, [[maybe_unused]] Endpoint endpoint,
+                             [[maybe_unused]] const QString &url,
+                             [[maybe_unused]] bool verify_certificate) override {
+        qFatal("presentation fixture must not test or save an endpoint");
+    }
+
+    void setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) override {
+        requested = connected;
+        beginEndpointOperation(req_id, endpoint,
+                               connected ? EndpointOperation::Connecting
+                                         : EndpointOperation::Disconnecting);
+    }
+
+    void updateCoinLabel([[maybe_unused]] const QString &outpoint,
+                         [[maybe_unused]] const QString &label) override {
+    }
+
+    void complete(bool success) {
+        if (success) {
+            running = requested;
+        }
+        EndpointResult result{};
+        result.is_ok = success;
+        result.kind = success ? BackendErrorKind::None : BackendErrorKind::Other;
+        result.error = success ? rust::String() : rust::String("disconnect failed");
+        finishEndpointOperation(result);
+    }
+
+    void externalState(bool connected) {
+        running = connected;
+        emit endpointStateChanged(Endpoint::Electrum);
+    }
+
+    bool running = true;
+    bool requested = true;
+};
+
+void connectedEndpointPolicy() {
+    EndpointPresentationBackend backend;
+    account::view::Settings settings(&backend, true);
+    auto *row = settings.row(Endpoint::Electrum);
+    auto *input = row->field->input();
+    auto saved = input->text();
+    require(input->isEnabled() && input->isReadOnly() && !row->ssl->isEnabled() &&
+                row->verify->isEnabled() && row->verify->isChecked(),
+            "connected Multikey address is read-only, SSL is locked, certificate choice unchanged");
+    QApplication::clipboard()->clear();
+    input->selectAll();
+    input->copy();
+    require(QApplication::clipboard()->text() == saved,
+            "a connected address can still be selected and copied");
+    editEndpoint(input, QStringLiteral("tcp://changed:50001"));
+    row->ssl->click();
+    require(input->text() == saved && row->ssl->isChecked() && row->draft_revision == 0,
+            "typing and SSL clicks cannot rewrite a connected address");
+
+    row->disconnect->click();
+    auto requestId = row->action_req;
+    require(requestId != 0 && !backend.requested && backend.running &&
+                backend.endpointOperationsBusy() && !input->isEnabled() && input->isReadOnly() &&
+                !row->ssl->isEnabled(),
+            "a delayed disconnect request does not unlock the still-connected address");
+    emit backend.endpointStateChanged(Endpoint::Electrum);
+    require(row->action_req == requestId && input->isReadOnly(),
+            "an intermediate notification cannot complete the pending disconnect");
+    backend.complete(false);
+    require(
+        row->action_req == 0 && !backend.endpointOperationsBusy() && backend.running &&
+            input->isEnabled() && input->isReadOnly() && !row->ssl->isEnabled() &&
+            !row->field->note()->isHidden() && input->text() == saved,
+        "failed disconnect restores availability but keeps the actual connected address locked");
+    row->disconnect->click();
+    require(row->action_req != 0 && input->isReadOnly(),
+            "disconnect retry remains locked until completion");
+    backend.complete(true);
+    require(!backend.running && row->action_req == 0 && input->isEnabled() &&
+                !input->isReadOnly() && row->ssl->isEnabled() && input->text() == saved,
+            "confirmed disconnect unlocks the unchanged address and SSL control");
+
+    auto draft = QStringLiteral("ssl://draft:50002");
+    editEndpoint(input, draft);
+    auto revision = row->draft_revision;
+    backend.externalState(true);
+    require(input->isReadOnly() && !row->ssl->isEnabled() && input->text() == draft &&
+                row->draft_revision == revision,
+            "external connection locks without clearing or reloading the draft");
+    {
+        account::view::Settings reopened(&backend, true);
+        require(reopened.row(Endpoint::Electrum)->field->input()->isReadOnly() &&
+                    !reopened.row(Endpoint::Electrum)->ssl->isEnabled(),
+                "reopened Multikey Settings starts locked for a confirmed connection");
+    }
+    backend.externalState(false);
+    require(!input->isReadOnly() && row->ssl->isEnabled() && input->text() == draft &&
+                row->draft_revision == revision,
+            "external disconnect unlocks the preserved draft");
+    {
+        account::view::Settings reopened(&backend, true);
+        require(!reopened.row(Endpoint::Electrum)->field->input()->isReadOnly() &&
+                    reopened.row(Endpoint::Electrum)->ssl->isEnabled(),
+                "reopened disconnected Multikey Settings starts editable");
+    }
+    row->ssl->click();
+    require(input->text() == QStringLiteral("tcp://draft:50002"),
+            "SSL can rewrite the address after confirmed disconnect");
+    backend.setEndpointConnected(66001, Endpoint::Electrum, true);
+    require(!input->isEnabled() && !row->ssl->isEnabled() && !backend.running,
+            "pending connect retains existing busy gating without claiming a connection");
+    backend.complete(true);
+    require(input->isEnabled() && input->isReadOnly() && !row->ssl->isEnabled(),
+            "confirmed connect locks the address through the existing state signal");
+}
+
+void endpointPolicyScope() {
+    EndpointPresentationBackend backend;
+    account::view::Settings sp(&backend);
+    for (auto endpoint : backend.endpoints()) {
+        auto *row = sp.row(endpoint);
+        require(row->field->input()->isEnabled() && !row->field->input()->isReadOnly(),
+                "default Settings policy leaves both SP endpoint addresses editable while running");
+    }
+    auto *electrum = sp.row(Endpoint::Electrum);
+    require(electrum->ssl->isEnabled(), "default Settings policy leaves connected SP SSL editable");
+    editEndpoint(electrum->field->input(), QStringLiteral("ssl://sp-draft:50002"));
+    electrum->ssl->click();
+    require(electrum->field->input()->text() == QStringLiteral("tcp://sp-draft:50002"),
+            "connected SP keeps address and transport editing");
+    account::view::Settings locked(&backend, true);
+    require(!locked.row(Endpoint::Blindbit)->field->input()->isReadOnly(),
+            "Electrum presentation policy never locks BlindBit");
+}
+
+template <typename Controller>
+void controllerSettingsPolicy(const QString &name, bool lock_connected_electrum) {
+    Controller controller(name, nullptr);
+    waitFor([&controller] { return !controller.accountLoading(); },
+            "constructor policy fixture opens offline");
+    controller.loadPanels();
+    auto screen = controller.screen(QStringLiteral("settings"));
+    require(screen.has_value(), "real controller constructs its Settings panel");
+    auto *settings = qobject_cast<account::view::Settings *>(*screen);
+    require(settings != nullptr && settings->m_lock_connected_electrum == lock_connected_electrum,
+            "only the Multikey controller opts into connected Electrum address locking");
+    if constexpr (std::is_same_v<Controller, MusigAccountController>) {
+        controller.m_electrum_state = MusigAccountController::ElectrumState::Connected;
+        emit controller.endpointStateChanged(Endpoint::Electrum);
+        require(settings->row(Endpoint::Electrum)->field->input()->isReadOnly() &&
+                    !settings->row(Endpoint::Electrum)->ssl->isEnabled(),
+                "real Multikey Settings locks when its controller confirms a connection");
+        controller.setAccountDeletionPending(true);
+        controller.m_endpoint_connect = false;
+        require(controller.electrumState() ==
+                        MusigAccountController::ElectrumState::Disconnecting &&
+                    controller.isEndpointRunning(Endpoint::Electrum) &&
+                    !controller.isEndpointRunning(Endpoint::Blindbit),
+                "Multikey running state uses confirmed connection, not the disconnect overlay");
+        controller.m_endpoint_connect = true;
+        require(controller.electrumState() == MusigAccountController::ElectrumState::Connecting &&
+                    controller.isEndpointRunning(Endpoint::Electrum),
+                "a requested connect cannot replace the confirmed running state");
+        controller.m_electrum_state = MusigAccountController::ElectrumState::Disconnected;
+        require(!controller.isEndpointRunning(Endpoint::Electrum),
+                "a requested connect without confirmation is not running");
+        controller.m_endpoint_connect = false;
+        controller.setAccountDeletionPending(false);
+        emit controller.endpointStateChanged(Endpoint::Electrum);
+        require(!settings->row(Endpoint::Electrum)->field->input()->isReadOnly() &&
+                    settings->row(Endpoint::Electrum)->ssl->isEnabled(),
+                "real Multikey Settings unlocks when its controller confirms disconnection");
+    }
+    SignalSpy stopped;
+    QObject::connect(&controller, &Controller::stopped, &stopped, &SignalSpy::onSignal,
+                     qontrol::UNIQUE);
+    controller.stop();
+    waitFor([&stopped] { return stopped.count() == 1; }, "constructor policy fixture drains");
+}
 
 // The real controller, with Test/save completed by the test instead of a live server.
 template <typename Controller> class ControlledEndpointTest final : public Controller {
@@ -1650,7 +1909,11 @@ void navigationSmoke() {
 }
 
 void endpointSmoke() {
+    connectedEndpointPolicy();
+    endpointPolicyScope();
     prepareEndpointAccounts();
+    controllerSettingsPolicy<AccountController>(QStringLiteral("boundary-sp"), false);
+    controllerSettingsPolicy<MusigAccountController>(QStringLiteral("boundary-policy"), true);
     savedEndpointObservers<AccountController>(QStringLiteral("boundary-sp"));
     savedEndpointObservers<MusigAccountController>(QStringLiteral("boundary-policy"));
 #ifdef Q_OS_UNIX

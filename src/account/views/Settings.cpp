@@ -39,7 +39,9 @@ auto toQString(const rust::String &value) -> QString {
 
 namespace account::view {
 
-Settings::Settings(AccountBackend *backend) : m_backend(backend) {
+Settings::Settings(AccountBackend *backend, bool lock_connected_electrum)
+    : m_backend(backend),
+      m_lock_connected_electrum(lock_connected_electrum) {
     init();
     doConnect();
     view();
@@ -306,8 +308,10 @@ void Settings::refreshRow(const ServerRow &row) {
     bool busy = isBusy();
     bool dirty = isDirty(row);
     bool running = m_backend->isEndpointRunning(row.endpoint);
+    bool addressLocked = m_lock_connected_electrum && row.endpoint == Endpoint::Electrum && running;
 
     row.field->setAvailable(!busy, dirty);
+    row.field->input()->setReadOnly(addressLocked);
 
     row.connect->setVisible(!running);
     row.disconnect->setVisible(running);
@@ -316,7 +320,7 @@ void Settings::refreshRow(const ServerRow &row) {
 
     if (row.ssl != nullptr) {
         bool ssl = row.ssl->isChecked();
-        row.ssl->setEnabled(!busy);
+        row.ssl->setEnabled(!busy && !addressLocked);
         // The shown state follows SSL, the choice stays in verify_wanted.
         row.verify->setChecked(ssl && row.verify_wanted);
         row.verify->setEnabled(!busy && ssl);

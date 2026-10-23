@@ -29,7 +29,7 @@ class Settings : public qontrol::Screen {
     Q_OBJECT
 
 public:
-    explicit Settings(AccountBackend *backend);
+    explicit Settings(AccountBackend *backend, bool lock_connected_electrum = false);
     ~Settings() override;
 
 public slots:
@@ -103,6 +103,7 @@ protected:
 
 private:
     AccountBackend *m_backend = nullptr;
+    bool m_lock_connected_electrum = false;
     QWidget *m_main_widget = nullptr;
     QList<ServerRow> m_rows;
     catalog::Label *m_capabilities = nullptr;

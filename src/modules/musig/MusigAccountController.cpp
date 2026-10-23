@@ -127,7 +127,7 @@ void MusigAccountController::loadPanels() {
         return;
     }
     if (!m_panels.contains("settings")) {
-        auto *panel = new qontrol::Panel(new account::view::Settings(this), "settings");
+        auto *panel = new qontrol::Panel(new account::view::Settings(this, true), "settings");
         m_panels.insert(panel);
     }
     if (m_panels.contains("history") || !m_account.has_value() || !m_account.value()->is_ok()) {
@@ -223,8 +223,7 @@ auto MusigAccountController::verifiesCertificate() const -> bool {
 }
 
 auto MusigAccountController::isEndpointRunning(Endpoint endpoint) const -> bool {
-    return endpoint == Endpoint::Electrum && !endpointsStopping() &&
-           m_electrum_state == ElectrumState::Connected;
+    return endpoint == Endpoint::Electrum && m_electrum_state == ElectrumState::Connected;
 }
 
 auto MusigAccountController::electrumState() const -> ElectrumState {
