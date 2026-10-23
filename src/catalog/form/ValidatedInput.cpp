@@ -2,7 +2,8 @@
 
 #include "theme/Palette.h"
 
-#include <QResizeEvent>
+#include <QEvent>
+#include <QStyle>
 #include <Qontrol>
 #include <common.h>
 
@@ -12,6 +13,8 @@ ValidatedInput::ValidatedInput(InputRole role, QWidget *parent) : QWidget(parent
     m_input = new Input(role, this);
     // Mark is a child of the input so it overlays inside the field's right padding.
     m_mark = new ValidationMark(m_input);
+    m_mark->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_input->installEventFilter(this);
 
     (new qontrol::Row)->push(m_input)->into(this);
 
@@ -21,12 +24,13 @@ ValidatedInput::ValidatedInput(InputRole role, QWidget *parent) : QWidget(parent
     connect(m_input, &Input::textChanged, this, &ValidatedInput::textChanged, qontrol::UNIQUE);
 }
 
-void ValidatedInput::resizeEvent(QResizeEvent *event) {
-    QWidget::resizeEvent(event);
-    int markWidth = metric::VALIDATION_MARK_WIDTH;
-    // The input fills this widget, and is not resized yet when this one is.
-    int markX = width() - markWidth - resolve(Spacing::XS);
-    m_mark->setGeometry(markX, 0, markWidth, height());
+auto ValidatedInput::eventFilter(QObject *watched, QEvent *event) -> bool {
+    if (watched == m_input && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) {
+        int markWidth = metric::VALIDATION_MARK_WIDTH;
+        int markX = m_input->width() - markWidth - resolve(Spacing::XS);
+        m_mark->setGeometry(markX, 0, markWidth, m_input->height());
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 auto ValidatedInput::input() const -> Input * {
@@ -38,11 +42,17 @@ void ValidatedInput::setWidth(Size s) {
 }
 
 void ValidatedInput::setState(ValidationMark::State state) {
+    if (m_mark->state() == state) {
+        return;
+    }
     m_mark->setState(state);
+    m_mark->style()->unpolish(m_mark);
+    m_mark->style()->polish(m_mark);
+    m_mark->update();
 }
 
 void ValidatedInput::setValid(bool valid) {
-    m_mark->setState(valid ? ValidationMark::State::Valid : ValidationMark::State::Invalid);
+    setState(valid ? ValidationMark::State::Valid : ValidationMark::State::Invalid);
 }
 
 } // namespace catalog

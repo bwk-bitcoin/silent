@@ -11,6 +11,7 @@
 #include "catalog/display/Display.h"
 #include "catalog/display/Label.h"
 #include "catalog/form/FieldGroup.h"
+#include "catalog/form/ValidatedInput.h"
 #include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/Checkbox.h"
 #include "catalog/inputs/ComboBox.h"
@@ -95,17 +96,13 @@ using catalog::Label;
 using catalog::LabelRole;
 using catalog::Toggle;
 
-static void setValidationIndicator(catalog::ValidationMark *indicator, const QString &text,
+static void setValidationIndicator(catalog::ValidatedInput *field, const QString &text,
                                    bool valid) {
     if (text.isEmpty()) {
-        indicator->setState(catalog::ValidationMark::State::None);
+        field->setState(catalog::ValidationMark::State::None);
         return;
     }
-    if (valid) {
-        indicator->setState(catalog::ValidationMark::State::Valid);
-    } else {
-        indicator->setState(catalog::ValidationMark::State::Invalid);
-    }
+    field->setValid(valid);
 }
 
 InputW::InputW(const RustCoin &coin) {
@@ -138,16 +135,17 @@ auto InputW::widget() -> QWidget * {
 }
 
 OutputW::OutputW(Send *screen, int id) {
-    m_address_input = new Input(InputRole::Mono);
+    m_address_field = new catalog::ValidatedInput(InputRole::Mono);
+    m_address_input = m_address_field->input();
     m_address_input->setPlaceholderText(TR("send-placeholder-address"));
-
-    m_address_indicator = new catalog::ValidationMark;
 
     m_delete_btn = catalog::btnRemovePayment();
     m_scan_btn = catalog::btnScanAddress();
 
-    m_amount_input = new Input(InputRole::Mono);
-    m_amount_input->setWidth(Size::S);
+    m_amount_field = new catalog::ValidatedInput(InputRole::Mono);
+    m_amount_input = m_amount_field->input();
+    m_amount_field->setWidth(Size::S);
+    m_amount_field->setFixedWidth(resolve(Size::S));
     m_amount_input->setPlaceholderText(TR("send-placeholder-amount"));
     auto *btcValidator = new QDoubleValidator(0.00000001, 21000000.0, 8, m_amount_input);
     btcValidator->setNotation(QDoubleValidator::StandardNotation);
@@ -162,8 +160,6 @@ OutputW::OutputW(Send *screen, int id) {
     fiatValidator->setLocale(QLocale::c());
     m_amount_fiat_input->setValidator(fiatValidator);
     m_amount_fiat_input->setProperty("outputId", id);
-
-    m_amount_indicator = new catalog::ValidationMark;
 
     m_label_input = new Input;
     m_label_input->setPlaceholderText(TR("send-placeholder-label"));
@@ -188,9 +184,8 @@ OutputW::OutputW(Send *screen, int id) {
     // tiny gap; the groups are separated by a normal gap.
     auto *btcGroup = (new qontrol::Row)
                          ->spacing(resolve(Spacing::XS))
-                         ->push(m_amount_input)
-                         ->push(new Label("BTC", LabelRole::Subheading))
-                         ->push(m_amount_indicator);
+                         ->push(m_amount_field)
+                         ->push(new Label("BTC", LabelRole::Subheading));
 
     m_fiat_code = new Label(QString(), LabelRole::Subheading);
     m_fiat_group = (new qontrol::Row)
@@ -212,8 +207,7 @@ OutputW::OutputW(Send *screen, int id) {
     auto *addressRow = (new qontrol::Row)
                            ->spacing(resolve(Spacing::XS))
                            ->push(m_scan_btn)
-                           ->push(m_address_input, 1)
-                           ->push(m_address_indicator);
+                           ->push(m_address_field, 1);
 
     auto *fields = (new catalog::FieldGroup(catalog::FieldGroup::Labels::Payment))
                        ->addField(TR("send-address"), addressRow)
@@ -262,7 +256,7 @@ void OutputW::setMaxMode(bool max) {
     m_amount_fiat_input->setEnabled(!max);
     if (max) {
         m_amount_input->setText(TR("send-max"));
-        setValidationIndicator(m_amount_indicator, "", false);
+        setValidationIndicator(m_amount_field, "", false);
     } else {
         if (m_amount_input->text() == TR("send-max")) {
             m_amount_input->setText("");
@@ -383,9 +377,11 @@ void Send::init() {
     m_fee_toggle = new Toggle;
     m_fee_toggle->setChecked(true); // Default to sats/vb mode
 
-    m_fee_value_input = new Input(InputRole::Mono);
+    m_fee_field = new catalog::ValidatedInput(InputRole::Mono);
+    m_fee_value_input = m_fee_field->input();
     m_fee_value_input->setObjectName(QStringLiteral("fee-value"));
-    m_fee_value_input->setWidth(Size::XS);
+    m_fee_field->setWidth(Size::XS);
+    m_fee_field->setFixedWidth(resolve(Size::XS));
     m_fee_value_input->setText("1");
     m_fee_mode_picker = new catalog::ComboBox;
     m_fee_mode_picker->setObjectName(QStringLiteral("fee-mode"));
@@ -394,8 +390,6 @@ void Send::init() {
     m_fee_tier_picker->setObjectName(QStringLiteral("fee-tier"));
     m_fee_tier_picker->addItems({TR("fee-low"), TR("fee-medium"), TR("fee-fast")});
     m_fee_tier_picker->setVisible(false);
-
-    m_fee_indicator = new catalog::ValidationMark;
 
     m_fee_rate_label = new Label(TR("send-fee-rate-label"), LabelRole::InfoLabel);
 
@@ -802,8 +796,7 @@ auto Send::transactionView() -> QWidget * {
                           ->pushSpacer(resolve(Spacing::S))
                           ->push(m_fee_toggle)
                           ->pushSpacer(resolve(Spacing::S))
-                          ->push(m_fee_value_input)
-                          ->push(m_fee_indicator)
+                          ->push(m_fee_field)
                           ->pushSpacer(resolve(Spacing::S))
                           ->push(m_fee_label)
                           ->pushSpacer(resolve(Spacing::S))
@@ -842,8 +835,8 @@ void Send::applyLocked() {
     // Held by the signing step, the fee is settled: only the processed fee stays, and
     // the step's own Cancel lets go of the transaction where Clear would empty the
     // payments.
-    for (QWidget *feeInput : std::initializer_list<QWidget *>{
-             m_fee_rate_label, m_fee_toggle, m_fee_value_input, m_fee_indicator, m_fee_label}) {
+    for (QWidget *feeInput : std::initializer_list<QWidget *>{m_fee_rate_label, m_fee_toggle,
+                                                              m_fee_field, m_fee_label}) {
         feeInput->setVisible(!m_locked);
     }
     m_fee_mode_picker->setVisible(!m_locked);
@@ -1293,10 +1286,10 @@ auto OutputW::label() -> QString {
 void OutputW::updateAddressValidation() {
     QString addr = m_address_input->text();
     if (addr.isEmpty()) {
-        setValidationIndicator(m_address_indicator, addr, false);
+        setValidationIndicator(m_address_field, addr, false);
     } else {
         auto result = ::validate_address(rust::String(addr.toStdString()));
-        setValidationIndicator(m_address_indicator, addr, result.empty());
+        setValidationIndicator(m_address_field, addr, result.empty());
     }
 }
 
@@ -1308,7 +1301,7 @@ void OutputW::updateAmountValidation() {
                       ? ::parse_btc_amount(rust::String(normalized.value().toStdString()))
                       : AmountParseResult{};
     m_parsed_amount = parsed.is_ok ? std::optional<uint64_t>(parsed.sats) : std::nullopt;
-    setValidationIndicator(m_amount_indicator, text, parsed.is_ok);
+    setValidationIndicator(m_amount_field, text, parsed.is_ok);
 }
 
 auto Send::txTemplate() -> std::optional<TransactionTemplate> {
@@ -1369,7 +1362,7 @@ void Send::onUpdateFeeValidation() {
                        ? ::parse_fee_input(rust::String(normalized.value().toStdString()),
                                            m_fee_toggle->isChecked())
                        : FeeParseResult{};
-    setValidationIndicator(m_fee_indicator, text, m_parsed_fee.is_ok);
+    setValidationIndicator(m_fee_field, text, m_parsed_fee.is_ok);
 }
 
 void Send::onProcess() {

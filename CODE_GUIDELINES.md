@@ -651,35 +651,33 @@ the `TempDir` handle for the lifetime it's needed — do not leak or forget it.
 
 All input fields must provide visual validation feedback to users:
 
-- **Valid input** → green ✓ check mark displayed after field
-- **Invalid input** → red ✗ cross displayed after field
-- **Empty input** → empty placeholder (same width, no mark)
+- **Valid input** → green ✓ check mark inside the field's trailing edge
+- **Invalid input** → red ✗ cross inside the field's trailing edge
+- **Empty input** → no mark, with the same reserved text gutter
 
-**Important:** The indicator must always occupy its space in the layout to prevent UI
-shifting. Never use `setVisible(false)` — instead clear the text for empty inputs.
+Use `catalog::ValidatedInput` for integrated validation. Its child `ValidationMark`
+overlays the actual `Input`, follows that input's resize/show events, and ignores
+mouse events. The right text margin stays reserved for every state, in addition to
+the base Input stylesheet's horizontal padding. State changes must not shift the
+field or let long text overlap the mark. Do not add a sibling indicator to the row.
 
 **Implementation:**
 
-1. Add a `QLabel *m_indicator` member next to each input field (20px wide, center-aligned)
-2. Connect the input's `textChanged` signal to a validation method
-3. Use the helper function to update indicator state:
+1. Create a `catalog::ValidatedInput` and put the wrapper in the layout.
+2. Use `input()` to set placeholders, validators, object names and focus, or to
+   connect the underlying `Input` signals to named validation slots.
+3. Update the wrapper's state without changing its geometry or visibility:
 
 ```cpp
-static void setValidationIndicator(QLabel *indicator, const QString &text, bool valid) {
-    if (text.isEmpty()) {
-        indicator->setText("");
-        indicator->setStyleSheet("");
-    } else {
-        if (valid) {
-            indicator->setText(QString::fromUtf8("✓"));
-            indicator->setStyleSheet("QLabel { color: green; }");
-        } else {
-            indicator->setText(QString::fromUtf8("✗"));
-            indicator->setStyleSheet("QLabel { color: red; }");
-        }
-    }
+if (m_address_field->input()->text().isEmpty()) {
+    m_address_field->setState(catalog::ValidationMark::State::None);
+} else {
+    m_address_field->setValid(valid);
 }
 ```
+
+An `EndpointRow` test-result mark is intentionally outside the field, after its
+Test button. It is not integrated input validation.
 
 **Use Qt validators for input restriction.** When restricting input format (numeric ranges,
 decimal places, etc.), use Qt's built-in validators rather than manual validation logic:

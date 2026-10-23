@@ -675,6 +675,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/plugin_bundle_smoke.cpp
         tests/host/PluginStopProbe.h
         tests/host/price_feed_smoke.cpp
+        tests/host/validated_input_geometry.cpp
         tests/host/sp_signing_smoke.cpp
         tests/host/musig_reset_smoke.cpp
         tests/host/boundary_smoke.cpp

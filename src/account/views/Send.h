@@ -46,7 +46,7 @@ class Separator;
 }
 
 namespace catalog {
-class ValidationMark;
+class ValidatedInput;
 }
 
 namespace catalog {
@@ -111,8 +111,8 @@ private:
     catalog::Input *m_amount_fiat_input = nullptr;
     catalog::Label *m_fiat_code = nullptr;
     QWidget *m_fiat_group = nullptr;
-    catalog::ValidationMark *m_address_indicator = nullptr;
-    catalog::ValidationMark *m_amount_indicator = nullptr;
+    catalog::ValidatedInput *m_address_field = nullptr;
+    catalog::ValidatedInput *m_amount_field = nullptr;
     catalog::Button *m_delete_btn = nullptr;
     catalog::Button *m_scan_btn = nullptr;
     catalog::Checkbox *m_max = nullptr;
@@ -226,7 +226,7 @@ private:
     catalog::Input *m_fee_value_input = nullptr;
     catalog::Label *m_fee_label = nullptr;
     catalog::Label *m_fee_rate_label = nullptr;
-    catalog::ValidationMark *m_fee_indicator = nullptr;
+    catalog::ValidatedInput *m_fee_field = nullptr;
 
     catalog::Label *m_warning_label = nullptr;
     catalog::Label *m_inputs_title_label = nullptr;

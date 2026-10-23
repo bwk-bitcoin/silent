@@ -172,6 +172,7 @@ auto launcherLists(const PluginRegistry &registry, const IModule *module, const 
 } // namespace
 
 namespace smoke {
+auto validatedInputGeometry() -> bool;
 void pluginAbiSmoke();
 auto pluginGnuHashChild(const QString &path, bool expected_admission) -> int;
 void legacyPluginAbiSmoke(const QString &plugin_id);
@@ -381,6 +382,7 @@ auto main(int argc, char *argv[]) -> int {
     smoke::pluginAbiSmoke();
 #endif
     check(smoke::priceFeedSmoke(), "price feed lifecycle and Send invariants");
+    check(smoke::validatedInputGeometry(), "validated input geometry");
 
     smoke::MockPlugin plugin;
     check(qobject_cast<IPlugin *>(&plugin) == &plugin &&

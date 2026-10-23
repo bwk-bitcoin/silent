@@ -1,7 +1,7 @@
 #pragma once
 
-#include "catalog/inputs/Input.h"
 #include "catalog/form/ValidationMark.h"
+#include "catalog/inputs/Input.h"
 #include <QWidget>
 
 namespace catalog {
@@ -22,7 +22,7 @@ public slots:
     void setValid(bool valid);
 
 protected:
-    void resizeEvent(QResizeEvent *event) override;
+    auto eventFilter(QObject *watched, QEvent *event) -> bool override;
 
 private:
     Input *m_input = nullptr;
