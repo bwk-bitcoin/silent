@@ -28,6 +28,10 @@ public:
     void startInstance([[maybe_unused]] const QString &id) override {
     }
 
+    void shutdown(ReqId req_id) override {
+        emit shutdownFinished(req_id, QString());
+    }
+
 private:
     QString m_id;
     ReqId m_next = 0;

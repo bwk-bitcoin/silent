@@ -9,11 +9,14 @@
 #include <QSet>
 #include <QString>
 #include <QStringList>
+#include <QTimer>
+#include <cstdint>
 #include <optional>
 
 #include "interfaces/module.h"
 
 class PluginLibrary;
+enum class PluginRemovalPhase : std::uint8_t;
 
 class PluginRegistry final : public QObject {
     Q_OBJECT
@@ -32,10 +35,18 @@ public:
     // Returns how many plugins it found that were not discovered before.
     auto rescanDiscoveredPlugins() -> int;
     void reloadEnabledPlugins();
-    // False when the plugin refused: it failed to load, or to unload.
+    // Enable performs admission now. Disable returns whether asynchronous shutdown
+    // was accepted; pluginStopFinished carries its actual result.
     auto setEnabled(const QString &plugin_id, bool enabled) -> bool;
+    void removePlugin(const QString &plugin_id);
+    [[nodiscard]] auto pluginStopping(const QString &plugin_id) const -> bool;
+    [[nodiscard]] auto pluginStopPending(const QString &plugin_id) const -> bool;
+    [[nodiscard]] auto pluginStopError(const QString &plugin_id) const -> QString;
+    [[nodiscard]] auto pluginRemovalReadError() const -> QString;
+    [[nodiscard]] auto pluginDisableRetryable(const QString &plugin_id) const -> bool;
     [[nodiscard]] auto pluginName(const QString &plugin_id) const -> QString;
     [[nodiscard]] auto pluginDescription(const QString &plugin_id) const -> QString;
+    [[nodiscard]] auto pluginMetadata(const QString &plugin_id) const -> QMap<QString, QString>;
     // Why the plugin failed to load, empty when it did not fail.
     [[nodiscard]] auto pluginLoadError(const QString &plugin_id) const -> QString;
     // The open accounts that close with the plugin.
@@ -69,8 +80,15 @@ public:
 signals:
     void enabledPluginsChanged();
     void accountDeletionFinished(IModule *module, QString id, QString error);
+    void pluginStopFinished(QString plugin_id, bool removed, QString error);
+    void pluginStopPrepared(QString plugin_id, QString error);
+    void pluginDataRemoved(QString plugin_id, QString error);
 
 private slots:
+    void onPluginStopPrepared(const QString &plugin_id, const QString &error);
+    void onPluginDataRemoved(const QString &plugin_id, const QString &error);
+    void onModuleShutdownFinished(ReqId req_id, const QString &error);
+    void advancePluginStops();
     void onAccountDeleted(ReqId req_id, const QString &id, const QString &error);
     void onModuleInstances(ReqId req_id, QList<QPair<QString, QString>> instances);
     void onModuleAutoStart(ReqId req_id, QStringList ids);
@@ -81,6 +99,10 @@ private slots:
     void onLauncherRefreshRequested();
 
 protected:
+    void beginPluginStop(const QString &plugin_id, bool remove);
+    void requestModuleShutdown(const QString &plugin_id);
+    [[nodiscard]] auto drainPluginCallers(const QString &plugin_id) -> bool;
+    void finishPluginShutdown(const QString &plugin_id);
     // A module that answers from inside list()/autoStart() replies before the pending
     // request is recorded, so the answer is parked and replayed by a direct call. The
     // slots resolve sender() and forward here; the replay passes the module it holds,
@@ -115,6 +137,7 @@ private:
         bool builtin = false;
         bool external = false;
         bool discovered = false;
+        std::optional<PluginRemovalPhase> removal_phase;
     };
 
     // Who an active module is, taken from its plugin record when it was activated. The
@@ -138,7 +161,6 @@ private:
     void deactivateModule(IModule *module);
     bool startOwnedInstance(IModule *module, const QString &instance_id);
     void stopPluginInstances(const QString &plugin_id);
-    [[nodiscard]] bool hasLiveOwnedInstances(const QString &plugin_id) const;
     void rebuildPluginList();
 
     QList<QString> m_plugin_order;
@@ -156,4 +178,20 @@ private:
     bool m_signer_polling = false;
     QHash<IModule *, QHash<ReqId, QString>> m_pending_deletions;
     ReqId m_delete_req_id = 0;
+    enum class StopPhase { Preparing, Stopping, Failed, Cleaning };
+
+    struct PluginStop {
+        StopPhase phase = StopPhase::Preparing;
+        bool remove = false;
+        ReqId req_id = 0;
+        QSet<IModule *> pending;
+        QString error;
+        bool callers_dropped = false;
+    };
+
+    QHash<QString, PluginStop> m_stops;
+    QString m_removal_read_error;
+    // Desired enable state from the same checked snapshot as the removal phases.
+    QSet<QString> m_enabled_snapshot;
+    QTimer m_stop_timer;
 };

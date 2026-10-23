@@ -24,6 +24,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    app_state::{self, RemovalPhase},
     config::datadir,
     ffi::{
         PluginCatalog, PluginInstallResult, PluginLibraryResult, PluginMetadata,
@@ -359,7 +360,13 @@ pub fn install(path: &Path, host: &Compatibility) -> Result<String, String> {
     let manifest = Manifest::read(&archive).map_err(in_bundle)?;
     let bundle = manifest.bundle(&archive, host).map_err(in_bundle)?;
     let text = serde_json::to_string(&bundle).map_err(|e| e.to_string())?;
-    state_crypt::write_state(&bundle_path(&manifest.id)?, &text)?;
+    let _publication = state_crypt::publication_guard();
+    let _state = crate::storage::app_state_lock(&datadir())?;
+    if crate::app_state::plugin_removal_pending(&manifest.id)? {
+        return Err("plugin removal must be completed before reinstalling".into());
+    }
+    fs::create_dir_all(datadir().join(PLUGINS_DIR)).map_err(|error| error.to_string())?;
+    state_crypt::write_state_durable(&bundle_path(&manifest.id)?, &text)?;
     Ok(manifest.id)
 }
 
@@ -477,12 +484,32 @@ pub fn open(id: &str) -> Result<Opened, String> {
 
 /// Removes the installed plugin `id`.
 pub fn remove(id: &str) -> Result<(), String> {
+    let _publication = state_crypt::publication_guard();
+    let _state = crate::storage::app_state_lock(&datadir())?;
+    remove_bundle(id)
+}
+
+fn remove_bundle(id: &str) -> Result<(), String> {
     let path = bundle_path(id)?;
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("{}: {e}", path.display())),
+    let temporary = path.with_extension("tmp");
+    for entry in [&temporary, &path] {
+        match fs::remove_file(entry) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", entry.display())),
+        }
     }
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        match fs::File::open(parent) {
+            Ok(directory) => directory
+                .sync_all()
+                .map_err(|error| format!("Bundle deletion durability failed: {error}"))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Bundle deletion durability failed: {error}")),
+        }
+    }
+    Ok(())
 }
 
 // ===== Bridge =====
@@ -544,5 +571,38 @@ pub fn plugin_library(plugin_id: String) -> PluginLibraryResult {
 }
 
 pub fn plugin_remove(plugin_id: String) -> String {
-    remove(&plugin_id).err().unwrap_or_default()
+    uninstall(&plugin_id).err().unwrap_or_default()
+}
+
+fn uninstall(id: &str) -> Result<(), String> {
+    crate::storage::removal_transaction(|| uninstall_locked(id))
+}
+
+fn uninstall_locked(id: &str) -> Result<(), String> {
+    let phase = app_state::plugin_removal_phase(id)?.ok_or("plugin removal was not prepared")?;
+    if phase <= RemovalPhase::PrivateData {
+        app_state::advance_plugin_removal_locked(id, RemovalPhase::PrivateData).map_err(
+            |error| {
+                format!(
+                "Could not persist private-data cleanup phase; data and bundle retained: {error}"
+            )
+            },
+        )?;
+        crate::storage::purge_plugin_locked(id).map_err(|error| {
+            format!("Private data cleanup failed; plugin remains disabled: {error}")
+        })?;
+    }
+    if phase <= RemovalPhase::Bundle {
+        app_state::advance_plugin_removal_locked(id, RemovalPhase::Bundle).map_err(|error| {
+            format!("Private data cleared; could not persist bundle-cleanup phase: {error}")
+        })?;
+        remove_bundle(id)
+            .map_err(|error| format!("Private data cleared; bundle removal failed: {error}"))?;
+    }
+    app_state::advance_plugin_removal_locked(id, RemovalPhase::Bookkeeping).map_err(|error| {
+        format!("Bundle and private data removed; could not persist bookkeeping phase: {error}")
+    })?;
+    app_state::finish_plugin_removal_locked(id).map_err(|error| {
+        format!("Bundle and private data removed; bookkeeping save failed: {error}")
+    })
 }

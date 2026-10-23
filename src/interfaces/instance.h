@@ -12,6 +12,9 @@ class IInstance {
 public:
     virtual ~IInstance() = default;
 
+    // Register before publishing tabs or settings. Unregistered wizard owners are
+    // synchronous: module shutdown must wait until openWizard and its native frames return.
+
     // Persist this ID, not this live handle. instanceRemoved invalidates the
     // handle; account() is a QObject and can be observed with QPointer.
     [[nodiscard]] virtual QString id() const = 0;

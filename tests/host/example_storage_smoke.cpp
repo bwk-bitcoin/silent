@@ -3,6 +3,7 @@
 #include "AppController.h"
 #include "ExternalStorageConsumer.h"
 #include "MockPlugin.h"
+#include "PluginStopProbe.h"
 #include "StorageProbe.h"
 #include "host/Host.h"
 #include "host/PluginMetadata.h"
@@ -87,12 +88,15 @@ auto installedLibrary() -> QByteArray {
 
 // Answered before the plugin's first storage request, so the host asks nothing.
 void allowSavedData(const QString &hash) {
-    auto answers = ::app_plugin_answers(rust::String(PLUGIN_ID.toStdString()),
-                                        rust::String(hash.toStdString()));
+    auto request = ::app_plugin_access_request(rust::String(PLUGIN_ID.toStdString()),
+                                               rust::String(hash.toStdString()));
+    require(request.is_ok, "the Saved Data request reads the app state");
+    auto answers = request.access;
     answers.plugin_id = rust::String(PLUGIN_ID.toStdString());
     answers.hash = rust::String(hash.toStdString());
     answers.state = PluginGrant::Allowed;
-    ::app_set_plugin_access(answers);
+    require(::app_set_plugin_access(answers, request.storage_epoch).empty(),
+            "allow Saved Data before the first storage request");
 }
 
 // ===== Public module and storage APIs =====
@@ -113,8 +117,9 @@ void requireLoadedAbi(PluginRegistry *registry) {
         }
         auto *object = dynamic_cast<QObject *>(plugin);
         require(object != nullptr && object->qt_metacast(SILENT_IPlugin_IID) != nullptr &&
-                    object->qt_metacast("dev.silent.IPlugin/7.0") == nullptr,
-                "the loaded example plugin exposes ABI 8 only");
+                    object->qt_metacast("dev.silent.IPlugin/7.0") == nullptr &&
+                    object->qt_metacast("dev.silent.IPlugin/8.0") == nullptr,
+                "the loaded example plugin exposes ABI 9 only");
         return;
     }
     qFatal("example storage smoke: the example plugin is not loaded");
@@ -179,10 +184,13 @@ void deleteLegacy(ExampleInstancesProbe &probe, PluginRegistry *registry, Host *
 
 void deniedDeletion(ExampleInstancesProbe &probe, PluginRegistry *registry, Host *host,
                     IModule *module, const QString &hash) {
-    auto answers = ::app_plugin_answers(rust::String(PLUGIN_ID.toStdString()),
-                                        rust::String(hash.toStdString()));
+    auto request = ::app_plugin_access_request(rust::String(PLUGIN_ID.toStdString()),
+                                               rust::String(hash.toStdString()));
+    require(request.is_ok, "the revocation request reads the app state");
+    auto answers = request.access;
     answers.state = PluginGrant::Denied;
-    ::app_set_plugin_access(answers);
+    require(::app_set_plugin_access(answers, request.storage_epoch).empty(),
+            "the revocation is saved");
     require(::app_plugin_answers(rust::String(PLUGIN_ID.toStdString()),
                                  rust::String(hash.toStdString()))
                     .state == PluginGrant::Denied,
@@ -212,7 +220,7 @@ void deniedDeletion(ExampleInstancesProbe &probe, PluginRegistry *registry, Host
 // A reloaded plugin reads the file again and finds no account: the kept legacy blob is
 // not imported a second time.
 void reload(ExampleInstancesProbe &probe, PluginRegistry *registry, Host *host) {
-    require(registry->setEnabled(PLUGIN_ID, false), "the example plugin unloads");
+    require(stopPlugin(registry, PLUGIN_ID).isEmpty(), "the example plugin unloads");
     require(registry->setEnabled(PLUGIN_ID, true), "the example plugin loads again");
     auto *module = exampleModule(registry);
     probe.attach(module);
@@ -309,7 +317,7 @@ void exampleStorageSmoke(const QString &bundle) {
     install(bundle);
     auto library = installedLibrary();
     require(pluginMetadataError(library, QStringLiteral(SILENT_IPlugin_IID)).isEmpty(),
-            "the sealed example library declares plugin ABI 8, read without loading it");
+            "the sealed example library declares plugin ABI 9, read without loading it");
     auto hash = sha256(library);
     allowSavedData(hash);
     // Any prompt means the preloaded grant was missed: it is denied, and the load fails.
@@ -335,7 +343,7 @@ void exampleStorageSmoke(const QString &bundle) {
     require(legacyBlobs() == blobs, "the migration keeps the legacy blob as it was");
     module->deleteInstance(LEGACY_ID);
     requireMigratedState(host, module);
-    require(registry->setEnabled(PLUGIN_ID, false),
+    require(stopPlugin(registry, PLUGIN_ID).isEmpty(),
             "ordinary plugin unload preserves account data");
     require(registry->setEnabled(PLUGIN_ID, true), "plugin reloads after ordinary runtime cleanup");
     module = exampleModule(registry);
@@ -348,9 +356,42 @@ void exampleStorageSmoke(const QString &bundle) {
     require(legacyBlobs() == blobs, "the legacy blob is never overwritten");
 
     timer.stop();
-    require(registry->setEnabled(PLUGIN_ID, false), "the example plugin unloads at the end");
-    require(std::string(::plugin_remove(rust::String(PLUGIN_ID.toStdString()))).empty(),
-            "the example plugin is removed");
+    require(stopPlugin(registry, PLUGIN_ID).isEmpty(), "the example plugin unloads at the end");
+    require(stopPlugin(registry, PLUGIN_ID, true).isEmpty(), "the example plugin is removed");
+}
+
+void exampleReinstallSmoke(const QString &bundle) {
+    auto *host = Host::get();
+    auto *registry = AppController::get()->pluginRegistry();
+    require(host != nullptr && registry != nullptr, "restarted host and registry exist");
+    require(legacyBlobs().isEmpty(), "removal deleted the legacy migration source before restart");
+    require(::app_plugin_history(rust::String(PLUGIN_ID.toStdString())).empty(),
+            "removal cleared every hash-specific grant before restart");
+    install(bundle);
+    auto hash = sha256(installedLibrary());
+    allowSavedData(hash);
+    registry->rescanDiscoveredPlugins();
+    require(registry->setEnabled(PLUGIN_ID, true), "reinstall enables in the restarted host");
+    auto *module = exampleModule(registry);
+    ExampleInstancesProbe probe;
+    probe.attach(module);
+    require(!lists(probe.waitForAnswer(0), LEGACY_ID),
+            "reinstalled plugin starts without old account IDs");
+    require(!lists(probe.waitForAnswer(1), LEGACY_ID),
+            "completed storage load cannot resurrect legacy accounts");
+    ExternalStorageConsumer consumer(host, module, QStringLiteral("reinstalled-blank"));
+    auto storage = consumer.open();
+    require(ExternalStorageConsumer::error(consumer.read(storage, STATE_PATH)) ==
+                QStringLiteral("not_found"),
+            "reinstall has no old state file after actual process restart");
+    auto migration = consumer.migrate(storage, STATE_PATH);
+    require(ExternalStorageConsumer::error(migration).isEmpty() &&
+                migration.value(QStringLiteral("reason")).toString() == QStringLiteral("completed"),
+            "reinstalled plugin cannot rerun old blob migration");
+    require(ExternalStorageConsumer::error(consumer.read(storage, STATE_PATH)) ==
+                QStringLiteral("not_found"),
+            "migration cannot resurrect a state file after reinstall");
+    require(stopPlugin(registry, PLUGIN_ID, true).isEmpty(), "reinstalled plugin removes cleanly");
 }
 
 } // namespace smoke

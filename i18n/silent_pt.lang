@@ -63,6 +63,8 @@ btn-register-descriptor => "Register Descriptor" => "Register Descriptor"
 btn-remove-key => "Remove Key" => "NONE"
 btn-remove-path => "Remove Path" => "NONE"
 btn-remove-payment => "Remove Payment" => "NONE"
+btn-remove-plugin => "Remove" => "Remove"
+btn-retry-disable-plugin => "Retry disable" => "Retry disable"
 btn-reveal-mnemonic => "Reveal Mnemonic" => "NONE"
 btn-save => "Save" => "NONE"
 btn-save-alias => "Save Alias" => "NONE"
@@ -898,6 +900,10 @@ plugin-access-accounts-sub
 => "NONE";;
 plugin-access-current => "The version loaded now." => "NONE"
 plugin-access-earlier => "An earlier version." => "NONE"
+plugin-access-flow-failed => "Access answers unavailable" => "Access answers unavailable"
+plugin-access-flow-retry
+=> "%1. Access controls are unavailable until the saved answers can be checked. Try Again reloads them."
+=> "%1. Access controls are unavailable until the saved answers can be checked. Try Again reloads them.";;
 plugin-access-flow-text
 => "What %1 may use, for each version of its library you answered. A change applies at once. Forget an answer and Silent asks again on the plugin's next use."
 => "NONE";;
@@ -923,6 +929,14 @@ plugin-access-refused-account
 plugin-access-refused-keys
 => "This plugin may not use your keys. Allow it in Settings, Plugin Manager, Access."
 => "NONE";;
+plugin-access-read-failed => "Could not read plugin access" => "Could not read plugin access"
+plugin-access-read-failed-text
+=> "Access for %1 could not be checked: %2. This request was refused. Unlock or restore access, then request it again."
+=> "Access for %1 could not be checked: %2. This request was refused. Unlock or restore access, then request it again.";;
+plugin-access-save-failed => "Could not confirm access answers" => "Could not confirm access answers"
+plugin-access-save-failed-text
+=> "Could not confirm saving access for %1: %2. This request was refused. Retry the request to read the saved answers."
+=> "Could not confirm saving access for %1: %2. This request was refused. Retry the request to read the saved answers.";;
 plugin-access-state => "Saved Data" => "NONE"
 plugin-access-state-sub
 => "Its own data, kept encrypted with Silent's. A new version of the plugin asks again."
@@ -1095,11 +1109,44 @@ settings-placeholder-electrum
 => "host:port (e.g. 127.0.0.1:50001)";;
 settings-plugin-add-failed => "Could not add the plugin" => "NONE"
 settings-plugin-added => "%1 added, off: turn it on to load it." => "NONE"
+settings-plugin-state-read-failed
+=> "Could not read pending plugin removals"
+=> "Could not read pending plugin removals";;
+settings-plugin-state-read-failed-text
+=> "Plugin controls are unavailable until application state can be read. Unlock or restore access, then try again. Known removal records have been kept. %1"
+=> "Plugin controls are unavailable until application state can be read. Unlock or restore access, then try again. Known removal records have been kept. %1";;
+settings-plugin-bookkeeping-pending
+=> "Bundle and private data were removed. Grant and settings cleanup is pending. Use Remove to finish."
+=> "Bundle and private data were removed. Grant and settings cleanup is pending. Use Remove to finish.";;
+settings-plugin-bundle-pending
+=> "Private data was removed. Installed bundle cleanup is pending. Use Remove to retry."
+=> "Private data was removed. Installed bundle cleanup is pending. Use Remove to retry.";;
+settings-plugin-disabled
+=> "%1 was disabled. Its saved data was kept."
+=> "%1 was disabled. Its saved data was kept.";;
 settings-plugin-drop
 => "Drop a plugin ZIP bundle on this window to add it. Any filename or extension is accepted; loose libraries, JSON files and folders are not. Built-in modules are not listed here."
 => "NONE";;
 settings-plugin-manager => "Plugin Manager" => "Gerenciador de plugins"
 settings-plugin-not-silent => "This library is not a Silent plugin." => "NONE"
+settings-plugin-removal-interrupted
+=> "Removal was interrupted. Private data may already be cleared. Use Remove to finish cleanup."
+=> "Removal was interrupted. Private data may already be cleared. Use Remove to finish cleanup.";;
+settings-plugin-removed
+=> "%1 was removed with its saved state and accounts."
+=> "%1 was removed with its saved state and accounts.";;
+settings-plugin-removing
+=> "Removing %1. Waiting for shutdown and private-data cleanup."
+=> "Removing %1. Waiting for shutdown and private-data cleanup.";;
+settings-plugin-stop-failed
+=> "Plugin shutdown or removal failed"
+=> "Plugin shutdown or removal failed";;
+settings-plugin-stop-interrupted
+=> "Removal stopped before private cleanup. Use Remove to finish shutdown and deletion."
+=> "Removal stopped before private cleanup. Use Remove to finish shutdown and deletion.";;
+settings-plugin-stopping
+=> "Unavailable during shutdown or removal. After an error, use Remove to retry cleanup."
+=> "Unavailable during shutdown or removal. After an error, use Remove to retry cleanup.";;
 settings-plugin-updated
 => "%1 updated: it loads the new version once turned off and on again."
 => "NONE";;
@@ -1108,6 +1155,11 @@ settings-price-none => "None" => "None"
 settings-price-source => "Source" => "Source"
 settings-price-unavailable => "%1 (unavailable)" => "%1 (unavailable)"
 settings-prices => "Price feed" => "Price feed"
+settings-remove-plugin => "Remove" => "Remove"
+settings-remove-question => "Remove %1?" => "Remove %1?"
+settings-remove-warning
+=> "This permanently deletes the installed plugin and all of its saved state and accounts. There is no keep-data option. Reinstalling starts with empty data. Shared signer keys and other plugins' accounts are not deleted."
+=> "This permanently deletes the installed plugin and all of its saved state and accounts. There is no keep-data option. Reinstalling starts with empty data. Shared signer keys and other plugins' accounts are not deleted.";;
 settings-section-belongs
 => "These settings belong to %1. Changes apply when you leave this page."
 => "NONE";;

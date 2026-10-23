@@ -6,6 +6,7 @@
 #include <QHash>
 #include <QList>
 #include <QPointer>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -61,7 +62,11 @@ public slots:
     void onLanguageSelectionChanged(int index);
     void onPluginToggled(bool enabled);
     void onPluginAccessClicked();
+    void onPluginRemoveClicked();
+    void onPluginDisableRetryClicked();
+    void onPluginStopFinished(const QString &plugin_id, bool removed, const QString &error);
     void onPluginsChanged();
+    void onRetryPluginState();
     void onBundlesImported(const QStringList &plugin_ids, const QStringList &errors);
     void onOpenSectionClicked();
     void onHostSettingsSectionsChanged();
@@ -95,6 +100,7 @@ protected:
     auto buildPlugins() -> QWidget *;
     void showMain();
     auto pluginRow(const QString &id, const QString &meta) -> catalog::SelectRow *;
+    void requestPluginDisable(const QString &id);
     // Adds the plugins dropped on the window (ws-plaude/silent#41).
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
@@ -153,6 +159,8 @@ private:
     catalog::Card *m_plugin_drop = nullptr;
     catalog::Label *m_plugin_drop_caption = nullptr;
     catalog::Notice *m_plugin_notice = nullptr;
+    catalog::Notice *m_removal_notice = nullptr;
+    catalog::Button *m_removal_retry_btn = nullptr;
     catalog::Label *m_plugin_result = nullptr;
     qontrol::Column *m_plugins_column = nullptr;
     // Seals the dropped bundles off the GUI thread; no other drop is taken meanwhile.
@@ -167,6 +175,8 @@ private:
     HostEvents *m_host_events = nullptr;
     QHash<QString, QString> m_plugin_meta;
     QString m_disabling_id;
+    QString m_removing_id;
+    QSet<QString> m_stopping_theme_plugins;
     QString m_unloading_id;
 
     QList<IThemeProvider *> m_theme_providers;
@@ -177,6 +187,7 @@ private:
     QHash<QString, QString> m_theme_plugin;
     bool m_updating_theme_picker = false;
     QString m_pending_theme_to_apply;
+    QString m_selected_theme;
 
     // The flow picked off the main view, deleted once it goes back or the tab is left.
     AppSettingsFlow *m_flow = nullptr;

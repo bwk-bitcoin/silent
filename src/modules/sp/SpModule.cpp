@@ -92,6 +92,10 @@ void SpModule::startInstance(const QString &id) {
     auto instance = std::make_unique<SpInstance>(id);
     watchAccount(id, instance->backend());
     Host::get()->registerInstance(id, instance.get(), this);
+    if (!instance->openPage()) {
+        Host::get()->removeInstance(id, this);
+        return;
+    }
     m_instances.push_back(std::move(instance));
 }
 

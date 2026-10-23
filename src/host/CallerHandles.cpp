@@ -242,6 +242,7 @@ void TransactionsHandle::finalize(ReqId req_id, const plugin::SigningRequest &re
         return;
     }
     auto *job = new TransactionJob(req_id, TransactionJob::Operation::Finalize, request);
+    ++m_running;
     connect(job, &QThread::finished, this, &TransactionsHandle::onFinished, qontrol::UNIQUE);
     connect(job, &QThread::finished, job, &QObject::deleteLater, qontrol::UNIQUE);
     job->start();
@@ -256,6 +257,7 @@ void TransactionsHandle::broadcast(ReqId req_id, plugin::Network network, const 
     request.network = network;
     auto *job =
         new TransactionJob(req_id, TransactionJob::Operation::Broadcast, request, endpoint, tx_hex);
+    ++m_running;
     connect(job, &QThread::finished, this, &TransactionsHandle::onFinished, qontrol::UNIQUE);
     connect(job, &QThread::finished, job, &QObject::deleteLater, qontrol::UNIQUE);
     job->start();
@@ -263,7 +265,11 @@ void TransactionsHandle::broadcast(ReqId req_id, plugin::Network network, const 
 
 void TransactionsHandle::onFinished() {
     auto *job = dynamic_cast<TransactionJob *>(sender());
-    if (job == nullptr || !m_pending.remove(job->requestId())) {
+    if (job == nullptr) {
+        return;
+    }
+    --m_running;
+    if (!m_pending.remove(job->requestId())) {
         return;
     }
     auto reqId = job->requestId();

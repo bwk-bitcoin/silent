@@ -38,10 +38,10 @@ use std::{
     fmt,
     fs::File,
     ops::Bound,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard, RwLockReadGuard,
     },
 };
 
@@ -51,7 +51,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::{
-    app_state::app_plugin_grants, keys::KEYS_DIR_NAME, plugin_bundle::PLUGINS_DIR, state_crypt,
+    app_state::{plugin_removal_phase, AppState, RemovalPhase, StoredGrant},
+    keys::KEYS_DIR_NAME,
+    plugin_bundle::PLUGINS_DIR,
+    state_crypt,
 };
 
 /// The largest file, in bytes.
@@ -116,6 +119,195 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 /// Held while a request reads or replaces a tree, by every session.
 static OPERATIONS: Mutex<()> = Mutex::new(());
 
+/// Host-only removal after cooperative native shutdown. The operation lock waits for
+/// accepted writers; revocation fences both queued requests and late publication.
+pub(crate) fn purge_plugin_locked(plugin_id: &str) -> Result<(), String> {
+    purge_plugin_store_locked(
+        &crate::config::datadir(),
+        plugin_id,
+        || match plugin_removal_phase(plugin_id)? {
+            Some(RemovalPhase::PrivateData | RemovalPhase::Bundle | RemovalPhase::Bookkeeping) => {
+                Ok(())
+            }
+            None | Some(RemovalPhase::Stopping) => {
+                Err("private cleanup was not durably authorized".into())
+            }
+        },
+    )
+}
+
+#[cfg(test)]
+fn purge_plugin_in(data_dir: &Path, plugin_id: &str) -> Result<(), String> {
+    purge_plugin_store(data_dir, plugin_id, || Ok(()))
+}
+
+#[cfg(test)]
+fn purge_plugin_store(
+    data_dir: &Path,
+    plugin_id: &str,
+    authorize: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    removal_transaction_in(data_dir, || {
+        purge_plugin_store_locked(data_dir, plugin_id, authorize)
+    })
+}
+
+pub(crate) fn removal_transaction<T>(
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    removal_transaction_in(&crate::config::datadir(), operation)
+}
+
+fn removal_transaction_in<T>(
+    data_dir: &Path,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let _turn = OPERATIONS.lock().unwrap_or_else(|error| error.into_inner());
+    let _publication = state_crypt::publication_change_guard();
+    let _state = app_state_lock(data_dir)?;
+    operation()
+}
+
+fn purge_plugin_store_locked(
+    data_dir: &Path,
+    plugin_id: &str,
+    authorize: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if !state_crypt::valid_plugin_id(plugin_id) {
+        return Err("invalid plugin storage identity".into());
+    }
+    if !state_crypt::holds_key() {
+        return Err("locked".into());
+    }
+    authorize()?;
+    for session in SESSIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .values()
+    {
+        if session.plugin_id == plugin_id && session.data_dir == data_dir {
+            session.revoke();
+        }
+    }
+    let private = clear_private_tree(data_dir, plugin_id)?;
+    remove_legacy_sources(data_dir, plugin_id, private)
+}
+
+enum PrivatePurge {
+    Cleared,
+    Absent,
+    ProtectedRoot,
+}
+
+impl PrivatePurge {
+    fn stage(&self) -> &'static str {
+        match self {
+            Self::Cleared => "Private tree cleared",
+            Self::Absent => "No private tree was present",
+            Self::ProtectedRoot => "Protected root retained; no private tree was owned",
+        }
+    }
+}
+
+fn clear_private_tree(data_dir: &Path, plugin_id: &str) -> Result<PrivatePurge, String> {
+    // Reserved roots never belonged to external IStorage callers.
+    if !valid_root(plugin_id) {
+        return Ok(PrivatePurge::ProtectedRoot);
+    }
+    let Some(root) = disk::LockedRoot::open(data_dir, plugin_id, false)
+        .map_err(|error| format!("Private tree could not be locked: {}", error.as_str()))?
+    else {
+        return Ok(PrivatePurge::Absent);
+    };
+    if let Some(bytes) = root
+        .read()
+        .map_err(|error| format!("Private tree ownership read failed: {}", error.as_str()))?
+    {
+        if !private_tree_owned(&bytes, plugin_id)? {
+            // Case-insensitive native filesystems may alias two distinct plugin IDs.
+            return Ok(PrivatePurge::ProtectedRoot);
+        }
+    } else {
+        let staged = match root.read_temporary() {
+            Ok(None) => {
+                // A staging unlinked by an attempt whose directory sync failed reads absent.
+                root.remove_temporary().map_err(|error| {
+                    format!("Private staging deletion failed: {}", error.as_str())
+                })?;
+                return Ok(PrivatePurge::Absent);
+            }
+            Ok(Some(bytes)) => Some(bytes),
+            Err(error) => {
+                log::warn!(
+                    "storage: discard unreadable unpublished staging for '{plugin_id}': {}",
+                    error.as_str()
+                );
+                None
+            }
+        };
+        if let Some(staged) = staged {
+            match private_tree_owned(&staged, plugin_id) {
+                Ok(false) => return Ok(PrivatePurge::ProtectedRoot),
+                Ok(true) => {}
+                Err(error) => {
+                    log::warn!("storage: discard unpublished staging for '{plugin_id}': {error}")
+                }
+            }
+        }
+        root.remove_temporary()
+            .map_err(|error| format!("Private staging deletion failed: {}", error.as_str()))?;
+        return Ok(PrivatePurge::Cleared);
+    }
+    // One replacement clears all accounts/files and permanently fences legacy import.
+    let tree = Tree {
+        migrated: true,
+        ..Tree::default()
+    };
+    let text = tree.encode(plugin_id).map_err(|error| error.as_str())?;
+    let sealed = state_crypt::seal(&text)?;
+    root.replace(&sealed, || Ok::<(), ErrorCode>(()))
+        .map_err(|error| {
+            format!(
+                "Atomic private-tree clear failed (old or empty complete tree retained): {}",
+                error.as_str()
+            )
+        })?;
+    Ok(PrivatePurge::Cleared)
+}
+
+fn private_tree_owned(bytes: &[u8], plugin_id: &str) -> Result<bool, String> {
+    let text = state_crypt::open(bytes)?;
+    let document: Value = serde_json::from_str(&text)
+        .map_err(|error| format!("Private tree ownership could not be verified: {error}"))?;
+    let owner = document
+        .get("owner")
+        .and_then(Value::as_str)
+        .ok_or("Private tree owner is missing; data retained")?;
+    Ok(owner == plugin_id)
+}
+
+fn remove_legacy_sources(
+    data_dir: &Path,
+    plugin_id: &str,
+    private: PrivatePurge,
+) -> Result<(), String> {
+    let name = state_crypt::legacy_plugin_state_name(plugin_id)?;
+    let temporary = Path::new(&name).with_extension("tmp");
+    let temporary = temporary
+        .to_str()
+        .ok_or("Invalid legacy temporary filename")?;
+    for entry in [name.as_str(), temporary] {
+        disk::remove_legacy(data_dir, entry).map_err(|error| {
+            format!(
+                "{}; legacy-source deletion failed: {}",
+                private.stage(),
+                error.as_str()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 pub(crate) fn lock_file(file: &File) -> Result<(), ErrorCode> {
     file.try_lock_exclusive().map_err(|error| {
         if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
@@ -124,6 +316,13 @@ pub(crate) fn lock_file(file: &File) -> Result<(), ErrorCode> {
             error.into()
         }
     })
+}
+
+/// Lock order: OPERATIONS, PUBLICATION, app-state lock, then the nonblocking root lock.
+/// The persistent lock file is never replaced or deleted with application state.
+pub(crate) fn app_state_lock(data_dir: &Path) -> Result<File, String> {
+    std::fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
+    disk::lock_app_state(data_dir).map_err(|error| format!("App-state lock: {}", error.as_str()))
 }
 
 /// The typed failure a response carries in `error`.
@@ -791,6 +990,7 @@ struct Session {
     plugin_hash: String,
     /// False for a module the host itself ships: it needs no grant.
     external: bool,
+    storage_epoch: u64,
     /// The only storage handle valid on this session.
     handle: String,
     revoked: AtomicBool,
@@ -827,11 +1027,23 @@ impl Session {
         }
         let mut handle = [0u8; HANDLE_BYTES];
         getrandom::getrandom(&mut handle).map_err(|error| error.to_string())?;
+        let storage_epoch = if external {
+            let _publication = state_crypt::publication_guard();
+            let _state = app_state_lock(&data_dir)?;
+            let state = AppState::try_load_in(&data_dir)?;
+            if state.removing_plugins.contains_key(&plugin_id) {
+                return Err("plugin removal is pending".into());
+            }
+            state.storage_epochs.get(&plugin_id).copied().unwrap_or(0)
+        } else {
+            0
+        };
         Ok(Self {
             data_dir,
             plugin_id,
             plugin_hash,
             external,
+            storage_epoch,
             handle: hex::encode(handle),
             revoked: AtomicBool::new(false),
             generation: AtomicU64::new(0),
@@ -871,8 +1083,35 @@ impl Session {
             .retain(|cancelled| cancelled != id);
     }
 
-    fn granted(&self) -> bool {
-        !self.external || app_plugin_grants(self.plugin_hash.clone()).state
+    fn authorize_state(&self) -> Result<(), ErrorCode> {
+        if !self.external {
+            return Ok(());
+        }
+        let state = AppState::try_load_in(&self.data_dir).map_err(|error| {
+            log::error!("storage: cannot authorize app state: {error}");
+            locked_or(ErrorCode::Denied)
+        })?;
+        if state
+            .storage_epochs
+            .get(&self.plugin_id)
+            .copied()
+            .unwrap_or(0)
+            != self.storage_epoch
+            || state
+                .removing_plugins
+                .get(&self.plugin_id)
+                .is_some_and(|phase| *phase >= RemovalPhase::PrivateData)
+        {
+            return Err(ErrorCode::Revoked);
+        }
+        if !state.plugin_access.iter().any(|access| {
+            access.plugin_id == self.plugin_id
+                && access.hash == self.plugin_hash
+                && access.state == StoredGrant::Allowed
+        }) {
+            return Err(ErrorCode::Denied);
+        }
+        Ok(())
     }
 
     fn check_handle(&self, storage: &str) -> Result<(), ErrorCode> {
@@ -989,13 +1228,21 @@ impl Pending {
     /// not cancelled, the state unlocked, the grant still given. The grant is read from
     /// the sealed app state, so a locked state is `locked`, not `denied`.
     fn authorize(&self) -> Result<(), ErrorCode> {
+        let _publication = state_crypt::publication_guard();
+        let _state = if self.session.external {
+            Some(app_state_lock(&self.session.data_dir).map_err(|_| locked_or(ErrorCode::Io))?)
+        } else {
+            None
+        };
+        self.authorize_locked()
+    }
+
+    fn authorize_locked(&self) -> Result<(), ErrorCode> {
         self.check_lifecycle()?;
         if !state_crypt::holds_key() {
             return Err(ErrorCode::Locked);
         }
-        if !self.session.granted() {
-            return Err(ErrorCode::Denied);
-        }
+        self.session.authorize_state()?;
         if self.session.generation.load(Ordering::SeqCst) != self.generation {
             return Err(ErrorCode::Denied);
         }
@@ -1026,6 +1273,8 @@ impl Drop for Pending {
 struct Store<'a> {
     pending: &'a Pending,
     root: Option<disk::LockedRoot>,
+    _state: Option<File>,
+    _publication: Option<RwLockReadGuard<'static, ()>>,
     _turn: MutexGuard<'static, ()>,
 }
 
@@ -1043,8 +1292,17 @@ impl<'a> Store<'a> {
 
     fn lock(pending: &'a Pending, create: bool) -> Result<Self, ErrorCode> {
         let turn = OPERATIONS.lock().unwrap_or_else(|e| e.into_inner());
+        let publication = pending
+            .session
+            .external
+            .then(state_crypt::publication_guard);
+        let state = if pending.session.external {
+            Some(app_state_lock(&pending.session.data_dir).map_err(|_| locked_or(ErrorCode::Io))?)
+        } else {
+            None
+        };
         // Revoked, cancelled or denied while waiting for its turn.
-        pending.authorize()?;
+        pending.authorize_locked()?;
         let root = disk::LockedRoot::open(
             &pending.session.data_dir,
             &pending.session.plugin_id,
@@ -1053,6 +1311,8 @@ impl<'a> Store<'a> {
         Ok(Self {
             pending,
             root,
+            _state: state,
+            _publication: publication,
             _turn: turn,
         })
     }
@@ -1103,8 +1363,8 @@ impl<'a> Store<'a> {
             .as_ref()
             .ok_or(ErrorCode::Io)?
             .replace(&sealed, || {
-                let guard = state_crypt::publication_guard();
-                self.pending.authorize()?;
+                let guard = (!session.external).then(state_crypt::publication_guard);
+                self.pending.authorize_locked()?;
                 Ok(guard)
             })
     }
@@ -1330,8 +1590,9 @@ mod disk {
         path::Path,
     };
 
+    use fs2::FileExt;
     use rustix::{
-        fs::{fstat, fsync, mkdirat, open, openat, FileType, Mode, OFlags},
+        fs::{fstat, fsync, mkdirat, open, openat, unlinkat, AtFlags, FileType, Mode, OFlags},
         io::Errno,
     };
 
@@ -1352,25 +1613,31 @@ mod disk {
         _lock: File,
     }
 
+    pub(crate) fn lock_app_state(data_dir: &Path) -> Result<File, ErrorCode> {
+        let data = data_dir_handle(data_dir, true)?.ok_or(ErrorCode::Io)?;
+        let file = lock_handle(&data, "app.lock")?;
+        FileExt::lock_exclusive(&file)?;
+        Ok(file)
+    }
+
+    fn lock_handle(root: &OwnedFd, name: &str) -> Result<File, ErrorCode> {
+        let file = openat(
+            root,
+            name,
+            OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .map_err(std::io::Error::from)?;
+        let stat = fstat(&file).map_err(std::io::Error::from)?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_nlink != 1 {
+            return Err(ErrorCode::Unavailable);
+        }
+        Ok(File::from(file))
+    }
+
     impl LockedRoot {
         pub(crate) fn lease(&self, name: &str) -> Result<File, ErrorCode> {
-            let file = openat(
-                &self.root,
-                name,
-                OFlags::RDWR
-                    | OFlags::CREATE
-                    | OFlags::NOFOLLOW
-                    | OFlags::CLOEXEC
-                    | OFlags::NONBLOCK,
-                Mode::RUSR | Mode::WUSR,
-            )
-            .map_err(std::io::Error::from)?;
-            let stat = fstat(&file).map_err(std::io::Error::from)?;
-            if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_nlink != 1
-            {
-                return Err(ErrorCode::Unavailable);
-            }
-            let file = File::from(file);
+            let file = lock_handle(&self.root, name)?;
             lock_file(&file)?;
             Ok(file)
         }
@@ -1383,23 +1650,7 @@ mod disk {
             let Some(root) = root(data_dir, plugin_id, create)? else {
                 return Ok(None);
             };
-            let lock = openat(
-                &root,
-                DOCUMENT_LOCK,
-                OFlags::RDWR
-                    | OFlags::CREATE
-                    | OFlags::NOFOLLOW
-                    | OFlags::CLOEXEC
-                    | OFlags::NONBLOCK,
-                Mode::RUSR | Mode::WUSR,
-            )
-            .map_err(std::io::Error::from)?;
-            let stat = fstat(&lock).map_err(std::io::Error::from)?;
-            if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_nlink != 1
-            {
-                return Err(ErrorCode::Unavailable);
-            }
-            let lock = File::from(lock);
+            let lock = lock_handle(&root, DOCUMENT_LOCK)?;
             lock_file(&lock)?;
             Ok(Some(Self { root, _lock: lock }))
         }
@@ -1409,6 +1660,14 @@ mod disk {
                 Err(ErrorCode::TooLarge) => Err(ErrorCode::Corrupt),
                 read => read,
             }
+        }
+
+        pub(crate) fn read_temporary(&self) -> Result<Option<Vec<u8>>, ErrorCode> {
+            read_file(&self.root, DOCUMENT_TEMP, MAX_SEALED_TREE_BYTES as u64)
+        }
+
+        pub(crate) fn remove_temporary(&self) -> Result<(), ErrorCode> {
+            remove_synced(&self.root, DOCUMENT_TEMP)
         }
 
         pub(crate) fn replace<G>(
@@ -1450,6 +1709,29 @@ mod disk {
             return Ok(None);
         };
         read_file(&legacy, name, limit)
+    }
+
+    pub(crate) fn remove_legacy(data_dir: &Path, name: &str) -> Result<(), ErrorCode> {
+        let Some(data) = data_dir_handle(data_dir, false)? else {
+            return Ok(());
+        };
+        let Some(legacy) = directory_at(&data, state_crypt::PLUGIN_STATE_DIR)? else {
+            return Ok(());
+        };
+        remove_synced(&legacy, name)
+    }
+
+    /// Unlinks the entry `name` in `directory` and syncs `directory`, also when `name` is
+    /// already absent: a retry after an unlink whose sync failed must sync it again.
+    fn remove_synced(directory: &OwnedFd, name: &str) -> Result<(), ErrorCode> {
+        match unlinkat(directory, name, AtFlags::empty()) {
+            Ok(()) | Err(Errno::NOENT) => {}
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        }
+        #[cfg(test)]
+        state_crypt::durable_write_checkpoint(state_crypt::DurableWriteStage::Unlinked)?;
+        fsync(directory).map_err(std::io::Error::from)?;
+        Ok(())
     }
 
     /// The configured data directory, `None` when absent and not `create`. It is the
@@ -1538,7 +1820,21 @@ mod disk {
 
     pub(crate) struct LockedRoot;
 
+    pub(crate) fn lock_app_state(_data_dir: &Path) -> Result<File, ErrorCode> {
+        Err(ErrorCode::Unavailable)
+    }
+
+    pub(crate) fn remove_legacy(_data_dir: &Path, _name: &str) -> Result<(), ErrorCode> {
+        Err(ErrorCode::Unavailable)
+    }
+
     impl LockedRoot {
+        pub(crate) fn read_temporary(&self) -> Result<Option<Vec<u8>>, ErrorCode> {
+            Err(ErrorCode::Unavailable)
+        }
+        pub(crate) fn remove_temporary(&self) -> Result<(), ErrorCode> {
+            Err(ErrorCode::Unavailable)
+        }
         pub(crate) fn lease(&self, _name: &str) -> Result<File, ErrorCode> {
             Err(ErrorCode::Unavailable)
         }
@@ -1838,7 +2134,7 @@ mod tests {
     use crate::{
         state_crypt::{self, DurableWriteStage},
         storage::{
-            disk, lookup, open_session, storage_request, storage_request_cancel,
+            disk, lookup, open_session, purge_plugin_in, storage_request, storage_request_cancel,
             storage_request_forget, storage_session_revoke, LogicalPath, Node, Tree, DOCUMENT,
             DOCUMENT_LOCK, DOCUMENT_TEMP, MAX_ENTRIES, MAX_FILE_BYTES, MAX_MESSAGE_BYTES,
             MAX_NAME_BYTES, MAX_OUTSTANDING, MAX_PATH_BYTES, OPERATIONS,
@@ -1983,6 +2279,344 @@ mod tests {
     }
 
     // ===== Operations =====
+
+    #[test]
+    fn plugin_removal_clears_all_files_and_legacy_without_touching_other_roots() {
+        let f = Fixture::new();
+        assert_eq!(f.call("mkdir", json!({"path":"accounts"})), ok());
+        assert_eq!(f.write("accounts/one", b"wallet", "create"), ok());
+        assert_eq!(f.write("settings", b"settings", "create"), ok());
+        let legacy = legacy_blob(f.data_dir(), PLUGIN, b"old accounts");
+        let legacy_temp = legacy.with_extension("tmp");
+        fs::copy(&legacy, &legacy_temp).expect("interrupted legacy-blob staging file");
+        let (other, handle) = session_on(f.data_dir(), "unrelated");
+        assert_eq!(
+            call(
+                other,
+                &handle,
+                "write",
+                json!({"path":"account", "data":data(b"other"), "mode":"create"})
+            ),
+            ok()
+        );
+        let other_path = f.data_dir().join("unrelated").join(DOCUMENT);
+        let other_bytes = fs::read(&other_path).expect("other tree bytes");
+        let shared = f.data_dir().join("unlock.key");
+        fs::write(&shared, b"unchanged unlock key").expect("unlock sentinel");
+        let mut shared_states = Vec::new();
+        for relative in ["keys/shared.bip138", "musig-sessions/history.bip138"] {
+            let path = f.data_dir().join(relative);
+            state_crypt::write_state(&path, "shared safety-state fixture")
+                .expect("encrypted shared state");
+            let bytes = fs::read(&path).expect("original shared ciphertext");
+            shared_states.push((path, bytes));
+        }
+
+        purge_plugin_in(f.data_dir(), PLUGIN).expect("private plugin purge");
+        assert!(!legacy.exists(), "legacy migration source must be deleted");
+        assert!(!legacy_temp.exists(), "legacy staging data is deleted too");
+        assert_eq!(f.write("late", b"late", "upsert"), failed("revoked"));
+        let (reinstalled, handle) = session_on(f.data_dir(), PLUGIN);
+        assert_eq!(
+            call(reinstalled, &handle, "list", json!({})),
+            json!({"id":"r", "error":"", "entries":[], "next":""})
+        );
+        assert_eq!(
+            call(reinstalled, &handle, "migrate", json!({"path":"restored"})),
+            json!({"id":"r", "error":"", "migrated":false, "reason":"completed"})
+        );
+        assert_eq!(
+            fs::read(&other_path).expect("other tree after purge"),
+            other_bytes,
+            "unrelated ciphertext is byte-identical"
+        );
+        assert_eq!(
+            fs::read(shared).expect("unlock sentinel after purge"),
+            b"unchanged unlock key"
+        );
+        for (path, bytes) in shared_states {
+            assert_eq!(
+                fs::read(&path).expect("shared state after purge"),
+                bytes,
+                "shared signer/session ciphertext remains byte-identical: {}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_removal_reports_legacy_failure_and_retry_does_not_resurrect_data() {
+        let f = Fixture::new();
+        assert_eq!(f.write("account", b"wallet", "create"), ok());
+        let legacy = legacy_blob(f.data_dir(), PLUGIN, b"legacy wallet");
+        fs::remove_file(&legacy).expect("replace legacy fixture");
+        fs::create_dir(&legacy).expect("legacy deletion failure fixture");
+        let error = purge_plugin_in(f.data_dir(), PLUGIN)
+            .expect_err("legacy directory refuses file deletion");
+        assert!(
+            error.contains("Private tree cleared; legacy-source deletion failed"),
+            "explicit partial phase: {error}"
+        );
+        fs::remove_dir(&legacy).expect("repair legacy fixture");
+        legacy_blob(f.data_dir(), PLUGIN, b"legacy wallet");
+        let (restarted, handle) = session_on(f.data_dir(), PLUGIN);
+        assert_eq!(
+            call(restarted, &handle, "migrate", json!({"path":"restored"}))["reason"],
+            "completed",
+            "partial purge cannot import the still-present legacy blob"
+        );
+        purge_plugin_in(f.data_dir(), PLUGIN).expect("purge retry");
+        assert!(!legacy.exists(), "retry deletes legacy source");
+    }
+
+    #[test]
+    fn plugin_removal_refuses_busy_tree_without_partial_file_clear() {
+        let f = Fixture::new();
+        assert_eq!(f.write("one", b"first", "create"), ok());
+        assert_eq!(f.write("two", b"second", "create"), ok());
+        let original = fs::read(f.root().join(DOCUMENT)).expect("original tree bytes");
+        let lock = disk::LockedRoot::open(f.data_dir(), PLUGIN, false)
+            .expect("lock existing root")
+            .expect("existing root");
+        assert!(purge_plugin_in(f.data_dir(), PLUGIN)
+            .expect_err("busy purge")
+            .contains("busy"));
+        assert_eq!(
+            fs::read(f.root().join(DOCUMENT)).expect("tree after refusal"),
+            original,
+            "failed clear preserves the complete original tree"
+        );
+        drop(lock);
+        purge_plugin_in(f.data_dir(), PLUGIN).expect("retry after releasing tree lock");
+    }
+
+    #[test]
+    fn plugin_removal_waits_for_real_pending_publication_and_fences_late_writer() {
+        let f = Fixture::new();
+        assert_eq!(f.write("account", b"old", "create"), ok());
+        let (paused_tx, paused_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let session = f.session;
+        let handle = f.handle.clone();
+        let writer = thread::spawn(move || {
+            state_crypt::on_durable_write_at(DurableWriteStage::Authorized, move || {
+                paused_tx.send(()).expect("writer publication checkpoint");
+                release_rx.recv().expect("release real writer");
+            });
+            call(
+                session,
+                &handle,
+                "write",
+                json!({"path":"account", "data":data(b"new"), "mode":"replace"}),
+            )
+        });
+        paused_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("writer paused before rename");
+        let directory = f.data_dir().to_path_buf();
+        let (done_tx, done_rx) = mpsc::channel();
+        let remover = thread::spawn(move || {
+            let result = purge_plugin_in(&directory, PLUGIN);
+            done_tx.send(result).expect("report removal");
+        });
+        assert!(
+            matches!(
+                done_rx.recv_timeout(Duration::from_millis(100)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "purge waits for the accepted writer's publication barrier"
+        );
+        release_tx.send(()).expect("release pending writer");
+        let answer = writer.join().expect("writer joined");
+        assert!(
+            answer == ok() || answer == failed("revoked"),
+            "writer finishes before purge; delivery may be fenced: {answer}"
+        );
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("removal completed")
+            .expect("purge succeeded");
+        remover.join().expect("removal joined");
+        assert_eq!(
+            f.write("late", b"must not survive", "upsert"),
+            failed("revoked")
+        );
+        let (session, handle) = session_on(f.data_dir(), PLUGIN);
+        assert_eq!(
+            call(session, &handle, "inspect", json!({"path":"account"})),
+            failed("not_found"),
+            "no late account resurrection"
+        );
+        assert_eq!(
+            call(session, &handle, "inspect", json!({"path":"late"})),
+            failed("not_found"),
+            "no late write survives removal"
+        );
+    }
+
+    #[test]
+    fn plugin_removal_locked_and_io_failures_preserve_complete_data_for_retry() {
+        let f = Fixture::new();
+        assert_eq!(f.write("account", b"wallet", "create"), ok());
+        let legacy = legacy_blob(f.data_dir(), PLUGIN, b"legacy wallet");
+        let original = fs::read(f.root().join(DOCUMENT)).expect("original tree bytes");
+        let original_legacy = fs::read(&legacy).expect("original legacy bytes");
+        state_crypt::lock();
+        let locked = purge_plugin_in(f.data_dir(), PLUGIN).expect_err("locked purge refuses");
+        state_crypt::unlock_for_tests();
+        assert_eq!(locked, "locked", "locked storage is explicit");
+        assert_eq!(
+            fs::read(f.root().join(DOCUMENT)).expect("tree after locked refusal"),
+            original
+        );
+        fs::set_permissions(f.root(), fs::Permissions::from_mode(0o500))
+            .expect("make root read-only");
+        let refused = purge_plugin_in(f.data_dir(), PLUGIN);
+        fs::set_permissions(f.root(), fs::Permissions::from_mode(0o700))
+            .expect("restore root permissions");
+        assert!(
+            refused
+                .expect_err("unwritable purge refuses")
+                .contains("Atomic private-tree clear failed"),
+            "I/O refusal reports the failed stage"
+        );
+        assert_eq!(
+            fs::read(f.root().join(DOCUMENT)).expect("tree after I/O refusal"),
+            original,
+            "failed atomic clear preserves every old account file"
+        );
+        assert_eq!(
+            fs::read(&legacy).expect("legacy after refusal"),
+            original_legacy,
+            "legacy source is not deleted before successful atomic clear"
+        );
+        purge_plugin_in(f.data_dir(), PLUGIN).expect("retry with unlocked writable storage");
+        assert!(
+            !legacy.exists(),
+            "successful retry deletes the legacy source"
+        );
+    }
+
+    #[test]
+    fn plugin_removal_does_not_claim_empty_roots_and_checks_staging_ownership() {
+        let f = Fixture::new();
+        let root = disk::LockedRoot::open(f.data_dir(), PLUGIN, true)
+            .expect("empty root")
+            .expect("created root");
+        drop(root);
+        purge_plugin_in(f.data_dir(), PLUGIN).expect("remove an unused plugin");
+        assert!(
+            !f.root().join(DOCUMENT).exists(),
+            "removal cannot claim an empty case-insensitive alias with a new owner marker"
+        );
+        let (session, handle) = session_on(f.data_dir(), PLUGIN);
+        assert_eq!(
+            call(
+                session,
+                &handle,
+                "write",
+                json!({"path":"account", "data":data(b"staged wallet"), "mode":"create"})
+            ),
+            ok()
+        );
+        fs::rename(f.root().join(DOCUMENT), f.root().join(DOCUMENT_TEMP))
+            .expect("model an interrupted first publication");
+        purge_plugin_in(f.data_dir(), PLUGIN).expect("clear owned unpublished staging data");
+        assert!(
+            !f.root().join(DOCUMENT).exists() && !f.root().join(DOCUMENT_TEMP).exists(),
+            "owned staging is erased without claiming an absent published tree"
+        );
+        let foreign =
+            state_crypt::seal(r#"{"version":1,"owner":"other","migrated":false,"entries":[]}"#)
+                .expect("foreign staging envelope");
+        fs::write(
+            f.root().join(DOCUMENT_TEMP),
+            b"BIP138 interrupted partial first write",
+        )
+        .expect("partial unpublished staging fixture");
+        purge_plugin_in(f.data_dir(), PLUGIN).expect("discard unreadable unpublished staging");
+        assert!(
+            !f.root().join(DOCUMENT_TEMP).exists(),
+            "an interrupted first write cannot permanently block removal or reinstall"
+        );
+        let outside = f.data_dir().join("outside-staging-target");
+        fs::write(&outside, b"protected external bytes").expect("external staging target");
+        symlink(&outside, f.root().join(DOCUMENT_TEMP)).expect("orphan staging symlink");
+        purge_plugin_in(f.data_dir(), PLUGIN).expect("discard staging link itself");
+        assert_eq!(
+            fs::read(&outside).expect("external target after cleanup"),
+            b"protected external bytes",
+            "staging cleanup never follows a link"
+        );
+        fs::write(f.root().join(DOCUMENT_TEMP), &foreign).expect("foreign staging fixture");
+        purge_plugin_in(f.data_dir(), PLUGIN).expect("protect foreign staging");
+        assert_eq!(
+            fs::read(f.root().join(DOCUMENT_TEMP)).expect("foreign staging after removal"),
+            foreign,
+            "uncommitted data of a different owner is not erased"
+        );
+        assert!(
+            !f.root().join(DOCUMENT).exists(),
+            "foreign empty root is never rebound to the removed ID"
+        );
+    }
+
+    #[test]
+    fn plugin_removal_preserves_reserved_roots_and_foreign_tree_owners() {
+        let f = Fixture::new();
+        for (id, relative) in [
+            ("keys", "keys/shared.bip138"),
+            ("musig-sessions", "musig-sessions/history.bip138"),
+            ("app.bip138", "app.bip138"),
+            ("con", "con/shared.bip138"),
+        ] {
+            let protected = f.data_dir().join(relative);
+            state_crypt::write_state(&protected, "protected shared state")
+                .expect("protected encrypted resource");
+            let before = fs::read(&protected).expect("protected resource bytes");
+            let legacy = legacy_blob(f.data_dir(), id, b"external plugin's old blob");
+            purge_plugin_in(f.data_dir(), id).expect("remove legacy-only external plugin state");
+            assert_eq!(
+                fs::read(&protected).expect("protected resource after removal"),
+                before,
+                "reserved root must not be erased for installed plugin ID {id}"
+            );
+            assert!(
+                !legacy.exists(),
+                "reserved storage ID still has its own legacy blob removed"
+            );
+        }
+        let (other, handle) = session_on(f.data_dir(), "other");
+        assert_eq!(
+            call(
+                other,
+                &handle,
+                "write",
+                json!({"path":"account", "data":data(b"other wallet"), "mode":"create"})
+            ),
+            ok()
+        );
+        let foreign =
+            fs::read(f.data_dir().join("other").join(DOCUMENT)).expect("foreign tree bytes");
+        disk::replace(f.data_dir(), PLUGIN, &foreign, || Ok(()))
+            .expect("model a native-directory alias to another plugin's tree");
+        let legacy = legacy_blob(f.data_dir(), PLUGIN, b"target plugin's legacy blob");
+        purge_plugin_in(f.data_dir(), PLUGIN).expect("cleanup without touching a foreign owner");
+        assert_eq!(
+            fs::read(f.root().join(DOCUMENT)).expect("foreign owner after removal"),
+            foreign,
+            "case-insensitive aliases or copied foreign trees cannot bypass storage ownership"
+        );
+        assert!(
+            !legacy.exists(),
+            "only the target plugin's legacy source is erased"
+        );
+        assert_eq!(
+            call(other, &handle, "read", json!({"path":"account"})),
+            json!({"id":"r", "error":"", "data":data(b"other wallet")}),
+            "the other plugin's actual account data remains readable"
+        );
+    }
 
     #[test]
     fn every_operation_on_nested_directories_and_independent_files() {
@@ -3686,5 +4320,90 @@ mod tests {
                 .is_empty(),
             "answered requests are forgotten"
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod removal_sync_tests {
+    use std::{fs, path::Path, sync::mpsc};
+
+    use temp_dir::TempDir;
+
+    use crate::{
+        state_crypt::{self, DurableWriteStage},
+        storage::{purge_plugin_in, Tree, DOCUMENT, DOCUMENT_TEMP},
+    };
+
+    const PLUGIN: &str = "example";
+
+    /// Purges `PLUGIN` with the directory sync after its first unlink failing, and
+    /// answers the error.
+    fn purge_failing_sync(data_dir: &Path) -> String {
+        state_crypt::fail_durable_write_at(DurableWriteStage::Unlinked);
+        purge_plugin_in(data_dir, PLUGIN).expect_err("directory sync fails")
+    }
+
+    /// Purges `PLUGIN` and checks it went through a real directory sync.
+    fn purge_syncing(data_dir: &Path) {
+        let (synced_tx, synced_rx) = mpsc::channel();
+        state_crypt::on_durable_write_at(DurableWriteStage::Unlinked, move || {
+            synced_tx.send(()).expect("sync checkpoint");
+        });
+        purge_plugin_in(data_dir, PLUGIN).expect("purge after a real directory sync");
+        synced_rx
+            .try_recv()
+            .expect("the purge reached the directory sync");
+    }
+
+    #[test]
+    fn a_legacy_retry_syncs_the_directory_of_an_already_unlinked_blob() {
+        state_crypt::unlock_for_tests();
+        let dir = TempDir::new().expect("temporary data directory");
+        let legacy =
+            state_crypt::legacy_plugin_state_path(dir.path(), PLUGIN).expect("legacy path");
+        state_crypt::write_state(&legacy, "legacy wallet").expect("legacy blob");
+
+        let error = purge_failing_sync(dir.path());
+        assert!(
+            error.contains("legacy-source deletion failed"),
+            "first attempt: {error}"
+        );
+        assert!(!legacy.exists(), "the unlink itself happened");
+        let error = purge_failing_sync(dir.path());
+        assert!(
+            error.contains("legacy-source deletion failed"),
+            "an absent blob still needs its directory synced: {error}"
+        );
+        purge_syncing(dir.path());
+    }
+
+    #[test]
+    fn a_staging_retry_syncs_the_root_of_an_already_unlinked_staging() {
+        state_crypt::unlock_for_tests();
+        let dir = TempDir::new().expect("temporary data directory");
+        let root = dir.path().join(PLUGIN);
+        let text = Tree::default().encode(PLUGIN).expect("owned tree");
+        fs::create_dir_all(&root).expect("plugin root");
+        fs::write(
+            root.join(DOCUMENT_TEMP),
+            state_crypt::seal(&text).expect("sealed staging"),
+        )
+        .expect("owned unpublished staging");
+
+        let error = purge_failing_sync(dir.path());
+        assert!(
+            error.contains("Private staging deletion failed"),
+            "first attempt: {error}"
+        );
+        assert!(
+            !root.join(DOCUMENT_TEMP).exists() && !root.join(DOCUMENT).exists(),
+            "the staging unlink itself happened"
+        );
+        let error = purge_failing_sync(dir.path());
+        assert!(
+            error.contains("Private staging deletion failed"),
+            "an absent staging still needs its root synced: {error}"
+        );
+        purge_syncing(dir.path());
     }
 }

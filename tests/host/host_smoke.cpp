@@ -182,6 +182,10 @@ void navigationSmoke();
 void deletionSmoke();
 void keysContractSmoke(const QString &screenshots);
 void pluginBundleSmoke(const QString &bundle);
+void pluginRemovalSmoke();
+void pluginRemovalUiSmoke(const QString &shots);
+void pluginRemovalReadFailureSmoke(const QString &shots);
+void pluginAccessSettingsFailureSmoke(const QString &shots);
 } // namespace smoke
 
 auto main(int argc, char *argv[]) -> int {
@@ -264,6 +268,34 @@ auto main(int argc, char *argv[]) -> int {
     // Initialise the host singleton before the registry connects to its events.
     Host::get();
     AppController::init();
+#ifdef SILENT_REMOVAL_FIXTURE
+    if (arguments.contains(QStringLiteral("--plugin-access-settings-failure"))) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::pluginAccessSettingsFailureSmoke(arguments.size() > 2 ? arguments.at(2) : QString());
+        std::fprintf(stdout, "Plugin access Settings failure smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.contains(QStringLiteral("--plugin-removal-read-failure"))) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::pluginRemovalReadFailureSmoke(arguments.size() > 2 ? arguments.at(2) : QString());
+        std::fprintf(stdout, "Plugin removal read failure smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.contains(QStringLiteral("--plugin-removal"))) {
+        smoke::pluginRemovalSmoke();
+        std::fprintf(stdout, "Plugin removal smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.contains(QStringLiteral("--plugin-removal-ui"))) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::pluginRemovalUiSmoke(arguments.size() > 2 ? arguments.at(2) : QString());
+        std::fprintf(stdout, "Plugin removal UI smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+#endif
     if (arguments.contains(QStringLiteral("--keys-contract"))) {
         Theme::init();
         smoke::keysContractSmoke(arguments.size() > 2 ? arguments.at(2) : QString());
@@ -275,6 +307,13 @@ auto main(int argc, char *argv[]) -> int {
         AppController::get()->registerBuiltinPlugin(std::make_unique<smoke::MockPlugin>());
         smoke::exampleStorageSmoke(arguments.at(2));
         std::fprintf(stdout, "Example storage smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.size() == 3 && arguments.at(1) == QStringLiteral("--storage-example-reinstall")) {
+        Theme::init();
+        AppController::get()->registerBuiltinPlugin(std::make_unique<smoke::MockPlugin>());
+        smoke::exampleReinstallSmoke(arguments.at(2));
+        std::fprintf(stdout, "Example reinstall smoke: OK\n");
         return gOk ? 0 : 1;
     }
     if (arguments.size() == 3 && arguments.at(1) == QStringLiteral("--plugin-bundle")) {
@@ -341,8 +380,10 @@ auto main(int argc, char *argv[]) -> int {
               plugin.qt_metacast("dev.silent.IPlugin/3.0") == nullptr &&
               plugin.qt_metacast("dev.silent.IPlugin/4.0") == nullptr &&
               plugin.qt_metacast("dev.silent.IPlugin/5.0") == nullptr &&
-              plugin.qt_metacast("dev.silent.IPlugin/6.0") == nullptr,
-          "mock plugin metadata exposes ABI 7 only");
+              plugin.qt_metacast("dev.silent.IPlugin/6.0") == nullptr &&
+              plugin.qt_metacast("dev.silent.IPlugin/7.0") == nullptr &&
+              plugin.qt_metacast("dev.silent.IPlugin/8.0") == nullptr,
+          "mock plugin metadata exposes ABI 9 only");
     auto *module = plugin.module();
 
     PluginRegistry registry;

@@ -2,6 +2,7 @@
 
 #include "appsettings/AccessFlow.h"
 #include "appsettings/DisableFlow.h"
+#include "appsettings/RemoveFlow.h"
 #include "appsettings/SectionFlow.h"
 
 #include "AppController.h"
@@ -191,6 +192,13 @@ void AppSettings::initMain() {
                                   ->push(m_plugin_drop_caption));
     m_plugin_notice = new Notice(Notice::Tone::Error);
     m_plugin_notice->setVisible(false);
+    m_removal_notice = new Notice(Notice::Tone::Error);
+    m_removal_notice->setObjectName(QStringLiteral("pendingRemovalReadError"));
+    m_removal_notice->setVisible(false);
+    m_removal_retry_btn = catalog::btnTryAgain();
+    m_removal_retry_btn->setObjectName(QStringLiteral("retryPendingRemovals"));
+    m_removal_retry_btn->setVisible(false);
+    m_removal_notice->setAction(m_removal_retry_btn);
     m_plugin_result = new Label(LabelRole::Caption);
     m_plugin_result->setTone(LabelTone::Success);
     m_plugin_result->setWordWrap(true);
@@ -205,6 +213,8 @@ void AppSettings::initMain() {
 void AppSettings::connectMain() {
     connectPrices();
     connectFees();
+    connect(m_removal_retry_btn, &QPushButton::clicked, this, &AppSettings::onRetryPluginState,
+            qontrol::UNIQUE);
     connect(m_theme_picker, qOverload<int>(&QComboBox::currentIndexChanged), this,
             &AppSettings::onThemeSelectionChanged, qontrol::UNIQUE);
     connect(m_language_picker, qOverload<int>(&QComboBox::currentIndexChanged), this,
@@ -212,6 +222,8 @@ void AppSettings::connectMain() {
     if (m_plugin_registry != nullptr) {
         connect(m_plugin_registry, &PluginRegistry::enabledPluginsChanged, this,
                 &AppSettings::onPluginsChanged, qontrol::UNIQUE);
+        connect(m_plugin_registry, &PluginRegistry::pluginStopFinished, this,
+                &AppSettings::onPluginStopFinished, qontrol::UNIQUE);
     }
     connect(this, &AppSettings::bundlesImported, this, &AppSettings::onBundlesImported,
             qontrol::UNIQUE);
@@ -372,8 +384,9 @@ void AppSettings::onFeePreferencesActivated([[maybe_unused]] int index) {
 auto AppSettings::buildPlugins() -> QWidget * {
     m_plugins = foldable(QString());
     m_plugins->setContent((new qontrol::Column)
-                              ->spacing(resolve(Spacing::S))
-                              ->push(m_plugin_notice)
+                               ->spacing(resolve(Spacing::S))
+                               ->push(m_removal_notice)
+                               ->push(m_plugin_notice)
                               ->push(m_plugin_result)
                               ->push(m_plugins_column)
                               ->push(m_plugin_drop));
@@ -396,26 +409,44 @@ void AppSettings::setView(const QString &title, int width, int title_inset) {
 }
 
 auto AppSettings::pluginRow(const QString &id, const QString &meta) -> catalog::SelectRow * {
-    QString error = m_plugin_registry->pluginLoadError(id);
+    QString error = m_plugin_registry->pluginStopError(id);
+    if (error.isEmpty()) {
+        error = m_plugin_registry->pluginLoadError(id);
+    }
     bool failed = !error.isEmpty();
-    bool unloading = id == m_unloading_id;
+    bool unloading = id == m_unloading_id || m_plugin_registry->pluginStopping(id);
 
     auto *row = new catalog::SelectRow;
     row->setIcon(failed ? icon::circleX : icon::puzzle);
     row->setTone(failed ? catalog::SelectRow::Tone::Error : catalog::SelectRow::Tone::Default);
     row->setTitle(m_plugin_registry->pluginName(id));
-    row->setSub(failed ? error : m_plugin_registry->pluginDescription(id));
+    auto description =
+        unloading ? TR("settings-plugin-stopping") : m_plugin_registry->pluginDescription(id);
+    row->setSub(failed ? error : description);
     row->setMeta(meta);
-    if (unloading) {
-        row->setStatus(catalog::pillPluginUnloading());
-    } else if (!pluginaccess::forPlugin(id).isEmpty()) {
+    auto *actions = (new qontrol::Row)->spacing(resolve(Spacing::S));
+    if (m_plugin_registry->pluginDisableRetryable(id)) {
+        auto *retryBtn = catalog::btnRetryDisablePlugin();
+        retryBtn->setProperty(K_PLUGIN_ID, id);
+        connect(retryBtn, &QPushButton::clicked, this, &AppSettings::onPluginDisableRetryClicked,
+                qontrol::UNIQUE);
+        actions->push(retryBtn);
+    }
+    if (!unloading && !pluginaccess::forPlugin(id).isEmpty()) {
         // What it may use, once it has asked for something.
         auto *accessBtn = catalog::btnPluginAccess();
         accessBtn->setProperty(K_PLUGIN_ID, id);
         connect(accessBtn, &QPushButton::clicked, this, &AppSettings::onPluginAccessClicked,
                 qontrol::UNIQUE);
-        row->setStatus(accessBtn);
+        actions->push(accessBtn);
     }
+    auto *removeBtn = catalog::btnRemovePlugin();
+    removeBtn->setProperty(K_PLUGIN_ID, id);
+    removeBtn->setEnabled(!m_plugin_registry->pluginStopPending(id));
+    connect(removeBtn, &QPushButton::clicked, this, &AppSettings::onPluginRemoveClicked,
+            qontrol::UNIQUE);
+    actions->push(removeBtn);
+    row->setStatus(actions);
     // Kept when empty, so the meta lines up on every row.
     row->setTrailingWidth(metric::TOGGLE_WIDTH);
     row->setChevron(false);
@@ -426,7 +457,7 @@ auto AppSettings::pluginRow(const QString &id, const QString &meta) -> catalog::
         toggle->setChecked(m_plugin_registry->isPluginEnabled(id));
         toggle->setEnabled(!unloading);
         toggle->setProperty(K_PLUGIN_ID, id);
-        connect(toggle, &QCheckBox::toggled, this, &AppSettings::onPluginToggled, qontrol::UNIQUE);
+        connect(toggle, &QCheckBox::clicked, this, &AppSettings::onPluginToggled, qontrol::UNIQUE);
         row->setTrailing(toggle);
     }
     return row;
@@ -490,7 +521,6 @@ void AppSettings::refreshThemeProviders() {
     m_pending_theme_list.clear();
     m_pending_palette.clear();
     m_provider_for_theme_name.clear();
-    m_theme_plugin.clear();
 
     if (m_host == nullptr) {
         return;
@@ -541,6 +571,7 @@ void AppSettings::requestThemeList() {
 
 void AppSettings::applyPersistedTheme() {
     QString activeTheme = QString::fromStdString(std::string(app_active_theme().c_str())).trimmed();
+    m_selected_theme = activeTheme;
     if (activeTheme.isEmpty()) {
         return;
     }
@@ -590,9 +621,13 @@ void AppSettings::updateThemeNote() {
 }
 
 void AppSettings::switchToLightTheme() {
+    m_selected_theme = LIGHT;
+    m_pending_palette.clear();
     m_pending_theme_to_apply.clear();
     if (auto *theme = Theme::get(); theme != nullptr) {
         theme->setMode(ThemeMode::Light);
+        theme->setPalette(Palette::light());
+        theme->apply();
     }
     app_set_active_theme(rust::String(LIGHT.toStdString()));
     int index = m_theme_picker->findData(LIGHT);
@@ -674,6 +709,8 @@ void AppSettings::openFlow(AppSettingsFlow *flow) {
 }
 
 void AppSettings::closeFlow() {
+    m_removing_id.clear();
+    m_disabling_id.clear();
     if (m_flow == nullptr) {
         return;
     }
@@ -694,6 +731,9 @@ void AppSettings::onThemeSelectionChanged(int index) {
     if (themeName.isEmpty()) {
         return;
     }
+    m_selected_theme = themeName;
+    m_pending_palette.clear();
+    m_pending_theme_to_apply.clear();
 
     if (themeName == LIGHT || themeName == DARK) {
         if (auto *theme = Theme::get(); theme != nullptr) {
@@ -729,7 +769,8 @@ void AppSettings::onLanguageSelectionChanged(int index) {
 }
 
 void AppSettings::dragEnterEvent(QDragEnterEvent *event) {
-    if (m_flow == nullptr && m_import_worker == nullptr && event->mimeData()->hasUrls()) {
+    if (m_plugin_registry != nullptr && m_plugin_registry->pluginRemovalReadError().isEmpty() &&
+        m_flow == nullptr && m_import_worker == nullptr && event->mimeData()->hasUrls()) {
         event->acceptProposedAction();
     }
 }
@@ -738,6 +779,7 @@ void AppSettings::dragEnterEvent(QDragEnterEvent *event) {
 // listed, off, until turned on.
 void AppSettings::dropEvent(QDropEvent *event) {
     if (m_flow != nullptr || m_import_worker != nullptr || m_plugin_registry == nullptr ||
+        !m_plugin_registry->pluginRemovalReadError().isEmpty() ||
         !event->mimeData()->hasUrls()) {
         return;
     }
@@ -786,6 +828,9 @@ void AppSettings::onBundlesImported(const QStringList &plugin_ids, const QString
         (m_plugin_registry->isPluginEnabled(id) ? updated : added).append(id);
     }
     m_plugin_registry->rescanDiscoveredPlugins();
+    if (!m_plugin_registry->pluginRemovalReadError().isEmpty()) {
+        return;
+    }
     QStringList lines;
     for (const auto &id : added) {
         lines.append(TR("settings-plugin-added").arg(m_plugin_registry->pluginName(id)));
@@ -799,7 +844,8 @@ void AppSettings::onBundlesImported(const QStringList &plugin_ids, const QString
 
 void AppSettings::onPluginToggled(bool enabled) {
     auto *toggle = qobject_cast<catalog::Toggle *>(sender());
-    if (toggle == nullptr || m_plugin_registry == nullptr) {
+    if (toggle == nullptr || m_plugin_registry == nullptr ||
+        !m_plugin_registry->pluginRemovalReadError().isEmpty()) {
         return;
     }
     QString id = toggle->property(K_PLUGIN_ID).toString();
@@ -818,7 +864,8 @@ void AppSettings::onPluginToggled(bool enabled) {
 }
 
 void AppSettings::onPluginAccessClicked() {
-    if (sender() == nullptr || m_plugin_registry == nullptr) {
+    if (sender() == nullptr || m_plugin_registry == nullptr ||
+        !m_plugin_registry->pluginRemovalReadError().isEmpty()) {
         return;
     }
     m_plugin_notice->setVisible(false);
@@ -826,7 +873,63 @@ void AppSettings::onPluginAccessClicked() {
     openFlow(new AccessFlow(m_plugin_registry, sender()->property(K_PLUGIN_ID).toString()));
 }
 
+void AppSettings::onPluginRemoveClicked() {
+    if (sender() == nullptr || m_plugin_registry == nullptr ||
+        !m_plugin_registry->pluginRemovalReadError().isEmpty()) {
+        return;
+    }
+    m_removing_id = sender()->property(K_PLUGIN_ID).toString();
+    openFlow(new RemoveFlow(m_plugin_registry->pluginName(m_removing_id)));
+}
+
+void AppSettings::onPluginDisableRetryClicked() {
+    if (sender() == nullptr || m_plugin_registry == nullptr ||
+        !m_plugin_registry->pluginRemovalReadError().isEmpty()) {
+        return;
+    }
+    requestPluginDisable(sender()->property(K_PLUGIN_ID).toString());
+}
+
+void AppSettings::onPluginStopFinished(const QString &plugin_id, bool removed,
+                                       const QString &error) {
+    m_unloading_id.clear();
+    if (m_stopping_theme_plugins.remove(plugin_id) &&
+        (error.isEmpty() || m_plugin_registry->pluginStopping(plugin_id))) {
+        switchToLightTheme();
+    }
+    m_plugin_notice->setVisible(!error.isEmpty());
+    m_plugin_result->setVisible(error.isEmpty());
+    if (!error.isEmpty()) {
+        m_plugin_notice->setTitle(TR("settings-plugin-stop-failed"));
+        m_plugin_notice->setText(error);
+    } else {
+        m_plugin_result->setText(
+            (removed ? TR("settings-plugin-removed") : TR("settings-plugin-disabled"))
+                .arg(plugin_id));
+    }
+    refreshThemeProviders();
+    requestThemeList();
+    onPluginsChanged();
+}
+
 void AppSettings::onPluginsChanged() {
+    auto error = m_plugin_registry == nullptr ? QString() : m_plugin_registry->pluginRemovalReadError();
+    m_removal_notice->setTitle(TR("settings-plugin-state-read-failed"));
+    m_removal_notice->setText(TR("settings-plugin-state-read-failed-text").arg(error));
+    m_removal_notice->setVisible(!error.isEmpty());
+    m_removal_retry_btn->setVisible(!error.isEmpty());
+    m_plugins_column->setEnabled(error.isEmpty());
+    m_plugin_drop->setEnabled(error.isEmpty());
+    setAcceptDrops(error.isEmpty());
+    if (!error.isEmpty()) {
+        if (m_flow != nullptr) {
+            m_flow->setEnabled(false);
+            showMain();
+            closeFlow();
+        }
+        m_plugin_notice->setVisible(false);
+        m_plugin_result->setVisible(false);
+    }
     // clear() also resets the layout spacing.
     catalog::clearRows(m_plugins_column);
     m_plugins_column->spacing(resolve(Spacing::S));
@@ -842,9 +945,14 @@ void AppSettings::onPluginsChanged() {
             auto meta = plugin->meta();
             QString id = meta.value(QStringLiteral("id")).trimmed();
             // Built-in modules are not user-managed: only external plugins are listed.
-            if (id.isEmpty() || m_plugin_registry->pluginHasBuiltinModules(id)) {
+            if (id.isEmpty() || m_plugin_registry->isPluginBuiltin(id) ||
+                m_plugin_registry->pluginHasBuiltinModules(id)) {
                 continue;
             }
+            // External row text must not retain QStringLiteral backing in a library
+            // that will be unmapped before the next completion-driven refresh.
+            meta = m_plugin_registry->pluginMetadata(id);
+            id = meta.value(QStringLiteral("id"));
             QString version = meta.value(QStringLiteral("version")).trimmed();
             QString line = version.isEmpty() ? id : QStringLiteral("%1  v%2").arg(id, version);
             m_plugin_meta.insert(id, line);
@@ -858,6 +966,12 @@ void AppSettings::onPluginsChanged() {
     }
     m_plugins->header()->setCount(count > 0 ? QString::number(count) : QString());
     m_plugins_column->setVisible(count > 0);
+}
+
+void AppSettings::onRetryPluginState() {
+    if (m_plugin_registry != nullptr) {
+        m_plugin_registry->reloadEnabledPlugins();
+    }
 }
 
 void AppSettings::onOpenSectionClicked() {
@@ -886,19 +1000,26 @@ void AppSettings::onHostSettingsSectionsChanged() {
 }
 
 void AppSettings::onHostInstanceChanged([[maybe_unused]] const QString &id) {
+    auto themeOwner = m_theme_plugin.value(m_selected_theme);
+    if (m_stopping_theme_plugins.remove(themeOwner)) {
+        switchToLightTheme();
+    }
     refreshThemeProviders();
     requestThemeList();
     applyPersistedTheme();
 }
 
 void AppSettings::onThemeNames(ReqId req_id, const QStringList &themes) {
+    if (m_pending_theme_list.value(req_id, nullptr) != qobject_cast<IThemeProvider *>(sender())) {
+        return;
+    }
     auto *provider = m_pending_theme_list.take(req_id);
     if (provider == nullptr) {
         return;
     }
 
     for (const auto &themeNameRaw : themes) {
-        QString themeName = themeNameRaw.trimmed();
+        QString themeName = QString::fromUtf8(themeNameRaw.trimmed().toUtf8());
         if (themeName.isEmpty()) {
             continue;
         }
@@ -932,7 +1053,8 @@ void AppSettings::onThemeNames(ReqId req_id, const QStringList &themes) {
 }
 
 void AppSettings::onThemePalette(ReqId req_id, theme::Palette palette) {
-    if (!m_pending_palette.contains(req_id)) {
+    if (!m_pending_palette.contains(req_id) ||
+        m_pending_palette.value(req_id) != qobject_cast<IThemeProvider *>(sender())) {
         return;
     }
     m_pending_palette.remove(req_id);
@@ -955,36 +1077,63 @@ void AppSettings::onFlowViewChanged(const QString &title, ModalWidth width) {
 }
 
 void AppSettings::onFlowBack() {
+    m_removing_id.clear();
     // A Back from disabling leaves the plugin enabled: its toggle shows it again.
     onPluginsChanged();
     showMain();
     closeFlow();
 }
 
-// Only disabling a plugin asks to be confirmed.
 void AppSettings::onFlowConfirmed() {
+    if (m_plugin_registry == nullptr || !m_plugin_registry->pluginRemovalReadError().isEmpty()) {
+        m_removing_id.clear();
+        m_disabling_id.clear();
+        showMain();
+        closeFlow();
+        onPluginsChanged();
+        return;
+    }
+    if (!m_removing_id.isEmpty()) {
+        auto id = m_removing_id;
+        if (m_theme_plugin.value(m_selected_theme) == id) {
+            m_stopping_theme_plugins.insert(id);
+        }
+        m_removing_id.clear();
+        showMain();
+        closeFlow();
+        m_plugin_notice->setVisible(false);
+        m_plugin_result->setText(TR("settings-plugin-removing").arg(id));
+        m_plugin_result->setVisible(true);
+        m_plugin_registry->removePlugin(id);
+        return;
+    }
     QString id = m_disabling_id;
-    QString activeTheme = m_theme_picker->currentData().toString();
-    bool themeGoes = !id.isEmpty() && m_theme_plugin.value(activeTheme) == id;
-
-    m_unloading_id = id;
-    onPluginsChanged();
     showMain();
     closeFlow();
-    // Unloading runs on this thread: paint the Unloading row before it starts.
-    repaint();
-    bool disabled = m_plugin_registry->setEnabled(id, false);
-    m_unloading_id.clear();
+    requestPluginDisable(id);
+}
 
-    if (!disabled) {
-        m_plugin_notice->setTitle(
-            TR("settings-disable-refused").arg(m_plugin_registry->pluginName(id)));
-        m_plugin_notice->setText(TR("settings-disable-refused-text"));
-        m_plugin_notice->setVisible(true);
-    } else if (themeGoes) {
-        switchToLightTheme();
+void AppSettings::requestPluginDisable(const QString &id) {
+    auto themeGoes = m_theme_plugin.value(m_selected_theme) == id;
+    if (themeGoes) {
+        m_stopping_theme_plugins.insert(id);
     }
-    onPluginsChanged();
+    m_unloading_id = id;
+    m_plugin_notice->setVisible(false);
+    m_plugin_result->setVisible(false);
+    if (!m_plugin_registry->setEnabled(id, false)) {
+        m_unloading_id.clear();
+        if (themeGoes) {
+            m_stopping_theme_plugins.remove(id);
+        }
+        if (!m_plugin_notice->isVisible()) {
+            m_plugin_notice->setTitle(
+                TR("settings-disable-refused").arg(m_plugin_registry->pluginName(id)));
+            m_plugin_notice->setText(TR("settings-disable-refused-text"));
+            m_plugin_notice->setVisible(true);
+        }
+        onPluginsChanged();
+    }
 }
 
 void AppSettings::onPriceSourcesChanged() {

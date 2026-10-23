@@ -15,7 +15,9 @@ public:
     [[nodiscard]] virtual QList<IModule *> modules() const = 0;
 };
 
-#ifdef SILENT_ABI7_FIXTURE
+#ifdef SILENT_ABI8_FIXTURE
+#define SILENT_IPlugin_IID "dev.silent.IPlugin/8.0"
+#elif defined(SILENT_ABI7_FIXTURE)
 #define SILENT_IPlugin_IID "dev.silent.IPlugin/7.0"
 #elif defined(SILENT_ABI6_FIXTURE)
 #define SILENT_IPlugin_IID "dev.silent.IPlugin/6.0"

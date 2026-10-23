@@ -130,7 +130,7 @@ built with Qt 6.8 and baseline x86-64 requirements:
     "kind": "native",
     "library": "payload/libmyplugin.so",
     "compatibility": {
-      "iid": "dev.silent.IPlugin/8.0",
+      "iid": "dev.silent.IPlugin/9.0",
       "target_os": "linux",
       "target_arch": "x86_64",
       "qt_major": 6,
@@ -1373,8 +1373,8 @@ they are not evidence of a supported funded signing combination.
 
 ## ABI & Linking Rules (Plugin Authors Must Read)
 
-The current plugin IID is `dev.silent.IPlugin/8.0`, the module IID is
-`dev.silent.IModule/2.0`, the signer IID is
+The current plugin IID is `dev.silent.IPlugin/9.0`, the module IID is
+`dev.silent.IModule/3.0`, the signer IID is
 `dev.silent.ISigner/3.0`, the account IID is
 `dev.silent.IAccount/3.0`, the keys IID is `dev.silent.IKeys/3.0`, and the transaction
 service IID is `dev.silent.ITransactions/2.0`. The feed IID remains

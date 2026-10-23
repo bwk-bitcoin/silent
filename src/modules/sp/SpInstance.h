@@ -18,6 +18,7 @@ class IThemeProvider;
 class SpInstance final : public IInstance {
 public:
     explicit SpInstance(QString id);
+    auto openPage() -> bool;
 
     [[nodiscard]] QString id() const override;
     void stop() override;

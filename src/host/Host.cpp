@@ -3,11 +3,13 @@
 #include "AppController.h"
 #include "MainWindow.h"
 #include "catalog/containers/Modal.h"
+#include "catalog/feedback/MessageModal.h"
 #include "host/PluginAccess.h"
 #include "host/PluginRegistry.h"
 #include "host/PriceFeedCoordinator.h"
 #include "host/StorageHandle.h"
 #include "i18n/I18nManager.h"
+#include "i18n/Tr.h"
 #include "interfaces/instance.h"
 #include "interfaces/keys.h"
 #include "interfaces/module.h"
@@ -22,6 +24,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QList>
+#include <QScopeGuard>
 #include <QThread>
 #include <Qontrol>
 #include <common.h>
@@ -145,13 +148,17 @@ void HostImpl::onRegisterInstanceRequested(const QString &id, IInstance *instanc
     if (instance == nullptr || owner == nullptr) {
         return;
     }
+    if (m_closing_callers.contains(owner)) {
+        return;
+    }
     if (m_instances.contains(id)) {
         qWarning() << "Host: instance id already registered, ignoring:" << id;
         return;
     }
-    m_instances.insert(id, instance);
-    m_instance_owner.insert(id, owner);
-    emit m_events.instanceRegistered(id);
+    auto instanceId = QString::fromUtf8(id.toUtf8());
+    m_instances.insert(instanceId, instance);
+    m_instance_owner.insert(instanceId, owner);
+    emit m_events.instanceRegistered(instanceId);
 }
 
 void HostImpl::onRemoveInstanceRequested(const QString &id, IModule *owner) {
@@ -195,6 +202,9 @@ void HostImpl::onSignerPollingRequested(IModule *requester, bool enabled) {
         qWarning() << "Host: ignoring a signer polling request from no module";
         return;
     }
+    if (enabled && m_closing_callers.contains(requester)) {
+        return;
+    }
 
     if (enabled) {
         m_signer_polling_requests.insert(requester, true);
@@ -212,6 +222,9 @@ void HostImpl::onSignerPollingRequested(IModule *requester, bool enabled) {
 
 QList<IInstance *> HostImpl::instances(IModule *caller) {
     assertGuiThread();
+    if (m_closing_callers.contains(caller)) {
+        return {};
+    }
     QList<IInstance *> handles;
     for (auto *instance : m_instances) {
         auto &handle = m_instance_handles[{caller, instance}];
@@ -252,6 +265,9 @@ QList<plugin::SignerEntry> HostImpl::signers() const {
 
 IKeys *HostImpl::keys(IModule *caller) {
     assertGuiThread();
+    if (m_closing_callers.contains(caller)) {
+        return nullptr;
+    }
     if (m_keys == nullptr) {
         return nullptr;
     }
@@ -274,6 +290,9 @@ auto HostImpl::keysModule() const -> IKeys * {
 
 auto HostImpl::transactions(IModule *caller) -> ITransactions * {
     assertGuiThread();
+    if (m_closing_callers.contains(caller)) {
+        return nullptr;
+    }
     auto *&handle = m_transaction_handles[caller];
     if (handle == nullptr) {
         handle = new host::TransactionsHandle(this, caller);
@@ -312,19 +331,51 @@ auto HostImpl::allowed(IModule *module, host::Grant grant, bool ask) -> bool {
 }
 
 auto HostImpl::requestAccess(IModule *caller, plugin::Access wanted) -> plugin::Access {
+    // The public ABI represents a refused request as no grants; errors are shown below.
+    return requestAccessChecked(caller, wanted).value_or(plugin::Access{});
+}
+
+auto HostImpl::requestAccessChecked(IModule *caller, plugin::Access wanted)
+    -> std::optional<plugin::Access> {
+    bool onGuiThread = qApp != nullptr && QThread::currentThread() == qApp->thread();
+    if (onGuiThread && m_closing_callers.contains(caller)) {
+        return {};
+    }
+    if (onGuiThread) {
+        ++m_active_calls[caller];
+    }
+    auto activeCall = qScopeGuard([this, caller, onGuiThread] {
+        if (onGuiThread && --m_active_calls[caller] == 0) {
+            m_active_calls.remove(caller);
+        }
+    });
     auto *registry = AppController::get()->pluginRegistry();
     auto known = registry == nullptr ? std::nullopt : registry->caller(caller);
     if (!known.has_value()) {
         return {};
     }
     if (!known->external) {
-        return {.account = true, .keys = true, .state = true};
+        return plugin::Access{.account = true, .keys = true, .state = true};
     }
-    auto answers = pluginaccess::answers(known->pluginId, known->pluginHash);
+    // Read once: the save below is refused if the plugin was removed since.
+    auto request = pluginaccess::request(known->pluginId, known->pluginHash);
+    if (!request.is_ok) {
+        auto error = QString::fromStdString(std::string(request.error));
+        qWarning() << "plugin access request refused for" << known->pluginId << ":"
+                   << error;
+        if (onGuiThread && !m_asking_access) {
+            m_asking_access = true;
+            AppController::execModal(new catalog::MessageModal(
+                TR("plugin-access-read-failed"),
+                TR("plugin-access-read-failed-text").arg(registry->pluginName(known->pluginId), error)));
+            m_asking_access = false;
+        }
+        return {};
+    }
+    auto answers = request.access;
     plugin::Access ask{.account = wanted.account && answers.account == PluginGrant::Unasked,
                        .keys = wanted.keys && answers.keys == PluginGrant::Unasked,
                        .state = wanted.state && answers.state == PluginGrant::Unasked};
-    bool onGuiThread = qApp != nullptr && QThread::currentThread() == qApp->thread();
     if ((ask.account || ask.keys || ask.state) && onGuiThread && !m_asking_access) {
         m_asking_access = true;
         auto *prompt = new modal::PluginAccessPrompt(
@@ -342,18 +393,30 @@ auto HostImpl::requestAccess(IModule *caller, plugin::Access wanted) -> plugin::
             if (ask.state) {
                 answers.state = answer;
             }
-            ::app_set_plugin_access(answers);
+            QString error = pluginaccess::save(answers, request.storage_epoch);
+            if (!error.isEmpty()) {
+                delete prompt;
+                AppController::execModal(new catalog::MessageModal(
+                    TR("plugin-access-save-failed"),
+                    TR("plugin-access-save-failed-text")
+                        .arg(registry->pluginName(known->pluginId), error)));
+                m_asking_access = false;
+                return {};
+            }
         }
         delete prompt;
         m_asking_access = false;
     }
-    return {.account = answers.account == PluginGrant::Allowed,
-            .keys = answers.keys == PluginGrant::Allowed,
-            .state = answers.state == PluginGrant::Allowed};
+    return plugin::Access{.account = answers.account == PluginGrant::Allowed,
+                          .keys = answers.keys == PluginGrant::Allowed,
+                          .state = answers.state == PluginGrant::Allowed};
 }
 
 auto HostImpl::storage(IModule *caller) -> IStorage * {
     assertGuiThread();
+    if (m_closing_callers.contains(caller)) {
+        return nullptr;
+    }
     if (auto *handle = m_storage_handles.value(caller, nullptr); handle != nullptr) {
         return handle;
     }
@@ -363,7 +426,9 @@ auto HostImpl::storage(IModule *caller) -> IStorage * {
         return nullptr;
     }
     // Asked here, on the GUI thread; the Rust session checks the answer on every request.
-    requestAccess(caller, {.state = true});
+    if (!requestAccessChecked(caller, {.state = true}).has_value()) {
+        return nullptr;
+    }
     // The prompt runs an event loop: the module may have gone, or got its handle, meanwhile.
     auto current = registry->caller(caller);
     if (!current.has_value() || current->pluginId != known->pluginId ||
@@ -389,20 +454,70 @@ auto HostImpl::storage(IModule *caller) -> IStorage * {
 
 void HostImpl::dropCaller(IModule *module) {
     if (auto *handle = m_keys_handles.take(module); handle != nullptr) {
+        m_draining_keys.insert(module, handle);
         handle->release();
+    } else if (auto *retiring = m_draining_keys.value(module).data();
+               retiring != nullptr && retiring->drained()) {
+        retiring->release();
     }
     if (auto *handle = m_transaction_handles.take(module); handle != nullptr) {
+        m_draining_transactions.insert(module, handle);
         handle->retire();
-        handle->deleteLater();
+        handle->setParent(this);
     }
     // Revoked but kept until the host goes: a built-in module outlives its deactivation
     // and may still call the IStorage it holds, which then answers revoked.
     if (auto *handle = m_storage_handles.take(module); handle != nullptr) {
+        m_draining_storage.insert(module, handle);
         handle->revoke();
     }
     for (auto it = m_instance_handles.begin(); it != m_instance_handles.end();) {
         it = it->first.first == module ? m_instance_handles.erase(it) : std::next(it);
     }
+}
+
+void HostImpl::setCallerClosing(IModule *module, bool closing) {
+    if (closing) {
+        m_closing_callers.insert(module);
+    } else {
+        m_closing_callers.remove(module);
+    }
+}
+
+void HostImpl::rememberClosedUi(IModule *module, QWidget *widget) {
+    if (module == nullptr || widget == nullptr) {
+        return;
+    }
+    auto &widgets = m_closed_ui[module];
+    widgets.removeIf([](const QPointer<QWidget> &entry) { return entry == nullptr; });
+    widgets.append(widget);
+}
+
+void HostImpl::destroyClosedUi(IModule *module) {
+    auto widgets = m_closed_ui.take(module);
+    for (const auto &widget : widgets) {
+        delete widget.data();
+    }
+}
+
+auto HostImpl::callerDrained(IModule *module) const -> bool {
+    auto storage = m_draining_storage.value(module);
+    auto transactions = m_draining_transactions.value(module);
+    auto keys = m_draining_keys.value(module);
+    return callerFramesIdle(module) && (storage == nullptr || storage->drained()) &&
+           (transactions == nullptr || transactions->drained()) &&
+           (keys == nullptr || keys->drained());
+}
+
+auto HostImpl::callerDrainError(IModule *module) const -> QString {
+    auto keys = m_draining_keys.value(module);
+    return keys != nullptr && keys->retirementFailed()
+               ? QStringLiteral("Signer-session retirement failed; shared safety history retained")
+               : QString();
+}
+
+auto HostImpl::callerFramesIdle(IModule *module) const -> bool {
+    return m_active_calls.value(module, 0) == 0;
 }
 
 void HostImpl::dropInstanceHandles(IInstance *instance) {
@@ -418,6 +533,12 @@ Host::TabId HostImpl::openTab(QWidget *content, IInstance *owner, PagePlacement 
         qWarning() << "Host openTab failed: null content or owner";
         return 0;
     }
+    if (m_instances.value(owner->id(), nullptr) != owner ||
+        m_closing_callers.contains(m_instance_owner.value(owner->id()))) {
+        return 0;
+    }
+    auto instanceId = QString::fromUtf8(owner->id().toUtf8());
+    auto *module = m_instance_owner.value(instanceId);
     if (placement != PagePlacement::Normal && placement != PagePlacement::Module) {
         qWarning() << "Host openTab failed: invalid placement";
         return 0;
@@ -433,14 +554,27 @@ Host::TabId HostImpl::openTab(QWidget *content, IInstance *owner, PagePlacement 
         // This owner already has a hosted tab; host does not take ownership of replacement content.
         // Dispose the extra widget to avoid ambiguous ownership/lifecycle leaks.
         if (m_tabs.value(m_tab_by_owner.value(owner)).content != content) {
-            content->deleteLater();
+            rememberClosedUi(module, content);
+            if (m_closing_callers.contains(module)) {
+                content->hide();
+                content->setParent(nullptr);
+            } else {
+                content->deleteLater();
+            }
         }
         return m_tab_by_owner.value(owner);
     }
 
     const TabId tab_id = ++m_next_tab_id;
     window->addTab(content, QString(), placement);
-    m_tabs.insert(tab_id, TabEntry{.id = tab_id, .content = content, .owner = owner});
+    if (m_instances.value(instanceId, nullptr) != owner || m_closing_callers.contains(module)) {
+        window->removeTab(content, false);
+        content->hide();
+        rememberClosedUi(module, content);
+        return 0;
+    }
+    m_tabs.insert(tab_id,
+                  TabEntry{.id = tab_id, .content = content, .owner = owner, .module = module});
     m_tab_by_owner.insert(owner, tab_id);
     return tab_id;
 }
@@ -474,12 +608,21 @@ void HostImpl::closeTab(TabId tab, bool delete_content) {
         return;
     }
     auto entry = m_tabs.take(tab);
+    auto closing = m_closing_callers.contains(entry.module);
+    if (delete_content) {
+        rememberClosedUi(entry.module, entry.content);
+    }
     m_tab_by_owner.remove(entry.owner);
     auto *window = mainWindow();
     if (window != nullptr) {
-        window->removeTab(entry.content, delete_content);
+        window->removeTab(entry.content, delete_content && !closing);
     } else if (entry.content != nullptr && delete_content) {
-        entry.content->deleteLater();
+        if (closing) {
+            entry.content->hide();
+            entry.content->setParent(nullptr);
+        } else {
+            entry.content->deleteLater();
+        }
     }
 }
 
@@ -489,6 +632,10 @@ Host::SectionId HostImpl::addSettingSection(QWidget *content, IInstance *owner,
     if (content == nullptr || owner == nullptr) {
         return 0;
     }
+    if (m_instances.value(owner->id(), nullptr) != owner ||
+        m_closing_callers.contains(m_instance_owner.value(owner->id()))) {
+        return 0;
+    }
 
     const SectionId section_id = ++m_next_section_id;
     m_sections.insert(section_id, SectionEntry{
@@ -496,6 +643,7 @@ Host::SectionId HostImpl::addSettingSection(QWidget *content, IInstance *owner,
                                       .content = content,
                                       .owner = owner,
                                       .title = title.trimmed(),
+                                      .module = m_instance_owner.value(owner->id()),
                                   });
     emit m_events.settingSectionsChanged();
     return section_id;
@@ -507,8 +655,14 @@ void HostImpl::delSettingSection(SectionId section) {
         return;
     }
     auto entry = m_sections.take(section);
+    rememberClosedUi(entry.module, entry.content);
     if (entry.content != nullptr) {
-        entry.content->deleteLater();
+        if (m_closing_callers.contains(entry.module)) {
+            entry.content->hide();
+            entry.content->setParent(nullptr);
+        } else {
+            entry.content->deleteLater();
+        }
     }
     emit m_events.settingSectionsChanged();
 }
@@ -518,14 +672,32 @@ Host::WizardId HostImpl::openWizard(QWidget *content, IInstance *owner) {
     if (content == nullptr || owner == nullptr) {
         return 0;
     }
+    if (m_instances.value(owner->id(), nullptr) == owner &&
+        m_closing_callers.contains(m_instance_owner.value(owner->id()))) {
+        return 0;
+    }
 
     const WizardId wizard_id = ++m_next_wizard_id;
     auto *modal = new HostedWizardModal(content);
-    m_wizards.insert(
-        wizard_id,
-        WizardEntry{.id = wizard_id, .content = content, .modal = modal, .owner = owner});
+    m_wizards.insert(wizard_id,
+                     WizardEntry{.id = wizard_id,
+                                 .content = content,
+                                 .modal = modal,
+                                 .owner = owner,
+                                 .module = m_instances.value(owner->id(), nullptr) == owner
+                                               ? m_instance_owner.value(owner->id())
+                                               : nullptr});
     m_wizard_by_modal.insert(modal, wizard_id);
     connect(modal, &QDialog::finished, this, &HostImpl::onWizardModalFinished, qontrol::UNIQUE);
+    auto *module = m_wizards.value(wizard_id).module;
+    if (module != nullptr) {
+        ++m_active_calls[module];
+    }
+    auto activeCall = qScopeGuard([this, module] {
+        if (module != nullptr && --m_active_calls[module] == 0) {
+            m_active_calls.remove(module);
+        }
+    });
     AppController::execModal(modal);
     return wizard_id;
 }
@@ -537,16 +709,23 @@ void HostImpl::closeWizard(WizardId wizard) {
     }
 
     auto entry = m_wizards.take(wizard);
+    auto closing = m_closing_callers.contains(entry.module);
+    rememberClosedUi(entry.module, entry.content);
+    rememberClosedUi(entry.module, entry.modal);
     if (entry.modal != nullptr) {
         m_wizard_by_modal.remove(entry.modal);
         auto *dialog = qobject_cast<QDialog *>(entry.modal.data());
         if (dialog != nullptr && dialog->isVisible()) {
             dialog->reject();
         }
-        entry.modal->deleteLater();
+        if (!closing) {
+            entry.modal->deleteLater();
+        }
     }
     if (entry.content != nullptr) {
-        entry.content->deleteLater();
+        if (!closing) {
+            entry.content->deleteLater();
+        }
     }
 }
 
@@ -612,11 +791,7 @@ QList<Host::SettingSectionView> HostImpl::settingSections() const {
 
 auto HostImpl::settingSectionModule(SectionId section) const -> IModule * {
     assertGuiThread();
-    auto *owner = m_sections.value(section).owner;
-    if (owner == nullptr) {
-        return nullptr;
-    }
-    return m_instance_owner.value(owner->id(), nullptr);
+    return m_sections.value(section).module;
 }
 
 void HostImpl::onHostedTabCloseRequested(QWidget *content) {
@@ -651,10 +826,17 @@ void HostImpl::onWizardModalFinished(int result) {
         return;
     }
     auto entry = m_wizards.take(wizard_id);
+    auto closing = m_closing_callers.contains(entry.module);
+    rememberClosedUi(entry.module, entry.content);
+    rememberClosedUi(entry.module, entry.modal);
     if (entry.content != nullptr) {
-        entry.content->deleteLater();
+        if (!closing) {
+            entry.content->deleteLater();
+        }
     }
-    dialog->deleteLater();
+    if (!closing) {
+        dialog->deleteLater();
+    }
 }
 
 void HostImpl::closeOwnedUi(IInstance *owner) {

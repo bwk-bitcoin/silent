@@ -54,6 +54,14 @@ class KeysHandle final : public IKeys {
     Q_OBJECT
 
 public:
+    [[nodiscard]] auto drained() const -> bool {
+        return m_retirement_jobs.empty();
+    }
+
+    [[nodiscard]] auto retirementFailed() const -> bool {
+        return drained() && m_releasing && !m_attempts.empty();
+    }
+
     KeysHandle(HostImpl *host, IModule *module, IKeys *target);
     ~KeysHandle() override;
 
@@ -143,6 +151,10 @@ public:
                    const QString &tx_hex) override;
     void retire();
 
+    [[nodiscard]] auto drained() const -> bool {
+        return m_running == 0;
+    }
+
 public slots:
     void onFinished();
 
@@ -156,6 +168,7 @@ private:
     QSet<ReqId> m_allocated;
     QSet<ReqId> m_pending;
     bool m_retired = false;
+    int m_running = 0;
 };
 
 // The IAccount behind an InstanceHandle: forwards each request with the caller

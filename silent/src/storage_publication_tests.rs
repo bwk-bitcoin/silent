@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use temp_dir::TempDir;
 
 use crate::{
-    app_state::{app_plugin_grants, app_set_plugin_access},
+    app_state::{app_plugin_access_request, app_plugin_grants, app_set_plugin_access},
     config::set_datadir,
     ffi::{PluginAccess, PluginGrant},
     state_crypt::{self, on_durable_write_at, DurableWriteStage},
@@ -24,14 +24,19 @@ use crate::{
 const PLUGIN: &str = "publication-test";
 const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-fn grant(state: PluginGrant) {
-    app_set_plugin_access(PluginAccess {
-        plugin_id: PLUGIN.into(),
-        hash: HASH.into(),
-        account: PluginGrant::Unasked,
-        keys: PluginGrant::Unasked,
-        state,
-    });
+/// Asks and saves the Saved Data grant: the error, empty once saved.
+fn grant(state: PluginGrant) -> String {
+    let request = app_plugin_access_request(PLUGIN.into(), HASH.into());
+    if !request.is_ok {
+        return request.error;
+    }
+    app_set_plugin_access(
+        PluginAccess {
+            state,
+            ..request.access
+        },
+        request.storage_epoch,
+    )
 }
 
 fn send(session: u64, mut message: Value) -> Value {
@@ -57,7 +62,7 @@ impl Fixture {
         let dir = TempDir::new().expect("isolated publication state");
         set_datadir(dir.path().to_path_buf());
         state_crypt::unlock_for_tests();
-        grant(PluginGrant::Allowed);
+        assert_eq!(grant(PluginGrant::Allowed), "", "initial grant saved");
         let session = storage_session_open(PLUGIN.into(), HASH.into(), true);
         let handle = open(session);
         let fixture = Self {
@@ -108,7 +113,7 @@ fn revocation(stage: DurableWriteStage, fail_save: bool) {
     }
 
     let answer = match stage {
-        DurableWriteStage::Authorized => {
+        DurableWriteStage::Authorized | DurableWriteStage::TempSynced => {
             let (go_tx, go_rx) = mpsc::channel();
             let (started_tx, started_rx) = mpsc::channel();
             let (done_tx, done_rx) = mpsc::channel();
@@ -121,7 +126,12 @@ fn revocation(stage: DurableWriteStage, fail_save: bool) {
                 started_tx
                     .send(())
                     .expect("revocation thread attempting update");
-                grant(PluginGrant::Denied);
+                let saved = grant(PluginGrant::Denied);
+                assert_eq!(
+                    saved.is_empty(),
+                    !fail_save,
+                    "the revocation reports its save: {saved}"
+                );
                 done_tx.send(()).expect("grant update returned");
             });
             let paused_tree = f.dir.path().join(PLUGIN).join(DOCUMENT);
@@ -139,7 +149,7 @@ fn revocation(stage: DurableWriteStage, fail_save: bool) {
                             .recv_timeout(Duration::from_millis(100)),
                         Err(mpsc::RecvTimeoutError::Timeout)
                     ),
-                    "grant update cannot complete between final authorization and rename"
+                    "grant update cannot split the authorized storage transaction"
                 );
                 assert!(
                     app_plugin_grants(HASH.into()).state,
@@ -163,10 +173,6 @@ fn revocation(stage: DurableWriteStage, fail_save: bool) {
                 "committed write may have its reply fenced by revocation: {answer}"
             );
             answer
-        }
-        DurableWriteStage::TempSynced => {
-            on_durable_write_at(stage, || grant(PluginGrant::Denied));
-            f.write(b"new")
         }
         stage => panic!("unexpected grant checkpoint {stage:?}"),
     };
@@ -200,23 +206,12 @@ fn revocation(stage: DurableWriteStage, fail_save: bool) {
             generation,
             "successful revocation invalidates the old generation"
         );
-        if stage == DurableWriteStage::TempSynced {
-            assert_eq!(
-                answer["error"], "denied",
-                "revocation completed before authorization prevents commit"
-            );
-            assert_eq!(
-                f.tree(),
-                tree_before,
-                "the unauthorized synced temp never replaces the old tree"
-            );
-        }
+        assert!(
+            answer["error"] == "" || answer["error"] == "denied",
+            "the serialized write commits before revocation; its reply may be fenced: {answer}"
+        );
     }
-    let expected = if !fail_save && stage == DurableWriteStage::TempSynced {
-        b"old"
-    } else {
-        b"new"
-    };
+    let expected = b"new";
     let stored = f.stored();
     assert_eq!(
         stored["error"], "",
@@ -280,7 +275,11 @@ fn unreadable_grants() {
     let original = fs::read(&path).expect("original granted state");
     let generation = storage_session_generation(f.session);
     fs::write(&path, b"unreadable grant state").expect("actual unreadable app state");
-    grant(PluginGrant::Denied);
+    let refused = grant(PluginGrant::Denied);
+    assert!(
+        refused.contains("not encrypted"),
+        "an unreadable state refuses the grant request: {refused}"
+    );
     assert_eq!(
         fs::read(&path).expect("refused grant state"),
         b"unreadable grant state",

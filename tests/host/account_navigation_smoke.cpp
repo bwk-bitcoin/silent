@@ -2,6 +2,7 @@
 
 #include "AppController.h"
 #include "MainWindow.h"
+#include "PluginStopProbe.h"
 #include "account/AccountShell.h"
 #include "account/PanelCollection.h"
 #include "host/PluginRegistry.h"
@@ -266,7 +267,7 @@ void customWidget(MainWindow &window) {
         click(widget);
         require(widget->isChecked(), "custom widget handles mouse input");
         QPointer<QWidget> view = widget;
-        require(registry->setEnabled(QStringLiteral("custom.widget.fixture"), false),
+        require(stopPlugin(registry, QStringLiteral("custom.widget.fixture")).isEmpty(),
                 "disable and unload fixture while its widget and launcher are alive");
         QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         require(view == nullptr && module == nullptr &&

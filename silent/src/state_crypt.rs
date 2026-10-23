@@ -24,10 +24,11 @@ use std::{
 
 #[cfg(any(unix, windows))]
 use std::io::Write;
-#[cfg(all(unix, test))]
-use std::os::fd::AsFd;
 #[cfg(unix)]
-use std::{ffi::OsStr, os::fd::BorrowedFd};
+use std::{
+    ffi::OsStr,
+    os::fd::{AsFd, BorrowedFd},
+};
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -326,14 +327,12 @@ pub fn write_state(path: &Path, text: &str) -> Result<(), String> {
 }
 
 /// Syncs the replacement before rename; errors after replacement may leave it installed.
-#[cfg(test)]
 pub(crate) fn write_state_durable(path: &Path, text: &str) -> Result<(), String> {
     let bytes = seal(text)?;
     write_sealed_durable(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 #[cfg(unix)]
-#[cfg(test)]
 fn write_sealed_durable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = path
         .parent()
@@ -405,7 +404,6 @@ pub(crate) fn replace_at<E: From<std::io::Error>, G>(
 }
 
 #[cfg(windows)]
-#[cfg(test)]
 fn write_sealed_durable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = path
         .parent()
@@ -493,6 +491,7 @@ pub(crate) enum DurableWriteStage {
     TempSynced,
     Authorized,
     Renamed,
+    Unlinked,
 }
 
 #[cfg(test)]
@@ -528,7 +527,7 @@ pub(crate) fn on_durable_write_at(stage: DurableWriteStage, hook: impl FnOnce() 
 }
 
 #[cfg(test)]
-fn durable_write_checkpoint(stage: DurableWriteStage) -> std::io::Result<()> {
+pub(crate) fn durable_write_checkpoint(stage: DurableWriteStage) -> std::io::Result<()> {
     let hook = DURABLE_WRITE_HOOK.with(|slot| {
         let mut slot = slot.borrow_mut();
         match slot.as_ref() {

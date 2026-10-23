@@ -4,7 +4,7 @@
 
 use serde_json::{json, Value};
 use silent::{
-    app_set_plugin_access, set_datadir,
+    app_plugin_access_request, app_set_plugin_access, set_datadir,
     state_crypt::{self, unlock_for_tests},
     storage_delivery_error, storage_request, storage_session_generation, storage_session_open,
     storage_session_revoke, PluginAccess, PluginGrant,
@@ -28,13 +28,16 @@ fn failed(code: &str) -> Value {
 }
 
 fn grant_state(hash: &str, state: PluginGrant) {
-    app_set_plugin_access(PluginAccess {
-        plugin_id: PLUGIN.into(),
-        hash: hash.into(),
-        account: PluginGrant::Unasked,
-        keys: PluginGrant::Unasked,
-        state,
-    });
+    let request = app_plugin_access_request(PLUGIN.into(), hash.into());
+    assert!(request.is_ok, "grant request: {}", request.error);
+    let saved = app_set_plugin_access(
+        PluginAccess {
+            state,
+            ..request.access
+        },
+        request.storage_epoch,
+    );
+    assert_eq!(saved, "", "grant saved");
 }
 
 fn open(session: u64) -> String {

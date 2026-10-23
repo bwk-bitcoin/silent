@@ -967,6 +967,7 @@ std::size_t align_of() {
 
 enum class KeyFileFailure : ::std::uint8_t;
 enum class PluginMetadataKind : ::std::uint8_t;
+enum class PluginRemovalPhase : ::std::uint8_t;
 enum class BackendErrorKind : ::std::uint8_t;
 enum class EndpointPhase : ::std::uint8_t;
 enum class Network : ::std::uint8_t;
@@ -988,6 +989,8 @@ struct FeedSelection;
 struct FeedSourceState;
 struct PluginMetadataField;
 struct PluginMetadata;
+struct PluginRemovalEntry;
+struct PluginRemovalListResult;
 struct PluginGrantedAccess;
 struct AmountParseResult;
 struct FeeParseResult;
@@ -1072,6 +1075,8 @@ struct PluginLibraryResult;
 struct StateIndexResult;
 enum class PluginGrant : ::std::uint8_t;
 struct PluginAccess;
+struct PluginAccessRequest;
+struct PluginAccessHistory;
 struct PsbtFileResult;
 struct DescriptorBackupResult;
 struct MusigDescriptorResult;
@@ -1140,6 +1145,16 @@ enum class PluginMetadataKind : ::std::uint8_t {
   Strings = 3,
 };
 #endif // CXXBRIDGE1_ENUM_PluginMetadataKind
+
+#ifndef CXXBRIDGE1_ENUM_PluginRemovalPhase
+#define CXXBRIDGE1_ENUM_PluginRemovalPhase
+enum class PluginRemovalPhase : ::std::uint8_t {
+  Stopping = 0,
+  PrivateData = 1,
+  Bundle = 2,
+  Bookkeeping = 3,
+};
+#endif // CXXBRIDGE1_ENUM_PluginRemovalPhase
 
 #ifndef CXXBRIDGE1_ENUM_BackendErrorKind
 #define CXXBRIDGE1_ENUM_BackendErrorKind
@@ -1422,6 +1437,28 @@ struct PluginMetadata final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_PluginMetadata
+
+#ifndef CXXBRIDGE1_STRUCT_PluginRemovalEntry
+#define CXXBRIDGE1_STRUCT_PluginRemovalEntry
+struct PluginRemovalEntry final {
+  ::rust::String plugin_id;
+  ::PluginRemovalPhase phase;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PluginRemovalEntry
+
+#ifndef CXXBRIDGE1_STRUCT_PluginRemovalListResult
+#define CXXBRIDGE1_STRUCT_PluginRemovalListResult
+struct PluginRemovalListResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::Vec<::PluginRemovalEntry> entries;
+  ::rust::Vec<::rust::String> enabled_plugins;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PluginRemovalListResult
 
 #ifndef CXXBRIDGE1_STRUCT_PluginGrantedAccess
 #define CXXBRIDGE1_STRUCT_PluginGrantedAccess
@@ -2724,6 +2761,38 @@ struct PluginAccess final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_PluginAccess
+
+#ifndef CXXBRIDGE1_STRUCT_PluginAccessRequest
+#define CXXBRIDGE1_STRUCT_PluginAccessRequest
+// The answers for one plugin library, read with the plugin's storage epoch when a
+// grant request starts. Refused while the plugin's removal is pending.
+struct PluginAccessRequest final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  // Given back to `app_set_plugin_access`: a removal since makes the save fail.
+  ::std::uint64_t storage_epoch CXX_DEFAULT_VALUE(0);
+  // Every grant unasked when none is kept for the library.
+  ::PluginAccess access;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PluginAccessRequest
+
+#ifndef CXXBRIDGE1_STRUCT_PluginAccessHistory
+#define CXXBRIDGE1_STRUCT_PluginAccessHistory
+// Every answer kept for one plugin, read with its storage epoch when Settings
+// shows them. Refused while the plugin's removal is pending.
+struct PluginAccessHistory final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  // Given back to `app_set_plugin_access`: a removal since makes the save fail.
+  ::std::uint64_t storage_epoch CXX_DEFAULT_VALUE(0);
+  // One entry per library hash, in the order they were answered.
+  ::rust::Vec<::PluginAccess> entries;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PluginAccessHistory
 
 #ifndef CXXBRIDGE1_STRUCT_PsbtFileResult
 #define CXXBRIDGE1_STRUCT_PsbtFileResult
@@ -4031,8 +4100,14 @@ bool validate_sp_descriptor(::rust::String descriptor) noexcept;
 // List enabled app-level plugin IDs.
 ::rust::Vec<::rust::String> app_enabled_plugins() noexcept;
 
+::rust::String app_begin_plugin_removal(::rust::String id) noexcept;
+
+::rust::String app_disable_plugin(::rust::String id) noexcept;
+
+::PluginRemovalListResult app_removing_plugins() noexcept;
+
 // Enable or disable a plugin ID at app level.
-void app_set_plugin_enabled(::rust::String id, bool enabled) noexcept;
+::rust::String app_set_plugin_enabled(::rust::String id, bool enabled) noexcept;
 
 // Get the active app theme name.
 ::rust::String app_active_theme() noexcept;
@@ -4121,7 +4196,8 @@ void state_lock() noexcept;
 // The library and catalogs of the installed plugin `plugin_id`.
 ::PluginLibraryResult plugin_library(::rust::String plugin_id) noexcept;
 
-// Removes the installed plugin `plugin_id`. Answers the error, empty on success.
+// Host only, after a durable removal checkpoint and completed native unload.
+// Purges private/legacy data, bundle and grants. Empty error means completion.
 ::rust::String plugin_remove(::rust::String plugin_id) noexcept;
 
 // Opens a storage session for the plugin the host authenticated as
@@ -4164,9 +4240,15 @@ void storage_request_forget(::std::uint64_t session, ::rust::String id) noexcept
 
 ::rust::Vec<::PluginAccess> app_plugin_history(::rust::String plugin_id) noexcept;
 
+::PluginAccessRequest app_plugin_access_request(::rust::String plugin_id, ::rust::String hash) noexcept;
+
+::PluginAccessHistory app_plugin_access_history(::rust::String plugin_id) noexcept;
+
 // Stores the answers for `access.hash`, replacing earlier ones. An entry left
-// with both grants unasked is dropped, so the host asks again.
-void app_set_plugin_access(::PluginAccess access) noexcept;
+// with both grants unasked is dropped, so the host asks again. Refused, with
+// the error, while the plugin's removal is pending or when its storage epoch
+// is no longer `expected_epoch`, the one its request or history was read with.
+::rust::String app_set_plugin_access(::PluginAccess access, ::std::uint64_t expected_epoch) noexcept;
 
 // Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
 ::PsbtFileResult sd_save_psbt(::rust::Str path, ::rust::Str psbt_hex) noexcept;

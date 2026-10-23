@@ -389,6 +389,9 @@ void keysContractSmoke(const QString &screenshots) {
             "module page ignores account close requests");
     MockInstance account(QStringLiteral("placement-account"));
     auto *accountPage = new QWidget;
+    require(host->openTab(accountPage, &account) == 0,
+            "unregistered owners cannot publish long-lived UI");
+    host->registerInstance(account.id(), &account, keysModule);
     auto accountTab = host->openTab(accountPage, &account);
     host->setTabTitle(accountTab, QStringLiteral("Account"));
     require(tabs->currentWidget() == accountPage && tabs->isTabVisible(tabs->indexOf(accountPage)),
@@ -433,7 +436,9 @@ void keysContractSmoke(const QString &screenshots) {
     }
     host->removeInstance(QStringLiteral("keys"), keysModule);
     host->closeTab(accountTab);
+    host->removeInstance(account.id(), keysModule);
     MockInstance generic(QStringLiteral("generic-module-page"));
+    host->registerInstance(generic.id(), &generic, keysModule);
     auto *genericPage = new QWidget;
     auto genericTab = host->openTab(genericPage, &generic, Host::PagePlacement::Module);
     host->setTabTitle(genericTab, QStringLiteral("External page"));
@@ -461,6 +466,7 @@ void keysContractSmoke(const QString &screenshots) {
     selectedPage(tabs, bar, genericPage, true);
     window.showTab(settings);
     host->closeTab(genericTab);
+    host->removeInstance(generic.id(), keysModule);
     selectedPage(tabs, bar, settings, true);
     QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     keysMetadataSmoke(*keysModule);

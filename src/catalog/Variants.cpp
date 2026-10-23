@@ -173,6 +173,17 @@ auto btnDisablePlugin() -> Button * {
         {.role = ButtonRole::Destructive, .label = TR("btn-disable-plugin"), .width = BtnWidth::L});
 }
 
+auto btnRemovePlugin() -> Button * {
+    return make(
+        {.role = ButtonRole::Destructive, .label = TR("btn-remove-plugin"), .width = BtnWidth::M});
+}
+
+auto btnRetryDisablePlugin() -> Button * {
+    return make({.role = ButtonRole::Default,
+                 .label = TR("btn-retry-disable-plugin"),
+                 .width = BtnWidth::M});
+}
+
 auto btnPluginAccess() -> Button * {
     return make({.role = ButtonRole::Default,
                  .label = TR("btn-plugin-access"),

@@ -13,6 +13,7 @@ class MusigAccountWidget;
 class MusigInstance final : public IInstance {
 public:
     explicit MusigInstance(QString id);
+    auto openPage() -> bool;
     [[nodiscard]] auto id() const -> QString override;
     void stop() override;
     [[nodiscard]] auto backend() const -> MusigAccountController *;

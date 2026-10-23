@@ -1,10 +1,20 @@
 #include "PluginAccess.h"
 
+#include <string>
+
 namespace pluginaccess {
 
-auto answers(const QString &plugin_id, const QString &hash) -> PluginAccess {
-    return ::app_plugin_answers(rust::String(plugin_id.toStdString()),
-                                rust::String(hash.toStdString()));
+auto request(const QString &plugin_id, const QString &hash) -> PluginAccessRequest {
+    return ::app_plugin_access_request(rust::String(plugin_id.toStdString()),
+                                       rust::String(hash.toStdString()));
+}
+
+auto history(const QString &plugin_id) -> PluginAccessHistory {
+    return ::app_plugin_access_history(rust::String(plugin_id.toStdString()));
+}
+
+auto save(const PluginAccess &access, uint64_t expected_epoch) -> QString {
+    return QString::fromStdString(std::string(::app_set_plugin_access(access, expected_epoch)));
 }
 
 auto stored(const QString &hash) -> plugin::Access {

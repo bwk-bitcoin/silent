@@ -1,6 +1,7 @@
 #include "AppController.h"
 #include "ExternalStorageConsumer.h"
 #include "MockPlugin.h"
+#include "PluginStopProbe.h"
 #include "StorageProbe.h"
 #include "host/Host.h"
 #include "host/PluginRegistry.h"
@@ -308,12 +309,15 @@ auto stateGrant(const QString &hash) -> PluginGrant {
 }
 
 void setStateGrant(const QString &hash, PluginGrant grant) {
-    auto answers = ::app_plugin_answers(rust::String(FIXTURE_ID.toStdString()),
-                                        rust::String(hash.toStdString()));
+    auto request = ::app_plugin_access_request(rust::String(FIXTURE_ID.toStdString()),
+                                               rust::String(hash.toStdString()));
+    require(request.is_ok, "the fixture grant request reads the app state");
+    auto answers = request.access;
     answers.plugin_id = rust::String(FIXTURE_ID.toStdString());
     answers.hash = rust::String(hash.toStdString());
     answers.state = grant;
-    ::app_set_plugin_access(answers);
+    require(::app_set_plugin_access(answers, request.storage_epoch).empty(),
+            "the fixture grant is saved");
 }
 
 // Names and contents below the visible plugin root are sealed.
@@ -421,14 +425,19 @@ void externalGrants(HostImpl *host, PluginRegistry *registry, ExternalStorageCon
 
     auto pending = one.send(writeRequest(state.storage, state.during, state.running));
     auto later = one.send(writeRequest(state.storage, state.queued, "queued"));
-    require(registry->setEnabled(FIXTURE_ID, false),
+    require(stopPlugin(registry, FIXTURE_ID).isEmpty(),
             "the fixture plugin unloads with requests outstanding");
+    // Accepted results may arrive during asynchronous shutdown, never after unload.
+    auto pendingAnswered = one.answered(pending);
+    auto laterAnswered = one.answered(later);
+    auto unloadAnswered = two.answered(lateUnload);
     requireError(one.call({{QStringLiteral("op"), QStringLiteral("discover")}}), "revoked",
                  "the IStorage of an unloaded plugin answers revoked");
     settle(witness, witness_storage);
-    require(!one.answered(pending) && !one.answered(later),
-            "an unloaded plugin's outstanding requests are never answered");
-    require(!two.answered(lateUnload), "unload also suppresses an already computed response");
+    require(one.answered(pending) == pendingAnswered && one.answered(later) == laterAnswered,
+            "an unloaded plugin receives no late outstanding-request results");
+    require(two.answered(lateUnload) == unloadAnswered,
+            "a computed response cannot arrive after unload completion");
 }
 
 void externalUpgrade(HostImpl *host, PluginRegistry *registry, const QByteArray &library,
@@ -559,11 +568,9 @@ void externalPlugin(HostImpl *host, PluginRegistry *registry, ExternalStorageCon
     externalUpgrade(host, registry, library, run, state);
     claimedIdentity(registry, library, run);
     changedIdentity(host, registry, run);
-    require(registry->setEnabled(FIXTURE_ID, false), "the upgraded fixture unloads");
-    require(std::string(::plugin_remove(rust::String(FIXTURE_ID.toStdString()))).empty(),
-            "the fixture plugin is removed");
-    require(std::string(::plugin_remove(rust::String(CLAIMER_ID.toStdString()))).empty(),
-            "the claiming plugin is removed");
+    require(stopPlugin(registry, FIXTURE_ID).isEmpty(), "the upgraded fixture unloads");
+    require(stopPlugin(registry, FIXTURE_ID, true).isEmpty(), "the fixture plugin is removed");
+    require(stopPlugin(registry, CLAIMER_ID, true).isEmpty(), "the claiming plugin is removed");
 }
 #endif
 } // namespace

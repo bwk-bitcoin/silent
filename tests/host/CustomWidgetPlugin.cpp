@@ -62,6 +62,11 @@ class Q_DECL_HIDDEN CustomModule final : public IModule {
 public:
     using IModule::IModule;
 
+    void shutdown(ReqId req_id) override {
+        qDeleteAll(findChildren<CustomInstance *>(QString(), Qt::FindDirectChildrenOnly));
+        emit shutdownFinished(req_id, QString());
+    }
+
     [[nodiscard]] auto meta() const -> QMap<QString, QString> override {
         return {{QStringLiteral("id"), QStringLiteral("custom.widget.module")}};
     }

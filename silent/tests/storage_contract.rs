@@ -5,9 +5,10 @@ use std::fs;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use silent::{
-    app_state::{AppState, StoredAccess, StoredGrant},
+    app_state::{app_plugin_access_request, app_set_plugin_access, StoredGrant},
     set_datadir, state_crypt,
     storage::{storage_request, storage_session_open, storage_session_revoke},
+    PluginAccess,
 };
 use temp_dir::TempDir;
 
@@ -31,16 +32,16 @@ fn open(session: u64) -> String {
 }
 
 fn grant(hash: &str, state: StoredGrant) {
-    let mut app = AppState::load();
-    app.plugin_access.retain(|access| access.hash != hash);
-    app.plugin_access.push(StoredAccess {
-        plugin_id: "contract.plugin".into(),
-        hash: hash.into(),
-        account: StoredGrant::Unasked,
-        keys: StoredGrant::Unasked,
-        state,
-    });
-    app.save();
+    let request = app_plugin_access_request("contract.plugin".into(), hash.into());
+    assert!(request.is_ok, "grant request: {}", request.error);
+    let saved = app_set_plugin_access(
+        PluginAccess {
+            state: state.into(),
+            ..request.access
+        },
+        request.storage_epoch,
+    );
+    assert_eq!(saved, "", "grant saved");
 }
 
 #[test]

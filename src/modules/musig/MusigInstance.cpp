@@ -13,15 +13,18 @@ MusigInstance::MusigInstance(QString id) : m_id(std::move(id)) {
     m_account_widget = new MusigAccountWidget(m_id);
     m_account_controller = m_account_widget->controller();
     m_account = std::make_unique<MusigAccountAdapter>(m_account_controller);
+}
 
+auto MusigInstance::openPage() -> bool {
     m_tab_id = Host::get()->openTab(m_account_widget, this);
     if (m_tab_id == 0) {
         qCritical() << "MusigInstance: failed to open tab for account" << m_id;
         // The controller's threads may already run: same teardown as stop().
         stop();
-    } else {
-        Host::get()->setTabTitle(m_tab_id, m_id);
+        return false;
     }
+    Host::get()->setTabTitle(m_tab_id, m_id);
+    return true;
 }
 
 auto MusigInstance::id() const -> QString {

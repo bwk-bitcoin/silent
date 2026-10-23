@@ -63,6 +63,8 @@ set(SILENT_APP_SOURCES
     src/host/PluginLibrary.cpp
     src/host/PluginRegistry.h
     src/host/PluginRegistry.cpp
+    src/views/modals/appsettings/RemoveFlow.h
+    src/views/modals/appsettings/RemoveFlow.cpp
     src/host/StorageHandle.h
     src/host/StorageHandle.cpp
     src/interfaces/host.h
@@ -600,10 +602,12 @@ if(SILENT_BUILD_HOST_SMOKE)
     set(SMOKE host_smoke)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_library(unload_failure_shim SHARED tests/host/UnloadFailure.cpp)
+        target_link_libraries(unload_failure_shim PRIVATE dl)
         string(REPEAT "x" 65536 ABI_METADATA_PADDING)
         file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/PluginAbiFixture.json"
             CONTENT "{\"padding\":\"${ABI_METADATA_PADDING}\"}\n")
-        foreach(ABI_VERSION 2 3 4 5 6 7 8 9)
+        foreach(ABI_VERSION 2 3 4 5 6 7 8 9 10)
             qt_add_library(plugin_abi${ABI_VERSION}_fixture MODULE tests/host/PluginAbiFixture.cpp)
             add_dependencies(plugin_abi${ABI_VERSION}_fixture RunBeforeBuild)
             target_link_libraries(plugin_abi${ABI_VERSION}_fixture PRIVATE silent_interfaces)
@@ -619,8 +623,9 @@ if(SILENT_BUILD_HOST_SMOKE)
         target_compile_definitions(plugin_abi6_fixture PRIVATE SILENT_ABI6_FIXTURE)
         target_compile_definitions(plugin_abi7_fixture PRIVATE SILENT_ABI7_FIXTURE)
         target_compile_definitions(plugin_abi8_fixture PRIVATE SILENT_ABI8_FIXTURE)
-        target_include_directories(plugin_abi8_fixture PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+        target_include_directories(plugin_abi9_fixture PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
         target_compile_definitions(plugin_abi9_fixture PRIVATE SILENT_ABI9_FIXTURE)
+        target_compile_definitions(plugin_abi10_fixture PRIVATE SILENT_ABI10_FIXTURE)
         qt_add_library(price_feed_fixture MODULE tests/host/PriceFeedPlugin.cpp)
         add_dependencies(price_feed_fixture RunBeforeBuild)
         # Like real plugins, use Qt headers but resolve Qt symbols from the host.
@@ -630,6 +635,13 @@ if(SILENT_BUILD_HOST_SMOKE)
         target_compile_definitions(price_feed_fixture PRIVATE
             $<TARGET_PROPERTY:Qt6::Core,INTERFACE_COMPILE_DEFINITIONS>)
         qt_add_library(storage_fixture MODULE tests/host/StoragePlugin.cpp)
+        qt_add_library(removal_fixture MODULE tests/host/RemovalPlugin.cpp)
+        target_link_libraries(removal_fixture PRIVATE silent_interfaces)
+        target_include_directories(removal_fixture PRIVATE
+            $<TARGET_PROPERTY:Qt6::Widgets,INTERFACE_INCLUDE_DIRECTORIES>
+            ${CMAKE_SOURCE_DIR}/lib/qontrol/src)
+        target_compile_definitions(removal_fixture PRIVATE
+            $<TARGET_PROPERTY:Qt6::Widgets,INTERFACE_COMPILE_DEFINITIONS>)
         add_dependencies(storage_fixture RunBeforeBuild)
         target_link_libraries(storage_fixture PRIVATE silent_interfaces)
         target_include_directories(storage_fixture PRIVATE
@@ -659,6 +671,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/example_storage_smoke.cpp
         tests/host/example_storage_smoke.h
         tests/host/plugin_bundle_smoke.cpp
+        tests/host/PluginStopProbe.h
         tests/host/price_feed_smoke.cpp
         tests/host/sp_signing_smoke.cpp
         tests/host/musig_reset_smoke.cpp
@@ -675,7 +688,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         SILENT_KEYS_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/host/fixtures")
     if(TARGET price_feed_fixture)
         target_sources(${SMOKE} PRIVATE tests/host/plugin_abi_smoke.cpp)
-        add_dependencies(${SMOKE} price_feed_fixture plugin_abi2_fixture plugin_abi3_fixture plugin_abi4_fixture plugin_abi5_fixture plugin_abi6_fixture plugin_abi7_fixture plugin_abi8_fixture plugin_abi9_fixture)
+        add_dependencies(${SMOKE} price_feed_fixture plugin_abi2_fixture plugin_abi3_fixture plugin_abi4_fixture plugin_abi5_fixture plugin_abi6_fixture plugin_abi7_fixture plugin_abi8_fixture plugin_abi9_fixture plugin_abi10_fixture)
         target_compile_definitions(${SMOKE} PRIVATE
             SILENT_ABI2_FIXTURE_PATH="$<TARGET_FILE:plugin_abi2_fixture>"
             SILENT_ABI3_FIXTURE_PATH="$<TARGET_FILE:plugin_abi3_fixture>"
@@ -685,9 +698,14 @@ if(SILENT_BUILD_HOST_SMOKE)
             SILENT_ABI7_FIXTURE_PATH="$<TARGET_FILE:plugin_abi7_fixture>"
             SILENT_ABI8_FIXTURE_PATH="$<TARGET_FILE:plugin_abi8_fixture>"
             SILENT_ABI9_FIXTURE_PATH="$<TARGET_FILE:plugin_abi9_fixture>"
+            SILENT_ABI10_FIXTURE_PATH="$<TARGET_FILE:plugin_abi10_fixture>"
             SILENT_PRICE_FEED_FIXTURE="$<TARGET_FILE:price_feed_fixture>")
     endif()
     if(TARGET storage_fixture)
+        target_sources(${SMOKE} PRIVATE tests/host/plugin_removal_smoke.cpp)
+        add_dependencies(${SMOKE} removal_fixture)
+        target_compile_definitions(${SMOKE} PRIVATE
+            SILENT_REMOVAL_FIXTURE="$<TARGET_FILE:removal_fixture>")
         add_dependencies(${SMOKE} storage_fixture)
         target_compile_definitions(${SMOKE} PRIVATE
             SILENT_STORAGE_FIXTURE="$<TARGET_FILE:storage_fixture>")

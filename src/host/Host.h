@@ -5,8 +5,10 @@
 #include <QHash>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 #include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace host {
@@ -72,6 +74,11 @@ public:
     auto allowed(IModule *module, host::Grant grant, bool ask) -> bool;
     // Drops the handles a module that goes away was given.
     void dropCaller(IModule *module);
+    void setCallerClosing(IModule *module, bool closing);
+    void destroyClosedUi(IModule *module);
+    [[nodiscard]] auto callerDrained(IModule *module) const -> bool;
+    [[nodiscard]] auto callerFramesIdle(IModule *module) const -> bool;
+    [[nodiscard]] auto callerDrainError(IModule *module) const -> QString;
 
     void onInstanceStopped(const QString &id);
     void onInstanceStopped(IInstance *instance);
@@ -104,11 +111,17 @@ private slots:
     void onHostedTabCloseRequested(QWidget *content);
     void onWizardModalFinished(int result);
 
+protected:
+    [[nodiscard]] auto requestAccessChecked(IModule *caller, plugin::Access wanted)
+        -> std::optional<plugin::Access>;
+    void rememberClosedUi(IModule *module, QWidget *widget);
+
 private:
     struct TabEntry {
         TabId id = 0;
         QPointer<QWidget> content;
         IInstance *owner = nullptr;
+        IModule *module = nullptr;
     };
 
     struct SectionEntry {
@@ -116,6 +129,7 @@ private:
         QPointer<QWidget> content;
         IInstance *owner = nullptr;
         QString title;
+        IModule *module = nullptr;
     };
 
     struct WizardEntry {
@@ -123,6 +137,7 @@ private:
         QPointer<QWidget> content;
         QPointer<QWidget> modal;
         IInstance *owner = nullptr;
+        IModule *module = nullptr;
     };
 
     [[nodiscard]] MainWindow *mainWindow() const;
@@ -138,6 +153,12 @@ private:
     QHash<IModule *, host::KeysHandle *> m_keys_handles;
     QHash<IModule *, host::TransactionsHandle *> m_transaction_handles;
     QHash<IModule *, host::StorageHandle *> m_storage_handles;
+    QHash<IModule *, QPointer<host::StorageHandle>> m_draining_storage;
+    QHash<IModule *, QPointer<host::TransactionsHandle>> m_draining_transactions;
+    QHash<IModule *, QPointer<host::KeysHandle>> m_draining_keys;
+    QSet<IModule *> m_closing_callers;
+    QHash<IModule *, int> m_active_calls;
+    QHash<IModule *, QList<QPointer<QWidget>>> m_closed_ui;
     std::map<std::pair<IModule *, IInstance *>, std::unique_ptr<host::InstanceHandle>>
         m_instance_handles;
     // A plugin is being asked: a call made meanwhile is refused, not asked again.

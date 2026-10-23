@@ -3,6 +3,7 @@
 // real PluginRegistry.
 
 #include "PluginBundleFixture.h"
+#include "PluginStopProbe.h"
 #include "host/Host.h"
 #include "host/PluginMetadata.h"
 #include "host/PluginRegistry.h"
@@ -231,8 +232,10 @@ void requireEnabled(PluginRegistry &registry, const QJsonObject &manifest) {
 }
 
 void requireDisabled(PluginRegistry &registry, const QString &plugin_id) {
-    require(registry.setEnabled(plugin_id, false), "the plugin disables");
-    QCoreApplication::processEvents();
+    auto error = stopPlugin(&registry, plugin_id);
+    if (!error.isEmpty()) {
+        qFatal("plugin disable failed: %s", qPrintable(error));
+    }
     require(!registry.isPluginEnabled(plugin_id) && loadedPlugin(registry, plugin_id) == nullptr,
             "a disabled plugin is unloaded");
 }
@@ -304,8 +307,7 @@ void claimedIdSmoke(PluginRegistry &registry, const QJsonObject &manifest,
             "the refusal names the id the library claims");
     requireListedMetadata(registry, installedManifest(claimedId));
     require(installedManifest(claimedId) == claimed, "the refused plugin keeps its manifest");
-    require(std::string(::plugin_remove(rust::String(claimedId.toStdString()))).empty(),
-            "the claimed-id plugin is removed");
+    require(stopPlugin(&registry, claimedId, true).isEmpty(), "the claimed-id plugin is removed");
 }
 
 } // namespace
@@ -367,13 +369,39 @@ void pluginBundleSmoke(const QString &bundle) {
     requireListedMetadata(registry, manifest);
     requireEnabled(registry, manifest);
     require(registry.pluginHash(id) == hash, "the original bundle's library loads again");
-    requireDisabled(registry, id);
-
     claimedIdSmoke(registry, manifest, directory);
 
-    require(std::string(::plugin_remove(rust::String(id.toStdString()))).empty(),
-            "the plugin is removed");
+    auto *host = Host::get();
+    auto shape = feedShape(id);
+    QString selectedSource;
+    if (shape == FeedShape::Price) {
+        auto sources = host->priceSources();
+        require(!sources.isEmpty(), "the real price producer is available before removal");
+        selectedSource = sources.first().id;
+        host->selectPrice(selectedSource, QStringLiteral("USD"));
+    } else if (shape == FeedShape::Fee) {
+        auto sources = host->feeSources();
+        require(!sources.isEmpty(), "the real fee producer is available before removal");
+        selectedSource = sources.first().id;
+        host->selectFees({.mode = FeeMode::Smart,
+                          .default_source = selectedSource,
+                          .smart_source = selectedSource,
+                          .tier = FeeTier::Medium});
+    }
+    require(stopPlugin(&registry, id, true).isEmpty(), "the plugin is removed");
     require(!isInstalled(id), "a removed plugin is no longer listed");
+    if (shape == FeedShape::Price) {
+        auto selected = host->selectedPrice();
+        require(selected.source == selectedSource && selected.currency == QStringLiteral("USD") &&
+                    !selected.rate.has_value(),
+                "removed price provider stays selected but unavailable, with no fallback");
+    } else if (shape == FeedShape::Fee) {
+        auto selected = host->selectedFees();
+        require(selected.preferences.smart_source == selectedSource &&
+                    selected.preferences.default_source == selectedSource &&
+                    !selected.medium.has_value() && !selected.default_rate.has_value(),
+                "removed fee provider stays selected but unavailable, with no fallback");
+    }
 }
 
 } // namespace smoke

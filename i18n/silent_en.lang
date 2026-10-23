@@ -1151,6 +1151,18 @@ plugin-access-no-account => "The account is gone."
 
 plugin-access-no-keys => "The keys module is not running."
 
+plugin-access-flow-failed => "Access answers unavailable"
+
+plugin-access-flow-retry => "%1. Access controls are unavailable until the saved answers can be checked. Try Again reloads them."
+
+plugin-access-save-failed => "Could not confirm access answers"
+
+plugin-access-save-failed-text
+=> "Could not confirm saving access for %1: %2. This request was refused. Retry the request to read the saved answers.";;
+
+plugin-access-read-failed => "Could not read plugin access"
+plugin-access-read-failed-text => "Access for %1 could not be checked: %2. This request was refused. Unlock or restore access, then request it again."
+
 state-setup-title => "Protect Silent"
 
 state-setup-text
@@ -1713,3 +1725,19 @@ settings-electrum-address => "Electrum Address"
 receive-addresses => "Addresses"
 
 musig-lock-line-absolute => "From block %1"
+settings-remove-plugin => "Remove"
+settings-remove-question => "Remove %1?"
+settings-remove-warning => "This permanently deletes the installed plugin and all of its saved state and accounts. There is no keep-data option. Reinstalling starts with empty data. Shared signer keys and other plugins' accounts are not deleted."
+settings-plugin-removing => "Removing %1. Waiting for shutdown and private-data cleanup."
+settings-plugin-stop-failed => "Plugin shutdown or removal failed"
+settings-plugin-removed => "%1 was removed with its saved state and accounts."
+settings-plugin-disabled => "%1 was disabled. Its saved data was kept."
+settings-plugin-stopping => "Unavailable during shutdown or removal. After an error, use Remove to retry cleanup."
+btn-remove-plugin => "Remove"
+btn-retry-disable-plugin => "Retry disable"
+settings-plugin-removal-interrupted => "Removal was interrupted. Private data may already be cleared. Use Remove to finish cleanup."
+settings-plugin-stop-interrupted => "Removal stopped before private cleanup. Use Remove to finish shutdown and deletion."
+settings-plugin-bundle-pending => "Private data was removed. Installed bundle cleanup is pending. Use Remove to retry."
+settings-plugin-bookkeeping-pending => "Bundle and private data were removed. Grant and settings cleanup is pending. Use Remove to finish."
+settings-plugin-state-read-failed => "Could not read pending plugin removals"
+settings-plugin-state-read-failed-text => "Plugin controls are unavailable until application state can be read. Unlock or restore access, then try again. Known removal records have been kept. %1"

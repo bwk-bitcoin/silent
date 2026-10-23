@@ -27,6 +27,8 @@ auto btnCameraSettings() -> Button *;
 auto btnQrSettings() -> Button *;
 auto btnOpenFile() -> Button *;
 auto btnDisablePlugin() -> Button *;
+auto btnRemovePlugin() -> Button *;
+auto btnRetryDisablePlugin() -> Button *;
 auto btnPluginAccess() -> Button *;
 auto btnForgetAccess() -> Button *;
 auto btnAllowAccess() -> Button *;

@@ -21,9 +21,9 @@ fn example_state_migrates_and_saves_through_the_public_host() {
     let payload = br#"{"example.legacy":{"name":"Legacy account","settingEnabled":true}}"#;
     state_crypt::write_state(&legacy, &STANDARD.encode(payload))
         .expect("seed the exact former ExampleState payload without an old public API");
-    let output = Command::new(host)
+    let output = Command::new(&host)
         .arg("--storage-example")
-        .arg(plugin)
+        .arg(&plugin)
         .env("HOME", home.path())
         .env("QT_QPA_PLATFORM", "offscreen")
         .output()
@@ -37,6 +37,27 @@ fn example_state_migrates_and_saves_through_the_public_host() {
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("Example storage smoke: OK"),
         "the real external consumer fixture ran to completion"
+    );
+    assert!(
+        !legacy.exists(),
+        "plugin removal deletes the actual legacy blob migration source"
+    );
+    let restarted = Command::new(&host)
+        .arg("--storage-example-reinstall")
+        .arg(&plugin)
+        .env("HOME", home.path())
+        .env("QT_QPA_PLATFORM", "offscreen")
+        .output()
+        .expect("restart the actual host and reinstall the bundle");
+    assert!(
+        restarted.status.success(),
+        "restarted external consumer failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&restarted.stdout),
+        String::from_utf8_lossy(&restarted.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&restarted.stdout).contains("Example reinstall smoke: OK"),
+        "the real reinstalled consumer completed with empty private data"
     );
     state_crypt::lock();
 }

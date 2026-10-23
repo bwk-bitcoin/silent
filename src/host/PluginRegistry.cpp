@@ -12,11 +12,14 @@
 #include <QLoggingCategory>
 #include <QSet>
 #include <QStringList>
+#include <QThread>
 #include <algorithm>
 #include <common.h>
 #include <silent.h>
 
 namespace {
+constexpr int PLUGIN_STOP_POLL_INTERVAL_MS = 20;
+
 class MetadataOnlyPlugin final : public IPlugin {
 public:
     explicit MetadataOnlyPlugin(QMap<QString, QString> meta) : m_meta(std::move(meta)) {
@@ -66,6 +69,13 @@ QMap<QString, QString> sidecarMeta(const PluginMetadata &bundle) {
 } // namespace
 
 PluginRegistry::PluginRegistry(QObject *parent) : QObject(parent) {
+    connect(this, &PluginRegistry::pluginStopPrepared, this, &PluginRegistry::onPluginStopPrepared,
+            qontrol::UNIQUE);
+    connect(this, &PluginRegistry::pluginDataRemoved, this, &PluginRegistry::onPluginDataRemoved,
+            qontrol::UNIQUE);
+    connect(&m_stop_timer, &QTimer::timeout, this, &PluginRegistry::advancePluginStops,
+            qontrol::UNIQUE);
+    m_stop_timer.setInterval(PLUGIN_STOP_POLL_INTERVAL_MS);
     auto *host = Host::get();
     if (host != nullptr && host->events() != nullptr) {
         connect(host->events(), &HostEvents::instanceRegistered, this,
@@ -82,11 +92,18 @@ PluginRegistry::PluginRegistry(QObject *parent) : QObject(parent) {
 }
 
 PluginRegistry::~PluginRegistry() {
+    for (auto *worker : findChildren<QThread *>(QString(), Qt::FindDirectChildrenOnly)) {
+        worker->wait();
+    }
     for (auto it = m_records.begin(); it != m_records.end(); ++it) {
         if (!it->external) {
             continue;
         }
-        disablePlugin(it.key());
+        // Active native work cannot be synchronously proved stopped here. Leave its
+        // mapping alive until process exit instead of unmapping running code.
+        if (it->plugin != nullptr && !it->modules.isEmpty()) {
+            continue;
+        }
         delete it->library;
         it->library = nullptr;
     }
@@ -95,6 +112,17 @@ PluginRegistry::~PluginRegistry() {
 }
 
 auto PluginRegistry::rescanDiscoveredPlugins() -> int {
+    auto removals = ::app_removing_plugins();
+    if (!removals.is_ok) {
+        m_removal_read_error = QString::fromStdString(std::string(removals.error));
+        emit enabledPluginsChanged();
+        return 0;
+    }
+    m_removal_read_error.clear();
+    m_enabled_snapshot.clear();
+    for (const auto &id : removals.enabled_plugins) {
+        m_enabled_snapshot.insert(QString::fromStdString(std::string(id)));
+    }
     QSet<QString> known;
     for (auto it = m_records.begin(); it != m_records.end(); ++it) {
         if (!it->external) {
@@ -104,6 +132,7 @@ auto PluginRegistry::rescanDiscoveredPlugins() -> int {
             known.insert(it.key());
         }
         it->discovered = false;
+        it->removal_phase.reset();
         // A scan gives a plugin that failed to load another chance.
         if (it->plugin == nullptr) {
             it->load_error.clear();
@@ -148,16 +177,35 @@ auto PluginRegistry::rescanDiscoveredPlugins() -> int {
         }
     }
 
+    for (const auto &entry : removals.entries) {
+        auto pluginId = QString::fromStdString(std::string(entry.plugin_id));
+        auto &record = m_records[pluginId];
+        record.id = pluginId;
+        record.external = true;
+        record.discovered = true;
+        record.enabled = false;
+        record.removal_phase = entry.phase;
+        record.meta.insert(QStringLiteral("id"), pluginId);
+    }
+    for (const auto &id : m_stops.keys()) {
+        if (m_records.contains(id)) {
+            m_records[id].discovered = true;
+        }
+    }
+
     rebuildPluginList();
     emit enabledPluginsChanged();
     return found;
 }
 
 void PluginRegistry::reloadEnabledPlugins() {
+    rescanDiscoveredPlugins();
+    if (!m_removal_read_error.isEmpty()) {
+        return;
+    }
     QHash<QString, bool> desiredEnabled;
-    auto enabled = app_enabled_plugins();
-    for (auto pluginId : enabled) {
-        desiredEnabled.insert(QString::fromStdString(std::string(pluginId.c_str())), true);
+    for (const auto &pluginId : m_enabled_snapshot) {
+        desiredEnabled.insert(pluginId, true);
     }
 
     for (auto it = m_records.constBegin(); it != m_records.constEnd(); ++it) {
@@ -170,6 +218,9 @@ void PluginRegistry::reloadEnabledPlugins() {
 
     bool changed = false;
     for (auto it = desiredEnabled.constBegin(); it != desiredEnabled.constEnd(); ++it) {
+        if (m_stops.contains(it.key())) {
+            continue;
+        }
         auto &record = m_records[it.key()];
         if (record.enabled != it.value()) {
             changed = true;
@@ -182,6 +233,9 @@ void PluginRegistry::reloadEnabledPlugins() {
             continue;
         }
         QString id = it.key();
+        if (pluginStopping(id)) {
+            continue;
+        }
         if (m_records.value(id).enabled) {
             if (!enablePlugin(id)) {
                 // Keep runtime enabled state truthful when load fails.
@@ -189,7 +243,10 @@ void PluginRegistry::reloadEnabledPlugins() {
                     changed = true;
                 }
                 m_records[id].enabled = false;
-                ::app_set_plugin_enabled(rust::String(id.toStdString()), false);
+                auto error = ::app_set_plugin_enabled(rust::String(id.toStdString()), false);
+                if (!error.empty()) {
+                    qWarning() << "Could not persist failed-plugin disable:" << error.c_str();
+                }
             }
             continue;
         }
@@ -224,7 +281,10 @@ void PluginRegistry::registerBuiltin(IPlugin *plugin) {
     }
     syncPluginTranslations(id, true);
     if (hadEntry && !wasEnabled) {
-        ::app_set_plugin_enabled(rust::String(id.toStdString()), true);
+        auto error = ::app_set_plugin_enabled(rust::String(id.toStdString()), true);
+        if (!error.empty()) {
+            qWarning() << "Could not persist built-in enable state:" << error.c_str();
+        }
     }
 
     QList<IModule *> modules = plugin->modules();
@@ -301,6 +361,12 @@ auto PluginRegistry::caller(IModule *module) const -> std::optional<plugin::Call
     if (ownerIt == m_module_owner.constEnd()) {
         return std::nullopt;
     }
+    if (ownerIt->external && !m_removal_read_error.isEmpty()) {
+        return std::nullopt;
+    }
+    if (m_stops.contains(ownerIt->plugin_id)) {
+        return std::nullopt;
+    }
     return plugin::Caller{
         .moduleId = ownerIt->module_id,
         .pluginId = ownerIt->plugin_id,
@@ -339,7 +405,7 @@ void PluginRegistry::deleteInstance(IModule *module, const QString &instance_id)
         host->instanceOwner(instance_id) != module) {
         owns = false;
     }
-    if (!m_module_owner.contains(module) || !owns || isCreatorInstanceId(instance_id) ||
+    if (!caller(module).has_value() || !owns || isCreatorInstanceId(instance_id) ||
         instance_id.isEmpty()) {
         emit accountDeletionFinished(module, instance_id,
                                      QStringLiteral("Unknown module/account identity"));
@@ -373,7 +439,9 @@ void PluginRegistry::onAccountDeleted(ReqId req_id, const QString &id, const QSt
             host != nullptr && host->instanceOwner(id) == module) {
             host->removeInstance(id);
         }
-        requestModuleInstances(module);
+        if (caller(module).has_value()) {
+            requestModuleInstances(module);
+        }
     }
     emit accountDeletionFinished(module, id, error);
 }
@@ -416,12 +484,16 @@ bool PluginRegistry::pluginHasBuiltinModules(const QString &plugin_id) const {
 }
 
 auto PluginRegistry::setEnabled(const QString &plugin_id, bool enabled) -> bool {
-    if (plugin_id.trimmed().isEmpty()) {
+    if (plugin_id.trimmed().isEmpty() || !m_removal_read_error.isEmpty()) {
         return false;
     }
-
-    if (pluginHasBuiltinModules(plugin_id) && !enabled) {
+    if ((m_stops.contains(plugin_id) && (enabled || !pluginDisableRetryable(plugin_id))) ||
+        (enabled && m_records.value(plugin_id).removal_phase.has_value())) {
         return false;
+    }
+    if (!enabled) {
+        beginPluginStop(plugin_id, false);
+        return m_stops.contains(plugin_id);
     }
 
     bool previous = isPluginEnabled(plugin_id);
@@ -429,22 +501,29 @@ auto PluginRegistry::setEnabled(const QString &plugin_id, bool enabled) -> bool 
         return true;
     }
 
-    if (enabled) {
-        m_records[plugin_id].enabled = true;
-        if (!enablePlugin(plugin_id)) {
-            m_records[plugin_id].enabled = false;
-            return false;
-        }
-    } else {
-        if (!disablePlugin(plugin_id)) {
-            m_records[plugin_id].enabled = true;
-            return false;
-        }
+    auto record = m_records.find(plugin_id);
+    if (record == m_records.end() || (!record->discovered && !record->builtin)) {
+        return false;
+    }
+    auto saved = ::app_set_plugin_enabled(rust::String(plugin_id.toStdString()), true);
+    if (!saved.empty()) {
+        record->load_error = QStringLiteral("Could not persist enabled state: %1")
+                                 .arg(QString::fromUtf8(saved.data(), saved.size()));
+        return false;
+    }
+    m_records[plugin_id].enabled = true;
+    if (!enablePlugin(plugin_id)) {
         m_records[plugin_id].enabled = false;
+        auto rollback = ::app_disable_plugin(rust::String(plugin_id.toStdString()));
+        if (!rollback.empty()) {
+            m_records[plugin_id].load_error +=
+                QStringLiteral("\nCould not persist disabled state: %1")
+                    .arg(QString::fromUtf8(rollback.data(), rollback.size()));
+        }
+        return false;
     }
 
     syncPluginTranslations(plugin_id, enabled);
-    ::app_set_plugin_enabled(rust::String(plugin_id.toStdString()), enabled);
     emit enabledPluginsChanged();
     return true;
 }
@@ -481,6 +560,14 @@ auto PluginRegistry::pluginDescription(const QString &plugin_id) const -> QStrin
 
 auto PluginRegistry::pluginLoadError(const QString &plugin_id) const -> QString {
     return m_records.value(plugin_id).load_error;
+}
+
+auto PluginRegistry::pluginRemovalReadError() const -> QString {
+    return m_removal_read_error;
+}
+
+auto PluginRegistry::pluginMetadata(const QString &plugin_id) const -> QMap<QString, QString> {
+    return m_records.value(plugin_id).meta;
 }
 
 auto PluginRegistry::pluginAccountNames(const QString &plugin_id) const -> QStringList {
@@ -683,6 +770,10 @@ IPlugin *PluginRegistry::pluginById(const QString &plugin_id) const {
 }
 
 bool PluginRegistry::enablePlugin(const QString &plugin_id) {
+    if (!m_removal_read_error.isEmpty() || m_stops.contains(plugin_id) ||
+        m_records.value(plugin_id).removal_phase.has_value()) {
+        return false;
+    }
     auto recordIt = m_records.find(plugin_id);
     if (recordIt != m_records.end() && recordIt->builtin) {
         syncPluginTranslations(plugin_id, true);
@@ -784,56 +875,293 @@ bool PluginRegistry::disablePlugin(const QString &plugin_id) {
         return false;
     }
 
-    auto &record = *recordIt;
-    for (auto *module : record.modules) {
-        if (m_pending_deletions.contains(module)) {
-            qWarning() << "Plugin has pending account deletion:" << plugin_id;
-            return false;
-        }
-    }
-    if (record.plugin == nullptr) {
-        bool unloaded = unloadPlugin(plugin_id);
-        if (!unloaded) {
-            qWarning() << "Plugin unload failed:" << plugin_id;
-            return false;
-        }
-        // Disabling tears down/unloads only; discovery state is owned by
-        // rescanDiscoveredPlugins(), so the plugin stays listed as discovered+disabled.
-        syncPluginTranslations(plugin_id, false);
-        rebuildPluginList();
+    if (recordIt->plugin == nullptr && recordIt->library == nullptr) {
         return true;
     }
+    beginPluginStop(plugin_id, false);
+    return true;
+}
 
-    stopPluginInstances(plugin_id);
-    if (hasLiveOwnedInstances(plugin_id)) {
-        qWarning() << "Plugin disable aborted: live instances still owned by plugin:" << plugin_id;
-        return false;
-    }
+auto PluginRegistry::pluginStopping(const QString &plugin_id) const -> bool {
+    return m_stops.contains(plugin_id) || m_records.value(plugin_id).removal_phase.has_value();
+}
 
-    for (auto *module : record.modules) {
-        deactivateModule(module);
-    }
+auto PluginRegistry::pluginStopPending(const QString &plugin_id) const -> bool {
+    return m_stops.contains(plugin_id) && (m_stops.value(plugin_id).phase != StopPhase::Failed ||
+                                           !m_stops.value(plugin_id).pending.isEmpty());
+}
 
-    bool unloaded = unloadPlugin(plugin_id);
-    if (!unloaded) {
-        qWarning() << "Plugin unload failed:" << plugin_id;
-        // Roll back module wiring best-effort so runtime state stays internally consistent.
-        for (auto *module : record.modules) {
-            activateModule(module, plugin_id);
+auto PluginRegistry::pluginDisableRetryable(const QString &plugin_id) const -> bool {
+    auto stop = m_stops.constFind(plugin_id);
+    return stop != m_stops.constEnd() && stop->phase == StopPhase::Failed && !stop->remove &&
+           stop->pending.isEmpty();
+}
+
+auto PluginRegistry::pluginStopError(const QString &plugin_id) const -> QString {
+    auto stop = m_stops.constFind(plugin_id);
+    if (stop != m_stops.constEnd()) {
+        if (stop->phase != StopPhase::Failed) {
+            return QString();
         }
-        return false;
+        return stop->pending.isEmpty()
+                   ? stop->error
+                   : stop->error +
+                         QStringLiteral("\nWaiting for remaining module shutdowns before retry.");
     }
+    auto phase = m_records.value(plugin_id).removal_phase;
+    if (!phase.has_value()) {
+        return QString();
+    }
+    switch (*phase) {
+    case PluginRemovalPhase::Stopping:
+        return TR("settings-plugin-stop-interrupted");
+    case PluginRemovalPhase::PrivateData:
+        return TR("settings-plugin-removal-interrupted");
+    case PluginRemovalPhase::Bundle:
+        return TR("settings-plugin-bundle-pending");
+    case PluginRemovalPhase::Bookkeeping:
+        return TR("settings-plugin-bookkeeping-pending");
+    }
+    return QStringLiteral("Unknown removal phase; plugin remains unavailable");
+}
 
-    m_plugin_order.removeAll(plugin_id);
+void PluginRegistry::removePlugin(const QString &plugin_id) {
+    beginPluginStop(plugin_id, true);
+}
+
+void PluginRegistry::beginPluginStop(const QString &plugin_id, bool remove) {
+    if (!m_removal_read_error.isEmpty()) {
+        emit pluginStopFinished(plugin_id, false, m_removal_read_error);
+        return;
+    }
+    auto record = m_records.constFind(plugin_id);
+    if (record == m_records.constEnd() || !record->external || record->builtin) {
+        emit pluginStopFinished(plugin_id, false,
+                                QStringLiteral("Only external plugins can be removed or disabled"));
+        return;
+    }
+    if (record->removal_phase.has_value() && !remove) {
+        emit pluginStopFinished(
+            plugin_id, false, QStringLiteral("Removal is pending; retry Remove to finish cleanup"));
+        return;
+    }
+    if (pluginStopPending(plugin_id)) {
+        emit pluginStopFinished(plugin_id, false,
+                                QStringLiteral("Plugin shutdown is already pending"));
+        return;
+    }
+    auto modules = record->modules;
+    for (auto *module : modules) {
+        if (m_pending_deletions.contains(module)) {
+            emit pluginStopFinished(
+                plugin_id, false,
+                QStringLiteral("Wait for pending account deletion before retrying"));
+            return;
+        }
+    }
+    auto reqId = ++m_delete_req_id;
+    if (reqId == 0) {
+        reqId = ++m_delete_req_id;
+    }
+    m_stops.insert(plugin_id, {.remove = remove, .req_id = reqId});
+    m_records[plugin_id].enabled = false;
+    auto *host = dynamic_cast<HostImpl *>(Host::get());
+    for (auto *module : modules) {
+        if (host != nullptr) {
+            host->setCallerClosing(module, true);
+        }
+    }
+    stopPluginInstances(plugin_id);
+    emit enabledPluginsChanged();
+    auto *worker = QThread::create([this, plugin_id, remove] {
+        auto id = rust::String(plugin_id.toStdString());
+        auto error = remove ? ::app_begin_plugin_removal(std::move(id))
+                            : ::app_disable_plugin(std::move(id));
+        emit pluginStopPrepared(plugin_id, QString::fromUtf8(error.data(), error.size()));
+    });
+    worker->setParent(this);
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater, qontrol::UNIQUE);
+    worker->start();
+}
+
+void PluginRegistry::onPluginStopPrepared(const QString &plugin_id, const QString &error) {
+    if (!m_stops.contains(plugin_id)) {
+        return;
+    }
+    auto &stop = m_stops[plugin_id];
+    if (!error.isEmpty()) {
+        stop.phase = StopPhase::Failed;
+        m_records[plugin_id].enabled = false;
+        stop.error =
+            QStringLiteral(
+                "Could not persist disabled/removal state; library and data retained. Plugin is "
+                "unavailable in this session; retry. Restart state is not guaranteed: %1")
+                .arg(error);
+        requestModuleShutdown(plugin_id);
+        auto failure = stop.error;
+        emit enabledPluginsChanged();
+        emit pluginStopFinished(plugin_id, false, failure);
+        return;
+    }
+    stop.phase = StopPhase::Stopping;
+    auto &record = m_records[plugin_id];
+    record.enabled = false;
+    if (stop.remove && !record.removal_phase.has_value()) {
+        record.removal_phase = PluginRemovalPhase::Stopping;
+    }
+    requestModuleShutdown(plugin_id);
+    emit enabledPluginsChanged();
+    m_stop_timer.start();
+}
+
+void PluginRegistry::requestModuleShutdown(const QString &plugin_id) {
+    auto modules = m_records.value(plugin_id).modules;
+    auto request = m_stops.value(plugin_id).req_id;
+    for (auto *module : modules) {
+        m_stops[plugin_id].pending.insert(module);
+        connect(module, &IModule::shutdownFinished, this, &PluginRegistry::onModuleShutdownFinished,
+                static_cast<Qt::ConnectionType>(qontrol::UNIQUE | Qt::QueuedConnection));
+    }
+    for (auto *module : modules) {
+        module->setSignerPolling(false);
+        module->shutdown(request);
+    }
+}
+
+void PluginRegistry::onModuleShutdownFinished(ReqId req_id, const QString &error) {
+    auto *module = qobject_cast<IModule *>(sender());
+    for (auto it = m_stops.begin(); it != m_stops.end(); ++it) {
+        if ((it->phase != StopPhase::Stopping && it->phase != StopPhase::Failed) ||
+            it->req_id != req_id || !it->pending.remove(module)) {
+            continue;
+        }
+        if (!error.isEmpty()) {
+            it->error =
+                it->error.isEmpty()
+                    ? QStringLiteral("Shutdown failed; plugin remains disabled and loaded: %1")
+                          .arg(error)
+                    : it->error + QLatin1Char('\n') + error;
+            it->phase = StopPhase::Failed;
+            emit pluginStopFinished(it.key(), false, it->error);
+        } else if (it->phase == StopPhase::Failed) {
+            emit enabledPluginsChanged();
+        }
+        return;
+    }
+}
+
+void PluginRegistry::advancePluginStops() {
+    auto ids = m_stops.keys();
+    bool waiting = false;
+    for (const auto &id : ids) {
+        auto &stop = m_stops[id];
+        if (stop.phase != StopPhase::Stopping) {
+            continue;
+        }
+        waiting = true;
+        if (!stop.pending.isEmpty()) {
+            continue;
+        }
+        if (stop.error.isEmpty() && !drainPluginCallers(id)) {
+            continue;
+        }
+        if (!stop.error.isEmpty()) {
+            stop.phase = StopPhase::Failed;
+            stop.error = QStringLiteral("Shutdown failed; plugin remains disabled and loaded: %1")
+                             .arg(stop.error);
+            emit pluginStopFinished(id, false, stop.error);
+            continue;
+        }
+        finishPluginShutdown(id);
+    }
+    if (!waiting) {
+        m_stop_timer.stop();
+    }
+}
+
+auto PluginRegistry::drainPluginCallers(const QString &plugin_id) -> bool {
+    auto modules = m_records.value(plugin_id).modules;
+    auto *host = dynamic_cast<HostImpl *>(Host::get());
+    auto &stop = m_stops[plugin_id];
+    if (!stop.callers_dropped) {
+        for (auto *module : modules) {
+            if (host != nullptr && !host->callerFramesIdle(module)) {
+                return false;
+            }
+        }
+        for (auto *module : modules) {
+            if (host != nullptr) {
+                host->dropCaller(module);
+            }
+        }
+        stop.callers_dropped = true;
+    }
+    for (auto *module : modules) {
+        if (host != nullptr && !host->callerDrained(module)) {
+            return false;
+        }
+    }
+    for (auto *module : modules) {
+        if (host != nullptr) {
+            stop.error += host->callerDrainError(module);
+        }
+    }
+    return true;
+}
+
+void PluginRegistry::finishPluginShutdown(const QString &plugin_id) {
+    auto modules = m_records.value(plugin_id).modules;
+    for (auto *module : modules) {
+        deactivateModule(module);
+        if (auto *host = dynamic_cast<HostImpl *>(Host::get()); host != nullptr) {
+            host->destroyClosedUi(module);
+        }
+    }
+    syncPluginTranslations(plugin_id, false);
+    auto &record = m_records[plugin_id];
     record.modules.clear();
     record.plugin = nullptr;
     record.plugin_object = nullptr;
-    // Disabling tears down/unloads only; discovery state is owned by
-    // rescanDiscoveredPlugins(), so the plugin stays listed as discovered+disabled.
-
-    syncPluginTranslations(plugin_id, false);
+    m_plugin_order.removeAll(plugin_id);
     rebuildPluginList();
-    return true;
+    if (!unloadPlugin(plugin_id)) {
+        m_stops[plugin_id].phase = StopPhase::Failed;
+        m_stops[plugin_id].error =
+            QStringLiteral("Unload failed; data and bundle retained. Retry removal.");
+        rebuildPluginList();
+        emit pluginStopFinished(plugin_id, false, m_stops.value(plugin_id).error);
+        return;
+    }
+    if (!m_stops.value(plugin_id).remove) {
+        m_stops.remove(plugin_id);
+        emit enabledPluginsChanged();
+        emit pluginStopFinished(plugin_id, false, QString());
+        return;
+    }
+    m_stops[plugin_id].phase = StopPhase::Cleaning;
+    auto *worker = QThread::create([this, plugin_id] {
+        auto error = ::plugin_remove(rust::String(plugin_id.toStdString()));
+        emit pluginDataRemoved(plugin_id, QString::fromUtf8(error.data(), error.size()));
+    });
+    worker->setParent(this);
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater, qontrol::UNIQUE);
+    worker->start();
+}
+
+void PluginRegistry::onPluginDataRemoved(const QString &plugin_id, const QString &error) {
+    if (!m_stops.contains(plugin_id)) {
+        return;
+    }
+    if (error.isEmpty()) {
+        m_stops.remove(plugin_id);
+        m_records.remove(plugin_id);
+    } else {
+        m_stops[plugin_id].phase = StopPhase::Failed;
+        m_stops[plugin_id].error = error;
+    }
+    rebuildPluginList();
+    emit enabledPluginsChanged();
+    emit pluginStopFinished(plugin_id, error.isEmpty(), error);
 }
 
 bool PluginRegistry::unloadPlugin(const QString &plugin_id) {
@@ -862,17 +1190,21 @@ void PluginRegistry::activateModule(IModule *module, const QString &plugin_id) {
     if (module == nullptr || plugin_id.isEmpty()) {
         return;
     }
+    if (auto *host = dynamic_cast<HostImpl *>(Host::get()); host != nullptr) {
+        host->setCallerClosing(module, false);
+    }
 
     auto record = m_records.constFind(plugin_id);
     if (record == m_records.constEnd()) {
         qWarning() << "Module activation has no plugin record:" << plugin_id;
         return;
     }
-    m_module_owner.insert(module,
-                          {.plugin_id = plugin_id,
-                           .module_id = module->meta().value(QStringLiteral("id")),
-                           .plugin_hash = record->external ? record->plugin_hash : QString(),
-                           .external = record->external});
+    m_module_owner.insert(
+        module,
+        {.plugin_id = plugin_id,
+         .module_id = QString::fromUtf8(module->meta().value(QStringLiteral("id")).toUtf8()),
+         .plugin_hash = record->external ? record->plugin_hash : QString(),
+         .external = record->external});
     if (m_signer_polling) {
         module->setSignerPolling(true);
     }
@@ -935,7 +1267,6 @@ void PluginRegistry::deactivateModule(IModule *module) {
     if (auto *hostImpl = dynamic_cast<HostImpl *>(Host::get()); hostImpl != nullptr) {
         hostImpl->dropCaller(module);
     }
-    module->setSignerPolling(false);
 }
 
 bool PluginRegistry::startOwnedInstance(IModule *module, const QString &instance_id) {
@@ -944,7 +1275,7 @@ bool PluginRegistry::startOwnedInstance(IModule *module, const QString &instance
     }
 
     QString trimmedInstanceId = instance_id.trimmed();
-    if (!m_module_owner.contains(module) || trimmedInstanceId.isEmpty()) {
+    if (!caller(module).has_value() || trimmedInstanceId.isEmpty()) {
         return false;
     }
 
@@ -1001,18 +1332,6 @@ void PluginRegistry::stopPluginInstances(const QString &plugin_id) {
     }
 }
 
-bool PluginRegistry::hasLiveOwnedInstances(const QString &plugin_id) const {
-    auto *host = dynamic_cast<HostImpl *>(Host::get());
-    if (host == nullptr) {
-        return false;
-    }
-
-    auto liveInstances = host->liveInstances();
-    return std::ranges::any_of(liveInstances, [this, &plugin_id](const auto *instance) {
-        return instance != nullptr && m_instance_owner_by_id.value(instance->id()) == plugin_id;
-    });
-}
-
 void PluginRegistry::onHostInstanceRegistered(const QString &id) {
     QString instanceId = id.trimmed();
     if (instanceId.isEmpty()) {
@@ -1052,7 +1371,7 @@ void PluginRegistry::onSignerPollingChanged(bool enabled) {
     // Every enabled module is told, not just the ones holding instances: a module
     // that owns a device service must start it before it has any device to show.
     for (auto it = m_module_owner.constBegin(); it != m_module_owner.constEnd(); ++it) {
-        if (it.key() != nullptr) {
+        if (it.key() != nullptr && caller(it.key()).has_value()) {
             it.key()->setSignerPolling(enabled);
         }
     }

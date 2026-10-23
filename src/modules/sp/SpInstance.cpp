@@ -145,15 +145,18 @@ SpInstance::SpInstance(QString id) : m_id(std::move(id)) {
     m_feed = std::make_unique<InertFeed>();
     m_signer = std::make_unique<InertSigner>();
     m_theme = std::make_unique<InertThemeProvider>();
+}
 
+auto SpInstance::openPage() -> bool {
     m_tab_id = Host::get()->openTab(m_account_widget, this);
     if (m_tab_id == 0) {
         qCritical() << "SpInstance: failed to open tab for account" << m_id;
         // The controller's threads may already run: same teardown as stop().
         stop();
-    } else {
-        Host::get()->setTabTitle(m_tab_id, m_id);
+        return false;
     }
+    Host::get()->setTabTitle(m_tab_id, m_id);
+    return true;
 }
 
 QString SpInstance::id() const {

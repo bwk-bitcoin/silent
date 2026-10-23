@@ -159,6 +159,23 @@ pub(crate) struct LockedRoot {
     _lock: File,
 }
 
+pub(crate) fn lock_app_state(data_dir: &Path) -> Result<File, ErrorCode> {
+    let data = Directory::data(data_dir, DIRECTORY_WRITE)?.ok_or(ErrorCode::Io)?;
+    let path = data.path.join("app.lock");
+    let file = data
+        .open(
+            "app.lock",
+            FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_OPEN_IF,
+            FILE_NON_DIRECTORY_FILE,
+        )
+        .map_err(|status| status.refused(&path))?;
+    refuse_reparse_point(&file, &path)?;
+    fs2::FileExt::lock_exclusive(&file)?;
+    Ok(file)
+}
+
 impl LockedRoot {
     pub(crate) fn lease(&self, name: &str) -> Result<File, ErrorCode> {
         let path = self.root.path.join(name);
@@ -225,6 +242,23 @@ impl LockedRoot {
         Ok(sealed)
     }
 
+    pub(crate) fn read_temporary(&self) -> Result<Option<Vec<u8>>, ErrorCode> {
+        let limit = (MAX_TREE_BYTES + MAX_ENVELOPE_BYTES) as u64;
+        let bytes = self.root.read_file(DOCUMENT_TEMP, limit)?;
+        if bytes
+            .as_ref()
+            .is_some_and(|bytes| bytes.len() as u64 > limit)
+        {
+            return Err(ErrorCode::TooLarge);
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn remove_temporary(&self) -> Result<(), ErrorCode> {
+        self.root.remove(DOCUMENT_TEMP)?;
+        self.root.sync()
+    }
+
     /// The lock and root handles remain held from load through durable publication.
     pub(crate) fn replace<G>(
         &self,
@@ -239,6 +273,18 @@ impl LockedRoot {
         sync(&temp, &self.root.path.join(DOCUMENT))?;
         self.root.sync()
     }
+}
+
+pub(crate) fn remove_legacy(data_dir: &Path, name: &str) -> Result<(), ErrorCode> {
+    let Some(data) = Directory::data(data_dir, DIRECTORY_READ)? else {
+        return Ok(());
+    };
+    let Some(legacy) = data.directory(state_crypt::PLUGIN_STATE_DIR, DIRECTORY_WRITE, FILE_OPEN)?
+    else {
+        return Ok(());
+    };
+    legacy.remove(name)?;
+    legacy.sync()
 }
 
 /// The bytes of `filename` in the legacy plugin state directory, never through a link:

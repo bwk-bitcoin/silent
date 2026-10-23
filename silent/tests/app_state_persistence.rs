@@ -38,9 +38,18 @@ fn app_state_plugin_and_theme_roundtrip() {
     );
 
     // Enable two plugins, then disable one.
-    app_set_plugin_enabled("sp".to_string(), true);
-    app_set_plugin_enabled("cj".to_string(), true);
-    app_set_plugin_enabled("sp".to_string(), false);
+    assert!(
+        app_set_plugin_enabled("sp".to_string(), true).is_empty(),
+        "enable sp"
+    );
+    assert!(
+        app_set_plugin_enabled("cj".to_string(), true).is_empty(),
+        "enable cj"
+    );
+    assert!(
+        app_set_plugin_enabled("sp".to_string(), false).is_empty(),
+        "disable sp"
+    );
 
     assert_eq!(
         app_enabled_plugins(),
@@ -49,7 +58,10 @@ fn app_state_plugin_and_theme_roundtrip() {
     );
 
     // Re-enabling sp should not duplicate cj.
-    app_set_plugin_enabled("sp".to_string(), true);
+    assert!(
+        app_set_plugin_enabled("sp".to_string(), true).is_empty(),
+        "enable sp again"
+    );
     let mut plugins = app_enabled_plugins();
     plugins.sort();
     assert_eq!(

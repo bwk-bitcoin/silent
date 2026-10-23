@@ -18,6 +18,7 @@ public:
     virtual ~IPlugin() = default;
 
     [[nodiscard]] virtual QMap<QString, QString> meta() const = 0;
+    // All async work belongs to these modules; constructors stay idle until activation.
     [[nodiscard]] virtual QList<IModule *> modules() const = 0;
 };
 
@@ -44,6 +45,14 @@ public:
         emit accountDeleted(req_id, id, QStringLiteral("Account deletion is not supported"));
     }
 
+    // Stop accepting work and asynchronously drain every owned instance, including
+    // already-closing ones, workers, callbacks and backend writes. Success promises
+    // no owned work or callbacks can outlive plugin destruction. Never infer this from a
+    // removed host registration. Refusal keeps the library mapped and retryable.
+    virtual void shutdown(ReqId req_id) {
+        emit shutdownFinished(req_id, QStringLiteral("Module shutdown is not supported"));
+    }
+
     // The host tells every module whether signing devices must be polled; it is on
     // while any module has asked for it through Host::requestSignerPolling. A module
     // that owns a device service starts or stops it here. Default: no-op for modules
@@ -52,13 +61,14 @@ public:
     }
 
 signals:
+    void shutdownFinished(ReqId req_id, QString error);
     void accountDeleted(ReqId req_id, QString id, QString error);
     void instances(ReqId req_id, QList<QPair<QString, QString>> instances);
     void autoStart(ReqId req_id, QStringList ids);
     void error(std::optional<ReqId> req_id, QString message);
 };
 
-#define SILENT_IPlugin_IID "dev.silent.IPlugin/8.0"
+#define SILENT_IPlugin_IID "dev.silent.IPlugin/9.0"
 Q_DECLARE_INTERFACE(IPlugin, SILENT_IPlugin_IID)
 
-#define SILENT_IModule_IID "dev.silent.IModule/2.0"
+#define SILENT_IModule_IID "dev.silent.IModule/3.0"

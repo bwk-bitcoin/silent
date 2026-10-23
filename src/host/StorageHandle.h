@@ -59,6 +59,10 @@ public:
     // Closes the session: outstanding requests get no answer, later ones answer revoked.
     void revoke();
 
+    [[nodiscard]] auto drained() const -> bool {
+        return m_job == nullptr;
+    }
+
 public slots:
     void onJobFinished();
 

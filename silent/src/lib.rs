@@ -22,6 +22,8 @@ pub mod musig;
 pub mod plugin_admission;
 pub mod plugin_bundle;
 pub mod policy;
+#[cfg(all(test, unix))]
+mod removal_process_tests;
 pub mod saved_psbt;
 pub mod spending;
 pub mod state_crypt;
@@ -50,6 +52,14 @@ mod ffi {
         Number,
         Flag,
         Strings,
+    }
+    #[derive(Debug, Clone, Copy)]
+    #[repr(u8)]
+    pub enum PluginRemovalPhase {
+        Stopping,
+        PrivateData,
+        Bundle,
+        Bookkeeping,
     }
     #[derive(Debug, Clone, Copy)]
     pub enum BackendErrorKind {
@@ -259,6 +269,19 @@ mod ffi {
     pub struct PluginMetadata {
         pub id: String,
         pub fields: Vec<PluginMetadataField>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct PluginRemovalEntry {
+        pub plugin_id: String,
+        pub phase: PluginRemovalPhase,
+    }
+    #[derive(Debug, Clone)]
+    pub struct PluginRemovalListResult {
+        pub is_ok: bool,
+        pub error: String,
+        pub entries: Vec<PluginRemovalEntry>,
+        pub enabled_plugins: Vec<String>,
     }
     #[derive(Debug, Clone)]
     pub struct PluginGrantedAccess {
@@ -1230,6 +1253,30 @@ mod ffi {
         pub state: PluginGrant,
     }
 
+    /// The answers for one plugin library, read with the plugin's storage epoch when a
+    /// grant request starts. Refused while the plugin's removal is pending.
+    #[derive(Debug, Clone)]
+    pub struct PluginAccessRequest {
+        pub is_ok: bool,
+        pub error: String,
+        /// Given back to `app_set_plugin_access`: a removal since makes the save fail.
+        pub storage_epoch: u64,
+        /// Every grant unasked when none is kept for the library.
+        pub access: PluginAccess,
+    }
+
+    /// Every answer kept for one plugin, read with its storage epoch when Settings
+    /// shows them. Refused while the plugin's removal is pending.
+    #[derive(Debug, Clone)]
+    pub struct PluginAccessHistory {
+        pub is_ok: bool,
+        pub error: String,
+        /// Given back to `app_set_plugin_access`: a removal since makes the save fail.
+        pub storage_epoch: u64,
+        /// One entry per library hash, in the order they were answered.
+        pub entries: Vec<PluginAccess>,
+    }
+
     #[derive(Debug, Clone)]
     pub struct PsbtFileResult {
         pub is_ok: bool,
@@ -1707,9 +1754,12 @@ mod ffi {
 
         /// List enabled app-level plugin IDs.
         fn app_enabled_plugins() -> Vec<String>;
+        fn app_begin_plugin_removal(id: String) -> String;
+        fn app_disable_plugin(id: String) -> String;
+        fn app_removing_plugins() -> PluginRemovalListResult;
 
         /// Enable or disable a plugin ID at app level.
-        fn app_set_plugin_enabled(id: String, enabled: bool);
+        fn app_set_plugin_enabled(id: String, enabled: bool) -> String;
 
         /// Get the active app theme name.
         fn app_active_theme() -> String;
@@ -1804,7 +1854,8 @@ mod ffi {
         /// The library and catalogs of the installed plugin `plugin_id`.
         fn plugin_library(plugin_id: String) -> PluginLibraryResult;
 
-        /// Removes the installed plugin `plugin_id`. Answers the error, empty on success.
+        /// Host only, after a durable removal checkpoint and completed native unload.
+        /// Purges private/legacy data, bundle and grants. Empty error means completion.
         fn plugin_remove(plugin_id: String) -> String;
 
         /// Opens a storage session for the plugin the host authenticated as
@@ -1843,10 +1894,14 @@ mod ffi {
         fn app_plugin_answers(plugin_id: String, hash: String) -> PluginAccess;
         fn app_plugin_grants(hash: String) -> PluginGrantedAccess;
         fn app_plugin_history(plugin_id: String) -> Vec<PluginAccess>;
+        fn app_plugin_access_request(plugin_id: String, hash: String) -> PluginAccessRequest;
+        fn app_plugin_access_history(plugin_id: String) -> PluginAccessHistory;
 
         /// Stores the answers for `access.hash`, replacing earlier ones. An entry left
-        /// with both grants unasked is dropped, so the host asks again.
-        fn app_set_plugin_access(access: PluginAccess);
+        /// with both grants unasked is dropped, so the host asks again. Refused, with
+        /// the error, while the plugin's removal is pending or when its storage epoch
+        /// is no longer `expected_epoch`, the one its request or history was read with.
+        fn app_set_plugin_access(access: PluginAccess, expected_epoch: u64) -> String;
 
         /// Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
         fn sd_save_psbt(path: &str, psbt_hex: &str) -> PsbtFileResult;
@@ -3243,12 +3298,13 @@ pub use account::{
     new_account, new_account_offline, Account, NotificationReceiver, Poll, PsbtResult,
 };
 pub use app_state::{
-    app_active_theme, app_enabled_plugins, app_fee_preferences, app_language, app_last_endpoint,
-    app_plugin_access, app_plugin_answers, app_plugin_grants, app_plugin_history,
-    app_price_currency, app_price_source, app_qr_camera_contrast_level, app_qr_display_levels,
-    app_set_active_theme, app_set_fee_preferences, app_set_language, app_set_last_endpoint,
-    app_set_plugin_access, app_set_plugin_enabled, app_set_price_selection,
-    app_set_qr_camera_contrast_level, app_set_qr_display_levels,
+    app_active_theme, app_begin_plugin_removal, app_disable_plugin, app_enabled_plugins,
+    app_fee_preferences, app_language, app_last_endpoint, app_plugin_access,
+    app_plugin_access_history, app_plugin_access_request, app_plugin_answers, app_plugin_grants,
+    app_plugin_history, app_price_currency, app_price_source, app_qr_camera_contrast_level,
+    app_qr_display_levels, app_removing_plugins, app_set_active_theme, app_set_fee_preferences,
+    app_set_language, app_set_last_endpoint, app_set_plugin_access, app_set_plugin_enabled,
+    app_set_price_selection, app_set_qr_camera_contrast_level, app_set_qr_display_levels,
 };
 pub use bbqr::{bbqr_frames, bbqr_scanner_new, bbqr_text_scanner_new, BbqrFrames, BbqrScanner};
 pub use camera::{camera_list, camera_open, CameraHandle};
@@ -3275,8 +3331,9 @@ pub use ffi::{
     FingerprintsResult, KeyDescriptor, KeyDevice, KeyFileFailure, KeyInfo, KeyInfoResult,
     KeyOpResult, KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice, LogLevel, MnemonicResult,
     MusigAttemptSnapshot, MusigCreationRequest, MusigFinalizeResult, MusigRound, MusigSpendLeaf,
-    Network, Notification, NotificationFlag, Output, PluginAccess, PluginGrant,
-    PluginGrantedAccess, PluginMetadata, PluginMetadataField, PluginMetadataKind,
+    Network, Notification, NotificationFlag, Output, PluginAccess, PluginAccessHistory,
+    PluginAccessRequest, PluginGrant, PluginGrantedAccess, PluginMetadata, PluginMetadataField,
+    PluginMetadataKind, PluginRemovalEntry, PluginRemovalListResult, PluginRemovalPhase,
     PolicyCompileResult, PolicyDraft, PolicyDraftError, PolicyDraftResult, PolicyDurationUnit,
     PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey,
     PolicyReviewPath, PolicySemantic, PolicySpec, PsbtFileResult, PsbtPayloadResult,

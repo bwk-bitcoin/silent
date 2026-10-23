@@ -43,5 +43,6 @@ private:
 // migration and its asynchronous storage. HOME holds the unlocked app state and the
 // example plugin's legacy blob, seeded before the run.
 void exampleStorageSmoke(const QString &bundle);
+void exampleReinstallSmoke(const QString &bundle);
 
 } // namespace smoke

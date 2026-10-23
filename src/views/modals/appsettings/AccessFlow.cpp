@@ -7,6 +7,7 @@
 #include "catalog/containers/ModalActions.h"
 #include "catalog/containers/ViewSlots.h"
 #include "catalog/display/Label.h"
+#include "catalog/feedback/Notice.h"
 #include "catalog/inputs/Toggle.h"
 #include "host/PluginAccess.h"
 #include "host/PluginRegistry.h"
@@ -81,6 +82,11 @@ void AccessFlow::initAccess() {
     m_access_text = new Label(LabelRole::Body);
     m_access_text->setWordWrap(true);
     m_access_text->setTone(LabelTone::Secondary);
+    m_notice = new catalog::Notice(catalog::Notice::Tone::Error);
+    m_notice->setTitle(TR("plugin-access-flow-failed"));
+    m_reload_btn = catalog::btnTryAgain();
+    m_notice->setAction(m_reload_btn);
+    m_notice->setVisible(false);
     m_rows = new qontrol::Column;
     m_rows->spacing(resolve(Spacing::S));
     m_empty = new Label(LabelRole::Caption);
@@ -93,6 +99,8 @@ void AccessFlow::initAccess() {
 }
 
 void AccessFlow::connectAccess() {
+    connect(m_reload_btn, &QPushButton::clicked, this, &AccessFlow::onReloadClicked,
+            qontrol::UNIQUE);
     connect(m_done_btn, &QPushButton::clicked, this, &AccessFlow::onBackClicked, qontrol::UNIQUE);
     connect(m_access_actions, &catalog::ModalActions::backClicked, this, &AccessFlow::onBackClicked,
             qontrol::UNIQUE);
@@ -102,6 +110,7 @@ auto AccessFlow::viewAccess() -> QWidget * {
     auto *column = (new qontrol::Column)
                        ->spacing(resolve(Spacing::M))
                        ->push(m_access_text)
+                       ->push(m_notice)
                        ->push(m_rows)
                        ->push(m_empty);
     // The main view's width, whatever the rows hold.
@@ -112,30 +121,37 @@ auto AccessFlow::viewAccess() -> QWidget * {
 void AccessFlow::showAccess() {
     QString name = m_plugin_registry->pluginName(m_id);
     m_access_text->setText(TR("plugin-access-flow-text").arg(name));
-    rebuildRows();
+    loadRows();
     viewSlots()->setHeader(nullptr);
     viewSlots()->setBody(m_access);
     viewSlots()->setFooter(m_access_actions);
     emit viewChanged(TR("plugin-access-flow-title").arg(name), ModalWidth::Wide);
 }
 
-void AccessFlow::rebuildRows() {
+void AccessFlow::loadRows() {
+    auto history = pluginaccess::history(m_id);
+    if (!history.is_ok) {
+        showFailure(toQString(history.error));
+        return;
+    }
     // clear() also resets the layout spacing.
     catalog::clearRows(m_rows);
     m_rows->spacing(resolve(Spacing::S));
-    QString current = m_plugin_registry->pluginHash(m_id);
-    auto entries = pluginaccess::forPlugin(m_id);
-    for (const auto &entry : entries) {
+    m_entries.clear();
+    m_entry_rows.clear();
+    m_epoch = history.storage_epoch;
+    m_notice->setVisible(false);
+    m_rows->setEnabled(true);
+    for (const auto &entry : history.entries) {
         QString hash = toQString(entry.hash);
 
         auto *grants = new qontrol::Row;
-        QStringList unasked;
         for (const auto &[grant, which, label] :
              {std::tuple{entry.account, GRANT_ACCOUNT, TR("plugin-access-accounts")},
               std::tuple{entry.keys, GRANT_KEYS, TR("plugin-access-keys")},
               std::tuple{entry.state, GRANT_STATE, TR("plugin-access-state")}}) {
             auto *toggle = grantToggle(grant, hash, which);
-            connect(toggle, &QCheckBox::toggled, this, &AccessFlow::onGrantToggled,
+            connect(toggle, &QCheckBox::clicked, this, &AccessFlow::onGrantClicked,
                     qontrol::UNIQUE);
             auto *caption = new Label(LabelRole::Caption);
             caption->setText(label);
@@ -143,9 +159,6 @@ void AccessFlow::rebuildRows() {
                 ->pushSpacer(resolve(Spacing::XS))
                 ->push(toggle)
                 ->pushSpacer(resolve(Spacing::S));
-            if (grant == PluginGrant::Unasked) {
-                unasked.append(label);
-            }
         }
         auto *forget = catalog::btnForgetAccess();
         forget->setProperty(K_HASH, hash);
@@ -155,20 +168,43 @@ void AccessFlow::rebuildRows() {
         auto *row = new catalog::SelectRow;
         row->setIcon(icon::puzzle);
         row->setTitle(TR("plugin-access-library").arg(hash.left(SHORT_HASH)));
-        QString sub = hash == current ? TR("plugin-access-current") : TR("plugin-access-earlier");
-        if (!unasked.isEmpty()) {
-            sub += QLatin1Char(' ') +
-                   TR("plugin-access-unasked").arg(unasked.join(QStringLiteral(", ")));
-        }
-        row->setSub(sub);
+        row->setSub(rowSub(entry));
         row->setTrailing(grants);
         row->setChevron(false);
         row->setClickable(false);
         m_rows->push(row);
         row->show();
+        m_entries.insert(hash, entry);
+        m_entry_rows.insert(hash, row);
     }
     m_empty->setText(TR("plugin-access-none"));
-    m_empty->setVisible(entries.isEmpty());
+    m_empty->setVisible(m_entries.isEmpty());
+}
+
+auto AccessFlow::rowSub(const PluginAccess &entry) const -> QString {
+    QString hash = toQString(entry.hash);
+    QString sub = hash == m_plugin_registry->pluginHash(m_id) ? TR("plugin-access-current")
+                                                              : TR("plugin-access-earlier");
+    QStringList unasked;
+    for (const auto &[grant, label] : {std::pair{entry.account, TR("plugin-access-accounts")},
+                                       std::pair{entry.keys, TR("plugin-access-keys")},
+                                       std::pair{entry.state, TR("plugin-access-state")}}) {
+        if (grant == PluginGrant::Unasked) {
+            unasked.append(label);
+        }
+    }
+    if (!unasked.isEmpty()) {
+        sub += QLatin1Char(' ') +
+               TR("plugin-access-unasked").arg(unasked.join(QStringLiteral(", ")));
+    }
+    return sub;
+}
+
+// The rows stay as read, disabled: only Try Again, reading them anew, enables them.
+void AccessFlow::showFailure(const QString &error) {
+    m_notice->setText(TR("plugin-access-flow-retry").arg(error));
+    m_notice->setVisible(true);
+    m_rows->setEnabled(false);
 }
 
 // ===== Slots =====
@@ -177,13 +213,16 @@ void AccessFlow::onBackClicked() {
     emit back();
 }
 
-void AccessFlow::onGrantToggled(bool allowed) {
-    auto *toggle = sender();
+void AccessFlow::onGrantClicked(bool allowed) {
+    auto *toggle = qobject_cast<QCheckBox *>(sender());
     if (toggle == nullptr) {
         return;
     }
     QString hash = toggle->property(K_HASH).toString();
-    auto entry = pluginaccess::answers(m_id, hash);
+    if (!m_entries.contains(hash)) {
+        return;
+    }
+    auto entry = m_entries.value(hash);
     auto grant = allowed ? PluginGrant::Allowed : PluginGrant::Denied;
     QString which = toggle->property(K_GRANT).toString();
     if (which == QLatin1String(GRANT_ACCOUNT)) {
@@ -193,8 +232,15 @@ void AccessFlow::onGrantToggled(bool allowed) {
     } else {
         entry.state = grant;
     }
-    ::app_set_plugin_access(entry);
-    rebuildRows();
+    QString error = pluginaccess::save(entry, m_epoch);
+    if (!error.isEmpty()) {
+        // Back to the answer kept: setChecked() does not emit clicked.
+        toggle->setChecked(!allowed);
+        showFailure(error);
+        return;
+    }
+    m_entries.insert(hash, entry);
+    m_entry_rows.value(hash)->setSub(rowSub(entry));
 }
 
 void AccessFlow::onForgetClicked() {
@@ -202,12 +248,27 @@ void AccessFlow::onForgetClicked() {
     if (button == nullptr) {
         return;
     }
-    auto entry = pluginaccess::answers(m_id, button->property(K_HASH).toString());
+    QString hash = button->property(K_HASH).toString();
+    if (!m_entries.contains(hash)) {
+        return;
+    }
+    auto entry = m_entries.value(hash);
     entry.account = PluginGrant::Unasked;
     entry.keys = PluginGrant::Unasked;
     entry.state = PluginGrant::Unasked;
-    ::app_set_plugin_access(entry);
-    rebuildRows();
+    QString error = pluginaccess::save(entry, m_epoch);
+    if (!error.isEmpty()) {
+        showFailure(error);
+        return;
+    }
+    // Hidden, not deleted: the button clicked is in the row. The next read deletes it.
+    m_entries.remove(hash);
+    m_entry_rows.take(hash)->hide();
+    m_empty->setVisible(m_entries.isEmpty());
+}
+
+void AccessFlow::onReloadClicked() {
+    loadRows();
 }
 
 } // namespace modal
