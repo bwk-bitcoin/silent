@@ -17,6 +17,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
+#include <QShowEvent>
 #include <Qontrol>
 #include <common.h>
 
@@ -347,16 +348,19 @@ TxFlow::TxFlow(QWidget *parent) : QWidget(parent) {
     // Fixed-height diagram (the design's fixed height); pin it so a constrained
     // column (single-column layout) cannot collapse it to nothing.
     setFixedHeight(canvasHeight());
-    m_card = new TxFlowHoverCard(this);
+    // A layout-free layer keeps card layout and visibility changes out of the modal's refit.
+    m_card_layer = new QWidget(this);
+    m_card_layer->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_card = new TxFlowHoverCard(m_card_layer);
     m_card->hide();
     connect(AmountDisplay::get(), &AmountDisplay::changed, this, &TxFlow::onAmountModeChanged,
             qontrol::UNIQUE);
 }
 
 TxFlow::~TxFlow() {
-    // The card is reparented to the top-level window on hover, so it is not freed
+    // The layer is reparented to the top-level window, so it is not freed
     // with this widget's children; delete it explicitly.
-    delete m_card;
+    delete m_card_layer;
 }
 
 void TxFlow::setInputs(const QList<InputItem> &inputs) {
@@ -618,12 +622,8 @@ auto TxFlow::hitTest(const QPointF &pos) const -> HoverHit {
 }
 
 void TxFlow::positionCard(const QPointF &pos) {
-    // Float the card over the whole window, so no container (the card around the
-    // diagram, a scroll area, a table) clips it. Reparent to the top level once.
+    // Float the card over the whole window, so no container clips it.
     QWidget *top = window();
-    if (m_card->parentWidget() != top) {
-        m_card->setParent(top);
-    }
     // TxFlow.jsx: right of the cursor, or left when it would leave the diagram, kept
     // within the diagram's width.
     int x = static_cast<int>(pos.x());
@@ -635,15 +635,20 @@ void TxFlow::positionCard(const QPointF &pos) {
         std::clamp(cardL, CARD_MARGIN, std::max(CARD_MARGIN, width() - CARD_WIDTH - CARD_MARGIN));
     int cardT = std::max(CARD_MARGIN, static_cast<int>(pos.y()) - CARD_OFFSET);
 
-    // Then within the window, so the card is never cut at its edges.
-    QPoint corner = mapTo(top, QPoint(cardL, cardT));
-    int left = std::clamp(corner.x(), CARD_MARGIN,
-                          std::max(CARD_MARGIN, top->width() - CARD_WIDTH - CARD_MARGIN));
-    int topY = std::clamp(corner.y(), CARD_MARGIN,
+    m_card->move(mapTo(top, QPoint(cardL, cardT)));
+    fitCardToWindow();
+    m_card_layer->raise();
+    m_card->show();
+}
+
+void TxFlow::fitCardToWindow() {
+    auto *top = m_card_layer->parentWidget();
+    m_card_layer->setGeometry(top->rect());
+    int left = std::clamp(m_card->x(), CARD_MARGIN,
+                          std::max(CARD_MARGIN, top->width() - m_card->width() - CARD_MARGIN));
+    int topY = std::clamp(m_card->y(), CARD_MARGIN,
                           std::max(CARD_MARGIN, top->height() - m_card->height() - CARD_MARGIN));
     m_card->move(left, topY);
-    m_card->raise();
-    m_card->show();
 }
 
 void TxFlow::mouseMoveEvent(QMouseEvent *event) {
@@ -660,10 +665,12 @@ void TxFlow::mouseMoveEvent(QMouseEvent *event) {
         return;
     }
 
-    m_hover_index = hit.index;
-    m_hover_is_input = hit.is_input;
-    updateCard();
-    update();
+    if (m_hover_index != hit.index || m_hover_is_input != hit.is_input) {
+        m_hover_index = hit.index;
+        m_hover_is_input = hit.is_input;
+        updateCard();
+        update();
+    }
 
     positionCard(event->position());
 }
@@ -700,10 +707,32 @@ void TxFlow::leaveEvent(QEvent *event) {
 }
 
 void TxFlow::hideEvent(QHideEvent *event) {
-    // The card lives on the window: hide it with the diagram (a page or modal switch).
     m_hover_index = -1;
     m_card->hide();
+    // Keep the hidden layer with the flow if it moves to another window.
+    m_card_layer->parentWidget()->removeEventFilter(this);
+    m_card_layer->setParent(this);
     QWidget::hideEvent(event);
+}
+
+void TxFlow::showEvent(QShowEvent *event) {
+    auto *top = window();
+    auto *oldTop = m_card_layer->parentWidget();
+    if (oldTop != top) {
+        oldTop->removeEventFilter(this);
+        m_card_layer->setParent(top);
+    }
+    top->installEventFilter(this);
+    fitCardToWindow();
+    m_card_layer->show();
+    QWidget::showEvent(event);
+}
+
+auto TxFlow::eventFilter(QObject *object, QEvent *event) -> bool {
+    if (event->type() == QEvent::Resize && object == m_card_layer->parentWidget()) {
+        fitCardToWindow();
+    }
+    return QWidget::eventFilter(object, event);
 }
 
 void TxFlow::onAmountModeChanged() {

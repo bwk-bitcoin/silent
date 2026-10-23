@@ -659,6 +659,8 @@ if(SILENT_BUILD_HOST_SMOKE)
 
     qt_add_executable(${SMOKE}
         tests/host/host_smoke.cpp
+        tests/gui/tx_flow_hover.cpp
+        tests/gui/tx_flow_hover.h
         tests/host/keys_metadata_smoke.cpp
         tests/host/MockPlugin.h
         tests/host/PriceProbe.h

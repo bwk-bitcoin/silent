@@ -54,6 +54,7 @@
 #include <modules/sp/SpPlugin.h>
 #include <theme/Theme.h>
 
+#include "../gui/tx_flow_hover.h"
 #include "ExternalSpendConsumer.h"
 #include "MockPlugin.h"
 #include "PriceProbe.h"
@@ -268,6 +269,13 @@ auto main(int argc, char *argv[]) -> int {
     // Initialise the host singleton before the registry connects to its events.
     Host::get();
     AppController::init();
+    if (arguments.contains(QStringLiteral("--tx-flow-hover"))) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::txFlowHoverSmoke();
+        std::fprintf(stdout, "TxFlow hover smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
 #ifdef SILENT_REMOVAL_FIXTURE
     if (arguments.contains(QStringLiteral("--plugin-access-settings-failure"))) {
         Theme::init();

@@ -8,6 +8,7 @@
 #include <QWidget>
 
 class QHideEvent;
+class QShowEvent;
 
 namespace catalog {
 
@@ -72,6 +73,8 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void leaveEvent(QEvent *event) override;
     void hideEvent(QHideEvent *event) override;
+    void showEvent(QShowEvent *event) override;
+    auto eventFilter(QObject *object, QEvent *event) -> bool override;
 
     // Result of hit-testing the cursor against ribbons and caps. index is -1 when
     // nothing is hovered; is_input selects the input vs output collections.
@@ -96,6 +99,7 @@ protected:
     void paintLabels(QPainter &painter, double canvas_width);
     // Shows the hover card beside the cursor, kept within the diagram's width.
     void positionCard(const QPointF &pos);
+    void fitCardToWindow();
     // Recompute bands, ribbon paths and cap rects from the current items; reused
     // by paintEvent and by hit-testing so mouseMove never needs a paint.
     void recomputeGeometry(double canvas_width);
@@ -123,6 +127,7 @@ private:
     int m_hover_index = -1;
     bool m_hover_is_input = false;
 
+    QWidget *m_card_layer = nullptr;
     TxFlowHoverCard *m_card = nullptr;
 };
 
