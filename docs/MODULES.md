@@ -992,6 +992,11 @@ capabilities or rates remain unavailable; another provider never supplies a subs
 sources retain their configured IDs; the host never automatically selects another.
 Invalid or withdrawn rates are unavailable, not zero-fee recommendations.
 
+Global Settings displays all four cached recommendations as read-only values in
+sat/vB, including in Manual mode. Each missing value is the literal `-`, also when
+the selected source is None or unavailable. Both fee notifications refresh this
+display from `selectedFees()` without requesting provider data or saving preferences.
+
 `selectFees(preferences)` applies the runtime coordinator selection immediately and
 queues persistence on a Host-owned worker in FIFO order. Only fee-preference writes
 become asynchronous; price persistence is unchanged. Write failures emit `qWarning`

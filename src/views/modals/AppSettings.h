@@ -149,6 +149,11 @@ private:
     catalog::ComboBox *m_fee_mode_picker = nullptr;
     catalog::ComboBox *m_fee_source_picker = nullptr;
     catalog::FieldGroup *m_fee_source_field = nullptr;
+    catalog::FieldGroup *m_fee_recommendations = nullptr;
+    catalog::Label *m_fee_default_label = nullptr;
+    catalog::Label *m_fee_low_label = nullptr;
+    catalog::Label *m_fee_medium_label = nullptr;
+    catalog::Label *m_fee_fast_label = nullptr;
 
     catalog::Section *m_plugins = nullptr;
     // The only way a plugin comes in: dropped on the window, sealed into the state.

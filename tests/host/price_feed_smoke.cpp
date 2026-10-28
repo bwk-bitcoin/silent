@@ -34,11 +34,13 @@
 #include <QVariant>
 #include <Qontrol>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <common.h>
 #include <limits>
 #include <string>
 #include <thread>
+#include <utility>
 
 #ifdef SILENT_PRICE_FEED_FIXTURE
 #include "host/PluginLibrary.h"
@@ -324,6 +326,26 @@ void accountWidgetLifetime(HostImpl *host, PriceModule *module) {
     host->selectFees(preferences);
 }
 
+void requireFeeRecommendations(modal::AppSettings &settings, const QString &default_rate,
+                               const QString &low, const QString &medium, const QString &fast) {
+    for (const auto &entry :
+         {std::pair{"settings-fee-default", default_rate}, std::pair{"settings-fee-low", low},
+          std::pair{"settings-fee-medium", medium}, std::pair{"settings-fee-fast", fast}}) {
+        auto *label = settings.findChild<catalog::Label *>(QString::fromLatin1(entry.first));
+        require(label != nullptr && label->isVisibleTo(&settings),
+                "each cached recommendation stays visible in Settings");
+        if (label->text() != entry.second) {
+            qFatal("fee recommendation %s: expected '%s', got '%s'", entry.first,
+                   qPrintable(entry.second), qPrintable(label->text()));
+        }
+    }
+}
+
+auto feedRequestCounts(const PriceFeed &feed) -> std::array<int, 5> {
+    return {feed.discoveries, feed.requests, feed.fee_discoveries, feed.default_requests,
+            feed.smart_requests};
+}
+
 void singleFeeProviderSettings(HostImpl *host, PriceModule *module, bool has_default,
                                bool has_smart) {
     auto missingId = QStringLiteral("missing-fee-provider");
@@ -337,6 +359,7 @@ void singleFeeProviderSettings(HostImpl *host, PriceModule *module, bool has_def
             "no providers keeps both None and the configured missing source");
     require(mode->currentData().toInt() == static_cast<int>(FeeMode::Smart),
             "missing source does not change the configured mode");
+    requireFeeRecommendations(settings, "-", "-", "-", "-");
     require(settings.findChild<QComboBox *>(QStringLiteral("fee-tier")) == nullptr,
             "settings has no global tier picker");
 
@@ -354,6 +377,7 @@ void singleFeeProviderSettings(HostImpl *host, PriceModule *module, bool has_def
                 source->currentData().toString() == missingId &&
                 host->selectedFees().preferences.source == missingId,
             "any capability combination appears without replacing the missing selection");
+    requireFeeRecommendations(settings, "-", "-", "-", "-");
 
     auto index = source->findData(QString());
     source->setCurrentIndex(index);
@@ -365,6 +389,7 @@ void singleFeeProviderSettings(HostImpl *host, PriceModule *module, bool has_def
             "explicit None clears every recommendation without selecting the only live provider");
     require(source->count() == 2 && source->currentData().toString().isEmpty(),
             "explicit None removes only the missing configured item");
+    requireFeeRecommendations(settings, "-", "-", "-", "-");
 
     index = source->findData(sourceId);
     source->setCurrentIndex(index);
@@ -372,6 +397,9 @@ void singleFeeProviderSettings(HostImpl *host, PriceModule *module, bool has_def
     require(host->selectedFees().preferences ==
                 FeePreferences{.mode = FeeMode::Smart, .source = sourceId},
             "provider selection keeps Smart and persists no tier");
+    requireFeeRecommendations(settings, has_default ? "0.625 sat/vB" : "-",
+                              has_smart ? "0.25 sat/vB" : "-", has_smart ? "0.5 sat/vB" : "-",
+                              has_smart ? "0.75 sat/vB" : "-");
     PriceBackend backend;
     PriceSend send(&backend);
     input(send, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
@@ -416,6 +444,7 @@ void singleFeeProviderSettings(HostImpl *host, PriceModule *module, bool has_def
     require(source->count() == 2 && source->currentData().toString() == sourceId &&
                 host->selectedFees().preferences.source == sourceId,
             "provider disappearance retains its configured ID beside None");
+    requireFeeRecommendations(settings, "-", "-", "-", "-");
     host->selectFees({});
 }
 
@@ -445,6 +474,8 @@ void waitForFeePreferences(const FeeWriteProbe &probe, const FeePreferences &pre
 void feeRecommendations(HostImpl *host, PriceModule *module) {
     FeeWriteProbe writes(host);
     host->selectFees({});
+    modal::AppSettings settings;
+    requireFeeRecommendations(settings, "-", "-", "-", "-");
     PriceFeed first;
     first.offered.clear();
     first.has_default = true;
@@ -477,11 +508,13 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     require(defaultOnly.default_rate == 0.5 && !defaultOnly.low.has_value() &&
                 !defaultOnly.medium.has_value() && !defaultOnly.fast.has_value(),
             "default-only selection never borrows smart rates from another provider");
+    requireFeeRecommendations(settings, "0.5 sat/vB", "-", "-", "-");
     host->selectFees({.mode = FeeMode::Smart, .source = secondId});
     auto smartOnly = host->selectedFees();
     require(!smartOnly.default_rate.has_value() && smartOnly.low == 0.25 &&
                 smartOnly.medium == 0.5 && smartOnly.fast == 0.75,
             "smart-only selection never borrows a default rate from another provider");
+    requireFeeRecommendations(settings, "-", "0.25 sat/vB", "0.5 sat/vB", "0.75 sat/vB");
     second.has_default = true;
     second.default_rate = 0.625;
     second.publishFeeCapabilities();
@@ -489,7 +522,61 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     require(fees.default_rate == 0.625 && fees.low == 0.25 && fees.medium == 0.5 &&
                 fees.fast == 0.75,
             "all four distinct cached recommendations come from the selected provider");
+    requireFeeRecommendations(settings, "0.625 sat/vB", "0.25 sat/vB", "0.5 sat/vB", "0.75 sat/vB");
+    host->selectFees({.mode = FeeMode::Manual, .source = secondId});
+    auto manual = host->selectedFees();
+    waitForFeePreferences(writes, manual.preferences);
+    auto writeCount = writes.outcomes().size();
+    auto firstRequests = feedRequestCounts(first);
+    auto secondRequests = feedRequestCounts(second);
+    {
+        modal::AppSettings refreshed;
+        requireFeeRecommendations(refreshed, "0.625 sat/vB", "0.25 sat/vB", "0.5 sat/vB",
+                                  "0.75 sat/vB");
+    }
+    requireFeeRecommendations(settings, "0.625 sat/vB", "0.25 sat/vB", "0.5 sat/vB", "0.75 sat/vB");
+    settings.onFeeSourcesChanged();
+    emit host->events()->feeSourcesChanged();
+    emit host->events()->selectedFeesChanged();
+    QEvent languageChange(QEvent::LanguageChange);
+    QApplication::sendEvent(&settings, &languageChange);
+    require(host->selectedFees() == manual,
+            "display and language refreshes do not change fee preferences or cached rates");
+    require(feedRequestCounts(first) == firstRequests &&
+                feedRequestCounts(second) == secondRequests,
+            "display refreshes never rediscover or request provider recommendations");
+    requireFeeRecommendations(settings, "0.625 sat/vB", "0.25 sat/vB", "0.5 sat/vB", "0.75 sat/vB");
+    emit second.defaultFeeRate(3, 0.1234567);
+    emit second.smartFeeRates(4, 0.125, 0.375, 0.875);
+    requireFeeRecommendations(settings, "0.1234567 sat/vB", "0.125 sat/vB", "0.375 sat/vB",
+                              "0.875 sat/vB");
+    require(host->selectedFees().preferences == manual.preferences,
+            "Manual mode displays pushed recommendations without changing preferences");
+    emit second.defaultFeeRate(3, 0.625);
+    emit second.smartFeeRates(4, 0.25, 0.5, 0.75);
+    second.has_default = false;
+    second.publishFeeCapabilities();
+    requireFeeRecommendations(settings, "-", "0.25 sat/vB", "0.5 sat/vB", "0.75 sat/vB");
+    second.has_smart = false;
+    second.publishFeeCapabilities();
+    requireFeeRecommendations(settings, "-", "-", "-", "-");
+    auto *settingsSource = settings.findChild<QComboBox *>(QStringLiteral("settings-fee-source"));
+    require(settingsSource->currentData().toString() == secondId &&
+                settingsSource->currentText() == TR("settings-price-unavailable").arg(secondId) &&
+                host->selectedFees().preferences == manual.preferences,
+            "capability withdrawal keeps the unavailable provider and Manual mode");
+    second.has_default = true;
+    second.publishFeeCapabilities();
+    requireFeeRecommendations(settings, "0.625 sat/vB", "-", "-", "-");
+    second.has_smart = true;
+    second.publishFeeCapabilities();
+    requireFeeRecommendations(settings, "0.625 sat/vB", "0.25 sat/vB", "0.5 sat/vB", "0.75 sat/vB");
+    require(host->selectedFees().preferences == manual.preferences,
+            "capability recovery does not change the configured Manual mode or provider");
+    host->selectFees(fees.preferences);
     waitForFeePreferences(writes, fees.preferences);
+    require(writes.outcomes().size() == writeCount + 1,
+            "FIFO drain records only the explicit selection, not display refreshes or pushes");
     HostImpl reopened;
     require(reopened.selectedFees().preferences == fees.preferences &&
                 !reopened.selectedFees().medium.has_value(),
@@ -586,6 +673,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
         require(!host->selectedFees().default_rate.has_value() &&
                     send.transaction()->fee_rate == 0.5,
                 "invalid Default recommendation cannot change the selected Smart rate");
+        requireFeeRecommendations(settings, "-", "0.25 sat/vB", "0.5 sat/vB", "0.75 sat/vB");
     }
     emit second.defaultFeeRate(3, 0.625);
     for (auto pair : {std::pair{0, 0.25}, std::pair{1, 0.5}, std::pair{2, 0.75}}) {
@@ -595,6 +683,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
                 "per-send smart tier selects exact rate");
     }
     emit second.smartFeeRates(8, 0.1, 0.2, 0.3);
+    requireFeeRecommendations(settings, "0.625 sat/vB", "0.1 sat/vB", "0.2 sat/vB", "0.3 sat/vB");
     require(send.transaction()->fee_rate == 0.3 &&
                 host->selectedFees().preferences == fees.preferences,
             "editable send follows its local tier without changing global preferences");
@@ -604,6 +693,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
                 host->selectedFees().fast == 0.3 && send.transaction()->fee_rate == 0.3 &&
                 backend.simulations == unchangedSimulations,
             "partial unavailability does not substitute another tier or rebuild an unchanged Fast");
+    requireFeeRecommendations(settings, "0.625 sat/vB", "-", "0.2 sat/vB", "0.3 sat/vB");
     {
         modal::AppSettings settings;
         auto *settingsMode = settings.findChild<QComboBox *>(QStringLiteral("settings-fee-mode"));
@@ -673,6 +763,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     mode->setCurrentIndex(2);
     emit mode->activated(2);
     emit second.smartFeeRates(8, 0, -1, std::numeric_limits<double>::quiet_NaN());
+    requireFeeRecommendations(settings, "9 sat/vB", "-", "-", "-");
     require(send.transaction()->fee_rate == 1 && send.transaction()->fee == 0 &&
                 mode->currentIndex() == 0,
             "invalid selected recommendation falls back to Manual 1 sat/vB");
@@ -707,6 +798,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
                 !host->selectedFees().default_rate.has_value() &&
                 host->selectedFees().preferences.source == secondId,
             "source loss withdraws cache without selecting another provider");
+    requireFeeRecommendations(settings, "-", "-", "-", "-");
     PriceBackend missingBackend;
     missingBackend.selected_network = Network::Bitcoin;
     PriceSend missing(&missingBackend);
@@ -717,6 +809,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     QApplication::processEvents();
     require(host->selectedFees().medium == 0.5 && missing.transaction()->fee_rate == 1,
             "same QObject re-registration ignores queued old capability/rate delivery");
+    requireFeeRecommendations(settings, "0.625 sat/vB", "0.25 sat/vB", "0.5 sat/vB", "0.75 sat/vB");
     first.has_smart = true;
     first.publishFeeCapabilities();
     require(first.smart_requests == 1 && host->feeSources().first().has_smart,
@@ -840,9 +933,12 @@ void libraryUnload(HostImpl *host, PriceModule *module) {
     host->selectFees({.mode = FeeMode::Smart, .source = sourceId});
     require(host->selectedFees().default_rate == 0.5 && host->selectedFees().fast == 0.75,
             "library recommendations cached before unload");
+    modal::AppSettings settings;
+    requireFeeRecommendations(settings, "0.5 sat/vB", "0.25 sat/vB", "0.5 sat/vB", "0.75 sat/vB");
     feed->raw(QByteArrayLiteral("queue"));
     host->removeInstance(instance.id(), module);
     require(library.unload(), "library unload succeeds with queued currencies and rates");
+    requireFeeRecommendations(settings, "-", "-", "-", "-");
     errno = 0;
     require(::mincore(page, pageSize, &residency) == -1 && errno == ENOMEM,
             "the library's literal storage really is unmapped, not kept resident by dlclose");
@@ -859,6 +955,7 @@ void libraryUnload(HostImpl *host, PriceModule *module) {
     require(host->selectedFees().default_rate == 0.5 && host->selectedFees().fast == 0.75 &&
                 host->feeSources().size() == 1,
             "old queued fee capabilities and rates cannot modify a reloaded library");
+    requireFeeRecommendations(settings, "0.5 sat/vB", "0.25 sat/vB", "0.5 sat/vB", "0.75 sat/vB");
     page = literalPage(feed, pageSize);
     feed->raw(QByteArrayLiteral("queue"));
     host->removeInstance(instance.id(), module);
@@ -871,6 +968,7 @@ void libraryUnload(HostImpl *host, PriceModule *module) {
             "queued payload destruction after unload leaves the source unavailable");
     require(!host->selectedFees().fast.has_value() && host->feeSources().empty(),
             "unloaded library leaves no fee recommendation");
+    requireFeeRecommendations(settings, "-", "-", "-", "-");
     host->selectFees({});
 }
 #endif
