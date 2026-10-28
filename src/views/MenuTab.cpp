@@ -163,79 +163,11 @@ void MenuTab::onAccountList([[maybe_unused]] const QList<QString> &accounts) {
     onRefreshLauncherItems();
 }
 
-void MenuTab::ensureModuleConnections() {
-    auto *controller = AppController::get();
-    if (controller == nullptr || controller->pluginRegistry() == nullptr) {
-        return;
-    }
-
-    QList<QPointer<IModule>> modules;
-    for (auto *module : controller->pluginRegistry()->enabledModulesForLauncher()) {
-        modules.append(module);
-    }
-    if (modules == m_modules) {
-        return;
-    }
-
-    for (const auto &module : m_modules) {
-        if (module == nullptr) {
-            continue;
-        }
-        disconnect(module.data(), &IModule::instances, this, &MenuTab::onModuleInstances);
-    }
-
-    m_modules = modules;
-    m_pending_list.clear();
-    m_sync_list_responses.clear();
-    m_items_by_module.clear();
-    for (const auto &module : m_modules) {
-        if (module == nullptr) {
-            continue;
-        }
-        connect(module.data(), &IModule::instances, this, &MenuTab::onModuleInstances,
-                qontrol::UNIQUE);
-    }
-}
-
+// Renders the instances the registry last got from each module. The registry asks the
+// modules for them itself (on activation, account creation and deletion) and emits
+// enabledPluginsChanged with each answer, so a refresh here never calls list(): that
+// reads the module's storage on the GUI thread.
 void MenuTab::onRefreshLauncherItems() {
-    ensureModuleConnections();
-    auto modules = m_modules;
-    for (const auto &module : modules) {
-        if (module == nullptr) {
-            continue;
-        }
-        ReqId reqId = module->list();
-        if (module == nullptr || reqId == 0) {
-            continue;
-        }
-        m_pending_list.insert(module, reqId);
-        if (m_sync_list_responses.contains(module) &&
-            m_sync_list_responses.value(module).first == reqId) {
-            auto response = m_sync_list_responses.take(module);
-            applyModuleInstances(module, response.first, response.second);
-        }
-    }
-}
-
-void MenuTab::onModuleInstances(ReqId req_id, QList<QPair<QString, QString>> instances) {
-    auto *module = qobject_cast<IModule *>(sender());
-    if (module == nullptr) {
-        return;
-    }
-    applyModuleInstances(module, req_id, std::move(instances));
-}
-
-void MenuTab::applyModuleInstances(IModule *module, ReqId req_id,
-                                   QList<QPair<QString, QString>> instances) {
-    if (!m_pending_list.contains(module) || m_pending_list.value(module) != req_id) {
-        if (req_id != 0) {
-            m_sync_list_responses.insert(module, {req_id, std::move(instances)});
-        }
-        return;
-    }
-
-    m_pending_list.remove(module);
-    m_items_by_module.insert(module, instances);
     rebuildRows();
 }
 
@@ -266,11 +198,10 @@ void MenuTab::rebuildRows() {
     m_creators.clear();
 
     // Launcher module order, so the built-in creators keep the plugin order (sp first).
-    for (const auto &module : m_modules) {
-        if (module == nullptr) {
-            continue;
-        }
-        for (const auto &item : m_items_by_module.value(module)) {
+    const auto modules =
+        registry != nullptr ? registry->enabledModulesForLauncher() : QList<IModule *>{};
+    for (auto *module : modules) {
+        for (const auto &item : registry->launcherInstancesForModule(module)) {
             QString id = item.first.trimmed();
             bool isCreator = PluginRegistry::isCreatorInstanceId(id);
             // External-plugin creators are listed after the built-in ones, below.

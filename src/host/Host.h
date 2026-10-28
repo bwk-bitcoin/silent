@@ -6,9 +6,11 @@
 #include <QObject>
 #include <QPointer>
 #include <QSet>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
+#include <silent.h>
 #include <utility>
 
 namespace host {
@@ -18,12 +20,20 @@ class StorageHandle;
 class IKeys;
 class MainWindow;
 class PriceFeedCoordinator;
+class QDialog;
+class QEventLoop;
+class QTimer;
+
+namespace pluginaccess {
+class Job;
+}
 
 class HostImpl final : public QObject, public Host {
     Q_OBJECT
 
 public:
     HostImpl();
+    ~HostImpl() override;
 
     void registerInstance(const QString &id, IInstance *instance, IModule *owner) override;
     void removeInstance(const QString &id, IModule *owner) override;
@@ -79,6 +89,8 @@ public:
     [[nodiscard]] auto callerDrained(IModule *module) const -> bool;
     [[nodiscard]] auto callerFramesIdle(IModule *module) const -> bool;
     [[nodiscard]] auto callerDrainError(IModule *module) const -> QString;
+    void enterFrame(IModule *module);
+    void leaveFrame(IModule *module);
 
     void onInstanceStopped(const QString &id);
     void onInstanceStopped(IInstance *instance);
@@ -110,10 +122,36 @@ private slots:
     void onRefreshLauncherRequested();
     void onHostedTabCloseRequested(QWidget *content);
     void onWizardModalFinished(int result);
+    void onGrantRequestRead(uint64_t revision, const PluginAccessRequest &request);
+    void onStorageOpened(uint64_t revision);
+    void onGrantWaitExpired();
+    void onAbandonGrantWaits();
 
 protected:
     [[nodiscard]] auto requestAccessChecked(IModule *caller, plugin::Access wanted)
         -> std::optional<plugin::Access>;
+    // The answers stored, read on the calling thread: off the GUI thread nothing is asked.
+    [[nodiscard]] static auto storedAccess(IModule *caller) -> std::optional<plugin::Access>;
+    // Asks for `ask`, saved against `request`'s epoch, then reads a revisioned snapshot
+    // of the published answers. None when the prompt or its save was abandoned.
+    [[nodiscard]] auto askAccess(IModule *caller, const plugin::Caller &known,
+                                 const PluginAccessRequest &request, plugin::Access ask)
+        -> std::optional<PluginAccessRequest>;
+    // Reads, or opens, off the GUI thread while a nested event loop waits for the answer:
+    // none when the wait ended first, as `caller` started closing or the app quits.
+    [[nodiscard]] auto readGrantRequest(IModule *caller, const plugin::Caller &known)
+        -> std::optional<PluginAccessRequest>;
+    [[nodiscard]] auto openStorageSession(IModule *caller, const plugin::Caller &known)
+        -> std::optional<uint64_t>;
+    void waitGrantJob(uint64_t job, IModule *caller, pluginaccess::Job *worker);
+    void abandonGrantJob(uint64_t job);
+    // Runs `modal`, a grant prompt or failure for `caller`, withdrawn when it starts
+    // closing. The caller deletes it.
+    void execAccessModal(IModule *caller, QDialog *modal);
+    // `caller` is still the module `known` the registry attributed when its request
+    // started at `revision`, and is not closing.
+    [[nodiscard]] auto callerCurrent(IModule *caller, const plugin::Caller &known,
+                                     uint64_t revision) const -> bool;
     void rememberClosedUi(IModule *module, QWidget *widget);
 
 private:
@@ -130,6 +168,13 @@ private:
         IInstance *owner = nullptr;
         QString title;
         IModule *module = nullptr;
+    };
+
+    struct GrantWait {
+        QPointer<QEventLoop> loop;
+        QPointer<QTimer> deadline;
+        QPointer<pluginaccess::Job> worker;
+        IModule *caller = nullptr;
     };
 
     struct WizardEntry {
@@ -158,11 +203,22 @@ private:
     QHash<IModule *, QPointer<host::KeysHandle>> m_draining_keys;
     QSet<IModule *> m_closing_callers;
     QHash<IModule *, int> m_active_calls;
+    // Bumped each time a module starts closing: a grant its earlier request read or saved
+    // is not handed out.
+    QHash<IModule *, uint64_t> m_caller_revisions;
     QHash<IModule *, QList<QPointer<QWidget>>> m_closed_ui;
     std::map<std::pair<IModule *, IInstance *>, std::unique_ptr<host::InstanceHandle>>
         m_instance_handles;
-    // A plugin is being asked: a call made meanwhile is refused, not asked again.
-    bool m_asking_access = false;
+    // The grant modal open, and the module it is for: while it is, a call made meanwhile
+    // is refused, not asked again.
+    QPointer<QDialog> m_access_modal;
+    IModule *m_access_modal_caller = nullptr;
+    // Kept until consumption; expiry removes both the wait and any delivered answer.
+    uint64_t m_grant_job = 0;
+    QHash<uint64_t, GrantWait> m_grant_waits;
+    QHash<uint64_t, PluginAccessRequest> m_grant_requests;
+    QHash<uint64_t, uint64_t> m_storage_sessions;
+    bool m_grants_abandoned = false;
     QHash<IModule *, bool> m_signer_polling_requests;
     bool m_signer_polling = false;
     QHash<TabId, TabEntry> m_tabs;

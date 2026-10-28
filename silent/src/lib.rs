@@ -282,6 +282,7 @@ mod ffi {
         pub error: String,
         pub entries: Vec<PluginRemovalEntry>,
         pub enabled_plugins: Vec<String>,
+        pub access: Vec<PluginAccess>,
     }
     #[derive(Debug, Clone)]
     pub struct PluginGrantedAccess {
@@ -1261,6 +1262,10 @@ mod ffi {
         pub error: String,
         /// Given back to `app_set_plugin_access`: a removal since makes the save fail.
         pub storage_epoch: u64,
+        /// In-process publication revision, checked from memory when consuming the answer.
+        pub grant_revision: u64,
+        /// Persisted publication version, compared under both locks on a prompt save.
+        pub grant_version: u64,
         /// Every grant unasked when none is kept for the library.
         pub access: PluginAccess,
     }
@@ -1895,6 +1900,8 @@ mod ffi {
         fn app_plugin_grants(hash: String) -> PluginGrantedAccess;
         fn app_plugin_history(plugin_id: String) -> Vec<PluginAccess>;
         fn app_plugin_access_request(plugin_id: String, hash: String) -> PluginAccessRequest;
+        /// Reads an atomic only; odd while a grant publication is in progress.
+        fn app_plugin_access_revision() -> u64;
         fn app_plugin_access_history(plugin_id: String) -> PluginAccessHistory;
 
         /// Stores the answers for `access.hash`, replacing earlier ones. An entry left
@@ -1902,6 +1909,12 @@ mod ffi {
         /// the error, while the plugin's removal is pending or when its storage epoch
         /// is no longer `expected_epoch`, the one its request or history was read with.
         fn app_set_plugin_access(access: PluginAccess, expected_epoch: u64) -> String;
+        /// Also refuses a stale persisted grant version, checked under both state locks.
+        fn app_set_plugin_access_if_current(
+            access: PluginAccess,
+            expected_epoch: u64,
+            expected_version: u64,
+        ) -> String;
 
         /// Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
         fn sd_save_psbt(path: &str, psbt_hex: &str) -> PsbtFileResult;
@@ -2341,9 +2354,8 @@ mod ffi {
         /// carries.
         fn remove_xpub(self: &mut KeysModule, fingerprint: &str, path: &str) -> KeyOpResult;
         fn key_xpubs(self: &KeysModule, fingerprint: &str) -> Vec<KeyXpub>;
-        /// Marks used every key xpub the accounts of the network are built on, caching
-        /// it when the key's cache lacks it.
-        fn mark_account_xpubs_used(self: &mut KeysModule) -> KeyOpResult;
+        /// Applies usage metadata already persisted by the account discovery worker.
+        fn apply_xpub_usage(self: &mut KeysModule, usage: &AccountXpubUsage) -> bool;
         fn register_descriptor(
             self: &mut KeysModule,
             fingerprint: &str,
@@ -2470,6 +2482,12 @@ mod ffi {
             quantity: u32,
         ) -> MusigSessionCreateResult;
         fn hot_cached_nonces(material: &HotMaterial, psbt_v2_hex: &str) -> HotCachedNonceResult;
+        /// Persists xpub usage from the accounts of `network`, returning cache updates.
+        /// Reads and writes storage: call it off the GUI thread.
+        type AccountXpubUsage;
+        fn is_ok(self: &AccountXpubUsage) -> bool;
+        fn get_error(self: &AccountXpubUsage) -> String;
+        fn account_xpub_usage(network: Network) -> Box<AccountXpubUsage>;
         fn musig_session_refresh(fingerprint: &str) -> KeyOpResult;
         fn musig_session_count(fingerprint: &str, policy: &str, provider: KeyRouteKind) -> u32;
         fn musig_session_limit() -> u32;
@@ -3294,17 +3312,18 @@ pub use account_storage::{
     delete_musig_account, delete_sp_account, musig_account_delete_check, sp_account_delete_check,
 };
 
-pub use account::{
-    new_account, new_account_offline, Account, NotificationReceiver, Poll, PsbtResult,
-};
-pub use app_state::{
+pub use crate::app_state::{
     app_active_theme, app_begin_plugin_removal, app_disable_plugin, app_enabled_plugins,
     app_fee_preferences, app_language, app_last_endpoint, app_plugin_access,
-    app_plugin_access_history, app_plugin_access_request, app_plugin_answers, app_plugin_grants,
-    app_plugin_history, app_price_currency, app_price_source, app_qr_camera_contrast_level,
-    app_qr_display_levels, app_removing_plugins, app_set_active_theme, app_set_fee_preferences,
-    app_set_language, app_set_last_endpoint, app_set_plugin_access, app_set_plugin_enabled,
+    app_plugin_access_history, app_plugin_access_request, app_plugin_access_revision,
+    app_plugin_answers, app_plugin_grants, app_plugin_history, app_price_currency,
+    app_price_source, app_qr_camera_contrast_level, app_qr_display_levels, app_removing_plugins,
+    app_set_active_theme, app_set_fee_preferences, app_set_language, app_set_last_endpoint,
+    app_set_plugin_access, app_set_plugin_access_if_current, app_set_plugin_enabled,
     app_set_price_selection, app_set_qr_camera_contrast_level, app_set_qr_display_levels,
+};
+pub use account::{
+    new_account, new_account_offline, Account, NotificationReceiver, Poll, PsbtResult,
 };
 pub use bbqr::{bbqr_frames, bbqr_scanner_new, bbqr_text_scanner_new, BbqrFrames, BbqrScanner};
 pub use camera::{camera_list, camera_open, CameraHandle};
@@ -3352,14 +3371,14 @@ pub use hwi_config::{
 };
 pub use keys::{
     bridge::{
-        commit_key_file, hot_cached_nonces, hot_create_sessions, hot_reveal, hot_seal, hot_sign,
-        hot_sp_descriptor, hot_xpub, key_file_preview, ledger_nonce_count, ledger_nonce_fetch,
-        ledger_nonce_fetch_for_signing, ledger_nonce_invalidate, ledger_nonce_limit,
-        ledger_nonce_merge, ledger_nonce_plan, ledger_nonce_refresh, ledger_nonce_restart,
-        ledger_nonce_sign, merge_signed_psbt, musig_session_count, musig_session_limit,
-        musig_session_plan, musig_session_refresh, musig_session_restart, new_keys_module,
-        usb_merge_signed, usb_sign_payload, HotMaterial, KeyFileCommit, KeyFilePreview, KeysModule,
-        LedgerNonceFetch, QrResponse, SealedHotKey,
+        account_xpub_usage, commit_key_file, hot_cached_nonces, hot_create_sessions, hot_reveal,
+        hot_seal, hot_sign, hot_sp_descriptor, hot_xpub, key_file_preview, ledger_nonce_count,
+        ledger_nonce_fetch, ledger_nonce_fetch_for_signing, ledger_nonce_invalidate,
+        ledger_nonce_limit, ledger_nonce_merge, ledger_nonce_plan, ledger_nonce_refresh,
+        ledger_nonce_restart, ledger_nonce_sign, merge_signed_psbt, musig_session_count,
+        musig_session_limit, musig_session_plan, musig_session_refresh, musig_session_restart,
+        new_keys_module, usb_merge_signed, usb_sign_payload, AccountXpubUsage, HotMaterial,
+        KeyFileCommit, KeyFilePreview, KeysModule, LedgerNonceFetch, QrResponse, SealedHotKey,
     },
     supports_silent_payments,
 };

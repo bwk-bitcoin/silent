@@ -9,6 +9,8 @@
 #include <interfaces/module.h>
 #include <interfaces/types.h>
 
+class PluginRegistry;
+
 namespace smoke {
 
 using ExampleInstances = QList<QPair<QString, QString>>;
@@ -20,6 +22,7 @@ class ExampleInstancesProbe final : public QObject {
 public:
     // Follows `module` from now on and forgets the answers of the module before.
     void attach(IModule *module);
+    void watchEnables(PluginRegistry *registry);
     [[nodiscard]] auto count() const -> qsizetype;
     // The answer at `index`, waiting for it.
     auto waitForAnswer(qsizetype index) -> ExampleInstances;
@@ -32,9 +35,11 @@ public:
 public slots:
     void onInstances(ReqId req_id, const ExampleInstances &instances);
     void onAccountDeleted(ReqId req_id, const QString &id, const QString &error);
+    void onPluginEnabled(const QString &id, const QString &error);
 
 private:
     QPointer<IModule> m_module;
+    QPointer<PluginRegistry> m_registry;
     QList<ExampleInstances> m_answers;
     QStringList m_deletion_errors;
 };

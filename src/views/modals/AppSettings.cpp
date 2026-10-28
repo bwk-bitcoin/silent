@@ -222,6 +222,8 @@ void AppSettings::connectMain() {
     if (m_plugin_registry != nullptr) {
         connect(m_plugin_registry, &PluginRegistry::enabledPluginsChanged, this,
                 &AppSettings::onPluginsChanged, qontrol::UNIQUE);
+        connect(m_plugin_registry, &PluginRegistry::pluginStateChanged, this,
+                &AppSettings::onPluginsChanged, qontrol::UNIQUE);
         connect(m_plugin_registry, &PluginRegistry::pluginStopFinished, this,
                 &AppSettings::onPluginStopFinished, qontrol::UNIQUE);
     }
@@ -384,9 +386,9 @@ void AppSettings::onFeePreferencesActivated([[maybe_unused]] int index) {
 auto AppSettings::buildPlugins() -> QWidget * {
     m_plugins = foldable(QString());
     m_plugins->setContent((new qontrol::Column)
-                               ->spacing(resolve(Spacing::S))
-                               ->push(m_removal_notice)
-                               ->push(m_plugin_notice)
+                              ->spacing(resolve(Spacing::S))
+                              ->push(m_removal_notice)
+                              ->push(m_plugin_notice)
                               ->push(m_plugin_result)
                               ->push(m_plugins_column)
                               ->push(m_plugin_drop));
@@ -432,9 +434,10 @@ auto AppSettings::pluginRow(const QString &id, const QString &meta) -> catalog::
                 qontrol::UNIQUE);
         actions->push(retryBtn);
     }
-    if (!unloading && !pluginaccess::forPlugin(id).isEmpty()) {
+    if (!unloading && m_plugin_registry->pluginHasAccessHistory(id)) {
         // What it may use, once it has asked for something.
         auto *accessBtn = catalog::btnPluginAccess();
+        accessBtn->setObjectName(QStringLiteral("pluginAccess"));
         accessBtn->setProperty(K_PLUGIN_ID, id);
         connect(accessBtn, &QPushButton::clicked, this, &AppSettings::onPluginAccessClicked,
                 qontrol::UNIQUE);
@@ -455,7 +458,8 @@ auto AppSettings::pluginRow(const QString &id, const QString &meta) -> catalog::
     if (!failed) {
         auto *toggle = new catalog::Toggle;
         toggle->setChecked(m_plugin_registry->isPluginEnabled(id));
-        toggle->setEnabled(!unloading);
+        toggle->setEnabled(!unloading && !m_plugin_registry->pluginStateLoading() &&
+                           !m_plugin_registry->pluginEnablePending(id));
         toggle->setProperty(K_PLUGIN_ID, id);
         connect(toggle, &QCheckBox::clicked, this, &AppSettings::onPluginToggled, qontrol::UNIQUE);
         row->setTrailing(toggle);
@@ -779,8 +783,7 @@ void AppSettings::dragEnterEvent(QDragEnterEvent *event) {
 // listed, off, until turned on.
 void AppSettings::dropEvent(QDropEvent *event) {
     if (m_flow != nullptr || m_import_worker != nullptr || m_plugin_registry == nullptr ||
-        !m_plugin_registry->pluginRemovalReadError().isEmpty() ||
-        !event->mimeData()->hasUrls()) {
+        !m_plugin_registry->pluginRemovalReadError().isEmpty() || !event->mimeData()->hasUrls()) {
         return;
     }
     event->acceptProposedAction();
@@ -913,14 +916,16 @@ void AppSettings::onPluginStopFinished(const QString &plugin_id, bool removed,
 }
 
 void AppSettings::onPluginsChanged() {
-    auto error = m_plugin_registry == nullptr ? QString() : m_plugin_registry->pluginRemovalReadError();
+    auto error =
+        m_plugin_registry == nullptr ? QString() : m_plugin_registry->pluginRemovalReadError();
     m_removal_notice->setTitle(TR("settings-plugin-state-read-failed"));
     m_removal_notice->setText(TR("settings-plugin-state-read-failed-text").arg(error));
     m_removal_notice->setVisible(!error.isEmpty());
     m_removal_retry_btn->setVisible(!error.isEmpty());
     m_plugins_column->setEnabled(error.isEmpty());
-    m_plugin_drop->setEnabled(error.isEmpty());
-    setAcceptDrops(error.isEmpty());
+    bool reading = m_plugin_registry != nullptr && m_plugin_registry->pluginStateLoading();
+    m_plugin_drop->setEnabled(error.isEmpty() && !reading);
+    setAcceptDrops(error.isEmpty() && !reading);
     if (!error.isEmpty()) {
         if (m_flow != nullptr) {
             m_flow->setEnabled(false);

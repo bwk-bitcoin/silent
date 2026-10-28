@@ -504,14 +504,38 @@ void KeysModule::setNetwork(Network network) {
     emit keysChanged();
 }
 
-// NOLINTNEXTLINE(readability-make-member-function-const)
 void KeysModule::markAccountXpubsUsed() {
-    if (rust() == nullptr) {
+    ++m_xpub_revision;
+    if (m_xpub_discovery == nullptr) {
+        startXpubDiscovery();
+    }
+}
+
+void KeysModule::startXpubDiscovery() {
+    auto work = std::make_shared<XpubDiscovery>(activeNetwork(), m_xpub_revision);
+    auto *thread = QThread::create([work] { work->usage = ::account_xpub_usage(work->network); });
+    m_xpub_discovery = work;
+    connect(thread, &QThread::finished, this, &KeysModule::onXpubDiscoveryFinished,
+            qontrol::UNIQUE);
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
+void KeysModule::onXpubDiscoveryFinished() {
+    auto work = std::move(m_xpub_discovery);
+    if (work->revision != m_xpub_revision) {
+        startXpubDiscovery();
         return;
     }
-    auto result = rust()->mark_account_xpubs_used();
-    if (!result.is_ok) {
-        qWarning() << "keys:" << toQt(result.error);
+    if (!work->usage.has_value()) {
+        return;
+    }
+    if (!work->usage.value()->is_ok()) {
+        qWarning() << "keys:" << toQt(work->usage.value()->get_error());
+    }
+    auto found = m_handles.find(work->network);
+    if (found != m_handles.end() && found->second->apply_xpub_usage(*work->usage.value())) {
+        emit keysChanged();
     }
 }
 

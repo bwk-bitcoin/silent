@@ -8,6 +8,7 @@
 #include "catalog/containers/ViewSlots.h"
 #include "catalog/display/Label.h"
 #include "catalog/feedback/Notice.h"
+#include "catalog/feedback/Spinner.h"
 #include "catalog/inputs/Toggle.h"
 #include "host/PluginAccess.h"
 #include "host/PluginRegistry.h"
@@ -87,6 +88,8 @@ void AccessFlow::initAccess() {
     m_reload_btn = catalog::btnTryAgain();
     m_notice->setAction(m_reload_btn);
     m_notice->setVisible(false);
+    m_busy = new catalog::Spinner(metric::ROW_SPINNER_SIZE);
+    m_busy->setVisible(false);
     m_rows = new qontrol::Column;
     m_rows->spacing(resolve(Spacing::S));
     m_empty = new Label(LabelRole::Caption);
@@ -111,6 +114,7 @@ auto AccessFlow::viewAccess() -> QWidget * {
                        ->spacing(resolve(Spacing::M))
                        ->push(m_access_text)
                        ->push(m_notice)
+                       ->push(m_busy)
                        ->push(m_rows)
                        ->push(m_empty);
     // The main view's width, whatever the rows hold.
@@ -129,11 +133,14 @@ void AccessFlow::showAccess() {
 }
 
 void AccessFlow::loadRows() {
-    auto history = pluginaccess::history(m_id);
-    if (!history.is_ok) {
-        showFailure(toQString(history.error));
-        return;
-    }
+    setBusy(true);
+    auto *job = new pluginaccess::Job;
+    connect(job, &pluginaccess::Job::historyRead, this, &AccessFlow::onHistoryRead,
+            qontrol::UNIQUE);
+    job->history(++m_revision, m_id);
+}
+
+void AccessFlow::showRows(const PluginAccessHistory &history) {
     // clear() also resets the layout spacing.
     catalog::clearRows(m_rows);
     m_rows->spacing(resolve(Spacing::S));
@@ -181,6 +188,36 @@ void AccessFlow::loadRows() {
     m_empty->setVisible(m_entries.isEmpty());
 }
 
+// Saved against the epoch the rows were read with; the rows wait disabled for the answer.
+void AccessFlow::save(const PluginAccess &entry) {
+    m_saving = entry;
+    setBusy(true);
+    auto *job = new pluginaccess::Job;
+    connect(job, &pluginaccess::Job::saved, m_plugin_registry, &PluginRegistry::onPluginAccessSaved,
+            qontrol::UNIQUE);
+    connect(job, &pluginaccess::Job::saved, this, &AccessFlow::onSaved, qontrol::UNIQUE);
+    job->save(++m_revision, entry, m_epoch);
+}
+
+// Back to the answers kept for `hash`: setChecked() does not emit clicked.
+void AccessFlow::resetToggles(const QString &hash) {
+    auto *row = m_entry_rows.value(hash, nullptr);
+    if (row == nullptr) {
+        return;
+    }
+    auto entry = m_entries.value(hash);
+    for (auto *toggle : row->findChildren<QCheckBox *>()) {
+        QString which = toggle->property(K_GRANT).toString();
+        auto grant = entry.state;
+        if (which == QLatin1String(GRANT_ACCOUNT)) {
+            grant = entry.account;
+        } else if (which == QLatin1String(GRANT_KEYS)) {
+            grant = entry.keys;
+        }
+        toggle->setChecked(grant == PluginGrant::Allowed);
+    }
+}
+
 auto AccessFlow::rowSub(const PluginAccess &entry) const -> QString {
     QString hash = toQString(entry.hash);
     QString sub = hash == m_plugin_registry->pluginHash(m_id) ? TR("plugin-access-current")
@@ -194,10 +231,17 @@ auto AccessFlow::rowSub(const PluginAccess &entry) const -> QString {
         }
     }
     if (!unasked.isEmpty()) {
-        sub += QLatin1Char(' ') +
-               TR("plugin-access-unasked").arg(unasked.join(QStringLiteral(", ")));
+        sub +=
+            QLatin1Char(' ') + TR("plugin-access-unasked").arg(unasked.join(QStringLiteral(", ")));
     }
     return sub;
+}
+
+// While a read or save runs, Try Again and the rows wait disabled, the spinner shown.
+void AccessFlow::setBusy(bool busy) {
+    m_busy->setVisible(busy);
+    m_reload_btn->setEnabled(!busy);
+    m_rows->setEnabled(!busy);
 }
 
 // The rows stay as read, disabled: only Try Again, reading them anew, enables them.
@@ -232,15 +276,7 @@ void AccessFlow::onGrantClicked(bool allowed) {
     } else {
         entry.state = grant;
     }
-    QString error = pluginaccess::save(entry, m_epoch);
-    if (!error.isEmpty()) {
-        // Back to the answer kept: setChecked() does not emit clicked.
-        toggle->setChecked(!allowed);
-        showFailure(error);
-        return;
-    }
-    m_entries.insert(hash, entry);
-    m_entry_rows.value(hash)->setSub(rowSub(entry));
+    save(entry);
 }
 
 void AccessFlow::onForgetClicked() {
@@ -256,19 +292,49 @@ void AccessFlow::onForgetClicked() {
     entry.account = PluginGrant::Unasked;
     entry.keys = PluginGrant::Unasked;
     entry.state = PluginGrant::Unasked;
-    QString error = pluginaccess::save(entry, m_epoch);
-    if (!error.isEmpty()) {
-        showFailure(error);
-        return;
-    }
-    // Hidden, not deleted: the button clicked is in the row. The next read deletes it.
-    m_entries.remove(hash);
-    m_entry_rows.take(hash)->hide();
-    m_empty->setVisible(m_entries.isEmpty());
+    save(entry);
 }
 
 void AccessFlow::onReloadClicked() {
     loadRows();
+}
+
+// A failed read keeps the rows read last, disabled; only a successful one takes its epoch.
+void AccessFlow::onHistoryRead(uint64_t revision, const PluginAccessHistory &history) {
+    if (revision != m_revision) {
+        return;
+    }
+    setBusy(false);
+    if (!history.is_ok) {
+        showFailure(toQString(history.error));
+        return;
+    }
+    showRows(history);
+}
+
+void AccessFlow::onSaved(uint64_t revision, const QString &error) {
+    if (revision != m_revision) {
+        return;
+    }
+    setBusy(false);
+    QString hash = toQString(m_saving.hash);
+    if (!error.isEmpty()) {
+        resetToggles(hash);
+        showFailure(error);
+        return;
+    }
+    bool forgotten = m_saving.account == PluginGrant::Unasked &&
+                     m_saving.keys == PluginGrant::Unasked &&
+                     m_saving.state == PluginGrant::Unasked;
+    if (!forgotten) {
+        m_entries.insert(hash, m_saving);
+        m_entry_rows.value(hash)->setSub(rowSub(m_saving));
+        return;
+    }
+    // Hidden, not deleted: the next read deletes it.
+    m_entries.remove(hash);
+    m_entry_rows.take(hash)->hide();
+    m_empty->setVisible(m_entries.isEmpty());
 }
 
 } // namespace modal

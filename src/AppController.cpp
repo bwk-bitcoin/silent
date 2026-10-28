@@ -12,6 +12,7 @@
 #include <qthread.h>
 
 AppController::AppController() = default;
+
 AppController::~AppController() = default;
 
 auto AppController::init() -> void {
@@ -45,7 +46,7 @@ auto AppController::registerBuiltinPlugin(std::unique_ptr<IPlugin> plugin) -> vo
     m_plugin_registry->registerBuiltin(raw);
 }
 
-auto AppController::initState() -> void {
+void AppController::initState() {
     if (!m_plugin_registry) {
         m_plugin_registry = std::make_unique<PluginRegistry>();
     }
@@ -60,22 +61,23 @@ auto AppController::initState() -> void {
                 &AppController::onHostSettingsSectionsChanged, qontrol::UNIQUE);
     }
 
-    connect(this, &AppController::regtestDefaultsReady, this,
-            &AppController::onRegtestDefaultsReady, qontrol::UNIQUE);
     connect(m_plugin_registry.get(), &PluginRegistry::enabledPluginsChanged, this,
             &AppController::onPluginRegistryChanged, qontrol::UNIQUE);
 
     applyPersistedThemeAtStartup();
     listAccounts();
 
-    auto *thread = QThread::create([this]() -> void {
+    auto fetch = std::make_shared<std::optional<QString>>();
+    auto *thread = QThread::create([fetch] {
         auto defaults = ::get_regtest_defaults();
         if (defaults.is_ok) {
-            auto blindbit = QString::fromStdString(std::string(defaults.blindbit_url.c_str()));
-            emit regtestDefaultsReady(blindbit);
+            *fetch = QString::fromStdString(std::string(defaults.blindbit_url.c_str()));
         }
     });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    m_regtest_fetch = fetch;
+    connect(thread, &QThread::finished, this, &AppController::onRegtestDefaultsReady,
+            qontrol::UNIQUE);
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
     thread->start();
 }
 
@@ -159,33 +161,8 @@ auto AppController::removeAccount(const QString &account) -> void {
     listAccounts();
 }
 
-auto AppController::finalizeListAccounts() -> void {
-    QList<QString> accounts;
-    for (const auto &id : m_config_order) {
-        if (m_discovered_accounts.contains(id)) {
-            accounts.append(id);
-        }
-    }
-
-    if (accounts.isEmpty()) {
-        emit accountList(m_config_order);
-        return;
-    }
-    emit accountList(accounts);
-}
-
-auto AppController::listAccounts() -> void {
-    m_config_order.clear();
-    m_known_configs.clear();
+void AppController::finalizeListAccounts() {
     m_discovered_accounts.clear();
-
-    const auto raccounts = list_configs();
-    for (auto acc : raccounts) {
-        const auto account = QString::fromStdString(std::string(acc.c_str()));
-        m_config_order.append(account);
-        m_known_configs.insert(account);
-    }
-
     if (m_plugin_registry == nullptr) {
         emit accountList(m_config_order);
         return;
@@ -208,6 +185,58 @@ auto AppController::listAccounts() -> void {
         }
     }
 
+    QList<QString> accounts;
+    for (const auto &id : m_config_order) {
+        if (m_discovered_accounts.contains(id)) {
+            accounts.append(id);
+        }
+    }
+
+    if (accounts.isEmpty()) {
+        emit accountList(m_config_order);
+        return;
+    }
+    emit accountList(accounts);
+}
+
+void AppController::listAccounts() {
+    // Config discovery can wait on storage publication, so answer from the last
+    // scanned configs now and let the background scan follow up.
+    if (m_configs_loaded) {
+        finalizeListAccounts();
+    }
+    requestConfigs();
+}
+
+void AppController::requestConfigs() {
+    m_configs_revision++;
+    if (m_configs_listing != nullptr) {
+        // onConfigsListed starts the next scan once the running one has finished.
+        return;
+    }
+    auto listing = std::make_shared<ConfigsListing>(m_configs_revision);
+    auto *thread = QThread::create([listing] {
+        for (auto config : ::list_configs()) {
+            listing->configs.append(QString::fromStdString(std::string(config.c_str())));
+        }
+    });
+    m_configs_listing = listing;
+    connect(thread, &QThread::finished, this, &AppController::onConfigsListed, qontrol::UNIQUE);
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater, qontrol::UNIQUE);
+    thread->start();
+}
+
+void AppController::onConfigsListed() {
+    auto listing = std::move(m_configs_listing);
+    if (listing->revision != m_configs_revision) {
+        // A newer request may follow a config change this scan missed.
+        requestConfigs();
+        return;
+    }
+
+    m_config_order = listing->configs;
+    m_known_configs = QSet<QString>(m_config_order.begin(), m_config_order.end());
+    m_configs_loaded = true;
     finalizeListAccounts();
 }
 
@@ -269,8 +298,11 @@ auto AppController::isAccountOpen(const QString &name) const -> bool {
     return m_open_accounts.contains(name);
 }
 
-auto AppController::onRegtestDefaultsReady(const QString &blindbit) -> void {
-    m_regtest_defaults = RegtestDefaultsInfo{.blindbit_url = blindbit};
+void AppController::onRegtestDefaultsReady() {
+    auto fetch = std::move(m_regtest_fetch);
+    if (fetch != nullptr && fetch->has_value()) {
+        m_regtest_defaults = RegtestDefaultsInfo{.blindbit_url = fetch->value()};
+    }
 }
 
 auto AppController::regtestDefaults() const -> std::optional<RegtestDefaultsInfo> {

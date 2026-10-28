@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     account_storage::{AccountStorage, Factory},
     ffi::{AccountCreationResult, BackendServer, MusigCreationRequest, Network, SpCreationRequest},
+    keys::{KeyManager, KeyManagerImpl, KeyStore, KEYS_DIR_NAME},
 };
 
 /// An account's config file inside its encrypted logical storage subtree.
@@ -644,6 +645,23 @@ fn descriptor_key_network(key: &DescriptorPublicKey, network: bitcoin::NetworkKi
     }
 }
 
+fn persist_xpub_usage(config: &Config) -> Result<(), String> {
+    let network = BtcNetwork::from(config.network);
+    let store = KeyStore::new(config.data_dir.join(KEYS_DIR_NAME), network);
+    let mut manager =
+        KeyManager::new(store, network).map_err(|e| format!("open account key store: {e}"))?;
+    for descriptor in [
+        &config.descriptor,
+        &config.segwit_descriptor,
+        &config.taproot_descriptor,
+    ] {
+        manager
+            .mark_xpubs_used(descriptor)
+            .map_err(|e| format!("mark account '{}' xpub usage: {e}", config.account_name))?;
+    }
+    Ok(())
+}
+
 fn persist_creation(config: Config) -> AccountCreationResult {
     let create = || -> Result<(), String> {
         validate_creation(&config)?;
@@ -658,6 +676,8 @@ fn persist_creation(config: Config) -> AccountCreationResult {
                 return Err("already_exists".into());
             }
         }
+        // Save usage before discovery can publish or deletion can erase the config.
+        persist_xpub_usage(&config)?;
         let storage = AccountStorage::open(&config)?;
         storage.create()?;
         storage.write(

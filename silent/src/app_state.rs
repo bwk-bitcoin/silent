@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,13 @@ use crate::{
 const DEFAULT_THEME: &str = "light";
 /// The QR display steppers' middle level, as the C++ side's `qr::DEFAULT_LEVEL`.
 const DEFAULT_QR_LEVEL: u8 = 3;
+
+// Odd while grants may be publishing; requests capture an even revision under the locks.
+static GRANT_REVISION: AtomicU64 = AtomicU64::new(2);
+
+pub fn app_plugin_access_revision() -> u64 {
+    GRANT_REVISION.load(Ordering::SeqCst)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppState {
@@ -58,6 +66,9 @@ pub struct AppState {
     /// What each external plugin library may use, by its sha256.
     #[serde(default)]
     pub plugin_access: Vec<StoredAccess>,
+    /// Retained when records are dropped so stale and ABA snapshots stay invalid.
+    #[serde(default)]
+    pub grant_version: u64,
 }
 
 /// One `PluginAccess`, as `app.json` stores it.
@@ -162,6 +173,7 @@ impl Default for AppState {
             qr_camera_contrast: DEFAULT_QR_LEVEL,
             endpoints: BTreeMap::new(),
             plugin_access: Vec::new(),
+            grant_version: 0,
         }
     }
 }
@@ -306,6 +318,11 @@ pub fn app_removing_plugins() -> crate::ffi::PluginRemovalListResult {
             is_ok: true,
             error: String::new(),
             enabled_plugins: state.enabled_plugin_ids(),
+            access: state
+                .plugin_access
+                .into_iter()
+                .map(PluginAccess::from)
+                .collect(),
             entries: state
                 .removing_plugins
                 .into_iter()
@@ -320,6 +337,7 @@ pub fn app_removing_plugins() -> crate::ffi::PluginRemovalListResult {
             error,
             entries: Vec::new(),
             enabled_plugins: Vec::new(),
+            access: Vec::new(),
         },
     }
 }
@@ -358,14 +376,19 @@ pub(crate) fn finish_plugin_removal_locked(id: &str) -> Result<(), String> {
         .map(|access| access.hash.clone())
         .collect();
     state.enabled_plugins.retain(|plugin| plugin != id);
+    if !hashes.is_empty() {
+        state.advance_grant_version()?;
+    }
     state.plugin_access.retain(|access| access.plugin_id != id);
     state.removing_plugins.remove(id);
+    let revision = GRANT_REVISION.fetch_add(1, Ordering::SeqCst);
     let saved = state.try_save();
     let published = match &saved {
         Ok(()) => true,
         Err(_) => match AppState::try_load() {
             Ok(published) => {
-                !published.removing_plugins.contains_key(id)
+                published.grant_version == state.grant_version
+                    && !published.removing_plugins.contains_key(id)
                     && !published
                         .plugin_access
                         .iter()
@@ -382,6 +405,7 @@ pub(crate) fn finish_plugin_removal_locked(id: &str) -> Result<(), String> {
             crate::storage::grants_changed(&hash);
         }
     }
+    GRANT_REVISION.store(revision + if published { 2 } else { 0 }, Ordering::SeqCst);
     saved
 }
 
@@ -572,6 +596,14 @@ impl From<StoredAccess> for PluginAccess {
 }
 
 impl AppState {
+    fn advance_grant_version(&mut self) -> Result<(), String> {
+        self.grant_version = self
+            .grant_version
+            .checked_add(1)
+            .ok_or("plugin grant version exhausted")?;
+        Ok(())
+    }
+
     /// The answers kept for the library `hash`, every grant unasked when none are.
     fn plugin_answers(&self, plugin_id: String, hash: String) -> PluginAccess {
         let hash = hash.to_ascii_lowercase();
@@ -628,7 +660,11 @@ fn read_for_grant<T>(
 }
 
 pub fn app_plugin_access_request(plugin_id: String, hash: String) -> PluginAccessRequest {
+    let mut grant_revision = 0;
+    let mut grant_version = 0;
     let read = read_for_grant(&plugin_id, |state| {
+        grant_revision = app_plugin_access_revision();
+        grant_version = state.grant_version;
         let mut access = state.plugin_answers(plugin_id.clone(), hash.clone());
         access.plugin_id = plugin_id.clone();
         access
@@ -638,12 +674,16 @@ pub fn app_plugin_access_request(plugin_id: String, hash: String) -> PluginAcces
             is_ok: true,
             error: String::new(),
             storage_epoch,
+            grant_revision,
+            grant_version,
             access,
         },
         Err(error) => PluginAccessRequest {
             is_ok: false,
             error,
             storage_epoch: 0,
+            grant_revision: 0,
+            grant_version: 0,
             access: PluginAccess {
                 plugin_id,
                 hash,
@@ -703,8 +743,30 @@ pub fn app_set_plugin_access(access: PluginAccess, expected_epoch: u64) -> Strin
         .unwrap_or_default()
 }
 
+pub fn app_set_plugin_access_if_current(
+    access: PluginAccess,
+    expected_epoch: u64,
+    expected_version: u64,
+) -> String {
+    try_set_plugin_access_with_version(access, expected_epoch, Some(expected_version))
+        .err()
+        .unwrap_or_default()
+}
+
 fn try_set_plugin_access(access: PluginAccess, expected_epoch: u64) -> Result<(), String> {
-    let _publication = state_crypt::publication_change_guard();
+    try_set_plugin_access_with_version(access, expected_epoch, None)
+}
+
+fn try_set_plugin_access_with_version(
+    access: PluginAccess,
+    expected_epoch: u64,
+    expected_version: Option<u64>,
+) -> Result<(), String> {
+    let _publication = {
+        #[cfg(test)]
+        crate::app_state::tests::before_grant_publication_lock();
+        state_crypt::publication_change_guard()
+    };
     if !state_crypt::holds_key() {
         return Err("Application state is locked. Unlock it and retry access".into());
     }
@@ -714,6 +776,12 @@ fn try_set_plugin_access(access: PluginAccess, expected_epoch: u64) -> Result<()
     if state.storage_epoch(&access.plugin_id) != expected_epoch {
         return Err(
             "The plugin was removed since these access answers were read: they were not saved"
+                .into(),
+        );
+    }
+    if expected_version.is_some_and(|version| version != state.grant_version) {
+        return Err(
+            "Access answers changed since they were read: these conflicting answers were not saved"
                 .into(),
         );
     }
@@ -750,27 +818,35 @@ fn try_set_plugin_access(access: PluginAccess, expected_epoch: u64) -> Result<()
         .iter()
         .find(|entry| entry.hash == hash)
         .cloned();
+    if previous != current {
+        state.advance_grant_version()?;
+    }
+    let revision = GRANT_REVISION.fetch_add(1, Ordering::SeqCst);
     let saved = state.try_save();
-    if saved.is_ok() {
-        crate::storage::grants_changed(&hash);
+    let published = if saved.is_ok() {
+        true
     } else if previous != current {
         match AppState::try_load() {
             Ok(published) => {
-                if published
-                    .plugin_access
-                    .iter()
-                    .find(|entry| entry.hash == hash)
-                    == current.as_ref()
-                {
-                    crate::storage::grants_changed(&hash);
-                }
+                published.grant_version == state.grant_version
+                    && published
+                        .plugin_access
+                        .iter()
+                        .find(|entry| entry.hash == hash)
+                        == current.as_ref()
             }
             Err(error) => {
                 log::error!("cannot verify failed grant publication: {error}");
-                crate::storage::grants_changed(&hash);
+                true
             }
         }
+    } else {
+        false
+    };
+    if published {
+        crate::storage::grants_changed(&hash);
     }
+    GRANT_REVISION.store(revision + if published { 2 } else { 0 }, Ordering::SeqCst);
     saved
 }
 
@@ -790,6 +866,17 @@ mod tests {
     // `app.json` at the start of each test for isolation.
     static TEST_LOCK: Mutex<()> = Mutex::new(());
     static DATADIR_GUARD: OnceLock<TempDir> = OnceLock::new();
+
+    thread_local! {
+        static GRANT_PUBLICATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    }
+
+    pub(crate) fn before_grant_publication_lock() {
+        let hook = GRANT_PUBLICATION_HOOK.with(|slot| slot.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 
     /// Acquire the test mutex, point `datadir()` at the shared `TempDir`, and clear any
     /// leftover `app.json` so each test starts from a clean slate.
@@ -1014,6 +1101,221 @@ mod tests {
                 );
             });
         }
+    }
+
+    #[test]
+    fn grant_version_defaults_to_zero_for_old_state() {
+        let state: AppState = serde_json::from_str("{}").expect("old state without grant version");
+        assert_eq!(state.grant_version, 0, "old state starts at version zero");
+    }
+
+    #[test]
+    fn grant_version_changes_only_for_mutations_and_survives_record_removal() {
+        with_isolated_datadir(|_base| {
+            let request = app_plugin_access_request("grant-version".into(), "version-hash".into());
+            assert!(request.is_ok, "initial snapshot: {}", request.error);
+            let epoch = request.storage_epoch;
+            let mut access = request.access;
+            save_access(access.clone());
+            assert_eq!(
+                AppState::load().grant_version,
+                0,
+                "an absent unasked record is a no-op"
+            );
+            access.account = PluginGrant::Allowed;
+            save_access(access.clone());
+            assert_eq!(
+                AppState::load().grant_version,
+                1,
+                "creating a grant increments the version"
+            );
+            save_access(access.clone());
+            app_set_language("fr".into());
+            assert_eq!(
+                AppState::load().grant_version,
+                1,
+                "no-op and unrelated settings retain the version"
+            );
+            access.account = PluginGrant::Unasked;
+            save_access(access.clone());
+            let state = AppState::try_load().expect("state after dropping the record");
+            assert!(
+                state.plugin_access.is_empty(),
+                "all-unasked record is dropped"
+            );
+            assert_eq!(
+                state.grant_version, 2,
+                "dropping the last record retains the version"
+            );
+            access.account = PluginGrant::Denied;
+            save_access(access);
+            begin_plugin_removal("grant-version").expect("begin grant removal");
+            advance_plugin_removal("grant-version", RemovalPhase::Bookkeeping)
+                .expect("advance grant removal");
+            finish_plugin_removal("grant-version").expect("finish grant removal");
+            let state = AppState::try_load().expect("state after removal bookkeeping");
+            assert_eq!(
+                state.grant_version, 4,
+                "bookkeeping grant removal increments the version"
+            );
+            assert!(
+                state.plugin_access.is_empty(),
+                "bookkeeping removes the record"
+            );
+            assert_ne!(
+                state.storage_epoch("grant-version"),
+                epoch,
+                "removal epoch remains independent"
+            );
+        });
+    }
+
+    #[test]
+    fn exhausted_grant_version_refuses_mutations_and_removal_bookkeeping() {
+        with_isolated_datadir(|base| {
+            let mut state = AppState {
+                grant_version: u64::MAX,
+                ..AppState::default()
+            };
+            state.try_save().expect("exhausted version fixture");
+            let request =
+                app_plugin_access_request("grant-overflow".into(), "overflow-hash".into());
+            assert!(request.is_ok, "overflow snapshot: {}", request.error);
+            save_access(request.access.clone());
+            let before =
+                fs::read(base.join("app.bip138")).expect("state before exhausted mutation");
+            let mut access = request.access;
+            access.account = PluginGrant::Allowed;
+            assert_eq!(
+                app_set_plugin_access_if_current(
+                    access,
+                    request.storage_epoch,
+                    request.grant_version
+                ),
+                "plugin grant version exhausted",
+                "grant version cannot wrap"
+            );
+            assert_eq!(
+                fs::read(base.join("app.bip138")).expect("refused mutation"),
+                before,
+                "overflow publishes nothing"
+            );
+            state.plugin_access.push(StoredAccess {
+                plugin_id: "grant-overflow".into(),
+                hash: "overflow-hash".into(),
+                account: StoredGrant::Allowed,
+                keys: StoredGrant::Unasked,
+                state: StoredGrant::Unasked,
+            });
+            state
+                .removing_plugins
+                .insert("grant-overflow".into(), RemovalPhase::Bookkeeping);
+            state.try_save().expect("exhausted bookkeeping fixture");
+            let before = fs::read(base.join("app.bip138")).expect("pending bookkeeping bytes");
+            assert_eq!(
+                finish_plugin_removal("grant-overflow"),
+                Err("plugin grant version exhausted".into()),
+                "removal refuses version overflow"
+            );
+            assert_eq!(
+                fs::read(base.join("app.bip138")).expect("refused bookkeeping"),
+                before,
+                "overflow retains grants and the removal journal"
+            );
+        });
+    }
+
+    #[test]
+    fn conditional_grant_save_checks_version_after_acquiring_publication_lock() {
+        with_isolated_datadir(|_base| {
+            let access = PluginAccess {
+                plugin_id: "conditional-publication".into(),
+                hash: "conditional-publication-hash".into(),
+                account: PluginGrant::Allowed,
+                keys: PluginGrant::Unasked,
+                state: PluginGrant::Unasked,
+            };
+            save_access(access.clone());
+            let snapshot = app_plugin_access_request(access.plugin_id.clone(), access.hash.clone());
+            assert!(
+                snapshot.is_ok,
+                "read Keys-only snapshot: {}",
+                snapshot.error
+            );
+            let expected_revision = snapshot.grant_revision;
+            let expected_version = snapshot.grant_version;
+            let expected_epoch = snapshot.storage_epoch;
+            let mut allowed = snapshot.access;
+            allowed.keys = PluginGrant::Allowed;
+            let (paused_tx, paused_rx) = mpsc::channel();
+            let (resume_tx, resume_rx) = mpsc::channel();
+            let worker = thread::spawn(move || {
+                GRANT_PUBLICATION_HOOK.with(|slot| {
+                    *slot.borrow_mut() = Some(Box::new(move || {
+                        assert_eq!(
+                            crate::app_state::app_plugin_access_revision(),
+                            expected_revision,
+                            "the pending save still matches before the competing publication"
+                        );
+                        paused_tx
+                            .send(())
+                            .expect("signal save before lock acquisition");
+                        resume_rx
+                            .recv_timeout(Duration::from_secs(5))
+                            .expect("resume save after the competing denial");
+                    }));
+                });
+                crate::app_state::app_set_plugin_access_if_current(
+                    allowed,
+                    expected_epoch,
+                    expected_version,
+                )
+            });
+            paused_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("save reached its pre-lock checkpoint with a matching revision");
+            let mut denied = access;
+            denied.account = PluginGrant::Denied;
+            assert_eq!(
+                crate::app_state::app_set_plugin_access(denied.clone(), expected_epoch),
+                "",
+                "the competing Account denial publishes while the worker is paused"
+            );
+            assert_ne!(
+                crate::app_state::app_plugin_access_revision(),
+                expected_revision,
+                "the competing denial changed the pending save's revision"
+            );
+            resume_tx
+                .send(())
+                .expect("release the pending conditional save");
+            assert_eq!(
+                worker.join().expect("conditional save worker finishes"),
+                "Access answers changed since they were read: these conflicting answers were not saved",
+                "the conditional save checks the persisted version after acquiring the publication lock"
+            );
+            let current = app_plugin_access_request(denied.plugin_id, denied.hash);
+            assert!(
+                current.is_ok,
+                "read grants after conflict: {}",
+                current.error
+            );
+            assert_eq!(
+                current.access.account,
+                PluginGrant::Denied,
+                "the stale save never restores Account Allowed"
+            );
+            assert_eq!(
+                current.access.keys,
+                PluginGrant::Unasked,
+                "the stale Keys Allow is not published"
+            );
+            assert_eq!(
+                current.access.state,
+                PluginGrant::Unasked,
+                "the unasked State grant remains unchanged"
+            );
+        });
     }
 
     #[test]
@@ -1418,6 +1720,12 @@ mod tests {
                 .expect("initial allowed grant");
             let session = crate::storage::storage_session_open(id.into(), hash.clone(), true);
             let before = crate::storage::storage_session_generation(session);
+            let snapshot = app_plugin_access_request(id.into(), hash.clone());
+            assert_eq!(snapshot.grant_revision, app_plugin_access_revision());
+            assert_eq!(
+                snapshot.grant_version, 1,
+                "initial grant publication version"
+            );
             state_crypt::fail_durable_write_at(state_crypt::DurableWriteStage::TempSynced);
             assert!(
                 try_set_plugin_access(access(PluginGrant::Denied), epoch).is_err(),
@@ -1427,6 +1735,18 @@ mod tests {
                 crate::storage::storage_session_generation(session),
                 before,
                 "failed unpublished grants do not invalidate an authorized generation"
+            );
+            assert_eq!(
+                snapshot.grant_revision,
+                app_plugin_access_revision(),
+                "an unpublished save failure leaves the grant snapshot current"
+            );
+            assert_eq!(
+                AppState::try_load()
+                    .expect("unpublished version")
+                    .grant_version,
+                snapshot.grant_version,
+                "pre-rename failure publishes no version increment"
             );
             state_crypt::fail_durable_write_at(state_crypt::DurableWriteStage::Renamed);
             assert!(
@@ -1438,6 +1758,18 @@ mod tests {
                 "a complete denied grant may already be published"
             );
             assert!(crate::storage::storage_session_generation(session) > before, "published grant changes always invalidate stale responses even after fsync failure");
+            assert_ne!(
+                snapshot.grant_revision,
+                app_plugin_access_revision(),
+                "published denial invalidates the allowed snapshot even after fsync failure"
+            );
+            assert_eq!(
+                AppState::try_load()
+                    .expect("published version")
+                    .grant_version,
+                snapshot.grant_version + 1,
+                "post-rename durability failure retains the published version increment"
+            );
             crate::storage::storage_session_revoke(session);
         });
     }

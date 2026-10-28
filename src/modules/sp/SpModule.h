@@ -20,7 +20,6 @@ public:
     [[nodiscard]] static auto get() -> SpModule *;
 
     [[nodiscard]] QMap<QString, QString> meta() const override;
-    ReqId list() override;
     ReqId autoStart() override;
     void startInstance(const QString &id) override;
     void deleteInstance(const QString &id) override;
@@ -30,10 +29,10 @@ private slots:
 
 protected:
     [[nodiscard]] static bool isSpAccount(const QString &account_id);
+    // The listed accounts, then the create-account entry.
+    [[nodiscard]] auto instanceEntries(const QStringList &account_ids) const
+        -> QList<QPair<QString, QString>> override;
 
 private:
-    ReqId nextReqId();
-
     std::vector<std::unique_ptr<IInstance>> m_instances;
-    ReqId m_next_req_id = 0;
 };

@@ -10,6 +10,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QLoggingCategory>
+#include <QPointer>
+#include <QScopeGuard>
 #include <QSet>
 #include <QStringList>
 #include <QThread>
@@ -19,6 +21,7 @@
 
 namespace {
 constexpr int PLUGIN_STOP_POLL_INTERVAL_MS = 20;
+constexpr int PLUGIN_STATE_READ_DEADLINE_MS = 15000;
 
 class MetadataOnlyPlugin final : public IPlugin {
 public:
@@ -69,9 +72,9 @@ QMap<QString, QString> sidecarMeta(const PluginMetadata &bundle) {
 } // namespace
 
 PluginRegistry::PluginRegistry(QObject *parent) : QObject(parent) {
-    connect(this, &PluginRegistry::pluginStopPrepared, this, &PluginRegistry::onPluginStopPrepared,
-            qontrol::UNIQUE);
-    connect(this, &PluginRegistry::pluginDataRemoved, this, &PluginRegistry::onPluginDataRemoved,
+    m_state_deadline.setSingleShot(true);
+    m_state_deadline.setInterval(PLUGIN_STATE_READ_DEADLINE_MS);
+    connect(&m_state_deadline, &QTimer::timeout, this, &PluginRegistry::onPluginStateReadDeadline,
             qontrol::UNIQUE);
     connect(&m_stop_timer, &QTimer::timeout, this, &PluginRegistry::advancePluginStops,
             qontrol::UNIQUE);
@@ -87,14 +90,10 @@ PluginRegistry::PluginRegistry(QObject *parent) : QObject(parent) {
         connect(host->events(), &HostEvents::launcherRefreshRequested, this,
                 &PluginRegistry::onLauncherRefreshRequested, qontrol::UNIQUE);
     }
-    rescanDiscoveredPlugins();
     reloadEnabledPlugins();
 }
 
 PluginRegistry::~PluginRegistry() {
-    for (auto *worker : findChildren<QThread *>(QString(), Qt::FindDirectChildrenOnly)) {
-        worker->wait();
-    }
     for (auto it = m_records.begin(); it != m_records.end(); ++it) {
         if (!it->external) {
             continue;
@@ -111,38 +110,167 @@ PluginRegistry::~PluginRegistry() {
     m_metadata_plugins.clear();
 }
 
-auto PluginRegistry::rescanDiscoveredPlugins() -> int {
-    auto removals = ::app_removing_plugins();
+void PluginRegistry::rescanDiscoveredPlugins() {
+    requestPluginState(true);
+}
+
+void PluginRegistry::requestPluginState(bool clear_errors) {
+    ++m_state_revision;
+    m_scan_requested = true;
+    m_clear_load_errors |= clear_errors;
+    if (!m_state_deadline.isActive()) {
+        m_state_deadline.start();
+    }
+    startPluginStateJob();
+    emit pluginStateChanged();
+}
+
+auto PluginRegistry::pluginStateLoading() const -> bool {
+    return m_scan_requested || m_state_consuming == PluginStateAction::Scan ||
+           (m_state_job != nullptr && m_state_job->action() == PluginStateAction::Scan);
+}
+
+void PluginRegistry::onPluginStateReadDeadline() {
+    if (!pluginStateLoading()) {
+        return;
+    }
+    ++m_state_revision;
+    m_removal_read_error = QStringLiteral(
+        "Reading plugin state is still waiting for storage. Known records were kept. "
+        "Retry after storage becomes available.");
+    emit pluginStateChanged();
+}
+
+auto PluginRegistry::pluginEnablePending(const QString &plugin_id) const -> bool {
+    return m_enabling.contains(plugin_id);
+}
+
+auto PluginRegistry::pluginHasAccessHistory(const QString &plugin_id) const -> bool {
+    return m_access_snapshot.contains(plugin_id);
+}
+
+void PluginRegistry::onPluginAccessSaved([[maybe_unused]] uint64_t revision,
+                                         [[maybe_unused]] const QString &error) {
+    // A save error can follow rename, so reread even when publication reports failure.
+    requestPluginState(false);
+}
+
+void PluginRegistry::startPluginStateJob() {
+    if (m_state_job != nullptr || m_state_consuming.has_value()) {
+        return;
+    }
+    StateRequest request;
+    if (!m_state_requests.isEmpty()) {
+        request = m_state_requests.takeFirst();
+    } else if (m_scan_requested) {
+        request = {.action = PluginStateAction::Scan,
+                   .plugin_id = {},
+                   .request = 0,
+                   .revision = m_state_revision,
+                   .clear_errors = m_clear_load_errors};
+        m_scan_requested = false;
+        m_clear_load_errors = false;
+    } else {
+        return;
+    }
+    m_state_job = new PluginStateJob(request.action, request.plugin_id, request.request,
+                                     request.revision, request.clear_errors);
+    m_state_job->setReceiver(this);
+    connect(m_state_job, &QThread::finished, this, &PluginRegistry::onPluginStateJobFinished,
+            qontrol::UNIQUE);
+    m_state_job->start();
+}
+
+void PluginRegistry::onPluginStateJobFinished() {
+    auto job = m_state_job;
+    if (job == nullptr || sender() != job) {
+        return;
+    }
+    QPointer<PluginRegistry> alive(this);
+    m_state_consuming = job->action();
+    switch (job->action()) {
+    case PluginStateAction::Scan:
+        finishPluginScan(*job);
+        break;
+    case PluginStateAction::Enable:
+        finishPluginEnable(*job);
+        break;
+    case PluginStateAction::Disable:
+        if (m_stops.contains(job->pluginId()) &&
+            m_stops.value(job->pluginId()).req_id == job->request()) {
+            onPluginStopPrepared(job->pluginId(), job->error());
+        }
+        break;
+    case PluginStateAction::BeginRemoval:
+        if (m_stops.contains(job->pluginId()) &&
+            m_stops.value(job->pluginId()).req_id == job->request()) {
+            onPluginStopPrepared(job->pluginId(), job->error());
+        }
+        break;
+    case PluginStateAction::RemoveData:
+        if (m_stops.contains(job->pluginId()) &&
+            m_stops.value(job->pluginId()).req_id == job->request()) {
+            onPluginDataRemoved(job->pluginId(), job->error());
+        }
+        break;
+    }
+    if (alive == nullptr) {
+        return;
+    }
+    m_state_job = nullptr;
+    m_state_consuming.reset();
+    if (job != nullptr) {
+        job->deleteLater();
+    }
+    startPluginStateJob();
+    emit pluginStateChanged();
+}
+
+void PluginRegistry::finishPluginScan(const PluginStateJob &job) {
+    if (job.revision() == m_state_revision) {
+        applyPluginState(job);
+    } else {
+        m_scan_requested = true;
+        m_clear_load_errors |= job.clearErrors();
+    }
+}
+
+void PluginRegistry::applyPluginState(const PluginStateJob &job) {
+    auto removals = job.state();
+    auto metadata = job.metadata();
+    auto clearErrors = job.clearErrors();
+    QPointer<PluginRegistry> alive(this);
+    m_state_deadline.stop();
     if (!removals.is_ok) {
         m_removal_read_error = QString::fromStdString(std::string(removals.error));
         emit enabledPluginsChanged();
-        return 0;
+        return;
     }
+    m_state_loaded = true;
     m_removal_read_error.clear();
     m_enabled_snapshot.clear();
     for (const auto &id : removals.enabled_plugins) {
         m_enabled_snapshot.insert(QString::fromStdString(std::string(id)));
     }
-    QSet<QString> known;
+    m_access_snapshot.clear();
+    for (const auto &entry : removals.access) {
+        m_access_snapshot.insert(QString::fromStdString(std::string(entry.plugin_id)));
+    }
     for (auto it = m_records.begin(); it != m_records.end(); ++it) {
         if (!it->external) {
             continue;
         }
-        if (it->discovered) {
-            known.insert(it.key());
-        }
         it->discovered = false;
         it->removal_phase.reset();
         // A scan gives a plugin that failed to load another chance.
-        if (it->plugin == nullptr) {
+        if (clearErrors && it->plugin == nullptr) {
             it->load_error.clear();
         }
     }
 
     // Only the plugins sealed in the app state: nothing found loose in
     // ~/.silent/plugins/ is ever read (ws-plaude/silent#41).
-    int found = 0;
-    for (const auto &bundle : ::plugin_metadata()) {
+    for (const auto &bundle : metadata) {
         auto meta = sidecarMeta(bundle);
         QString pluginId = meta.value(QStringLiteral("id")).trimmed();
         if (pluginId.isEmpty()) {
@@ -156,9 +284,6 @@ auto PluginRegistry::rescanDiscoveredPlugins() -> int {
         record.version = meta.value(QStringLiteral("version")).trimmed();
         record.meta = meta;
         record.discovered = true;
-        if (!known.contains(pluginId)) {
-            ++found;
-        }
 
         if (record.plugin == nullptr) {
             record.plugin_object = nullptr;
@@ -194,12 +319,22 @@ auto PluginRegistry::rescanDiscoveredPlugins() -> int {
     }
 
     rebuildPluginList();
+    if (m_reload_requested) {
+        m_reload_requested = false;
+        applyEnabledPlugins();
+    }
+    if (alive == nullptr) {
+        return;
+    }
     emit enabledPluginsChanged();
-    return found;
 }
 
 void PluginRegistry::reloadEnabledPlugins() {
-    rescanDiscoveredPlugins();
+    m_reload_requested = true;
+    requestPluginState(false);
+}
+
+void PluginRegistry::applyEnabledPlugins() {
     if (!m_removal_read_error.isEmpty()) {
         return;
     }
@@ -216,45 +351,30 @@ void PluginRegistry::reloadEnabledPlugins() {
         }
     }
 
-    bool changed = false;
-    for (auto it = desiredEnabled.constBegin(); it != desiredEnabled.constEnd(); ++it) {
-        if (m_stops.contains(it.key())) {
+    auto ids = m_records.keys();
+    QPointer<PluginRegistry> alive(this);
+    for (const auto &id : ids) {
+        if (!m_records.value(id).external) {
             continue;
         }
-        auto &record = m_records[it.key()];
-        if (record.enabled != it.value()) {
-            changed = true;
-        }
-        record.enabled = it.value();
-    }
-
-    for (auto it = m_records.constBegin(); it != m_records.constEnd(); ++it) {
-        if (!it->external) {
-            continue;
-        }
-        QString id = it.key();
         if (pluginStopping(id)) {
             continue;
         }
-        if (m_records.value(id).enabled) {
-            if (!enablePlugin(id)) {
-                // Keep runtime enabled state truthful when load fails.
-                if (m_records.value(id).enabled) {
-                    changed = true;
-                }
-                m_records[id].enabled = false;
-                auto error = ::app_set_plugin_enabled(rust::String(id.toStdString()), false);
-                if (!error.empty()) {
-                    qWarning() << "Could not persist failed-plugin disable:" << error.c_str();
+        if (desiredEnabled.value(id, false)) {
+            if (!m_records.value(id).enabled && !m_enabling.contains(id)) {
+                setEnabled(id, true);
+                if (alive == nullptr) {
+                    return;
                 }
             }
             continue;
         }
-        disablePlugin(id);
-    }
-
-    if (changed) {
-        emit enabledPluginsChanged();
+        if (m_records.value(id).enabled) {
+            disablePlugin(id);
+            if (alive == nullptr) {
+                return;
+            }
+        }
     }
 }
 
@@ -268,8 +388,6 @@ void PluginRegistry::registerBuiltin(IPlugin *plugin) {
         return;
     }
 
-    bool hadEntry = existingIt != m_records.end();
-    bool wasEnabled = hadEntry && existingIt->enabled;
     auto &record = m_records[id];
     record.id = id;
     record.builtin = true;
@@ -280,12 +398,6 @@ void PluginRegistry::registerBuiltin(IPlugin *plugin) {
         m_plugin_order.append(id);
     }
     syncPluginTranslations(id, true);
-    if (hadEntry && !wasEnabled) {
-        auto error = ::app_set_plugin_enabled(rust::String(id.toStdString()), true);
-        if (!error.empty()) {
-            qWarning() << "Could not persist built-in enable state:" << error.c_str();
-        }
-    }
 
     QList<IModule *> modules = plugin->modules();
     std::ranges::remove(modules, nullptr);
@@ -435,6 +547,12 @@ void PluginRegistry::onAccountDeleted(ReqId req_id, const QString &id, const QSt
         m_pending_deletions.remove(module);
     }
     if (error.isEmpty()) {
+        auto instances = m_launcher_instances.find(module);
+        if (instances != m_launcher_instances.end()) {
+            instances->removeIf([&id](const auto &entry) { return entry.first == id; });
+        }
+        m_pending_list_requests.remove(module);
+        m_sync_list_responses.remove(module);
         if (auto *host = dynamic_cast<HostImpl *>(Host::get());
             host != nullptr && host->instanceOwner(id) == module) {
             host->removeInstance(id);
@@ -496,6 +614,14 @@ auto PluginRegistry::setEnabled(const QString &plugin_id, bool enabled) -> bool 
         return m_stops.contains(plugin_id);
     }
 
+    if (m_enabling.contains(plugin_id)) {
+        return true;
+    }
+
+    if (!m_state_loaded) {
+        return false;
+    }
+
     bool previous = isPluginEnabled(plugin_id);
     if (previous == enabled) {
         return true;
@@ -505,27 +631,72 @@ auto PluginRegistry::setEnabled(const QString &plugin_id, bool enabled) -> bool 
     if (record == m_records.end() || (!record->discovered && !record->builtin)) {
         return false;
     }
-    auto saved = ::app_set_plugin_enabled(rust::String(plugin_id.toStdString()), true);
-    if (!saved.empty()) {
-        record->load_error = QStringLiteral("Could not persist enabled state: %1")
-                                 .arg(QString::fromUtf8(saved.data(), saved.size()));
-        return false;
+    auto request = ++m_delete_req_id;
+    if (request == 0) {
+        request = ++m_delete_req_id;
     }
-    m_records[plugin_id].enabled = true;
-    if (!enablePlugin(plugin_id)) {
-        m_records[plugin_id].enabled = false;
-        auto rollback = ::app_disable_plugin(rust::String(plugin_id.toStdString()));
-        if (!rollback.empty()) {
-            m_records[plugin_id].load_error +=
-                QStringLiteral("\nCould not persist disabled state: %1")
-                    .arg(QString::fromUtf8(rollback.data(), rollback.size()));
-        }
-        return false;
-    }
-
-    syncPluginTranslations(plugin_id, enabled);
+    ++m_state_revision;
+    m_enabling.insert(plugin_id, request);
+    m_state_requests.append({.action = PluginStateAction::Enable,
+                             .plugin_id = plugin_id,
+                             .request = request,
+                             .revision = m_state_revision});
+    startPluginStateJob();
     emit enabledPluginsChanged();
     return true;
+}
+
+void PluginRegistry::finishPluginEnable(const PluginStateJob &job) {
+    auto id = job.pluginId();
+    if (m_enabling.value(id, 0) != job.request() || m_stops.contains(id) ||
+        !m_records.contains(id)) {
+        m_enabling.remove(id);
+        emit pluginEnableFinished(id,
+                                  QStringLiteral("Enable was superseded by shutdown or removal"));
+        return;
+    }
+    auto error = job.error();
+    // Activation can enter a nested event loop that deletes the finished job.
+    auto enablePersisted = job.enablePersisted();
+    auto library = job.library();
+    QPointer<PluginRegistry> alive(this);
+    if (error.isEmpty()) {
+        m_records[id].enabled = true;
+        auto enabled = enablePlugin(id, library);
+        if (alive == nullptr) {
+            return;
+        }
+        if (!enabled) {
+            m_records[id].enabled = false;
+            error = m_records.value(id).load_error;
+            if (error.isEmpty()) {
+                error = QStringLiteral("Plugin activation failed");
+                m_records[id].load_error = error;
+            }
+        }
+    } else {
+        m_records[id].enabled = false;
+        m_records[id].load_error = error;
+    }
+    if (!m_stops.contains(id)) {
+        syncPluginTranslations(id, error.isEmpty());
+    }
+    if (alive == nullptr) {
+        return;
+    }
+    m_enabling.remove(id);
+    if (!error.isEmpty() && enablePersisted) {
+        // Compensate an accepted enable even when a later scan has failed admission.
+        startPluginStop(id, false);
+    }
+    if (alive == nullptr) {
+        return;
+    }
+    emit enabledPluginsChanged();
+    if (alive == nullptr) {
+        return;
+    }
+    emit pluginEnableFinished(id, error);
 }
 
 auto PluginRegistry::pluginName(const QString &plugin_id) const -> QString {
@@ -769,7 +940,7 @@ IPlugin *PluginRegistry::pluginById(const QString &plugin_id) const {
     return nullptr;
 }
 
-bool PluginRegistry::enablePlugin(const QString &plugin_id) {
+bool PluginRegistry::enablePlugin(const QString &plugin_id, const PluginLibraryResult &opened) {
     if (!m_removal_read_error.isEmpty() || m_stops.contains(plugin_id) ||
         m_records.value(plugin_id).removal_phase.has_value()) {
         return false;
@@ -803,7 +974,6 @@ bool PluginRegistry::enablePlugin(const QString &plugin_id) {
 
     // The bytes opened from the app state are the ones hashed and the ones loaded:
     // no file on disk between the two.
-    auto opened = ::plugin_library(rust::String(plugin_id.toStdString()));
     if (!opened.is_ok) {
         qWarning() << "Enable failed: plugin unreadable" << plugin_id;
         record.load_error = QString::fromStdString(std::string(opened.error));
@@ -857,12 +1027,17 @@ bool PluginRegistry::enablePlugin(const QString &plugin_id) {
     if (!m_plugin_order.contains(plugin_id)) {
         m_plugin_order.append(plugin_id);
     }
-    for (auto *module : record.modules) {
+    auto modules = record.modules;
+    QPointer<PluginRegistry> alive(this);
+    for (auto *module : modules) {
         activateModule(module, plugin_id);
+        if (alive == nullptr) {
+            return false;
+        }
     }
     rebuildPluginList();
     syncPluginTranslations(plugin_id, true);
-    return true;
+    return alive != nullptr;
 }
 
 bool PluginRegistry::disablePlugin(const QString &plugin_id) {
@@ -887,20 +1062,22 @@ auto PluginRegistry::pluginStopping(const QString &plugin_id) const -> bool {
 }
 
 auto PluginRegistry::pluginStopPending(const QString &plugin_id) const -> bool {
-    return m_stops.contains(plugin_id) && (m_stops.value(plugin_id).phase != StopPhase::Failed ||
-                                           !m_stops.value(plugin_id).pending.isEmpty());
+    auto stop = m_stops.constFind(plugin_id);
+    return stop != m_stops.constEnd() &&
+           (stop->phase != StopPhase::Failed || stop->checkpoint == StopCheckpoint::Pending ||
+            !stop->pending.isEmpty());
 }
 
 auto PluginRegistry::pluginDisableRetryable(const QString &plugin_id) const -> bool {
     auto stop = m_stops.constFind(plugin_id);
     return stop != m_stops.constEnd() && stop->phase == StopPhase::Failed && !stop->remove &&
-           stop->pending.isEmpty();
+           stop->checkpoint != StopCheckpoint::Pending && stop->pending.isEmpty();
 }
 
 auto PluginRegistry::pluginStopError(const QString &plugin_id) const -> QString {
     auto stop = m_stops.constFind(plugin_id);
     if (stop != m_stops.constEnd()) {
-        if (stop->phase != StopPhase::Failed) {
+        if (stop->error.isEmpty()) {
             return QString();
         }
         return stop->pending.isEmpty()
@@ -934,6 +1111,11 @@ void PluginRegistry::beginPluginStop(const QString &plugin_id, bool remove) {
         emit pluginStopFinished(plugin_id, false, m_removal_read_error);
         return;
     }
+    startPluginStop(plugin_id, remove);
+}
+
+void PluginRegistry::startPluginStop(const QString &plugin_id, bool remove) {
+    QPointer<PluginRegistry> alive(this);
     auto record = m_records.constFind(plugin_id);
     if (record == m_records.constEnd() || !record->external || record->builtin) {
         emit pluginStopFinished(plugin_id, false,
@@ -964,24 +1146,29 @@ void PluginRegistry::beginPluginStop(const QString &plugin_id, bool remove) {
         reqId = ++m_delete_req_id;
     }
     m_stops.insert(plugin_id, {.remove = remove, .req_id = reqId});
+    m_enabling.remove(plugin_id);
+    ++m_state_revision;
     m_records[plugin_id].enabled = false;
     auto *host = dynamic_cast<HostImpl *>(Host::get());
     for (auto *module : modules) {
         if (host != nullptr) {
             host->setCallerClosing(module, true);
+            if (alive == nullptr) {
+                return;
+            }
         }
     }
-    stopPluginInstances(plugin_id);
     emit enabledPluginsChanged();
-    auto *worker = QThread::create([this, plugin_id, remove] {
-        auto id = rust::String(plugin_id.toStdString());
-        auto error = remove ? ::app_begin_plugin_removal(std::move(id))
-                            : ::app_disable_plugin(std::move(id));
-        emit pluginStopPrepared(plugin_id, QString::fromUtf8(error.data(), error.size()));
-    });
-    worker->setParent(this);
-    connect(worker, &QThread::finished, worker, &QObject::deleteLater, qontrol::UNIQUE);
-    worker->start();
+    if (alive == nullptr) {
+        return;
+    }
+    m_state_requests.append(
+        {.action = remove ? PluginStateAction::BeginRemoval : PluginStateAction::Disable,
+         .plugin_id = plugin_id,
+         .request = reqId,
+         .revision = m_state_revision});
+    startPluginStateJob();
+    m_stop_timer.start();
 }
 
 void PluginRegistry::onPluginStopPrepared(const QString &plugin_id, const QString &error) {
@@ -989,29 +1176,26 @@ void PluginRegistry::onPluginStopPrepared(const QString &plugin_id, const QStrin
         return;
     }
     auto &stop = m_stops[plugin_id];
+    stop.checkpoint = error.isEmpty() ? StopCheckpoint::Saved : StopCheckpoint::Failed;
     if (!error.isEmpty()) {
-        stop.phase = StopPhase::Failed;
         m_records[plugin_id].enabled = false;
-        stop.error =
+        auto failure =
             QStringLiteral(
                 "Could not persist disabled/removal state; library and data retained. Plugin is "
                 "unavailable in this session; retry. Restart state is not guaranteed: %1")
                 .arg(error);
-        requestModuleShutdown(plugin_id);
-        auto failure = stop.error;
+        stop.error = stop.error.isEmpty() ? failure : failure + QLatin1Char('\n') + stop.error;
+        failure = stop.error;
         emit enabledPluginsChanged();
         emit pluginStopFinished(plugin_id, false, failure);
         return;
     }
-    stop.phase = StopPhase::Stopping;
     auto &record = m_records[plugin_id];
     record.enabled = false;
     if (stop.remove && !record.removal_phase.has_value()) {
         record.removal_phase = PluginRemovalPhase::Stopping;
     }
-    requestModuleShutdown(plugin_id);
     emit enabledPluginsChanged();
-    m_stop_timer.start();
 }
 
 void PluginRegistry::requestModuleShutdown(const QString &plugin_id) {
@@ -1022,9 +1206,18 @@ void PluginRegistry::requestModuleShutdown(const QString &plugin_id) {
         connect(module, &IModule::shutdownFinished, this, &PluginRegistry::onModuleShutdownFinished,
                 static_cast<Qt::ConnectionType>(qontrol::UNIQUE | Qt::QueuedConnection));
     }
+    stopPluginInstances(plugin_id);
+    m_stops[plugin_id].phase = StopPhase::Stopping;
     for (auto *module : modules) {
+        auto *host = dynamic_cast<HostImpl *>(Host::get());
+        if (host != nullptr) {
+            host->enterFrame(module);
+        }
         module->setSignerPolling(false);
         module->shutdown(request);
+        if (host != nullptr) {
+            host->leaveFrame(module);
+        }
     }
 }
 
@@ -1054,12 +1247,33 @@ void PluginRegistry::advancePluginStops() {
     auto ids = m_stops.keys();
     bool waiting = false;
     for (const auto &id : ids) {
+        if (m_stops.value(id).phase == StopPhase::WaitingFrames) {
+            waiting = true;
+            auto *host = dynamic_cast<HostImpl *>(Host::get());
+            auto modules = m_records.value(id).modules;
+            if (host != nullptr && std::ranges::any_of(modules, [host](IModule *module) {
+                    return !host->callerFramesIdle(module);
+                })) {
+                continue;
+            }
+            requestModuleShutdown(id);
+        }
         auto &stop = m_stops[id];
         if (stop.phase != StopPhase::Stopping) {
             continue;
         }
         waiting = true;
         if (!stop.pending.isEmpty()) {
+            continue;
+        }
+        if (stop.checkpoint == StopCheckpoint::Pending) {
+            continue;
+        }
+        // Failed checkpoints keep final-write handles and native mappings available for retry.
+        if (stop.checkpoint != StopCheckpoint::Saved || !stop.error.isEmpty()) {
+            stop.phase = StopPhase::Failed;
+            emit enabledPluginsChanged();
+            emit pluginStopFinished(id, false, stop.error);
             continue;
         }
         if (stop.error.isEmpty() && !drainPluginCallers(id)) {
@@ -1139,13 +1353,12 @@ void PluginRegistry::finishPluginShutdown(const QString &plugin_id) {
         return;
     }
     m_stops[plugin_id].phase = StopPhase::Cleaning;
-    auto *worker = QThread::create([this, plugin_id] {
-        auto error = ::plugin_remove(rust::String(plugin_id.toStdString()));
-        emit pluginDataRemoved(plugin_id, QString::fromUtf8(error.data(), error.size()));
-    });
-    worker->setParent(this);
-    connect(worker, &QThread::finished, worker, &QObject::deleteLater, qontrol::UNIQUE);
-    worker->start();
+    ++m_state_revision;
+    m_state_requests.append({.action = PluginStateAction::RemoveData,
+                             .plugin_id = plugin_id,
+                             .request = m_stops.value(plugin_id).req_id,
+                             .revision = m_state_revision});
+    startPluginStateJob();
 }
 
 void PluginRegistry::onPluginDataRemoved(const QString &plugin_id, const QString &error) {
@@ -1187,12 +1400,20 @@ bool PluginRegistry::unloadPlugin(const QString &plugin_id) {
 }
 
 void PluginRegistry::activateModule(IModule *module, const QString &plugin_id) {
-    if (module == nullptr || plugin_id.isEmpty()) {
+    QPointer<PluginRegistry> alive(this);
+    if (module == nullptr || plugin_id.isEmpty() || m_stops.contains(plugin_id)) {
         return;
     }
-    if (auto *host = dynamic_cast<HostImpl *>(Host::get()); host != nullptr) {
+    auto *host = dynamic_cast<HostImpl *>(Host::get());
+    if (host != nullptr) {
+        host->enterFrame(module);
         host->setCallerClosing(module, false);
     }
+    auto frame = qScopeGuard([host, module] {
+        if (host != nullptr) {
+            host->leaveFrame(module);
+        }
+    });
 
     auto record = m_records.constFind(plugin_id);
     if (record == m_records.constEnd()) {
@@ -1217,6 +1438,9 @@ void PluginRegistry::activateModule(IModule *module, const QString &plugin_id) {
             static_cast<Qt::ConnectionType>(qontrol::UNIQUE | Qt::QueuedConnection));
 
     ReqId autoReqId = module->autoStart();
+    if (alive == nullptr) {
+        return;
+    }
     if (autoReqId != 0) {
         m_pending_auto_start_requests[module].insert(autoReqId);
         if (m_sync_auto_start_responses.contains(module) &&
@@ -1226,11 +1450,26 @@ void PluginRegistry::activateModule(IModule *module, const QString &plugin_id) {
         }
     }
 
-    requestModuleInstances(module);
+    if (!m_stops.contains(plugin_id)) {
+        requestModuleInstances(module);
+    }
 }
 
 void PluginRegistry::requestModuleInstances(IModule *module) {
+    QPointer<PluginRegistry> alive(this);
+    auto *host = dynamic_cast<HostImpl *>(Host::get());
+    if (host != nullptr) {
+        host->enterFrame(module);
+    }
+    auto frame = qScopeGuard([host, module] {
+        if (host != nullptr) {
+            host->leaveFrame(module);
+        }
+    });
     ReqId listReqId = module->list();
+    if (alive == nullptr) {
+        return;
+    }
     if (listReqId == 0) {
         return;
     }
@@ -1285,6 +1524,15 @@ bool PluginRegistry::startOwnedInstance(IModule *module, const QString &instance
         }
     }
 
+    auto *host = dynamic_cast<HostImpl *>(Host::get());
+    if (host != nullptr) {
+        host->enterFrame(module);
+    }
+    auto frame = qScopeGuard([host, module] {
+        if (host != nullptr) {
+            host->leaveFrame(module);
+        }
+    });
     module->startInstance(trimmedInstanceId);
     return true;
 }

@@ -178,7 +178,7 @@ class AccountHandle final : public IAccount {
     Q_OBJECT
 
 public:
-    AccountHandle(HostImpl *host, IModule *module, IAccount *target);
+    AccountHandle(HostImpl *host, IModule *module, IModule *owner, IAccount *target);
     ~AccountHandle() override;
     void cancelRequest(ReqId req_id) override;
 
@@ -205,7 +205,7 @@ private slots:
     void onRaw(ReqId req_id, const QByteArray &response);
     void onError(std::optional<ReqId> req_id, const QString &message);
 
-private:
+protected:
     // Runs one request on the account: refused (0, error(std::nullopt, ...)) when the
     // caller may not use accounts. An account answers from inside the call before its
     // id is known, so the answers given during the call wait for it.
@@ -213,8 +213,10 @@ private:
     // Passes an answer on now, or once the call underway has returned its id.
     void relay(std::optional<ReqId> req_id, std::function<void()> emit_answer);
 
+private:
     HostImpl *m_host = nullptr;
     IModule *m_module = nullptr;
+    IModule *m_owner = nullptr;
     QPointer<IAccount> m_target;
     QSet<ReqId> m_requests;
     int m_in_call = 0;

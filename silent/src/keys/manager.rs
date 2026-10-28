@@ -250,7 +250,54 @@ pub struct KeyManager {
     secp: Secp256k1<All>,
 }
 
+pub(crate) struct UsedXpub {
+    pub fingerprint: Fingerprint,
+    pub entry: XpubEntry,
+}
+
 impl KeyManager {
+    pub(crate) fn used_xpubs(&self) -> Vec<UsedXpub> {
+        self.records
+            .values()
+            .flat_map(|record| {
+                record
+                    .xpubs
+                    .iter()
+                    .filter(|entry| entry.used)
+                    .map(|entry| UsedXpub {
+                        fingerprint: record.fingerprint,
+                        entry: entry.clone(),
+                    })
+            })
+            .collect()
+    }
+
+    /// Merge only monotonic usage metadata; persistence happened on the worker.
+    pub(crate) fn merge_used_xpubs(&mut self, used: &[UsedXpub]) -> bool {
+        let mut changed = false;
+        for used in used {
+            let Some(record) = self.records.get_mut(&used.fingerprint) else {
+                continue;
+            };
+            match record
+                .xpubs
+                .iter_mut()
+                .find(|entry| entry.path == used.entry.path)
+            {
+                Some(entry) if entry.xpub == used.entry.xpub => {
+                    changed |= !entry.used;
+                    entry.used = true;
+                }
+                Some(_) => log::warn!("worker usage conflicts with a newer cached xpub; retained"),
+                None => {
+                    insert_xpub(record, used.entry.clone());
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
     pub(crate) fn import_portable(&mut self, record: KeyRecord) -> Result<KeyRecord, Error> {
         let record = self.store.import_portable(record)?;
         self.accept_imported(record.clone())?;
@@ -831,7 +878,11 @@ impl KeyManagerImpl for KeyManager {
             }
             self.mutate(fingerprint, |record| {
                 match record.xpubs.iter_mut().find(|entry| entry.path == path) {
-                    Some(entry) => entry.used = true,
+                    Some(entry) if entry.xpub == xpub => entry.used = true,
+                    Some(_) => log::warn!(
+                        "mark_xpubs_used: {fingerprint} at {path} caches another xpub than the \
+                         descriptor's, left as it is"
+                    ),
                     None => insert_xpub(
                         record,
                         XpubEntry {
@@ -2284,6 +2335,62 @@ mod tests {
             }),
             "expected the cached xpub left as it was, got {entry:?}"
         );
+    }
+
+    #[test]
+    fn mark_xpubs_used_leaves_a_replacement_written_by_another_manager() {
+        let tmp = temp_dir::TempDir::new().expect("create temp dir");
+        let mut manager = manager_over(tmp.path(), Network::Regtest);
+        manager
+            .add_key(KeyRecord::new(
+                fingerprint(1),
+                Network::Regtest,
+                "alias".into(),
+            ))
+            .expect("add key");
+        let path = DerivationPath::from_str("m/86'/1'/0'").expect("valid path");
+        let original = test_xpub();
+        manager
+            .cache_xpub(fingerprint(1), path.clone(), original)
+            .expect("cache original xpub");
+        let mut worker = manager_over(tmp.path(), Network::Regtest);
+
+        manager
+            .remove_xpub(fingerprint(1), &path)
+            .expect("remove unused original xpub");
+        let replacement = other_test_xpub();
+        manager
+            .cache_xpub(fingerprint(1), path.clone(), replacement)
+            .expect("cache replacement at the same path");
+        assert_eq!(
+            worker.xpub(fingerprint(1), &path),
+            Some(original),
+            "worker still has the descriptor's original xpub"
+        );
+
+        worker
+            .mark_xpubs_used(&format!("tr([00000001/86'/1'/0']{original}/<0;1>/*)"))
+            .expect("conflicting usage is skipped");
+
+        let expected = Some(XpubEntry {
+            path: path.clone(),
+            xpub: replacement,
+            used: false,
+        });
+        assert_eq!(
+            cached_entry(&worker, &path),
+            expected,
+            "worker reloads the replacement without marking it used"
+        );
+        let reloaded = manager_over(tmp.path(), Network::Regtest);
+        assert_eq!(
+            cached_entry(&reloaded, &path),
+            expected,
+            "replacement remains unused on disk"
+        );
+        worker
+            .remove_xpub(fingerprint(1), &path)
+            .expect("replacement remains removable");
     }
 
     #[test]

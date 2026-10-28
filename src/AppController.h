@@ -43,25 +43,38 @@ public:
 
 signals:
     void accountList(QList<QString>);
-    void regtestDefaultsReady(const QString &blindbit);
 
 public slots:
-    auto initState() -> void;
+    void initState();
     auto addAccount(const QString &name) -> void;
     auto removeAccount(const QString &account) -> void;
-    auto listAccounts() -> void;
+    void listAccounts();
     auto createAccount(const QString &name, const QString &descriptor, Network network,
                        const QString &blindbit_url, const QString &electrum_url) -> void;
     auto openAccount(const QString &name) -> void;
     void showKeysTab();
     auto onHostInstanceRemoved(const QString &id) -> void;
     auto onHostInstanceRegistered(const QString &id) -> void;
-    auto onRegtestDefaultsReady(const QString &blindbit) -> void;
+    void onRegtestDefaultsReady();
     auto onHostSettingsSectionsChanged() -> void;
     auto onPluginRegistryChanged() -> void;
+    void onConfigsListed();
+
+protected:
+    void requestConfigs();
+    void finalizeListAccounts();
 
 private:
-    auto finalizeListAccounts() -> void;
+    // One list_configs() scan, shared by its worker and onConfigsListed() so the worker
+    // never touches this controller.
+    struct ConfigsListing {
+        explicit ConfigsListing(quint64 listing_revision) : revision(listing_revision) {
+        }
+
+        quint64 revision;
+        QList<QString> configs;
+    };
+
     auto pluginIdForModule(const IModule *module) const -> QString;
     [[nodiscard]] auto moduleForPluginId(const QString &plugin_id) const -> IModule *;
     [[nodiscard]] static auto pluginIdForAccount(const QString &account_id) -> QString;
@@ -72,6 +85,9 @@ private:
 
     QSet<QString> m_open_accounts;
     std::optional<RegtestDefaultsInfo> m_regtest_defaults;
+    // The fetch's blindbit URL, set by its worker. Not joined on destruction: it is a
+    // network call and the worker holds its own reference.
+    std::shared_ptr<std::optional<QString>> m_regtest_fetch;
     std::unique_ptr<PluginRegistry> m_plugin_registry;
     std::vector<std::unique_ptr<IPlugin>> m_builtin_plugins;
     Host *m_host = nullptr;
@@ -79,6 +95,11 @@ private:
     QList<QString> m_config_order;
     QSet<QString> m_known_configs;
     QSet<QString> m_discovered_accounts;
+    // Bumped by every config refresh request; only the reply to the latest one is applied.
+    quint64 m_configs_revision = 0;
+    bool m_configs_loaded = false;
+    // The running scan, at most one: requests coming while it runs wait for its answer.
+    std::shared_ptr<ConfigsListing> m_configs_listing;
 
     QString m_startup_active_theme;
     bool m_startup_custom_theme_applied = false;

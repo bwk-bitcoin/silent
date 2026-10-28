@@ -1,4 +1,5 @@
 #include "PluginBundleFixture.h"
+#include "PluginStopProbe.h"
 #include "host/PluginLibrary.h"
 #include "host/PluginMetadata.h"
 #include "host/PluginRegistry.h"
@@ -693,14 +694,14 @@ void legacyPluginAbiSmoke(const QString &plugin_id) {
         qFatal("legacy ABI smoke needs a fresh execution sentinel");
     }
     PluginRegistry registry;
-    registry.rescanDiscoveredPlugins();
+    rescanPluginsAndWait(&registry);
     if (registry.isPluginEnabled(plugin_id) ||
         registry.pluginName(plugin_id) != QStringLiteral("ABI fixture") ||
         registry.pluginVersion(plugin_id) != QStringLiteral("1.0.0") ||
         registry.pluginDescription(plugin_id) != QStringLiteral("Legacy ABI fixture")) {
         qFatal("the legacy bundle must be listed disabled from its sidecar");
     }
-    if (registry.setEnabled(plugin_id, true) || registry.isPluginEnabled(plugin_id)) {
+    if (enablePluginAndWait(&registry, plugin_id) || registry.isPluginEnabled(plugin_id)) {
         qFatal("registry must refuse an incompatible ABI library sealed by an earlier Silent");
     }
     auto error = registry.pluginLoadError(plugin_id);
@@ -758,8 +759,8 @@ void pluginAbiSmoke() {
     }
     {
         PluginRegistry registry;
-        registry.rescanDiscoveredPlugins();
-        if (!registry.setEnabled(ABI9_ID, true) || !registry.isPluginEnabled(ABI9_ID)) {
+        rescanPluginsAndWait(&registry);
+        if (!enablePluginAndWait(&registry, ABI9_ID) || !registry.isPluginEnabled(ABI9_ID)) {
             qFatal("registry must accept the installed ABI 9 library: %s",
                    qPrintable(registry.pluginLoadError(ABI9_ID)));
         }

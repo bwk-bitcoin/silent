@@ -5,6 +5,7 @@
 #include "account/TransactionJob.h"
 #include "i18n/Tr.h"
 
+#include <QScopeGuard>
 #include <Qontrol>
 #include <common.h>
 
@@ -130,36 +131,46 @@ void KeysHandle::coordinate(ReqId req_id, const plugin::SigningRequest &request)
                                QStringLiteral("request was not allocated by this caller"));
         return;
     }
-    if (m_target == nullptr || !m_host->allowed(m_module, Grant::Keys, true)) {
+    QPointer<KeysHandle> guard(this);
+    m_submitted.insert(req_id);
+    auto allowed = m_target != nullptr && m_host->allowed(m_module, Grant::Keys, true);
+    if (guard == nullptr || !m_requests.contains(req_id)) {
+        return;
+    }
+    if (m_target == nullptr || !allowed) {
         m_requests.remove(req_id);
+        m_submitted.remove(req_id);
         emit coordinationError(req_id, plugin::SpendError::Permission,
                                QStringLiteral("keys unavailable or access denied"));
         return;
     }
     if (!account::validRequest(request)) {
         m_requests.remove(req_id);
+        m_submitted.remove(req_id);
         emit coordinationError(req_id, plugin::SpendError::InvalidRequest,
                                QStringLiteral("invalid public enum value"));
         return;
     }
     CallerScope scope(m_target.data(), HostImpl::caller(m_module));
     auto metadata = m_target->keys(request.network);
+    if (guard == nullptr || m_target == nullptr || !m_requests.contains(req_id)) {
+        return;
+    }
     if (!metadata.is_ok) {
         m_requests.remove(req_id);
+        m_submitted.remove(req_id);
         emit coordinationError(req_id, plugin::SpendError::InvalidRequest, metadata.error);
         return;
     }
     setCaller(HostImpl::caller(m_module));
-    m_submitted.insert(req_id);
     m_coordination_requests.insert(req_id, request);
     m_target->coordinate(req_id, request);
 }
 
 void KeysHandle::onCoordinated(ReqId req_id, const plugin::SigningResult &result) {
-    if (!m_requests.remove(req_id)) {
+    if (!m_requests.contains(req_id)) {
         return;
     }
-    m_submitted.remove(req_id);
     auto request = m_coordination_requests.take(req_id);
     if (request.stage == plugin::SigningStage::Release) {
         m_attempts.remove(request.sessionId);
@@ -172,7 +183,13 @@ void KeysHandle::onCoordinated(ReqId req_id, const plugin::SigningResult &result
             m_attempts.insert(result.sessionId, request);
         }
     }
-    if (m_host->allowed(m_module, Grant::Keys, false)) {
+    QPointer<KeysHandle> guard(this);
+    auto allowed = m_host->allowed(m_module, Grant::Keys, false);
+    if (guard == nullptr || !m_requests.remove(req_id)) {
+        return;
+    }
+    m_submitted.remove(req_id);
+    if (allowed) {
         emit coordinated(req_id, result);
     } else {
         retire();
@@ -229,11 +246,17 @@ auto TransactionsHandle::begin(ReqId req_id) -> bool {
                    QStringLiteral("request is unknown or already submitted"));
         return false;
     }
-    if (!m_host->allowed(m_module, Grant::Account, true)) {
+    QPointer<TransactionsHandle> guard(this);
+    m_pending.insert(req_id);
+    auto allowed = m_host->allowed(m_module, Grant::Account, true);
+    if (guard == nullptr || m_retired || !m_pending.contains(req_id)) {
+        return false;
+    }
+    if (!allowed) {
+        m_pending.remove(req_id);
         emit error(req_id, plugin::SpendError::Permission, QStringLiteral("account access denied"));
         return false;
     }
-    m_pending.insert(req_id);
     return true;
 }
 
@@ -269,20 +292,27 @@ void TransactionsHandle::onFinished() {
         return;
     }
     --m_running;
-    if (!m_pending.remove(job->requestId())) {
+    if (!m_pending.contains(job->requestId())) {
         return;
     }
     auto reqId = job->requestId();
-    if (!m_host->allowed(m_module, Grant::Account, false)) {
+    // Authorization can process the job's deferred deletion.
+    auto operation = job->operation();
+    auto result = job->result();
+    QPointer<TransactionsHandle> guard(this);
+    auto allowed = m_host->allowed(m_module, Grant::Account, false);
+    if (guard == nullptr || !m_pending.remove(reqId)) {
+        return;
+    }
+    if (!allowed) {
         emit error(reqId, plugin::SpendError::Permission,
                    QStringLiteral("account permission revoked"));
         return;
     }
-    const auto &result = job->result();
     if (!result.is_ok) {
         emit error(reqId, account::toPublic<plugin::SpendError>(result.kind),
                    QString::fromStdString(std::string(result.error)));
-    } else if (job->operation() == TransactionJob::Operation::Broadcast) {
+    } else if (operation == TransactionJob::Operation::Broadcast) {
         emit broadcasted(reqId, QString::fromStdString(std::string(result.txid)));
     } else {
         emit finalized(reqId, QString::fromStdString(std::string(result.psbt_v2_hex)),
@@ -294,6 +324,7 @@ void TransactionsHandle::onFinished() {
 auto KeysHandle::allowedTarget(std::optional<ReqId> req_id, plugin::Network network) const
     -> IKeys * {
     auto *self = const_cast<KeysHandle *>(this);
+    QPointer<KeysHandle> guard(self);
     if (req_id.has_value()) {
         if (m_submitted.contains(*req_id)) {
             return nullptr;
@@ -319,7 +350,11 @@ auto KeysHandle::allowedTarget(std::optional<ReqId> req_id, plugin::Network netw
         }
         return nullptr;
     }
-    if (!m_host->allowed(m_module, Grant::Keys, true)) {
+    auto allowed = m_host->allowed(m_module, Grant::Keys, true);
+    if (guard == nullptr || m_target == nullptr || (req_id.has_value() && !mine(*req_id))) {
+        return nullptr;
+    }
+    if (!allowed) {
         if (req_id.has_value()) {
             emit self->error(req_id, TR("plugin-access-refused-keys"));
         }
@@ -328,6 +363,9 @@ auto KeysHandle::allowedTarget(std::optional<ReqId> req_id, plugin::Network netw
     if (req_id.has_value()) {
         CallerScope scope(m_target.data(), HostImpl::caller(m_module));
         auto metadata = m_target->keys(network);
+        if (guard == nullptr || m_target == nullptr || !mine(*req_id)) {
+            return nullptr;
+        }
         if (!metadata.is_ok) {
             self->m_requests.remove(*req_id);
             self->m_submitted.remove(*req_id);
@@ -343,11 +381,16 @@ auto KeysHandle::mine(ReqId req_id) const -> bool {
 }
 
 auto KeysHandle::finish(ReqId req_id) -> bool {
-    if (!m_requests.remove(req_id)) {
+    if (!m_requests.contains(req_id)) {
+        return false;
+    }
+    QPointer<KeysHandle> guard(this);
+    auto allowed = m_host->allowed(m_module, Grant::Keys, false);
+    if (guard == nullptr || !m_requests.remove(req_id)) {
         return false;
     }
     m_submitted.remove(req_id);
-    if (!m_host->allowed(m_module, Grant::Keys, false)) {
+    if (!allowed) {
         emit error(req_id, QStringLiteral("keys permission revoked"));
         return false;
     }
@@ -554,9 +597,10 @@ void KeysHandle::onRegistrationChecked(ReqId req_id, bool registered) {
 void KeysHandle::onError(std::optional<ReqId> req_id, const QString &message,
                          plugin::SignError kind) {
     // A failure tied to no request goes to every caller allowed to use keys.
+    QPointer<KeysHandle> guard(this);
     bool forMe =
         req_id.has_value() ? finish(*req_id) : m_host->allowed(m_module, Grant::Keys, false);
-    if (forMe) {
+    if (guard != nullptr && forMe) {
         emit error(req_id, message, kind);
     }
 }
@@ -567,9 +611,10 @@ void KeysHandle::onCancelled(ReqId req_id) {
     }
 }
 
-AccountHandle::AccountHandle(HostImpl *host, IModule *module, IAccount *target)
+AccountHandle::AccountHandle(HostImpl *host, IModule *module, IModule *owner, IAccount *target)
     : m_host(host),
       m_module(module),
+      m_owner(owner),
       m_target(target) {
     connect(target, &QObject::destroyed, this, &AccountHandle::onAccountDestroyed, qontrol::UNIQUE);
     connect(target, &IAccount::cancelled, this, &AccountHandle::onAccountCancelled,
@@ -628,11 +673,25 @@ void AccountHandle::onAccountCancelled(ReqId req_id) {
 }
 
 auto AccountHandle::forward(const std::function<ReqId(IAccount *)> &request) -> ReqId {
+    m_host->enterFrame(m_owner);
+    m_host->enterFrame(m_module);
+    auto frame =
+        qScopeGuard([host = QPointer<HostImpl>(m_host), owner = m_owner, caller = m_module] {
+            if (host != nullptr) {
+                host->leaveFrame(owner);
+                host->leaveFrame(caller);
+            }
+        });
     if (m_target == nullptr) {
         emit error(std::nullopt, TR("plugin-access-no-account"));
         return 0;
     }
-    if (!m_host->allowed(m_module, Grant::Account, true)) {
+    QPointer<AccountHandle> guard(this);
+    auto allowed = m_host->allowed(m_module, Grant::Account, true);
+    if (guard == nullptr || m_target == nullptr) {
+        return 0;
+    }
+    if (!allowed) {
         emit error(std::nullopt, TR("plugin-access-refused-account"));
         return 0;
     }
@@ -642,6 +701,9 @@ auto AccountHandle::forward(const std::function<ReqId(IAccount *)> &request) -> 
         CallerScope scope(m_target.data(), HostImpl::caller(m_module));
         reqId = request(m_target);
     }
+    if (guard == nullptr || m_target == nullptr) {
+        return 0;
+    }
     --m_in_call;
     if (reqId != 0) {
         m_requests.insert(reqId);
@@ -650,16 +712,31 @@ auto AccountHandle::forward(const std::function<ReqId(IAccount *)> &request) -> 
         auto held = std::exchange(m_held, {});
         for (const auto &[held_id, emit_answer] : held) {
             relay(held_id, emit_answer);
+            if (guard == nullptr || m_target == nullptr) {
+                return 0;
+            }
         }
     }
     return reqId;
 }
 
 void AccountHandle::relay(std::optional<ReqId> req_id, std::function<void()> emit_answer) {
+    // Authorization runs an event loop: the account's emitting native stack stays mapped.
+    m_host->enterFrame(m_owner);
+    m_host->enterFrame(m_module);
+    auto frame =
+        qScopeGuard([host = QPointer<HostImpl>(m_host), owner = m_owner, caller = m_module] {
+            if (host != nullptr) {
+                host->leaveFrame(owner);
+                host->leaveFrame(caller);
+            }
+        });
+    QPointer<AccountHandle> guard(this);
     bool pushed = !req_id.has_value() || *req_id == 0;
     if (pushed) {
         // An update the account pushes goes to every caller allowed to use accounts.
-        if (m_host->allowed(m_module, Grant::Account, false)) {
+        auto allowed = m_host->allowed(m_module, Grant::Account, false);
+        if (guard != nullptr && m_target != nullptr && allowed) {
             emit_answer();
         }
         return;
@@ -668,8 +745,12 @@ void AccountHandle::relay(std::optional<ReqId> req_id, std::function<void()> emi
         m_held.append({req_id, std::move(emit_answer)});
         return;
     }
-    if (m_requests.remove(*req_id)) {
-        if (m_host->allowed(m_module, Grant::Account, false)) {
+    if (m_requests.contains(*req_id)) {
+        auto allowed = m_host->allowed(m_module, Grant::Account, false);
+        if (guard == nullptr || m_target == nullptr || !m_requests.remove(*req_id)) {
+            return;
+        }
+        if (allowed) {
             emit_answer();
         } else {
             emit error(req_id, TR("plugin-access-refused-account"));
@@ -765,7 +846,8 @@ IAccount *InstanceHandle::account() {
         return nullptr;
     }
     if (m_account == nullptr) {
-        m_account = std::make_unique<AccountHandle>(m_host, m_module, account);
+        m_account = std::make_unique<AccountHandle>(m_host, m_module,
+                                                    m_host->instanceOwner(m_target->id()), account);
     }
     return m_account.get();
 }

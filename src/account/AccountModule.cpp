@@ -3,17 +3,83 @@
 #include "account/AccountBackend.h"
 #include "interfaces/host.h"
 
+#include <QPointer>
 #include <QThread>
 #include <Qontrol>
 #include <common.h>
+#include <utility>
 
 namespace account {
 
-AccountModule::AccountModule(Operation check, Operation remove) : m_check(check), m_remove(remove) {
+AccountModule::AccountModule(const char *plugin_id, Operation check, Operation remove)
+    : m_check(check),
+      m_remove(remove),
+      m_plugin_id(plugin_id) {
     connect(this, &AccountModule::deletionChecked, this, &AccountModule::onDeletionChecked,
             qontrol::UNIQUE);
     connect(this, &AccountModule::deletionRemoved, this, &AccountModule::onDeletionRemoved,
             qontrol::UNIQUE);
+}
+
+auto AccountModule::list() -> ReqId {
+    ReqId reqId = nextReqId();
+    m_waiting_req_ids.append(reqId);
+    if (m_list_worker == nullptr) {
+        startListing();
+    }
+    return reqId;
+}
+
+void AccountModule::startListing() {
+    m_listing_req_ids = std::exchange(m_waiting_req_ids, {});
+    auto result = std::make_shared<QStringList>();
+    m_list_result = result;
+    m_list_worker = QThread::create([result, pluginId = m_plugin_id] {
+        for (auto &name : ::list_module_configs(pluginId)) {
+            result->append(QString::fromUtf8(name.data(), static_cast<qsizetype>(name.size())));
+        }
+    });
+    connect(m_list_worker, &QThread::finished, this, &AccountModule::onListWorkerFinished,
+            qontrol::UNIQUE);
+    connect(m_list_worker, &QThread::finished, m_list_worker, &QThread::deleteLater,
+            qontrol::UNIQUE);
+    m_list_worker->start();
+}
+
+void AccountModule::onListWorkerFinished() {
+    if (sender() != m_list_worker.data()) {
+        return;
+    }
+    m_list_worker = nullptr;
+    auto result = std::move(m_list_result);
+    auto entries = instanceEntries(*result);
+    QPointer<AccountModule> alive(this);
+    for (auto reqId : std::exchange(m_listing_req_ids, {})) {
+        emit instances(reqId, entries);
+        if (alive == nullptr) {
+            return;
+        }
+    }
+    if (m_list_worker == nullptr && !m_waiting_req_ids.isEmpty()) {
+        startListing();
+    }
+}
+
+auto AccountModule::instanceEntries(const QStringList &account_ids) const
+    -> QList<QPair<QString, QString>> {
+    QList<QPair<QString, QString>> entries;
+    for (const auto &accountId : account_ids) {
+        entries.append({accountId, accountId});
+    }
+    return entries;
+}
+
+auto AccountModule::nextReqId() -> ReqId {
+    ++m_next_req_id;
+    if (m_next_req_id == 0) {
+        ++m_next_req_id;
+    }
+    return m_next_req_id;
 }
 
 auto AccountModule::accountUnavailable(const QString &id) const -> bool {

@@ -6,8 +6,6 @@
 #include "modules/musig/MusigInstance.h"
 
 #include <QDebug>
-#include <QList>
-#include <QPair>
 #include <QStringList>
 #include <Qontrol>
 #include <common.h>
@@ -20,7 +18,8 @@ namespace {
 MusigModule *gMusigModule = nullptr;
 } // namespace
 
-MusigModule::MusigModule() : AccountModule(::musig_account_delete_check, ::delete_musig_account) {
+MusigModule::MusigModule()
+    : AccountModule(MUSIG_PLUGIN_ID, ::musig_account_delete_check, ::delete_musig_account) {
     gMusigModule = this;
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this,
             &MusigModule::onInstanceRemoved, qontrol::UNIQUE);
@@ -40,18 +39,6 @@ auto MusigModule::meta() const -> QMap<QString, QString> {
     return {{QStringLiteral("id"), QStringLiteral("musig.module")},
             {QStringLiteral("name"), QStringLiteral("MuSig2 Accounts")},
             {QStringLiteral("version"), QStringLiteral("1.0.0")}};
-}
-
-auto MusigModule::list() -> ReqId {
-    ReqId reqId = nextReqId();
-    QList<QPair<QString, QString>> instances;
-    auto configs = ::list_module_configs(MUSIG_PLUGIN_ID);
-    for (auto &name : configs) {
-        QString accountId = QString::fromStdString(std::string(name.c_str()));
-        instances.append({accountId, accountId});
-    }
-    emit IModule::instances(reqId, instances);
-    return reqId;
 }
 
 auto MusigModule::autoStart() -> ReqId {
@@ -100,12 +87,4 @@ auto MusigModule::isMusigAccount(const QString &account_id) -> bool {
     }
     return QString::fromStdString(std::string(config->get_plugin_id().c_str())) ==
            QString::fromLatin1(MUSIG_PLUGIN_ID);
-}
-
-auto MusigModule::nextReqId() -> ReqId {
-    ++m_next_req_id;
-    if (m_next_req_id == 0) {
-        ++m_next_req_id;
-    }
-    return m_next_req_id;
 }

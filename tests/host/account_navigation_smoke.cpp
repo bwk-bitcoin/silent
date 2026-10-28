@@ -244,11 +244,11 @@ void customWidget(MainWindow &window) {
                 .is_ok,
             "install SDK-only fixture");
     auto *registry = AppController::get()->pluginRegistry();
-    registry->rescanDiscoveredPlugins();
+    rescanPluginsAndWait(registry);
     QPointer<MenuTab> launcher = window.findChild<MenuTab *>();
     require(launcher != nullptr, "real launcher remains alive throughout fixture unload");
     for (int visit = 0; visit < 2; ++visit) {
-        require(registry->setEnabled(QStringLiteral("custom.widget.fixture"), true),
+        require(enablePluginAndWait(registry, QStringLiteral("custom.widget.fixture")),
                 "load or re-enable external widget fixture");
         QPointer<IModule> module = fixtureModule(*registry, QStringLiteral("custom.widget.module"));
         require(module != nullptr, "external module is live");

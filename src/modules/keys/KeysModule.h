@@ -340,8 +340,12 @@ signals:
 private slots:
     void onHotWorkFinished();
     // Records as used every key xpub the network's accounts are built on, so it stays
-    // used once its account is deleted.
+    // used once its account is deleted. The account configs are read on a worker, see
+    // startXpubDiscovery().
     void markAccountXpubsUsed();
+    // Marks the xpubs of the scan's descriptors, or scans again when a newer
+    // markAccountXpubsUsed() came while it ran.
+    void onXpubDiscoveryFinished();
     void onInstanceRegistered(const QString &id);
     void onInstanceRemoved(const QString &id);
     void onDevicesChanged();
@@ -396,6 +400,22 @@ protected:
         QString error;
     };
 
+    // Owned usage result, shared by the worker and its completion slot.
+    // so the worker never touches this module.
+    struct XpubDiscovery {
+        XpubDiscovery(Network work_network, quint64 work_revision)
+            : network(work_network),
+              revision(work_revision) {
+        }
+
+        Network network;
+        quint64 revision;
+        std::optional<rust::Box<AccountXpubUsage>> usage;
+    };
+
+    // Reads the configs of the active network's accounts on a worker, answered in
+    // onXpubDiscoveryFinished().
+    void startXpubDiscovery();
     void createModule();
     void teardownModule();
     void refreshLiveDevices();
@@ -451,6 +471,10 @@ private:
     bool m_tab_shown = false;
     ReqId m_next_req_id = 0;
     QHash<QThread *, std::shared_ptr<HotWork>> m_hot_work;
+    // Bumped by each markAccountXpubsUsed(): a scan started for an older one is stale.
+    quint64 m_xpub_revision = 0;
+    // The running scan, at most one: requests coming while it runs wait for its answer.
+    std::shared_ptr<XpubDiscovery> m_xpub_discovery;
     // The network the Rust manager holds. network() answers from it rather than from
     // ::hwi_config_network(), which is read from disk and can drift from the manager
     // (a failed config write, another process), so a sealed key always matches.

@@ -32,6 +32,9 @@ use crate::{
     storage,
 };
 
+#[path = "grant_version_process_tests.rs"]
+mod grant_version;
+
 const ROLE: &str = "SILENT_REMOVAL_PROCESS_ROLE";
 const DATADIR: &str = "SILENT_REMOVAL_PROCESS_DATADIR";
 const ENTRY: &str = "removal_process_tests::process_role";
@@ -90,6 +93,9 @@ enum WorkerCommand {
     /// Allows Keys on the answers kept as `name`, saved against their epoch.
     GrantSave {
         name: String,
+    },
+    GrantAccount {
+        grant: StoredGrant,
     },
 }
 
@@ -169,6 +175,9 @@ fn process_role() {
     state_crypt::unlock_for_tests();
     match role.as_str() {
         WORKER => worker(),
+        "grant-version-denial" => grant_version::run("denial"),
+        "grant-version-missing" => grant_version::run("missing"),
+        "grant-version-aba" => grant_version::run("aba"),
         "stale-preference" => stale_preference_save_blocks_removal_phases(),
         "stale-snapshot" => stale_snapshot_setter_keeps_private_data_phase(),
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -303,6 +312,15 @@ impl WorkerHost {
                     ..access.clone()
                 };
                 json!({"error": app_set_plugin_access(access, *epoch)})
+            }
+            WorkerCommand::GrantAccount { grant } => {
+                let request = app_plugin_access_request(PLUGIN.into(), plugin_hash());
+                assert!(request.is_ok, "worker grant snapshot: {}", request.error);
+                let access = PluginAccess {
+                    account: grant.into(),
+                    ..request.access
+                };
+                json!({"error": app_set_plugin_access(access, request.storage_epoch)})
             }
         }
     }

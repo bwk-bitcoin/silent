@@ -350,6 +350,7 @@ struct ExternalRun {
     QString keep;
     QString during;
     QString queued;
+    QString afterUnload;
     QByteArray running;
     QByteArray marker;
 };
@@ -433,6 +434,8 @@ void externalGrants(HostImpl *host, PluginRegistry *registry, ExternalStorageCon
     auto unloadAnswered = two.answered(lateUnload);
     requireError(one.call({{QStringLiteral("op"), QStringLiteral("discover")}}), "revoked",
                  "the IStorage of an unloaded plugin answers revoked");
+    requireError(one.write(state.storage, state.afterUnload, "after", QStringLiteral("create")),
+                 "revoked", "a write submitted after unload completion is revoked");
     settle(witness, witness_storage);
     require(one.answered(pending) == pendingAnswered && one.answered(later) == laterAnswered,
             "an unloaded plugin receives no late outstanding-request results");
@@ -449,8 +452,8 @@ void externalUpgrade(HostImpl *host, PluginRegistry *registry, const QByteArray 
     installFixture(FIXTURE_ID, upgraded);
     require(stateGrant(hash) == PluginGrant::Unasked,
             "a new library version inherits no Saved Data grant");
-    registry->rescanDiscoveredPlugins();
-    require(registry->setEnabled(FIXTURE_ID, true) && registry->pluginHash(FIXTURE_ID) == hash,
+    rescanPluginsAndWait(registry);
+    require(enablePluginAndWait(registry, FIXTURE_ID) && registry->pluginHash(FIXTURE_ID) == hash,
             "the upgraded fixture loads under its new hash");
     auto *module = fixtureModule(registry, QStringLiteral("storage.first"));
 
@@ -472,8 +475,10 @@ void externalUpgrade(HostImpl *host, PluginRegistry *registry, const QByteArray 
     auto storage = after.open();
     require(ExternalStorageConsumer::data(after.read(storage, state.keep)) == state.marker,
             "the upgraded plugin finds its storage at the same root");
-    requireError(after.read(storage, state.queued), "not_found",
-                 "a request queued at unload never runs");
+    requireWholeOrAbsent(after.read(storage, state.queued), "queued",
+                         "a write accepted before asynchronous shutdown is absent or whole");
+    requireError(after.read(storage, state.afterUnload), "not_found",
+                 "a write submitted after unload completion changes nothing");
     requireWholeOrAbsent(after.read(storage, state.during), state.running,
                          "a write running at unload is absent or whole");
     require(stateGrant(state.hash) == PluginGrant::Allowed, "the old library keeps its own grant");
@@ -487,8 +492,8 @@ void claimedIdentity(PluginRegistry *registry, const QByteArray &library, const 
     // Its own bytes, so its own hash, while FIXTURE_ID is loaded and allowed Saved Data.
     auto claimer = library + QByteArray("\nstorage fixture claimer ") + run.toLatin1();
     installFixture(CLAIMER_ID, claimer);
-    registry->rescanDiscoveredPlugins();
-    require(!registry->setEnabled(CLAIMER_ID, true),
+    rescanPluginsAndWait(registry);
+    require(!enablePluginAndWait(registry, CLAIMER_ID),
             "a library claiming another installed plugin's id does not load");
     require(!registry->isPluginEnabled(CLAIMER_ID) &&
                 registry->pluginLoadError(CLAIMER_ID).contains(FIXTURE_ID),
@@ -555,12 +560,13 @@ void externalPlugin(HostImpl *host, PluginRegistry *registry, ExternalStorageCon
     require(file.open(QIODevice::ReadOnly), "the fixture library opens");
     auto library = file.readAll();
     installFixture(FIXTURE_ID, library);
-    registry->rescanDiscoveredPlugins();
-    require(registry->setEnabled(FIXTURE_ID, true), "the fixture plugin loads");
+    rescanPluginsAndWait(registry);
+    require(enablePluginAndWait(registry, FIXTURE_ID), "the fixture plugin loads");
     ExternalRun state{.hash = registry->pluginHash(FIXTURE_ID),
                       .keep = run + QStringLiteral("/keep.txt"),
                       .during = run + QStringLiteral("/during-unload.bin"),
                       .queued = run + QStringLiteral("/queued-unload.txt"),
+                      .afterUnload = run + QStringLiteral("/after-unload.txt"),
                       .running = QByteArray(IStorage::MAX_FILE_SIZE, 'u'),
                       .marker = QByteArray("storage-fixture-plaintext-") + run.toLatin1()};
     require(state.hash == sha256(library), "the fixture runs under its library hash");

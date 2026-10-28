@@ -63,6 +63,8 @@ set(SILENT_APP_SOURCES
     src/host/PluginLibrary.cpp
     src/host/PluginRegistry.h
     src/host/PluginRegistry.cpp
+    src/host/PluginStateJob.h
+    src/host/PluginStateJob.cpp
     src/views/modals/appsettings/RemoveFlow.h
     src/views/modals/appsettings/RemoveFlow.cpp
     src/host/StorageHandle.h
@@ -604,6 +606,8 @@ if(SILENT_BUILD_HOST_SMOKE)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_library(unload_failure_shim SHARED tests/host/UnloadFailure.cpp)
         target_link_libraries(unload_failure_shim PRIVATE dl)
+        add_library(fsync_hold_shim SHARED tests/host/FsyncHold.cpp)
+        target_link_libraries(fsync_hold_shim PRIVATE dl)
         string(REPEAT "x" 65536 ABI_METADATA_PADDING)
         file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/PluginAbiFixture.json"
             CONTENT "{\"padding\":\"${ABI_METADATA_PADDING}\"}\n")
@@ -705,6 +709,12 @@ if(SILENT_BUILD_HOST_SMOKE)
             SILENT_PRICE_FEED_FIXTURE="$<TARGET_FILE:price_feed_fixture>")
     endif()
     if(TARGET storage_fixture)
+        target_sources(${SMOKE} PRIVATE tests/host/access_async_smoke.cpp tests/host/access_async_smoke.h)
+        target_sources(${SMOKE} PRIVATE tests/host/grant_freshness_smoke.cpp tests/host/grant_freshness_smoke.h
+            tests/host/authorization_lifetime_smoke.cpp tests/host/authorization_lifetime_smoke.h)
+        target_sources(${SMOKE} PRIVATE tests/host/registry_async_errors.cpp tests/host/registry_async_errors.h)
+        target_sources(${SMOKE} PRIVATE tests/host/listing_reentrancy_smoke.cpp tests/host/listing_reentrancy_smoke.h)
+        target_sources(${SMOKE} PRIVATE tests/host/access_history_refresh_smoke.cpp tests/host/access_history_refresh_smoke.h)
         target_sources(${SMOKE} PRIVATE tests/host/plugin_removal_smoke.cpp)
         add_dependencies(${SMOKE} removal_fixture)
         target_compile_definitions(${SMOKE} PRIVATE

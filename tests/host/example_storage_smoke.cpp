@@ -221,9 +221,8 @@ void deniedDeletion(ExampleInstancesProbe &probe, PluginRegistry *registry, Host
 // not imported a second time.
 void reload(ExampleInstancesProbe &probe, PluginRegistry *registry, Host *host) {
     require(stopPlugin(registry, PLUGIN_ID).isEmpty(), "the example plugin unloads");
-    require(registry->setEnabled(PLUGIN_ID, true), "the example plugin loads again");
+    require(enablePluginAndWait(registry, PLUGIN_ID), "the example plugin loads again");
     auto *module = exampleModule(registry);
-    probe.attach(module);
     // The answer before the load, then the one the completed load refreshes.
     require(!lists(probe.waitForAnswer(0), LEGACY_ID), "the reloaded plugin lists no account");
     require(!lists(probe.waitForAnswer(1), LEGACY_ID),
@@ -233,6 +232,18 @@ void reload(ExampleInstancesProbe &probe, PluginRegistry *registry, Host *host) 
 }
 
 } // namespace
+
+void ExampleInstancesProbe::watchEnables(PluginRegistry *registry) {
+    m_registry = registry;
+    connect(registry, &PluginRegistry::pluginEnableFinished, this,
+            &ExampleInstancesProbe::onPluginEnabled, qontrol::UNIQUE);
+}
+
+void ExampleInstancesProbe::onPluginEnabled(const QString &id, const QString &error) {
+    if (id == PLUGIN_ID && error.isEmpty()) {
+        attach(exampleModule(m_registry));
+    }
+}
 
 void ExampleInstancesProbe::attach(IModule *module) {
     if (m_module != nullptr) {
@@ -326,17 +337,17 @@ void exampleStorageSmoke(const QString &bundle) {
     QObject::connect(&timer, &QTimer::timeout, &prompts, &StoragePrompts::onTick, qontrol::UNIQUE);
     timer.start(10);
 
-    registry->rescanDiscoveredPlugins();
-    require(registry->setEnabled(PLUGIN_ID, true), "the example plugin loads");
+    ExampleInstancesProbe probe;
+    probe.watchEnables(registry);
+    rescanPluginsAndWait(registry);
+    require(enablePluginAndWait(registry, PLUGIN_ID), "the example plugin loads");
     require(registry->pluginHash(PLUGIN_ID) == hash, "the example runs under its library hash");
     requireLoadedAbi(registry);
     auto *module = exampleModule(registry);
     require(HostImpl::caller(module).external && HostImpl::caller(module).pluginHash == hash,
             "the example module is an external caller with its library hash");
-    ExampleInstancesProbe probe;
-    probe.attach(module);
-    require(!lists(registry->launcherInstancesForModule(module), LEGACY_ID),
-            "enabling the plugin does not read its storage synchronously");
+    require(!lists(probe.waitForAnswer(0), LEGACY_ID),
+            "the first discovery answer does not wait for storage");
 
     discoverLegacy(probe, registry, module);
     requireMigratedState(host, module);
@@ -345,9 +356,9 @@ void exampleStorageSmoke(const QString &bundle) {
     requireMigratedState(host, module);
     require(stopPlugin(registry, PLUGIN_ID).isEmpty(),
             "ordinary plugin unload preserves account data");
-    require(registry->setEnabled(PLUGIN_ID, true), "plugin reloads after ordinary runtime cleanup");
+    require(enablePluginAndWait(registry, PLUGIN_ID),
+            "plugin reloads after ordinary runtime cleanup");
     module = exampleModule(registry);
-    probe.attach(module);
     discoverLegacy(probe, registry, module);
     requireMigratedState(host, module);
     deniedDeletion(probe, registry, host, module, hash);
@@ -370,11 +381,11 @@ void exampleReinstallSmoke(const QString &bundle) {
     install(bundle);
     auto hash = sha256(installedLibrary());
     allowSavedData(hash);
-    registry->rescanDiscoveredPlugins();
-    require(registry->setEnabled(PLUGIN_ID, true), "reinstall enables in the restarted host");
-    auto *module = exampleModule(registry);
     ExampleInstancesProbe probe;
-    probe.attach(module);
+    probe.watchEnables(registry);
+    rescanPluginsAndWait(registry);
+    require(enablePluginAndWait(registry, PLUGIN_ID), "reinstall enables in the restarted host");
+    auto *module = exampleModule(registry);
     require(!lists(probe.waitForAnswer(0), LEGACY_ID),
             "reinstalled plugin starts without old account IDs");
     require(!lists(probe.waitForAnswer(1), LEGACY_ID),

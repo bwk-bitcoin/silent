@@ -3,6 +3,7 @@
 #include "MockPlugin.h"
 #include "PluginBundleFixture.h"
 #include "PluginStopProbe.h"
+#include "catalog/feedback/Spinner.h"
 #include "catalog/inputs/Toggle.h"
 #include "host/PluginRegistry.h"
 #include "interfaces/host.h"
@@ -27,8 +28,8 @@
 #include <QPushButton>
 #include <QTemporaryDir>
 #include <QThread>
-#include <common.h>
 #include <algorithm>
+#include <common.h>
 #include <memory>
 #include <silent.h>
 #include <string>
@@ -52,6 +53,43 @@ void require(bool condition, const char *message) {
     if (!condition) {
         qFatal("plugin removal: %s", message);
     }
+}
+
+template <typename Predicate> void waitForCompletion(Predicate completed, const char *message) {
+    QElapsedTimer timer;
+    timer.start();
+    while (!completed() && timer.elapsed() < TIMEOUT_MS) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
+    require(completed(), message);
+}
+
+void waitForRegistry(PluginRegistry *registry) {
+    waitForCompletion([registry] { return !registry->pluginStateLoading(); },
+                      "checked asynchronous plugin state read completes");
+}
+
+void waitForStop(PluginRegistry *registry, const QString &id) {
+    waitForCompletion([registry, &id] { return !registry->pluginStopPending(id); },
+                      "plugin stop checkpoint settles after its runtime completion");
+    waitForRegistry(registry);
+}
+
+void waitForEnable(PluginRegistry *registry, const QString &id) {
+    waitForCompletion(
+        [registry, &id] {
+            return !registry->pluginEnablePending(id) && !registry->pluginStopPending(id) &&
+                   !registry->pluginStateLoading();
+        },
+        "asynchronous plugin enable and any compensating disable complete");
+}
+
+void waitForAccess(modal::AccessFlow *flow) {
+    auto *busy = flow->findChild<catalog::Spinner *>();
+    require(busy != nullptr, "actual access flow exposes its read/save loading state");
+    waitForCompletion([busy] { return busy->isHidden(); },
+                      "asynchronous Settings access read or save completes");
 }
 
 auto read(const QString &path) -> QByteArray {
@@ -78,7 +116,9 @@ void allowNativeStorage(const QString &id, const QByteArray &bytes) {
 auto removalPending(const QString &id) -> bool {
     auto pending = ::app_removing_plugins();
     require(pending.is_ok, "pending removals are checked before interpreting entries");
-    return std::ranges::any_of(pending.entries, [&id](const auto &entry) { return QString::fromStdString(std::string(entry.plugin_id)) == id; });
+    return std::ranges::any_of(pending.entries, [&id](const auto &entry) {
+        return QString::fromStdString(std::string(entry.plugin_id)) == id;
+    });
 }
 
 auto visibleToggle(modal::AppSettings *settings, const QString &id) -> catalog::Toggle * {
@@ -143,6 +183,7 @@ void removeAndWait(PluginRegistry *registry, RemovalProbe &probe, const QString 
     probe.error.clear();
     registry->removePlugin(id);
     probe.wait();
+    waitForStop(registry, id);
 }
 
 void checkPendingReadFailure(PluginRegistry *registry, modal::AppSettings *settings,
@@ -152,7 +193,7 @@ void checkPendingReadFailure(PluginRegistry *registry, modal::AppSettings *setti
     require(!failed.is_ok && !failed.error.empty(),
             "Rust pending-list error is explicit, never a successful empty list");
     registry->rescanDiscoveredPlugins();
-    QCoreApplication::processEvents();
+    waitForRegistry(registry);
     require(!registry->pluginRemovalReadError().isEmpty(), "registry exposes pending-list failure");
     require(registry->pluginStopError(id) == known_phase,
             "failed rescan retains the last known removal phase");
@@ -187,6 +228,7 @@ void checkPendingReadFailure(PluginRegistry *registry, modal::AppSettings *setti
     require(!installBundle(id, QStringLiteral("Removal fixture"), bytes).is_ok,
             "direct import cannot bypass the read failure");
     PluginRegistry restarted;
+    waitForRegistry(&restarted);
     require(!restarted.pluginRemovalReadError().isEmpty(),
             "a new registry reports unreadable state instead of claiming no pending removal");
 }
@@ -202,28 +244,33 @@ auto visibleButton(QWidget *page, const QString &text) -> QPushButton * {
 
 auto stateGrantToggle(QWidget *page) -> QCheckBox * {
     for (auto *toggle : page->findChildren<QCheckBox *>()) {
-        if (toggle->isVisible() && toggle->property("accessGrant").toString() == QStringLiteral("state")) {
+        if (toggle->isVisible() &&
+            toggle->property("accessGrant").toString() == QStringLiteral("state")) {
             return toggle;
         }
     }
     qFatal("Saved Data toggle is missing");
 }
 
-auto hasVisibleAccessFailure(QWidget *page, const QString &error = QStringLiteral("removed since")) -> bool {
+auto hasVisibleAccessFailure(QWidget *page, const QString &error = QStringLiteral("removed since"))
+    -> bool {
     return std::ranges::any_of(page->findChildren<QLabel *>(), [&error](auto *label) {
         return label->isVisible() && label->text().contains(error);
     });
 }
 
-void staleSettingsGrant(modal::AppSettings *settings, PluginRegistry *registry,
-                         const QString &id, const QByteArray &bytes, bool forget,
-                         const QString &shots) {
-    auto hash = QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+void staleSettingsGrant(modal::AppSettings *settings, PluginRegistry *registry, const QString &id,
+                        const QByteArray &bytes, bool forget, const QString &shots) {
+    auto hash =
+        QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
     allowNativeStorage(id, bytes);
     registry->rescanDiscoveredPlugins();
+    waitForRegistry(registry);
     visibleButton(settings, QStringLiteral("Access"))->click();
     auto *flow = settings->findChild<modal::AccessFlow *>();
-    require(flow != nullptr && flow->isVisible(), "actual Settings access view captures its lifetime");
+    require(flow != nullptr && flow->isVisible(),
+            "actual Settings access view captures its lifetime");
+    waitForAccess(flow);
     require(stateGrantToggle(flow)->isChecked(), "the old view starts from its Allowed answer");
     require(::app_begin_plugin_removal(rust::String(id.toStdString())).empty() &&
                 ::plugin_remove(rust::String(id.toStdString())).empty(),
@@ -236,7 +283,7 @@ void staleSettingsGrant(modal::AppSettings *settings, PluginRegistry *registry,
     } else {
         mouseClick(stateGrantToggle(flow));
     }
-    QCoreApplication::processEvents();
+    waitForAccess(flow);
     require(hasVisibleAccessFailure(flow), "stale Settings save is visibly rejected with retry");
     if (!shots.isEmpty()) {
         require(QDir().mkpath(shots), "create stale access captures directory");
@@ -252,6 +299,7 @@ void staleSettingsGrant(modal::AppSettings *settings, PluginRegistry *registry,
             "stale toggle never recreates old grants; stale Forget never erases a fresh grant");
     ::state_lock();
     visibleButton(flow, QStringLiteral("Try Again"))->click();
+    waitForAccess(flow);
     require(hasVisibleAccessFailure(flow, QStringLiteral("locked")) &&
                 !stateGrantToggle(flow)->isEnabled() && stateGrantToggle(flow)->isChecked(),
             "a failed reload reports the read error and retains the disabled old rows");
@@ -261,14 +309,17 @@ void staleSettingsGrant(modal::AppSettings *settings, PluginRegistry *registry,
         allowNativeStorage(id, bytes);
     }
     visibleButton(flow, QStringLiteral("Try Again"))->click();
+    waitForAccess(flow);
     require(!hasVisibleAccessFailure(flow) && stateGrantToggle(flow)->isEnabled(),
             "deliberate reload captures the current installation lifetime");
     mouseClick(stateGrantToggle(flow));
+    waitForAccess(flow);
     auto request = ::app_plugin_access_request(rust::String(id.toStdString()),
                                                rust::String(hash.toStdString()));
     require(request.is_ok && request.access.state == PluginGrant::Denied,
             "a fresh Settings action really saves the new Denied answer");
     visibleButton(flow, QStringLiteral("Forget"))->click();
+    waitForAccess(flow);
     require(::app_plugin_history(rust::String(id.toStdString())).empty(),
             "fresh Forget saves against the current epoch");
     visibleButton(flow, QStringLiteral("Done"))->click();
@@ -289,6 +340,7 @@ void pluginRemovalSmoke() {
     auto id = QStringLiteral("removal.fixture");
     AppController::get()->registerBuiltinPlugin(std::make_unique<RemovalBuiltin>());
     auto *registry = AppController::get()->pluginRegistry();
+    waitForRegistry(registry);
     RemovalProbe probe;
     QObject::connect(registry, &PluginRegistry::pluginStopFinished, &probe,
                      &RemovalProbe::onFinished, qontrol::UNIQUE);
@@ -300,6 +352,7 @@ void pluginRemovalSmoke() {
     auto installed = installBundle(id, QStringLiteral("Removal fixture"), bytes);
     require(installed.is_ok, "native bundle imports without execution");
     registry->rescanDiscoveredPlugins();
+    waitForRegistry(registry);
     require(read(sentinel).isEmpty(), "disabled inspection does not run a constructor");
     removeAndWait(registry, probe, id);
     require(probe.removed && probe.error.isEmpty(), "disabled plugin removal succeeds");
@@ -308,6 +361,7 @@ void pluginRemovalSmoke() {
     require(installBundle(id, QStringLiteral("Removal fixture"), bytes).is_ok,
             "reinstall empty plugin");
     registry->rescanDiscoveredPlugins();
+    waitForRegistry(registry);
     auto session = ::storage_session_open(rust::String(id.toStdString()), rust::String(), false);
     auto opened = storageRequest(session, R"({"id":"open","op":"open","storage":"private"})");
     auto handle = opened.value(QStringLiteral("storage")).toString();
@@ -324,6 +378,8 @@ void pluginRemovalSmoke() {
             "seed real private account file");
     allowNativeStorage(id, bytes);
     require(registry->setEnabled(id, true), "enable real native worker");
+    waitForEnable(registry, id);
+    require(registry->isPluginEnabled(id), "real native worker finishes enabling");
     auto privatePath = QDir::homePath() + QStringLiteral("/.silent/removal.fixture/tree.bip138");
     auto privateBytes = read(privatePath);
     require(!privateBytes.isEmpty(), "native fixture has actual encrypted private data");
@@ -376,6 +432,7 @@ void pluginRemovalSmoke() {
     }
     emit probe.releaseWorker();
     probe.wait();
+    waitForStop(registry, id);
     if (writeFailure) {
         require(QFile::setPermissions(QFileInfo(privatePath).path(), privatePermissions),
                 "restore private storage permissions");
@@ -433,6 +490,7 @@ void pluginRemovalSmoke() {
             QStringLiteral("not_found"),
         "reinstall starts without old account data");
     registry->rescanDiscoveredPlugins();
+    waitForRegistry(registry);
     auto bundlesDirectory = QDir::homePath() + QStringLiteral("/.silent/plugins");
     auto permissions = QFileInfo(bundlesDirectory).permissions();
     require(QFile::setPermissions(bundlesDirectory, QFile::ReadOwner | QFile::ExeOwner),
@@ -469,7 +527,10 @@ void pluginRemovalSmoke() {
     auto oldSentinel = directory.filePath(QStringLiteral("old-constructor"));
     qputenv("SILENT_ABI_SENTINEL", QFile::encodeName(oldSentinel));
     registry->rescanDiscoveredPlugins();
-    require(!registry->setEnabled(oldId, true),
+    waitForRegistry(registry);
+    require(registry->setEnabled(oldId, true), "incompatible library enable check is admitted");
+    waitForEnable(registry, oldId);
+    require(!registry->isPluginEnabled(oldId),
             "current host refuses incompatible installed library");
     require(!registry->pluginLoadError(oldId).isEmpty(),
             "incompatible plugin keeps its explicit error");
@@ -492,6 +553,7 @@ void pluginAccessSettingsFailureSmoke(const QString &shots) {
     controller->registerBuiltinPlugin(std::make_unique<MockPlugin>());
     auto *registry = controller->pluginRegistry();
     registry->rescanDiscoveredPlugins();
+    waitForRegistry(registry);
     MainWindow window;
     controller->start(&window);
     window.resize(1440, 1000);
@@ -500,6 +562,7 @@ void pluginAccessSettingsFailureSmoke(const QString &shots) {
     require(settings != nullptr, "actual Settings exists for grant lifetime exercise");
     window.showTab(settings);
     QCoreApplication::processEvents();
+    waitForRegistry(registry);
     staleSettingsGrant(settings, registry, id, bytes, false, shots);
     staleSettingsGrant(settings, registry, id, bytes, true, shots);
 }
@@ -515,6 +578,7 @@ void pluginRemovalReadFailureSmoke(const QString &shots) {
     controller->registerBuiltinPlugin(std::make_unique<MockPlugin>());
     auto *registry = controller->pluginRegistry();
     registry->rescanDiscoveredPlugins();
+    waitForRegistry(registry);
     auto knownPhase = registry->pluginStopError(id);
     require(!knownPhase.isEmpty(), "registry initially knows the pending phase");
     MainWindow window;
@@ -525,6 +589,7 @@ void pluginRemovalReadFailureSmoke(const QString &shots) {
     require(settings != nullptr, "real Settings exists for read-failure exercise");
     window.showTab(settings);
     QCoreApplication::processEvents();
+    waitForRegistry(registry);
     auto statePath = QDir::homePath() + QStringLiteral("/.silent/app.bip138");
     auto lockPath = QDir::homePath() + QStringLiteral("/.silent/app.lock");
     auto original = read(statePath);
@@ -557,23 +622,28 @@ void pluginRemovalReadFailureSmoke(const QString &shots) {
                         state.write("corrupt journal") > 0,
                     "install corrupt journal fixture");
         } else {
-            require(QFile::setPermissions(fault == QStringLiteral("unreadable") ? statePath : lockPath,
-                                          fault == QStringLiteral("unreadable") ? QFile::Permissions() : QFile::ReadOwner),
-                    "install actual inaccessible journal or unwritable lock fixture");
+            require(
+                QFile::setPermissions(fault == QStringLiteral("unreadable") ? statePath : lockPath,
+                                      fault == QStringLiteral("unreadable") ? QFile::Permissions()
+                                                                            : QFile::ReadOwner),
+                "install actual inaccessible journal or unwritable lock fixture");
         }
         checkPendingReadFailure(registry, settings, id, knownPhase, bytes);
-        require(confirmation == nullptr || (!confirmation->isVisible() && !confirmation->isEnabled()),
+        require(confirmation == nullptr ||
+                    (!confirmation->isVisible() && !confirmation->isEnabled()),
                 "the actual previously open confirmation is gone or withdrawn and disabled");
         auto error = registry->pluginRemovalReadError();
         removeAndWait(registry, probe, id);
         require(!probe.removed && probe.error == error,
                 "removal reports the read failure instead of destructive success");
         retry->click();
+        waitForRegistry(registry);
         require(!registry->pluginRemovalReadError().isEmpty() && notice->isVisible(),
                 "retry while still inaccessible remains an explicit failure");
         if (!shots.isEmpty()) {
             require(QDir().mkpath(shots), "create read-failure captures directory");
-            require(window.grab().save(QDir(shots).filePath(QStringLiteral("issue71-pending-%1-wip.png").arg(fault))),
+            require(window.grab().save(QDir(shots).filePath(
+                        QStringLiteral("issue71-pending-%1-wip.png").arg(fault))),
                     "capture real whole-window pending-read failure");
         }
         if (fault == QStringLiteral("locked")) {
@@ -585,19 +655,22 @@ void pluginRemovalReadFailureSmoke(const QString &shots) {
                         state.write(original) == original.size(),
                     "restore exact original ciphertext");
         } else {
-            require(QFile::setPermissions(fault == QStringLiteral("unreadable") ? statePath : lockPath,
-                                          fault == QStringLiteral("unreadable") ? statePermissions : lockPermissions),
+            require(QFile::setPermissions(
+                        fault == QStringLiteral("unreadable") ? statePath : lockPath,
+                        fault == QStringLiteral("unreadable") ? statePermissions : lockPermissions),
                     "restore file access before retry");
         }
-        require(read(statePath) == original, "failed reads and refused operations preserve journal bytes");
+        require(read(statePath) == original,
+                "failed reads and refused operations preserve journal bytes");
         retry->click();
-        QCoreApplication::processEvents();
+        waitForRegistry(registry);
         require(registry->pluginRemovalReadError().isEmpty() && !notice->isVisible() &&
                     !retry->isVisible() && settings->acceptDrops(),
                 "successful checked retry restores controls and clears only the error");
         require(removalPending(id) && registry->pluginStopError(id) == knownPhase,
                 "successful read recovers the real pending record, not an empty default");
-        require(!registry->setEnabled(id, true), "recovered pending removal still cannot be enabled");
+        require(!registry->setEnabled(id, true),
+                "recovered pending removal still cannot be enabled");
     }
     removeAndWait(registry, probe, id);
     require(probe.removed && probe.error.isEmpty() && !removalPending(id),
@@ -620,6 +693,7 @@ void pluginRemovalUiSmoke(const QString &shots) {
     require(settings != nullptr, "actual MainWindow owns Settings");
     window.showTab(settings);
     QCoreApplication::processEvents();
+    waitForRegistry(registry);
     ::app_set_active_theme(rust::String("light"));
     auto appState = QDir::homePath() + QStringLiteral("/.silent/app.bip138");
     auto original = read(appState);
@@ -680,6 +754,7 @@ void pluginRemovalUiSmoke(const QString &shots) {
     auto *toggle = visibleToggle(settings, id);
     require(toggle != nullptr && !toggle->isChecked(), "real external toggle starts disabled");
     mouseClick(toggle);
+    waitForEnable(registry, id);
     require(registry->isPluginEnabled(id),
             "actual mouse events enable the plugin through its toggle");
     RemovalProbe native;
@@ -698,6 +773,7 @@ void pluginRemovalUiSmoke(const QString &shots) {
     click(disableFlow, QStringLiteral("Disable Plugin"));
     require(disabledFailure.wait().contains(QStringLiteral("deliberate native refusal")),
             "failed disable shows the actual native error");
+    waitForStop(registry, id);
     qunsetenv("SILENT_REMOVAL_REFUSE");
     require(registry->pluginDisableRetryable(id) && !removalPending(id),
             "failed disable has a non-destructive retry, not a removal journal");
@@ -706,6 +782,7 @@ void pluginRemovalUiSmoke(const QString &shots) {
     click(settings, QStringLiteral("Retry disable"));
     require(retriedDisable.wait().isEmpty(),
             "retry disable completes without selecting destructive Remove");
+    waitForStop(registry, id);
     require(::plugin_library(rust::String(id.toStdString())).is_ok,
             "disable retry retains installed bundle");
     auto preservedSession =
@@ -722,6 +799,7 @@ void pluginRemovalUiSmoke(const QString &shots) {
     ::storage_session_revoke(preservedSession);
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     mouseClick(visibleToggle(settings, id));
+    waitForEnable(registry, id);
     require(registry->isPluginEnabled(id), "a safely disabled plugin can be enabled again");
     for (auto *module : registry->enabledModulesForLauncher()) {
         if (module->meta().value(QStringLiteral("id")) == QStringLiteral("removal.module")) {
@@ -739,6 +817,7 @@ void pluginRemovalUiSmoke(const QString &shots) {
     click(flow, QStringLiteral("Remove"));
     auto error = completion.wait();
     require(error.isEmpty(), "real Settings removal completes successfully");
+    waitForStop(registry, id);
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     require(removeButton() == nullptr, "completion refresh removes the installed row");
     capture(QStringLiteral("issue71-removed-wip.png"));

@@ -20,7 +20,7 @@ const QString K_CREATE_INSTANCE_ID = QStringLiteral("sp.create");
 SpModule *gSpModule = nullptr;
 } // namespace
 
-SpModule::SpModule() : AccountModule(::sp_account_delete_check, ::delete_sp_account) {
+SpModule::SpModule() : AccountModule(SP_PLUGIN_ID, ::sp_account_delete_check, ::delete_sp_account) {
     gSpModule = this;
     connect(Host::get()->events(), &HostEvents::instanceRemoved, this, &SpModule::onInstanceRemoved,
             qontrol::UNIQUE);
@@ -54,18 +54,11 @@ bool SpModule::isSpAccount(const QString &account_id) {
            QString::fromLatin1(SP_PLUGIN_ID);
 }
 
-ReqId SpModule::list() {
-    ReqId reqId = nextReqId();
-    QList<QPair<QString, QString>> instances;
-    auto configs = ::list_module_configs(SP_PLUGIN_ID);
-    for (auto &name : configs) {
-        QString accountId = QString::fromStdString(std::string(name.c_str()));
-        instances.append({accountId, accountId});
-    }
-
-    instances.append({K_CREATE_INSTANCE_ID, TR("sp-account-type")});
-    emit IModule::instances(reqId, instances);
-    return reqId;
+auto SpModule::instanceEntries(const QStringList &account_ids) const
+    -> QList<QPair<QString, QString>> {
+    auto entries = AccountModule::instanceEntries(account_ids);
+    entries.append({K_CREATE_INSTANCE_ID, TR("sp-account-type")});
+    return entries;
 }
 
 ReqId SpModule::autoStart() {
@@ -108,12 +101,4 @@ void SpModule::deleteInstance(const QString &id) {
 
 void SpModule::onInstanceRemoved(const QString &id) {
     deleteInstance(id);
-}
-
-ReqId SpModule::nextReqId() {
-    ++m_next_req_id;
-    if (m_next_req_id == 0) {
-        ++m_next_req_id;
-    }
-    return m_next_req_id;
 }

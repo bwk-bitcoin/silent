@@ -27,6 +27,7 @@
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QtTypes>
 #include <algorithm>
 #include <common.h>
@@ -45,6 +46,36 @@ void require(bool condition, const char *message) {
     if (!condition) {
         qFatal("plugin bundle smoke: %s", message);
     }
+}
+
+void waitForRegistry(PluginRegistry &registry) {
+    QElapsedTimer timer;
+    timer.start();
+    while (registry.pluginStateLoading() && timer.elapsed() < TIMEOUT_MS) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
+    require(!registry.pluginStateLoading() && registry.pluginRemovalReadError().isEmpty(),
+            "the checked plugin snapshot completes without a read error");
+}
+
+void rescanPlugins(PluginRegistry &registry) {
+    registry.rescanDiscoveredPlugins();
+    waitForRegistry(registry);
+}
+
+void waitForEnable(PluginRegistry &registry, const QString &id) {
+    QElapsedTimer timer;
+    timer.start();
+    while ((registry.pluginEnablePending(id) || registry.pluginStopPending(id) ||
+            registry.pluginStateLoading()) &&
+           timer.elapsed() < TIMEOUT_MS) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
+    require(!registry.pluginEnablePending(id) && !registry.pluginStopPending(id) &&
+                !registry.pluginStateLoading(),
+            "the enable request and any compensating Disable finish");
 }
 
 auto text(const rust::String &value) -> QString {
@@ -194,10 +225,11 @@ void requireFeedShape(PluginRegistry &registry, const QString &plugin_id) {
 // bundle's.
 void requireEnabled(PluginRegistry &registry, const QJsonObject &manifest) {
     auto id = manifest.value(QStringLiteral("id")).toString();
+    waitForRegistry(registry);
     if (!registry.setEnabled(id, true)) {
         qFatal("plugin bundle smoke: enable failed: %s", qPrintable(registry.pluginLoadError(id)));
     }
-    QCoreApplication::processEvents();
+    waitForEnable(registry, id);
     require(registry.isPluginEnabled(id) && registry.pluginLoadError(id).isEmpty(),
             "the imported plugin enables");
     auto opened = ::plugin_library(rust::String(id.toStdString()));
@@ -299,9 +331,11 @@ void claimedIdSmoke(PluginRegistry &registry, const QJsonObject &manifest,
         qFatal("plugin bundle smoke: claimed-id import failed: %s", imported.error.c_str());
     }
     require(text(imported.plugin_id) == claimedId, "the bundle imports under its manifest id");
-    registry.rescanDiscoveredPlugins();
+    rescanPlugins(registry);
     require(!registry.isPluginEnabled(claimedId), "the claimed-id plugin is listed disabled");
-    require(!registry.setEnabled(claimedId, true), "a library claiming another id never enables");
+    require(registry.setEnabled(claimedId, true), "the claimed-id enable check is admitted");
+    waitForEnable(registry, claimedId);
+    require(!registry.isPluginEnabled(claimedId), "a library claiming another id never enables");
     require(registry.pluginLoadError(claimedId) ==
                 QStringLiteral("plugin library claims the id '%1'").arg(id),
             "the refusal names the id the library claims");
@@ -326,7 +360,7 @@ void pluginBundleSmoke(const QString &bundle) {
             "the installed manifest is the bundle's");
 
     PluginRegistry registry;
-    registry.rescanDiscoveredPlugins();
+    rescanPlugins(registry);
     requireListedMetadata(registry, manifest);
     requireEnabled(registry, manifest);
     auto hash = registry.pluginHash(id);
@@ -336,7 +370,7 @@ void pluginBundleSmoke(const QString &bundle) {
     auto replaced = install(renamed);
     require(replaced.is_ok && text(replaced.plugin_id) == id,
             "the bundle imports under any file name, over the enabled plugin");
-    registry.rescanDiscoveredPlugins();
+    rescanPlugins(registry);
     require(registry.isPluginEnabled(id), "importing over an enabled plugin keeps it enabled");
 
     // Other library bytes stay pending until disabled and enabled.
@@ -344,7 +378,7 @@ void pluginBundleSmoke(const QString &bundle) {
         install(retaggedBundle(manifest, directory.filePath(QStringLiteral("retagged.zip"))));
     require(retagged.is_ok && text(retagged.plugin_id) == id,
             "other library bytes import over the enabled plugin");
-    registry.rescanDiscoveredPlugins();
+    rescanPlugins(registry);
     require(registry.isPluginEnabled(id) && registry.pluginHash(id) == hash,
             "importing over an enabled plugin keeps its library running");
     requireDisabled(registry, id);
@@ -355,7 +389,7 @@ void pluginBundleSmoke(const QString &bundle) {
     requireDisabled(registry, id);
     auto again = install(bundle);
     require(again.is_ok, "the bundle imports over the disabled plugin");
-    registry.rescanDiscoveredPlugins();
+    rescanPlugins(registry);
     require(installedManifest(id) == manifest, "the replacement keeps the manifest");
     requireListedMetadata(registry, manifest);
 
@@ -364,7 +398,7 @@ void pluginBundleSmoke(const QString &bundle) {
         install(copyBundle(bundle, directory.filePath(QStringLiteral("broken.silent")), true));
     require(!broken.is_ok && !std::string(broken.error).empty(),
             "a truncated bundle is refused with its error");
-    registry.rescanDiscoveredPlugins();
+    rescanPlugins(registry);
     require(installedManifest(id) == manifest, "a refused bundle replaces nothing");
     requireListedMetadata(registry, manifest);
     requireEnabled(registry, manifest);

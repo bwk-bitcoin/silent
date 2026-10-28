@@ -59,7 +59,9 @@
 #include "MockPlugin.h"
 #include "PriceProbe.h"
 #include "StorageProbe.h"
+#include "access_async_smoke.h"
 #include "example_storage_smoke.h"
+#include "registry_async_errors.h"
 
 namespace {
 
@@ -146,10 +148,20 @@ public:
         return m_errors;
     }
 
+    [[nodiscard]] auto waitForInstances(ReqId req_id, int timeout_ms) const -> bool {
+        QElapsedTimer timer;
+        timer.start();
+        while (m_request != req_id && timer.elapsed() < timeout_ms) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            QThread::msleep(1);
+        }
+        return m_request == req_id;
+    }
+
 public slots:
 
-    void onInstances([[maybe_unused]] ReqId req_id,
-                     const QList<QPair<QString, QString>> &instances) {
+    void onInstances(ReqId req_id, const QList<QPair<QString, QString>> &instances) {
+        m_request = req_id;
         m_instances = instances;
     }
 
@@ -160,6 +172,7 @@ public slots:
 
 private:
     QList<QPair<QString, QString>> m_instances;
+    ReqId m_request = 0;
     int m_errors = 0;
 };
 
@@ -278,6 +291,32 @@ auto main(int argc, char *argv[]) -> int {
         return gOk ? 0 : 1;
     }
 #ifdef SILENT_REMOVAL_FIXTURE
+    if (arguments.contains(QStringLiteral("--registry-async-errors"))) {
+        Theme::init();
+        Theme::get()->apply();
+        AppController::get()->initState();
+        smoke::registryCheckpointFailureSmoke();
+        smoke::registryEnableRollbackFailureSmoke();
+        smoke::registryEnableRollbackReadErrorSmoke();
+        smoke::registryStaleScanErrorsSmoke();
+        smoke::registryAccountDeletionRefreshSmoke();
+        std::fprintf(stdout, "Registry async errors smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.contains(QStringLiteral("--access-async"))) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::accessAsyncSmoke();
+        std::fprintf(stdout, "Access async smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.contains(QStringLiteral("--publication-heartbeat"))) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::publicationHeartbeatSmoke();
+        std::fprintf(stdout, "Publication heartbeat smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
     if (arguments.contains(QStringLiteral("--plugin-access-settings-failure"))) {
         Theme::init();
         Theme::get()->apply();
@@ -773,7 +812,9 @@ auto main(int argc, char *argv[]) -> int {
     QObject::connect(&musigModule, &IModule::error, &musigSpy, &ModuleSpy::onError,
                      qontrol::UNIQUE);
 
-    musigModule.list();
+    auto listRequest = musigModule.list();
+    check(musigSpy.waitForInstances(listRequest, 10000),
+          "the musig module answers the requested asynchronous config listing");
     QList<QPair<QString, QString>> musigListed{{musigAccount, musigAccount}};
     check(musigSpy.instances() == musigListed,
           "the musig module should list exactly the musig account, no sp account, no create entry");

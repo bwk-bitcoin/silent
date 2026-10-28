@@ -1124,6 +1124,7 @@ struct BbqrFrames;
 struct BbqrScanner;
 struct MusigAccount;
 struct LedgerNonceFetch;
+struct AccountXpubUsage;
 
 #ifndef CXXBRIDGE1_ENUM_KeyFileFailure
 #define CXXBRIDGE1_ENUM_KeyFileFailure
@@ -1455,6 +1456,7 @@ struct PluginRemovalListResult final {
   ::rust::String error;
   ::rust::Vec<::PluginRemovalEntry> entries;
   ::rust::Vec<::rust::String> enabled_plugins;
+  ::rust::Vec<::PluginAccess> access;
 
   using IsRelocatable = ::std::true_type;
 };
@@ -2771,6 +2773,10 @@ struct PluginAccessRequest final {
   ::rust::String error;
   // Given back to `app_set_plugin_access`: a removal since makes the save fail.
   ::std::uint64_t storage_epoch CXX_DEFAULT_VALUE(0);
+  // In-process publication revision, checked from memory when consuming the answer.
+  ::std::uint64_t grant_revision CXX_DEFAULT_VALUE(0);
+  // Persisted publication version, compared under both locks on a prompt save.
+  ::std::uint64_t grant_version CXX_DEFAULT_VALUE(0);
   // Every grant unasked when none is kept for the library.
   ::PluginAccess access;
 
@@ -3558,9 +3564,8 @@ struct KeysModule final : public ::rust::Opaque {
 
   ::rust::Vec<::KeyXpub> key_xpubs(::rust::Str fingerprint) const noexcept;
 
-  // Marks used every key xpub the accounts of the network are built on, caching
-  // it when the key's cache lacks it.
-  ::KeyOpResult mark_account_xpubs_used() noexcept;
+  // Applies usage metadata already persisted by the account discovery worker.
+  bool apply_xpub_usage(::AccountXpubUsage const &usage) noexcept;
 
   ::KeyOpResult register_descriptor(::rust::Str fingerprint, ::rust::Str descriptor) noexcept;
 
@@ -4003,6 +4008,24 @@ private:
 };
 #endif // CXXBRIDGE1_STRUCT_LedgerNonceFetch
 
+#ifndef CXXBRIDGE1_STRUCT_AccountXpubUsage
+#define CXXBRIDGE1_STRUCT_AccountXpubUsage
+// Persists xpub usage from the accounts of `network`, returning cache updates.
+// Reads and writes storage: call it off the GUI thread.
+struct AccountXpubUsage final : public ::rust::Opaque {
+  bool is_ok() const noexcept;
+  ::rust::String get_error() const noexcept;
+  ~AccountXpubUsage() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_AccountXpubUsage
+
 ::CoordinationResult coordination_prepare(::Network network, ::rust::Str psbt, ::rust::Vec<::RustSelectedInput> inputs, ::SigningStage stage) noexcept;
 
 ::CoordinationResult coordination_accept(::rust::Str original, ::rust::Str returned, ::rust::Vec<::RustSelectedInput> inputs, ::SigningStage stage) noexcept;
@@ -4242,6 +4265,9 @@ void storage_request_forget(::std::uint64_t session, ::rust::String id) noexcept
 
 ::PluginAccessRequest app_plugin_access_request(::rust::String plugin_id, ::rust::String hash) noexcept;
 
+// Reads an atomic only; odd while a grant publication is in progress.
+::std::uint64_t app_plugin_access_revision() noexcept;
+
 ::PluginAccessHistory app_plugin_access_history(::rust::String plugin_id) noexcept;
 
 // Stores the answers for `access.hash`, replacing earlier ones. An entry left
@@ -4249,6 +4275,9 @@ void storage_request_forget(::std::uint64_t session, ::rust::String id) noexcept
 // the error, while the plugin's removal is pending or when its storage epoch
 // is no longer `expected_epoch`, the one its request or history was read with.
 ::rust::String app_set_plugin_access(::PluginAccess access, ::std::uint64_t expected_epoch) noexcept;
+
+// Also refuses a stale persisted grant version, checked under both state locks.
+::rust::String app_set_plugin_access_if_current(::PluginAccess access, ::std::uint64_t expected_epoch, ::std::uint64_t expected_version) noexcept;
 
 // Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
 ::PsbtFileResult sd_save_psbt(::rust::Str path, ::rust::Str psbt_hex) noexcept;
@@ -4392,6 +4421,8 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 ::MusigSessionCreateResult hot_create_sessions(::HotMaterial const &material, ::rust::Str password, ::rust::Str policy, ::std::uint32_t quantity) noexcept;
 
 ::HotCachedNonceResult hot_cached_nonces(::HotMaterial const &material, ::rust::Str psbt_v2_hex) noexcept;
+
+::rust::Box<::AccountXpubUsage> account_xpub_usage(::Network network) noexcept;
 
 ::KeyOpResult musig_session_refresh(::rust::Str fingerprint) noexcept;
 

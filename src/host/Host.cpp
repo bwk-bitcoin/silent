@@ -21,11 +21,13 @@
 #include <QApplication>
 #include <QDebug>
 #include <QDialog>
+#include <QEventLoop>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QList>
 #include <QScopeGuard>
 #include <QThread>
+#include <QTimer>
 #include <Qontrol>
 #include <common.h>
 
@@ -60,6 +62,8 @@ public:
 } // namespace
 
 HostImpl::HostImpl() : QObject(nullptr), m_i18n(new HostI18nImpl()) {
+    connect(qApp, &QCoreApplication::aboutToQuit, this, &HostImpl::onAbandonGrantWaits,
+            qontrol::UNIQUE);
     m_prices = new PriceFeedCoordinator(this);
     auto fees = ::app_fee_preferences();
     m_prices->selectFees(
@@ -91,6 +95,10 @@ HostImpl::HostImpl() : QObject(nullptr), m_i18n(new HostI18nImpl()) {
             qontrol::UNIQUE);
     connect(this, &HostImpl::refreshLauncherRequested, this, &HostImpl::onRefreshLauncherRequested,
             qontrol::UNIQUE);
+}
+
+HostImpl::~HostImpl() {
+    onAbandonGrantWaits();
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
@@ -222,7 +230,7 @@ void HostImpl::onSignerPollingRequested(IModule *requester, bool enabled) {
 
 QList<IInstance *> HostImpl::instances(IModule *caller) {
     assertGuiThread();
-    if (m_closing_callers.contains(caller)) {
+    if (m_grants_abandoned || m_closing_callers.contains(caller)) {
         return {};
     }
     QList<IInstance *> handles;
@@ -312,7 +320,7 @@ auto HostImpl::caller(IModule *module) -> plugin::Caller {
 auto HostImpl::allowed(IModule *module, host::Grant grant, bool ask) -> bool {
     auto *registry = AppController::get()->pluginRegistry();
     auto known = registry == nullptr ? std::nullopt : registry->caller(module);
-    if (!known.has_value()) {
+    if (!known.has_value() || m_closing_callers.contains(module)) {
         return false;
     }
     if (!known->external) {
@@ -320,12 +328,15 @@ auto HostImpl::allowed(IModule *module, host::Grant grant, bool ask) -> bool {
     }
     plugin::Access wanted{.account = grant == host::Grant::Account,
                           .keys = grant == host::Grant::Keys};
-    auto access = ask ? requestAccess(module, wanted) : pluginaccess::stored(known->pluginHash);
+    auto access = requestAccessChecked(module, ask ? wanted : plugin::Access{});
+    if (!access.has_value()) {
+        return false;
+    }
     switch (grant) {
     case host::Grant::Account:
-        return access.account;
+        return access->account;
     case host::Grant::Keys:
-        return access.keys;
+        return access->keys;
     }
     return false;
 }
@@ -337,16 +348,18 @@ auto HostImpl::requestAccess(IModule *caller, plugin::Access wanted) -> plugin::
 
 auto HostImpl::requestAccessChecked(IModule *caller, plugin::Access wanted)
     -> std::optional<plugin::Access> {
-    bool onGuiThread = qApp != nullptr && QThread::currentThread() == qApp->thread();
-    if (onGuiThread && m_closing_callers.contains(caller)) {
+    if (qApp == nullptr || QThread::currentThread() != qApp->thread()) {
+        return storedAccess(caller);
+    }
+    if (m_closing_callers.contains(caller)) {
         return {};
     }
-    if (onGuiThread) {
-        ++m_active_calls[caller];
-    }
-    auto activeCall = qScopeGuard([this, caller, onGuiThread] {
-        if (onGuiThread && --m_active_calls[caller] == 0) {
-            m_active_calls.remove(caller);
+    // Held through every nested wait below: the module's code stays mapped under it.
+    ++m_active_calls[caller];
+    auto self = QPointer<HostImpl>(this);
+    auto activeCall = qScopeGuard([self, caller] {
+        if (self != nullptr && --self->m_active_calls[caller] == 0) {
+            self->m_active_calls.remove(caller);
         }
     });
     auto *registry = AppController::get()->pluginRegistry();
@@ -357,59 +370,195 @@ auto HostImpl::requestAccessChecked(IModule *caller, plugin::Access wanted)
     if (!known->external) {
         return plugin::Access{.account = true, .keys = true, .state = true};
     }
+    auto revision = m_caller_revisions.value(caller);
     // Read once: the save below is refused if the plugin was removed since.
-    auto request = pluginaccess::request(known->pluginId, known->pluginHash);
-    if (!request.is_ok) {
-        auto error = QString::fromStdString(std::string(request.error));
-        qWarning() << "plugin access request refused for" << known->pluginId << ":"
-                   << error;
-        if (onGuiThread && !m_asking_access) {
-            m_asking_access = true;
-            AppController::execModal(new catalog::MessageModal(
-                TR("plugin-access-read-failed"),
-                TR("plugin-access-read-failed-text").arg(registry->pluginName(known->pluginId), error)));
-            m_asking_access = false;
+    auto request = readGrantRequest(caller, *known);
+    if (self == nullptr || !request.has_value() || !callerCurrent(caller, *known, revision)) {
+        return {};
+    }
+    if (!request->is_ok) {
+        auto error = QString::fromStdString(std::string(request->error));
+        qWarning() << "plugin access request refused for" << known->pluginId << ":" << error;
+        if (m_access_modal == nullptr) {
+            auto *failure =
+                new catalog::MessageModal(TR("plugin-access-read-failed"),
+                                          TR("plugin-access-read-failed-text")
+                                              .arg(registry->pluginName(known->pluginId), error));
+            execAccessModal(caller, failure);
+            delete failure;
         }
         return {};
     }
-    auto answers = request.access;
+    auto answers = request->access;
     plugin::Access ask{.account = wanted.account && answers.account == PluginGrant::Unasked,
                        .keys = wanted.keys && answers.keys == PluginGrant::Unasked,
                        .state = wanted.state && answers.state == PluginGrant::Unasked};
-    if ((ask.account || ask.keys || ask.state) && onGuiThread && !m_asking_access) {
-        m_asking_access = true;
-        auto *prompt = new modal::PluginAccessPrompt(
-            registry->pluginName(known->pluginId), known->pluginId,
-            registry->pluginVersion(known->pluginId), known->pluginHash, ask);
-        prompt->exec();
-        if (prompt->answered()) {
-            auto answer = prompt->allowed() ? PluginGrant::Allowed : PluginGrant::Denied;
-            if (ask.account) {
-                answers.account = answer;
-            }
-            if (ask.keys) {
-                answers.keys = answer;
-            }
-            if (ask.state) {
-                answers.state = answer;
-            }
-            QString error = pluginaccess::save(answers, request.storage_epoch);
-            if (!error.isEmpty()) {
-                delete prompt;
-                AppController::execModal(new catalog::MessageModal(
-                    TR("plugin-access-save-failed"),
-                    TR("plugin-access-save-failed-text")
-                        .arg(registry->pluginName(known->pluginId), error)));
-                m_asking_access = false;
-                return {};
-            }
+    if ((ask.account || ask.keys || ask.state) && m_access_modal == nullptr) {
+        auto asked = askAccess(caller, *known, *request, ask);
+        if (self == nullptr || !asked.has_value() || !callerCurrent(caller, *known, revision)) {
+            return {};
         }
-        delete prompt;
-        m_asking_access = false;
+        request = *asked;
+        answers = request->access;
+    }
+    // A deeper event loop may have published new grants after this wait was quit.
+    if (request->grant_revision != ::app_plugin_access_revision()) {
+        return {};
     }
     return plugin::Access{.account = answers.account == PluginGrant::Allowed,
                           .keys = answers.keys == PluginGrant::Allowed,
                           .state = answers.state == PluginGrant::Allowed};
+}
+
+auto HostImpl::storedAccess(IModule *caller) -> std::optional<plugin::Access> {
+    auto *registry = AppController::get()->pluginRegistry();
+    auto known = registry == nullptr ? std::nullopt : registry->caller(caller);
+    if (!known.has_value()) {
+        return {};
+    }
+    if (!known->external) {
+        return plugin::Access{.account = true, .keys = true, .state = true};
+    }
+    auto request = pluginaccess::request(known->pluginId, known->pluginHash);
+    if (!request.is_ok) {
+        qWarning() << "plugin access request refused for" << known->pluginId << ":"
+                   << QString::fromStdString(std::string(request.error));
+        return {};
+    }
+    if (request.grant_revision != ::app_plugin_access_revision()) {
+        return {};
+    }
+    return plugin::Access{.account = request.access.account == PluginGrant::Allowed,
+                          .keys = request.access.keys == PluginGrant::Allowed,
+                          .state = request.access.state == PluginGrant::Allowed};
+}
+
+auto HostImpl::askAccess(IModule *caller, const plugin::Caller &known,
+                         const PluginAccessRequest &request, plugin::Access ask)
+    -> std::optional<PluginAccessRequest> {
+    if (request.grant_revision != ::app_plugin_access_revision()) {
+        return {};
+    }
+    auto self = QPointer<HostImpl>(this);
+    auto *registry = AppController::get()->pluginRegistry();
+    auto *prompt = new modal::PluginAccessPrompt(
+        registry->pluginName(known.pluginId), registry->pluginVersion(known.pluginId),
+        request.access, request.storage_epoch, request.grant_version, ask);
+    execAccessModal(caller, prompt);
+    auto savedAnswer = prompt->saved();
+    auto error = prompt->error();
+    delete prompt;
+    if (self == nullptr) {
+        return {};
+    }
+    if (!error.isEmpty()) {
+        auto *failure = new catalog::MessageModal(
+            TR("plugin-access-save-failed"),
+            TR("plugin-access-save-failed-text").arg(registry->pluginName(known.pluginId), error));
+        execAccessModal(caller, failure);
+        delete failure;
+        return {};
+    }
+    if (!savedAnswer || m_grants_abandoned || m_closing_callers.contains(caller)) {
+        return {};
+    }
+    // The prompt's save is not the consumption point. Read its published answers,
+    // then validate their revision after this additional nested wait too.
+    auto saved = readGrantRequest(caller, known);
+    if (!saved.has_value() || !saved->is_ok || saved->storage_epoch != request.storage_epoch) {
+        return {};
+    }
+    return saved;
+}
+
+auto HostImpl::readGrantRequest(IModule *caller, const plugin::Caller &known)
+    -> std::optional<PluginAccessRequest> {
+    auto job = ++m_grant_job;
+    auto *reader = new pluginaccess::Job;
+    connect(reader, &pluginaccess::Job::requestRead, this, &HostImpl::onGrantRequestRead,
+            qontrol::UNIQUE);
+    reader->request(job, known.pluginId, known.pluginHash);
+    auto self = QPointer<HostImpl>(this);
+    waitGrantJob(job, caller, reader);
+    if (self == nullptr || !m_grant_requests.contains(job)) {
+        return std::nullopt;
+    }
+    return m_grant_requests.take(job);
+}
+
+auto HostImpl::openStorageSession(IModule *caller, const plugin::Caller &known)
+    -> std::optional<uint64_t> {
+    auto job = ++m_grant_job;
+    auto *opener = new pluginaccess::Job;
+    connect(opener, &pluginaccess::Job::storageOpened, this, &HostImpl::onStorageOpened,
+            qontrol::UNIQUE);
+    opener->openStorage(job, known.pluginId, known.pluginHash, known.external);
+    auto self = QPointer<HostImpl>(this);
+    waitGrantJob(job, caller, opener);
+    if (self == nullptr || !m_storage_sessions.contains(job)) {
+        return std::nullopt;
+    }
+    return m_storage_sessions.take(job);
+}
+
+// The synchronous ABI waits here; the GUI keeps painting and answering input meanwhile.
+void HostImpl::waitGrantJob(uint64_t job, IModule *caller, pluginaccess::Job *worker) {
+    if (m_grants_abandoned || m_closing_callers.contains(caller)) {
+        worker->release();
+        return;
+    }
+    QEventLoop loop;
+    QTimer deadline;
+    deadline.setSingleShot(true);
+    connect(&deadline, &QTimer::timeout, this, &HostImpl::onGrantWaitExpired, qontrol::UNIQUE);
+    deadline.start(15000);
+    m_grant_waits.insert(
+        job, {.loop = &loop, .deadline = &deadline, .worker = worker, .caller = caller});
+    auto self = QPointer<HostImpl>(this);
+    loop.exec();
+    if (self != nullptr) {
+        m_grant_waits.remove(job);
+    }
+}
+
+void HostImpl::abandonGrantJob(uint64_t job) {
+    auto wait = m_grant_waits.take(job);
+    if (wait.deadline != nullptr) {
+        wait.deadline->stop();
+    }
+    if (wait.worker != nullptr) {
+        wait.worker->release();
+    }
+    m_grant_requests.remove(job);
+    auto session = m_storage_sessions.take(job);
+    if (session != 0) {
+        ::storage_session_revoke(session);
+    }
+    if (wait.loop != nullptr) {
+        wait.loop->quit();
+    }
+}
+
+void HostImpl::execAccessModal(IModule *caller, QDialog *modal) {
+    m_access_modal = modal;
+    m_access_modal_caller = caller;
+    auto self = QPointer<HostImpl>(this);
+    modal->exec();
+    if (self != nullptr) {
+        m_access_modal_caller = nullptr;
+    }
+}
+
+auto HostImpl::callerCurrent(IModule *caller, const plugin::Caller &known, uint64_t revision) const
+    -> bool {
+    if (m_closing_callers.contains(caller) || m_caller_revisions.value(caller) != revision) {
+        return false;
+    }
+    auto *registry = AppController::get()->pluginRegistry();
+    auto current = registry == nullptr ? std::nullopt : registry->caller(caller);
+    return current.has_value() && current->pluginId == known.pluginId &&
+           current->pluginHash == known.pluginHash && current->external == known.external &&
+           current->moduleId == known.moduleId;
 }
 
 auto HostImpl::storage(IModule *caller) -> IStorage * {
@@ -425,28 +574,42 @@ auto HostImpl::storage(IModule *caller) -> IStorage * {
     if (!known.has_value()) {
         return nullptr;
     }
-    // Asked here, on the GUI thread; the Rust session checks the answer on every request.
+    ++m_active_calls[caller];
+    auto self = QPointer<HostImpl>(this);
+    auto activeCall = qScopeGuard([self, caller] {
+        if (self != nullptr && --self->m_active_calls[caller] == 0) {
+            self->m_active_calls.remove(caller);
+        }
+    });
+    auto revision = m_caller_revisions.value(caller);
+    // Asked here; the Rust session checks the answer on every request.
     if (!requestAccessChecked(caller, {.state = true}).has_value()) {
         return nullptr;
     }
-    // The prompt runs an event loop: the module may have gone, or got its handle, meanwhile.
-    auto current = registry->caller(caller);
-    if (!current.has_value() || current->pluginId != known->pluginId ||
-        current->pluginHash != known->pluginHash || current->external != known->external ||
-        current->moduleId != known->moduleId) {
+    // The waits run event loops: the module may have gone, or got its handle, meanwhile.
+    if (self == nullptr || !callerCurrent(caller, *known, revision)) {
         return nullptr;
     }
     if (auto *handle = m_storage_handles.value(caller, nullptr); handle != nullptr) {
         return handle;
     }
-    auto session =
-        ::storage_session_open(rust::String(known->pluginId.toStdString()),
-                               rust::String(known->pluginHash.toStdString()), known->external);
-    if (session == 0) {
+    auto session = openStorageSession(caller, *known);
+    if (!session.has_value()) {
+        return nullptr;
+    }
+    if (*session == 0) {
         qWarning() << "Host: storage unavailable for" << known->pluginId;
         return nullptr;
     }
-    auto *handle = new host::StorageHandle(session);
+    if (!callerCurrent(caller, *known, revision)) {
+        ::storage_session_revoke(*session);
+        return nullptr;
+    }
+    if (auto *handle = m_storage_handles.value(caller, nullptr); handle != nullptr) {
+        ::storage_session_revoke(*session);
+        return handle;
+    }
+    auto *handle = new host::StorageHandle(*session);
     handle->setParent(this);
     m_storage_handles.insert(caller, handle);
     return handle;
@@ -479,6 +642,26 @@ void HostImpl::dropCaller(IModule *module) {
 void HostImpl::setCallerClosing(IModule *module, bool closing) {
     if (closing) {
         m_closing_callers.insert(module);
+        for (const auto &tab : std::as_const(m_tabs)) {
+            if (tab.module == module && tab.content != nullptr) {
+                tab.content->setEnabled(false);
+            }
+        }
+        for (const auto &section : std::as_const(m_sections)) {
+            if (section.module == module && section.content != nullptr) {
+                section.content->setEnabled(false);
+            }
+        }
+        // Its requests already waiting end now, refused: their jobs finish alone.
+        ++m_caller_revisions[module];
+        for (auto job : m_grant_waits.keys()) {
+            if (m_grant_waits.value(job).caller == module) {
+                abandonGrantJob(job);
+            }
+        }
+        if (m_access_modal != nullptr && m_access_modal_caller == module) {
+            m_access_modal->reject();
+        }
     } else {
         m_closing_callers.remove(module);
     }
@@ -518,6 +701,18 @@ auto HostImpl::callerDrainError(IModule *module) const -> QString {
 
 auto HostImpl::callerFramesIdle(IModule *module) const -> bool {
     return m_active_calls.value(module, 0) == 0;
+}
+
+void HostImpl::enterFrame(IModule *module) {
+    if (module != nullptr) {
+        ++m_active_calls[module];
+    }
+}
+
+void HostImpl::leaveFrame(IModule *module) {
+    if (module != nullptr && --m_active_calls[module] == 0) {
+        m_active_calls.remove(module);
+    }
 }
 
 void HostImpl::dropInstanceHandles(IInstance *instance) {
@@ -837,6 +1032,51 @@ void HostImpl::onWizardModalFinished(int result) {
     if (!closing) {
         dialog->deleteLater();
     }
+}
+
+void HostImpl::onGrantRequestRead(uint64_t revision, const PluginAccessRequest &request) {
+    auto wait = m_grant_waits.constFind(revision);
+    if (wait == m_grant_waits.constEnd()) {
+        return;
+    }
+    m_grant_requests.insert(revision, request);
+    wait->loop->quit();
+}
+
+void HostImpl::onGrantWaitExpired() {
+    auto *deadline = qobject_cast<QTimer *>(sender());
+    for (auto job : m_grant_waits.keys()) {
+        if (m_grant_waits.value(job).deadline == deadline) {
+            abandonGrantJob(job);
+            return;
+        }
+    }
+}
+
+void HostImpl::onAbandonGrantWaits() {
+    m_grants_abandoned = true;
+    for (auto job : m_grant_waits.keys()) {
+        abandonGrantJob(job);
+    }
+    if (m_access_modal != nullptr) {
+        m_access_modal->reject();
+    }
+}
+
+// A session nobody waits for any more is revoked: its request was refused meanwhile.
+void HostImpl::onStorageOpened(uint64_t revision) {
+    auto *job = qobject_cast<pluginaccess::Job *>(sender());
+    if (job == nullptr) {
+        return;
+    }
+    auto wait = m_grant_waits.constFind(revision);
+    if (wait == m_grant_waits.constEnd()) {
+        job->release();
+        return;
+    }
+    auto session = job->takeSession();
+    m_storage_sessions.insert(revision, session);
+    wait->loop->quit();
 }
 
 void HostImpl::closeOwnedUi(IInstance *owner) {

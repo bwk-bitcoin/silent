@@ -31,7 +31,9 @@ use crate::{
         crypto::{open_mnemonic, Password},
         hot::{create_sessions, publish_cached, seal_mnemonic, sign_hot, sp_descriptor, xpub_at},
         ledger_nonces::{self, Fetch, SessionSource, Signing},
-        manager::{descriptor_has_key, KeyManager, KeyManagerImpl, LiveDevice, SigningCandidate},
+        manager::{
+            descriptor_has_key, KeyManager, KeyManagerImpl, LiveDevice, SigningCandidate, UsedXpub,
+        },
         musig_sessions,
         portable::{self, PortableError},
         psbt, qr,
@@ -47,6 +49,21 @@ pub struct KeysModule {
     inner: Option<KeyManager>,
     error: String,
     session: qr::QrSession,
+}
+
+pub struct AccountXpubUsage {
+    network: BtcNetwork,
+    used: Vec<UsedXpub>,
+    error: String,
+}
+
+impl AccountXpubUsage {
+    pub fn is_ok(&self) -> bool {
+        self.error.is_empty()
+    }
+    pub fn get_error(&self) -> String {
+        self.error.clone()
+    }
 }
 
 pub struct KeyFilePreview {
@@ -520,34 +537,12 @@ impl KeysModule {
             .collect()
     }
 
-    /// Marks used every key xpub the accounts of the network are built on.
-    pub fn mark_account_xpubs_used(&mut self) -> ffi::KeyOpResult {
-        let Some(manager) = self.inner.as_mut() else {
-            return failed_op(&self.error);
-        };
-        let mut result = ok_op();
-        for name in list_configs() {
-            let config = match Config::from_file(name.clone()) {
-                Ok(config) => config,
-                Err(e) => {
-                    log::error!("mark_account_xpubs_used: account '{name}': {e}");
-                    continue;
-                }
-            };
-            if BtcNetwork::from(config.get_network()) != manager.network() {
-                continue;
-            }
-            for descriptor in [
-                config.get_descriptor(),
-                config.get_segwit_descriptor(),
-                config.get_taproot_descriptor(),
-            ] {
-                if let Err(e) = manager.mark_xpubs_used(&descriptor) {
-                    result = failed_op(&format!("mark_account_xpubs_used: account '{name}': {e}"));
-                }
-            }
-        }
-        result
+    /// Applies usage metadata already persisted by the account discovery worker.
+    pub fn apply_xpub_usage(&mut self, usage: &AccountXpubUsage) -> bool {
+        self.inner
+            .as_mut()
+            .filter(|manager| manager.network() == usage.network)
+            .is_some_and(|manager| manager.merge_used_xpubs(&usage.used))
     }
 
     pub fn register_descriptor(&mut self, fingerprint: &str, descriptor: &str) -> ffi::KeyOpResult {
@@ -910,6 +905,45 @@ pub fn hot_sign(material: &HotMaterial, password: &str, psbt_v2_hex: &str) -> ff
             ..failed_sign(&format!("sign_hot {}: {e}", record.fingerprint))
         },
     }
+}
+
+pub fn account_xpub_usage(network: ffi::Network) -> Box<AccountXpubUsage> {
+    let network = BtcNetwork::from(network);
+    let mut usage = AccountXpubUsage {
+        network,
+        used: Vec::new(),
+        error: String::new(),
+    };
+    let mut manager = match open_manager(network.into()) {
+        Ok(manager) => manager,
+        Err(error) => {
+            usage.error = error;
+            return Box::new(usage);
+        }
+    };
+    for name in list_configs() {
+        let config = match Config::from_file(name.clone()) {
+            Ok(config) => config,
+            Err(e) => {
+                log::error!("account_descriptors: account '{name}': {e}");
+                continue;
+            }
+        };
+        if BtcNetwork::from(config.get_network()) != network {
+            continue;
+        }
+        for descriptor in [
+            config.get_descriptor(),
+            config.get_segwit_descriptor(),
+            config.get_taproot_descriptor(),
+        ] {
+            if let Err(error) = manager.mark_xpubs_used(&descriptor) {
+                usage.error = format!("mark account '{name}' xpub usage: {error}");
+            }
+        }
+    }
+    usage.used = manager.used_xpubs();
+    Box::new(usage)
 }
 
 pub fn hot_create_sessions(
