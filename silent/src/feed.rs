@@ -2,11 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ffi::{FeedPrice, FeedQuote, FeedSelection, FeedSourceState, RustFeePreferences};
 
-pub(crate) const DEFAULT_FEE_TIER: u8 = 1;
-
 impl RustFeePreferences {
     pub(crate) fn is_valid(&self) -> bool {
-        self.mode <= 2 && self.tier <= 2
+        self.mode <= 2
     }
 }
 
@@ -20,25 +18,12 @@ struct Source {
     smart: [Option<f64>; 3],
 }
 
+#[derive(Default)]
 pub struct FeedState {
     sources: BTreeMap<String, Source>,
     selected_source: String,
     selected_currency: String,
     fees: RustFeePreferences,
-}
-
-impl Default for FeedState {
-    fn default() -> Self {
-        Self {
-            sources: BTreeMap::new(),
-            selected_source: String::new(),
-            selected_currency: String::new(),
-            fees: RustFeePreferences {
-                tier: DEFAULT_FEE_TIER,
-                ..Default::default()
-            },
-        }
-    }
 }
 
 pub fn new_feed_state() -> Box<FeedState> {
@@ -152,15 +137,9 @@ impl FeedState {
         }
     }
     pub fn fee_selection(&self) -> FeedSelection {
-        let default = self
-            .sources
-            .get(&self.fees.default_source)
-            .and_then(|source| source.default);
-        let smart = self
-            .sources
-            .get(&self.fees.smart_source)
-            .map(|source| source.smart)
-            .unwrap_or([None; 3]);
+        let source = self.sources.get(&self.fees.source);
+        let default = source.and_then(|source| source.default);
+        let smart = source.map(|source| source.smart).unwrap_or([None; 3]);
         FeedSelection {
             preferences: self.fees.clone(),
             default_rate: quote(default),

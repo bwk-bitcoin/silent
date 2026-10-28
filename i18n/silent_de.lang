@@ -1059,7 +1059,6 @@ settings-capabilities-template
 => "Tweaks Only: %1\nFull Basic: %2\nFull + Dust Filter: %3\nCut-Through + Dust Filter: %4"
 => "Tweaks Only: %1\nFull Basic: %2\nFull + Dust Filter: %3\nCut-Through + Dust Filter: %4";;
 settings-connection => "Connection" => "Verbindung"
-settings-default-fee-source => "Default source" => "Standardquelle"
 settings-disable-account-one => "1 open account closes" => "NONE"
 settings-disable-account-one-text
 => "%1 comes from this plugin and will close. Enable the plugin again to reopen it."
@@ -1091,7 +1090,7 @@ settings-failed-start-scanner
 => "Failed to start scanner"
 => "Failed to start scanner";;
 settings-fee-mode => "Fee mode" => "Gebührenmodus"
-settings-fee-tier => "Initial smart tier" => "Anfängliche intelligente Stufe"
+settings-fee-source => "Provider" => "Anbieter"
 settings-fees => "Transaction fees" => "Transaktionsgebühren"
 settings-general => "General" => "Allgemein"
 settings-height => "Height %1" => "Höhe %1"
@@ -1165,7 +1164,6 @@ settings-section-belongs
 => "NONE";;
 settings-section-fallback => "Section %1" => "Abschnitt %1"
 settings-section-from => "From %1." => "NONE"
-settings-smart-fee-source => "Smart source" => "Intelligente Quelle"
 settings-theme => "Theme:" => "Thema:"
 settings-theme-dark => "Dark" => "Dunkel"
 settings-theme-light => "Light" => "Hell"

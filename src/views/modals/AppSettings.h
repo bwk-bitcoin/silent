@@ -147,12 +147,8 @@ private:
     catalog::Section *m_fees = nullptr;
     catalog::FieldGroup *m_fee_mode_field = nullptr;
     catalog::ComboBox *m_fee_mode_picker = nullptr;
-    catalog::ComboBox *m_default_fee_picker = nullptr;
-    catalog::ComboBox *m_smart_fee_picker = nullptr;
-    catalog::ComboBox *m_fee_tier_picker = nullptr;
-    catalog::FieldGroup *m_default_fee_field = nullptr;
-    catalog::FieldGroup *m_smart_fee_field = nullptr;
-    catalog::FieldGroup *m_fee_tier_field = nullptr;
+    catalog::ComboBox *m_fee_source_picker = nullptr;
+    catalog::FieldGroup *m_fee_source_field = nullptr;
 
     catalog::Section *m_plugins = nullptr;
     // The only way a plugin comes in: dropped on the window, sealed into the state.

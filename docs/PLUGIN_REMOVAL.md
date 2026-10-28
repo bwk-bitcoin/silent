@@ -10,8 +10,10 @@ There is no keep-data choice. Disable preserves private data.
 
 ## Native shutdown contract
 
-IPlugin/9.0 and IModule/3.0 add `shutdown(req_id)` and
-`shutdownFinished(req_id, error)`. The host records the request before dispatch and
+The current root IID is IPlugin/10.0; IModule remains at 3.0. The shutdown contract,
+introduced with IPlugin/9.0 and IModule/3.0, uses `shutdown(req_id)` and
+`shutdownFinished(req_id, error)`. ABI 9 libraries are now incompatible and can be
+removed without loading them. The host records the request before dispatch and
 receives completion through a queued connection, outside the native call stack.
 The default implementation refuses shutdown. A removed registration or tab is not
 completion.
@@ -33,7 +35,8 @@ thread-local destruction. Cancel timers and retire queued callbacks. Never repor
 success merely because cancellation was requested.
 
 The host withdraws feed sources and runtime UI without changing selected source
-IDs. A selected source remains missing, not automatically replaced. Once every
+IDs, including the single configured fee provider. Its recommendations become
+unavailable, not replaced by another provider. Once every
 module reports successful shutdown the host revokes caller handles, waits for accepted host-owned storage
 and transaction jobs, destroys deferred plugin UI, and unloads the library.
 

@@ -1515,9 +1515,10 @@ void Send::onSigningSent() {
 void Send::initializeFees() {
     auto preferences = Host::get()->selectedFees().preferences;
     m_fee_mode = preferences.mode;
-    m_fee_tier = preferences.tier;
+    m_fee_tier = FeeTier::Medium;
     m_fee_mode_picker->setCurrentIndex(static_cast<int>(m_fee_mode));
     m_fee_tier_picker->setCurrentIndex(static_cast<int>(m_fee_tier));
+    m_fee_tier_picker->setVisible(m_fee_mode == FeeMode::Smart);
     m_fee_toggle->setChecked(true);
     onFeeToggled();
     m_fee_value_input->setText(QStringLiteral("1"));

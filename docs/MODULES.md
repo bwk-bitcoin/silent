@@ -130,7 +130,7 @@ built with Qt 6.8 and baseline x86-64 requirements:
     "kind": "native",
     "library": "payload/libmyplugin.so",
     "compatibility": {
-      "iid": "dev.silent.IPlugin/9.0",
+      "iid": "dev.silent.IPlugin/10.0",
       "target_os": "linux",
       "target_arch": "x86_64",
       "qt_major": 6,
@@ -196,8 +196,12 @@ cargo test --manifest-path silent/Cargo.toml --test storage_example -- --ignored
 The legacy installed-format gate has a separate driver:
 `SILENT_HOST_SMOKE=<absolute-host-smoke> cargo test --manifest-path silent/Cargo.toml
 --test plugin_legacy_abi -- --ignored`. It seeds encrypted version 1 bundles for
-ABIs 2 through 7 and 9, then verifies registry refusal, expected/found diagnostics,
-retained metadata and absence of initializer/constructor side effects.
+ABIs 2 through 9 and future ABI 11, then verifies registry refusal, expected/found
+diagnostics, retained metadata and absence of initializer/constructor side effects.
+The `--plugin-abi` host smoke uses ABI 10 as its accepted control and verifies that
+refused imports preserve its installed bytes. ABI 9 uses frozen declarations from
+`tests/host/legacy/ModuleV2.h`, not the current root header. The compiled-fixture Rust
+tests expect `SILENT_ABI_FIXTURE_PATH` to point to `libplugin_abi10_fixture.so`.
 
 ### Out-of-tree Plugin Repo Pattern
 
@@ -979,14 +983,33 @@ are pushed by the provider; there is no host polling or automatic expiry.
 
 `Host::feeSources()` lists each source's Default/Smart capabilities.
 `Host::selectedFees()` returns cached optional recommendations and `FeePreferences`:
-mode Manual/Default/Smart, independent `default_source` and `smart_source`, and smart
-tier Low/Medium/Fast. `selectFees(preferences)` persists these globally for all networks.
+`mode` Manual/Default/Smart and one `source` ID. `selectFees(preferences)` persists only
+mode and source globally for all networks. Settings offers one provider picker,
+including no selection and configured-but-unavailable IDs. Default, Low, Medium and
+Fast recommendations all come from that one source, regardless of mode. Missing
+capabilities or rates remain unavailable; another provider never supplies a substitute.
 `HostEvents::feeSourcesChanged` and `selectedFeesChanged` notify consumers. Missing
 sources retain their configured IDs; the host never automatically selects another.
 Invalid or withdrawn rates are unavailable, not zero-fee recommendations.
 
+`selectFees(preferences)` applies the runtime coordinator selection immediately and
+queues persistence on a Host-owned worker in FIFO order. Only fee-preference writes
+become asynchronous; price persistence is unchanged. Write failures emit `qWarning`
+and keep the current runtime choice, never rolling back a newer selection. The old
+saved preference may remain until a later selection is saved successfully. Host
+drains accepted writes on application quit and in its destructor.
+
+Legacy preferences migrate only when deserializing persisted state. An explicit new
+`source` wins, including an empty string. Without it, Default keeps `default_source`
+and Smart keeps `smart_source`. Manual keeps the sole nonempty source, or the common
+source when both are equal; different nonempty sources leave no selection. Provider
+availability never determines migration. Old stored tiers are ignored, and subsequent
+writes contain only mode and source.
+
 New Send transactions follow their selected recommendation while editable. A manual
-rate or absolute-fee override stops following. Missing recommendations fall back to
+rate or absolute-fee override stops following. Each new Smart Send starts at Medium.
+Low/Medium/Fast is a per-Send choice, not a global preference; recommendation updates
+do not reset that local tier. Missing recommendations fall back to
 Manual at 1 sat/vB, even after recovery; a new transaction can use the configured
 preference again. Prepared/signing/restored transactions keep their actual fees.
 Positive fractional rates are supported at milli-sat/vB precision by both builders.
@@ -1373,17 +1396,18 @@ they are not evidence of a supported funded signing combination.
 
 ## ABI & Linking Rules (Plugin Authors Must Read)
 
-The current plugin IID is `dev.silent.IPlugin/9.0`, the module IID is
+The current plugin IID is `dev.silent.IPlugin/10.0`, the module IID is
 `dev.silent.IModule/3.0`, the signer IID is
 `dev.silent.ISigner/3.0`, the account IID is
 `dev.silent.IAccount/3.0`, the keys IID is `dev.silent.IKeys/3.0`, and the transaction
 service IID is `dev.silent.ITransactions/2.0`. The feed IID remains
 `dev.silent.IFeed/3.0`. Public Keys and spending enums are SDK-owned, not generated
-Rust types. This changes record layouts, signatures and callbacks. Rebuild plugins
+Rust types. Root ABI 10 changes `FeePreferences` to mode and one source, removing the
+global tier. The `IFeed` methods, signals and IID are unchanged. Rebuild plugins
 against this checkout and use `SILENT_IPlugin_IID` in plugin metadata. Include both
 `src` only for public interfaces; generated `lib/include` and CXX headers are not needed.
-Old 1.0 to 7.0 plugins are refused rather than
-called through incompatible vtables.
+Only the exact root IID is accepted. Old 1.0 to 9.0 plugins and future 11.0 plugins
+are refused rather than called through incompatible vtables.
 
 `interfaces/enums.h` defines the shared `plugin::Network`, `plugin::KeyRouteKind`
 and spending/coordination enums. Network wire integers are Bitcoin=0, Testnet=1,

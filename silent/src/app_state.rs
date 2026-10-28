@@ -47,7 +47,7 @@ pub struct AppState {
     pub price_source: String,
     #[serde(default)]
     pub price_currency: String,
-    #[serde(default = "default_fee_preferences")]
+    #[serde(default)]
     pub fee_preferences: FeePreferencesInternal,
     /// The QR display tuning picked last, as the steppers' levels, for every account.
     #[serde(default = "default_qr_level")]
@@ -137,18 +137,56 @@ fn default_qr_level() -> u8 {
     DEFAULT_QR_LEVEL
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct FeePreferencesInternal {
     mode: u8,
-    default_source: String,
-    smart_source: String,
-    tier: u8,
+    source: String,
 }
 
-fn default_fee_preferences() -> FeePreferencesInternal {
-    FeePreferencesInternal {
-        tier: crate::feed::DEFAULT_FEE_TIER,
-        ..FeePreferencesInternal::default()
+impl<'de> Deserialize<'de> for FeePreferencesInternal {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Preferences {
+            #[serde(default)]
+            mode: u8,
+            #[serde(default)]
+            default_source: String,
+            #[serde(default)]
+            smart_source: String,
+        }
+
+        let mut fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        let source = match fields.remove("source") {
+            Some(serde_json::Value::String(source)) => Some(source),
+            Some(_) => return Err(serde::de::Error::custom("fee source must be a string")),
+            None => None,
+        };
+        let preferences = Preferences::deserialize(serde_json::Value::Object(fields))
+            .map_err(serde::de::Error::custom)?;
+        if preferences.mode > 2 {
+            return Err(serde::de::Error::custom("invalid fee mode"));
+        }
+        let source = match source {
+            Some(source) => source,
+            None => match preferences.mode {
+                1 => preferences.default_source,
+                2 => preferences.smart_source,
+                0 if preferences.default_source.is_empty() => preferences.smart_source,
+                0 if preferences.smart_source.is_empty()
+                    || preferences.default_source == preferences.smart_source =>
+                {
+                    preferences.default_source
+                }
+                _ => String::new(),
+            },
+        };
+        Ok(Self {
+            mode: preferences.mode,
+            source,
+        })
     }
 }
 
@@ -166,7 +204,7 @@ impl Default for AppState {
             language: String::new(),
             price_source: String::new(),
             price_currency: String::new(),
-            fee_preferences: default_fee_preferences(),
+            fee_preferences: FeePreferencesInternal::default(),
             qr_density: DEFAULT_QR_LEVEL,
             qr_contrast: DEFAULT_QR_LEVEL,
             qr_speed: DEFAULT_QR_LEVEL,
@@ -468,25 +506,25 @@ pub fn app_fee_preferences() -> RustFeePreferences {
     let preferences = AppState::load().fee_preferences;
     RustFeePreferences {
         mode: preferences.mode,
-        default_source: preferences.default_source,
-        smart_source: preferences.smart_source,
-        tier: preferences.tier,
+        source: preferences.source,
     }
 }
 
-pub fn app_set_fee_preferences(preferences: RustFeePreferences) {
+pub fn app_set_fee_preferences(preferences: RustFeePreferences) -> String {
     if !preferences.is_valid() {
-        log::error!("invalid fee mode or tier");
-        return;
+        return "invalid fee mode".into();
     }
-    update_settings(|state| {
+    let persist = || -> Result<(), String> {
+        let _publication = state_crypt::publication_change_guard();
+        let _state = crate::storage::app_state_lock(&datadir())?;
+        let mut state = AppState::try_load()?;
         state.fee_preferences = FeePreferencesInternal {
             mode: preferences.mode,
-            default_source: preferences.default_source,
-            smart_source: preferences.smart_source,
-            tier: preferences.tier,
+            source: preferences.source,
         };
-    });
+        state.try_save()
+    };
+    persist().err().unwrap_or_default()
 }
 
 pub fn app_price_currency() -> String {
@@ -1625,9 +1663,7 @@ mod tests {
             app_set_price_selection("other-provider".into(), "USD".into());
             app_set_fee_preferences(RustFeePreferences {
                 mode: 0,
-                default_source: String::new(),
-                smart_source: String::new(),
-                tier: 1,
+                source: String::new(),
             });
             app_set_qr_display_levels(QrDisplayLevels {
                 density: 1,
@@ -1978,49 +2014,331 @@ mod tests {
     }
 
     #[test]
-    fn fee_preferences_roundtrip_all_modes_and_tiers() {
-        with_isolated_datadir(|_base| {
-            let legacy: AppState = serde_json::from_str("{}").expect("legacy app state");
-            assert_eq!(legacy.fee_preferences.mode, 0, "old state starts Manual");
-            assert_eq!(legacy.fee_preferences.tier, 1, "old state starts Medium");
-            for mode in 0..=2 {
-                for tier in 0..=2 {
-                    app_set_fee_preferences(RustFeePreferences {
-                        mode,
-                        default_source: "default-provider".into(),
-                        smart_source: "smart-provider".into(),
-                        tier,
+    fn fee_preferences_migrate_legacy_sources_and_ignore_old_tiers() {
+        let legacy: AppState = serde_json::from_str("{}").expect("legacy app state");
+        assert_eq!(legacy.fee_preferences.mode, 0, "old state starts Manual");
+        assert_eq!(
+            legacy.fee_preferences.source, "",
+            "old state selects no provider"
+        );
+        assert_eq!(
+            serde_json::to_value(&legacy.fee_preferences).expect("serialize missing preferences"),
+            serde_json::json!({"mode": 0, "source": ""}),
+            "missing preferences serialize only the default mode and empty source"
+        );
+        for mode in 0..=2 {
+            for (default_source, smart_source, manual_source) in [
+                ("", "", ""),
+                ("first", "", "first"),
+                ("second", "", "second"),
+                ("", "first", "first"),
+                ("", "second", "second"),
+                ("first", "first", "first"),
+                ("second", "second", "second"),
+                ("first", "second", ""),
+                ("second", "first", ""),
+            ] {
+                let migrated = match mode {
+                    0 => manual_source,
+                    1 => default_source,
+                    2 => smart_source,
+                    _ => unreachable!("only declared fee modes"),
+                };
+                for source in [None, Some(""), Some("explicit-provider")] {
+                    for tier in [
+                        None,
+                        Some(serde_json::json!(0)),
+                        Some(serde_json::json!(1)),
+                        Some(serde_json::json!(2)),
+                        Some(serde_json::json!("Low")),
+                        Some(serde_json::json!("Fast")),
+                        Some(serde_json::json!(99)),
+                        Some(serde_json::json!(-1)),
+                        Some(serde_json::json!(null)),
+                        Some(serde_json::json!(true)),
+                        Some(serde_json::json!([])),
+                        Some(serde_json::json!({})),
+                    ] {
+                        let mut input = serde_json::json!({
+                            "mode": mode,
+                            "default_source": default_source,
+                            "smart_source": smart_source,
+                        });
+                        if let Some(source) = source {
+                            input["source"] = serde_json::json!(source);
+                        }
+                        if let Some(tier) = tier {
+                            input["tier"] = tier;
+                        }
+                        let state: AppState = serde_json::from_value(serde_json::json!({
+                            "fee_preferences": input.clone(),
+                        }))
+                        .expect("migrate legacy preferences regardless of old tier");
+                        let expected = serde_json::json!({
+                            "mode": mode,
+                            "source": source.unwrap_or(migrated),
+                        });
+                        let serialized =
+                            serde_json::to_value(&state).expect("serialize migrated state");
+                        assert_eq!(
+                            serialized["fee_preferences"], expected,
+                            "migration emits only mode/source for {input}"
+                        );
+                        let reloaded: AppState =
+                            serde_json::from_value(serialized).expect("reload migrated state");
+                        assert_eq!(
+                            serde_json::to_value(&reloaded.fee_preferences)
+                                .expect("serialize reloaded preferences"),
+                            expected,
+                            "migration roundtrip preserves the selection for {input}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fee_preferences_accept_missing_legacy_fields() {
+        for (input, source) in [
+            (serde_json::json!({}), ""),
+            (serde_json::json!({"source": ""}), ""),
+            (
+                serde_json::json!({"source": "explicit-provider"}),
+                "explicit-provider",
+            ),
+            (serde_json::json!({"default_source": "first"}), "first"),
+            (serde_json::json!({"smart_source": "second"}), "second"),
+        ] {
+            let state: AppState = serde_json::from_value(serde_json::json!({
+                "fee_preferences": input.clone(),
+            }))
+            .expect("preferences without a mode");
+            assert_eq!(
+                serde_json::to_value(&state.fee_preferences).expect("serialize default mode"),
+                serde_json::json!({"mode": 0, "source": source}),
+                "missing mode starts Manual and retains deterministic selection: {input}"
+            );
+        }
+        for mode in 0..=2 {
+            for (input, source) in [
+                (serde_json::json!({"mode": mode}), ""),
+                (serde_json::json!({"mode": mode, "source": ""}), ""),
+                (
+                    serde_json::json!({"mode": mode, "source": "missing-provider"}),
+                    "missing-provider",
+                ),
+                (
+                    serde_json::json!({"mode": mode, "default_source": "first"}),
+                    if mode == 2 { "" } else { "first" },
+                ),
+                (
+                    serde_json::json!({"mode": mode, "smart_source": "second"}),
+                    if mode == 1 { "" } else { "second" },
+                ),
+            ] {
+                let state: AppState = serde_json::from_value(serde_json::json!({
+                    "fee_preferences": input.clone(),
+                }))
+                .expect("preferences without legacy source fields");
+                assert_eq!(
+                    serde_json::to_value(&state.fee_preferences).expect("serialize preferences"),
+                    serde_json::json!({"mode": mode, "source": source}),
+                    "absent legacy fields need no provider substitution: {input}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fee_preferences_reject_invalid_containers() {
+        for preferences in [
+            serde_json::json!(null),
+            serde_json::json!(true),
+            serde_json::json!(1),
+            serde_json::json!("preferences"),
+            serde_json::json!([]),
+            serde_json::json!([0, "provider", "default", "smart"]),
+        ] {
+            assert!(
+                serde_json::from_value::<AppState>(serde_json::json!({
+                    "fee_preferences": preferences.clone(),
+                }))
+                .is_err(),
+                "fee preferences must be an object: {preferences}"
+            );
+        }
+    }
+
+    #[test]
+    fn fee_preferences_reject_invalid_modes() {
+        for mode in [
+            serde_json::json!(3),
+            serde_json::json!(255),
+            serde_json::json!(256),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("Smart"),
+            serde_json::json!(null),
+            serde_json::json!(false),
+            serde_json::json!([]),
+            serde_json::json!({}),
+        ] {
+            for source in [None, Some(""), Some("explicit-provider")] {
+                let mut preferences = serde_json::json!({
+                    "mode": mode.clone(),
+                    "default_source": "legacy-default",
+                    "smart_source": "legacy-smart",
+                });
+                if let Some(source) = source {
+                    preferences["source"] = serde_json::json!(source);
+                }
+                assert!(
+                    serde_json::from_value::<AppState>(serde_json::json!({
+                        "fee_preferences": preferences.clone(),
+                    }))
+                    .is_err(),
+                    "explicit and legacy selections reject invalid modes: {preferences}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fee_preferences_reject_invalid_explicit_source_types() {
+        for mode in 0..=2 {
+            for source in [
+                serde_json::json!(null),
+                serde_json::json!(false),
+                serde_json::json!(0),
+                serde_json::json!(1.5),
+                serde_json::json!([]),
+                serde_json::json!({}),
+            ] {
+                for legacy in [false, true] {
+                    let mut preferences = serde_json::json!({
+                        "mode": mode,
+                        "source": source.clone(),
                     });
-                    let loaded = app_fee_preferences();
-                    assert_eq!(loaded.mode, mode, "persist fee mode {mode}");
-                    assert_eq!(loaded.tier, tier, "persist smart tier {tier}");
-                    assert_eq!(
-                        loaded.default_source, "default-provider",
-                        "retain default source"
-                    );
-                    assert_eq!(
-                        loaded.smart_source, "smart-provider",
-                        "retain independent smart source"
+                    if legacy {
+                        preferences["default_source"] = serde_json::json!("legacy-default");
+                        preferences["smart_source"] = serde_json::json!("legacy-smart");
+                    }
+                    assert!(
+                        serde_json::from_value::<AppState>(serde_json::json!({
+                            "fee_preferences": preferences.clone(),
+                        }))
+                        .is_err(),
+                        "malformed explicit sources cannot fall back to legacy: {preferences}"
                     );
                 }
             }
-            app_set_fee_preferences(RustFeePreferences {
-                mode: 3,
-                ..RustFeePreferences::default()
-            });
+        }
+    }
+
+    #[test]
+    fn fee_preferences_roundtrip_all_modes_and_sources() {
+        with_isolated_datadir(|_base| {
+            for mode in 0..=2 {
+                for source in ["", "default-provider", "smart-provider", "missing-provider"] {
+                    assert_eq!(
+                        app_set_fee_preferences(RustFeePreferences {
+                            mode,
+                            source: source.into(),
+                        }),
+                        "",
+                        "persist mode {mode} and source {source:?}"
+                    );
+                    let loaded = app_fee_preferences();
+                    assert_eq!(loaded.mode, mode, "persist fee mode {mode}");
+                    assert_eq!(loaded.source, source, "retain source for mode {mode}");
+                    assert_eq!(
+                        serde_json::to_value(AppState::load().fee_preferences)
+                            .expect("serialize persisted preferences"),
+                        serde_json::json!({"mode": mode, "source": source}),
+                        "persist only mode/source for mode {mode}"
+                    );
+                }
+            }
+            assert_eq!(
+                app_set_fee_preferences(RustFeePreferences {
+                    mode: 3,
+                    ..RustFeePreferences::default()
+                }),
+                "invalid fee mode",
+                "invalid mode reports an error to the persistence worker"
+            );
             assert_eq!(
                 app_fee_preferences().mode,
                 2,
                 "reject invalid mode without overwriting preferences"
             );
-            app_set_fee_preferences(RustFeePreferences {
-                tier: 3,
-                ..RustFeePreferences::default()
-            });
             assert_eq!(
-                app_fee_preferences().tier,
-                2,
-                "reject invalid tier without overwriting preferences"
+                app_fee_preferences().source,
+                "missing-provider",
+                "invalid mode cannot replace the selected source"
+            );
+        });
+    }
+
+    #[test]
+    fn fee_preferences_report_read_and_write_failures_without_replacing_saved_state() {
+        with_isolated_datadir(|base| {
+            state_crypt::unlock_for_tests();
+            assert_eq!(
+                app_set_fee_preferences(RustFeePreferences {
+                    mode: 1,
+                    source: "saved-provider".into(),
+                }),
+                "",
+                "save the original selection"
+            );
+            let path = base.join("app.bip138");
+            let original = fs::read(&path).expect("original state ciphertext");
+            fs::write(&path, b"unreadable state").expect("unreadable state fixture");
+            let error = app_set_fee_preferences(RustFeePreferences {
+                mode: 2,
+                source: "runtime-provider".into(),
+            });
+            assert!(!error.is_empty(), "read failure reaches the worker");
+            assert_eq!(
+                fs::read(&path).expect("state after read failure"),
+                b"unreadable state",
+                "read failure cannot authorize overwriting the existing state"
+            );
+            fs::write(&path, &original).expect("restore saved state");
+            let blocked_temp = base.join("app.tmp");
+            fs::create_dir(&blocked_temp).expect("block the atomic-save temporary file");
+            let error = app_set_fee_preferences(RustFeePreferences {
+                mode: 2,
+                source: "runtime-provider".into(),
+            });
+            assert!(!error.is_empty(), "write failure reaches the worker");
+            assert_eq!(
+                fs::read(&path).expect("state after write failure"),
+                original,
+                "failed replacement retains the original ciphertext"
+            );
+            let saved = app_fee_preferences();
+            assert_eq!(saved.mode, 1, "failed write retains the saved mode");
+            assert_eq!(
+                saved.source, "saved-provider",
+                "failed write retains the saved provider"
+            );
+            fs::remove_dir(&blocked_temp).expect("remove atomic-save blocker");
+            assert_eq!(
+                app_set_fee_preferences(RustFeePreferences {
+                    mode: 2,
+                    source: "runtime-provider".into(),
+                }),
+                "",
+                "a later save succeeds after the storage failure is repaired"
+            );
+            let saved = app_fee_preferences();
+            assert_eq!(saved.mode, 2, "recovered write stores the requested mode");
+            assert_eq!(
+                saved.source, "runtime-provider",
+                "recovered write stores the requested provider"
             );
         });
     }

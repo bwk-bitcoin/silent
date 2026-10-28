@@ -64,13 +64,12 @@ public:
 HostImpl::HostImpl() : QObject(nullptr), m_i18n(new HostI18nImpl()) {
     connect(qApp, &QCoreApplication::aboutToQuit, this, &HostImpl::onAbandonGrantWaits,
             qontrol::UNIQUE);
+    connect(qApp, &QCoreApplication::aboutToQuit, this, &HostImpl::onDrainFeeWrites,
+            qontrol::UNIQUE);
     m_prices = new PriceFeedCoordinator(this);
     auto fees = ::app_fee_preferences();
-    m_prices->selectFees(
-        {.mode = static_cast<FeeMode>(fees.mode),
-         .default_source = QString::fromStdString(std::string(fees.default_source)),
-         .smart_source = QString::fromStdString(std::string(fees.smart_source)),
-         .tier = static_cast<FeeTier>(fees.tier)});
+    m_prices->selectFees({.mode = static_cast<FeeMode>(fees.mode),
+                          .source = QString::fromStdString(std::string(fees.source))});
     connect(m_prices, &PriceFeedCoordinator::feeSourcesChanged, &m_events,
             &HostEvents::feeSourcesChanged, qontrol::UNIQUE);
     connect(m_prices, &PriceFeedCoordinator::selectedFeesChanged, &m_events,
@@ -98,6 +97,7 @@ HostImpl::HostImpl() : QObject(nullptr), m_i18n(new HostI18nImpl()) {
 }
 
 HostImpl::~HostImpl() {
+    onDrainFeeWrites();
     onAbandonGrantWaits();
 }
 
@@ -1162,10 +1162,80 @@ auto HostImpl::selectedFees() const -> SelectedFees {
 
 void HostImpl::selectFees(const FeePreferences &preferences) {
     assertGuiThread();
-    ::app_set_fee_preferences(
-        {.mode = static_cast<uint8_t>(preferences.mode),
-         .default_source = rust::String(preferences.default_source.toStdString()),
-         .smart_source = rust::String(preferences.smart_source.toStdString()),
-         .tier = static_cast<uint8_t>(preferences.tier)});
+    if (m_fee_writes_stopped) {
+        qWarning() << "Host: refusing fee preferences during shutdown";
+        return;
+    }
+    switch (preferences.mode) {
+    case FeeMode::Manual:
+    case FeeMode::Default:
+    case FeeMode::Smart:
+        break;
+    default:
+        qWarning() << "Host: refusing invalid fee mode:" << static_cast<int>(preferences.mode);
+        return;
+    }
+    // Enqueue before notifying listeners, which may select another preference.
+    m_fee_writes.append(
+        {.mode = preferences.mode, .source = QString::fromUtf8(preferences.source.toUtf8())});
+    dispatchFeeWrite();
     m_prices->selectFees(preferences);
+}
+
+void HostImpl::dispatchFeeWrite() {
+    if (m_fee_write_thread != nullptr || m_fee_writes.empty()) {
+        return;
+    }
+    auto preferences = m_fee_writes.first();
+    auto error = std::make_shared<QString>();
+    m_fee_write_error = error;
+    m_fee_write_thread = QThread::create([preferences, error] {
+        *error = QString::fromStdString(std::string(
+            ::app_set_fee_preferences({.mode = static_cast<uint8_t>(preferences.mode),
+                                       .source = rust::String(preferences.source.toStdString())})));
+    });
+    m_fee_write_thread->setParent(this);
+    connect(m_fee_write_thread, &QThread::finished, this, &HostImpl::onFeePreferencesWritten,
+            qontrol::UNIQUE);
+    m_fee_write_thread->start();
+}
+
+void HostImpl::onFeePreferencesWritten() {
+    if (sender() != m_fee_write_thread || m_fee_write_thread == nullptr) {
+        return;
+    }
+    finishFeeWrite();
+}
+
+void HostImpl::finishFeeWrite() {
+    auto preferences = m_fee_writes.takeFirst();
+    auto error = *m_fee_write_error;
+    m_fee_write_error.reset();
+    auto *worker = m_fee_write_thread;
+    m_fee_write_thread = nullptr;
+    if (m_fee_writes_stopped) {
+        delete worker;
+    } else {
+        worker->deleteLater();
+    }
+    if (!error.isEmpty()) {
+        // A save can fail after replacement; never roll back the runtime selection.
+        qWarning() << "Host: failed to persist fee preferences:" << error;
+    }
+    dispatchFeeWrite();
+    if (!m_fee_writes_stopped) {
+        emit feePreferencesWritten(static_cast<quint8>(preferences.mode), preferences.source,
+                                   error);
+    }
+}
+
+void HostImpl::onDrainFeeWrites() {
+    m_fee_writes_stopped = true;
+    // The singleton is not deleted on app shutdown; drain without an event loop too.
+    while (m_fee_write_thread != nullptr) {
+        disconnect(m_fee_write_thread, &QThread::finished, this,
+                   &HostImpl::onFeePreferencesWritten);
+        m_fee_write_thread->wait();
+        finishFeeWrite();
+    }
 }

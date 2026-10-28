@@ -3,6 +3,7 @@
 #include "host/CallerHandles.h"
 #include "interfaces/host.h"
 #include <QHash>
+#include <QList>
 #include <QObject>
 #include <QPointer>
 #include <QSet>
@@ -22,6 +23,7 @@ class MainWindow;
 class PriceFeedCoordinator;
 class QDialog;
 class QEventLoop;
+class QThread;
 class QTimer;
 
 namespace pluginaccess {
@@ -112,6 +114,7 @@ signals:
     void setKeysRequested(IKeys *keys, IModule *owner);
     void signerPollingRequested(IModule *requester, bool enabled);
     void refreshLauncherRequested();
+    void feePreferencesWritten(quint8 mode, const QString &source, const QString &error);
 
 private slots:
     void onRegisterInstanceRequested(const QString &id, IInstance *instance, IModule *owner);
@@ -126,8 +129,12 @@ private slots:
     void onStorageOpened(uint64_t revision);
     void onGrantWaitExpired();
     void onAbandonGrantWaits();
+    void onFeePreferencesWritten();
+    void onDrainFeeWrites();
 
 protected:
+    void dispatchFeeWrite();
+    void finishFeeWrite();
     [[nodiscard]] auto requestAccessChecked(IModule *caller, plugin::Access wanted)
         -> std::optional<plugin::Access>;
     // The answers stored, read on the calling thread: off the GUI thread nothing is asked.
@@ -232,6 +239,10 @@ private:
     bool m_main_window_hooked = false;
     HostEvents m_events;
     PriceFeedCoordinator *m_prices = nullptr;
+    QList<FeePreferences> m_fee_writes;
+    QThread *m_fee_write_thread = nullptr;
+    std::shared_ptr<QString> m_fee_write_error;
+    bool m_fee_writes_stopped = false;
     QHash<QString, QString> m_price_source_ids;
     HostI18n *m_i18n = nullptr;
 };

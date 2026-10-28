@@ -204,8 +204,7 @@ void PriceFeedCoordinator::onFeedDestroyed([[maybe_unused]] QObject *feed) {
     auto preferences = selectedFees().preferences;
     for (auto it = m_sources.begin(); it != m_sources.end();) {
         if (it->feed == nullptr) {
-            feesChanged = feesChanged || it.key() == preferences.default_source ||
-                          it.key() == preferences.smart_source;
+            feesChanged = feesChanged || it.key() == preferences.source;
             m_state->remove_feed(rust::String(it.key().toStdString()));
             delete it->connection;
             it = m_sources.erase(it);
@@ -242,9 +241,7 @@ void PriceFeedCoordinator::selectFees(const FeePreferences &preferences) {
     auto previous = selectedFees();
     RustFeePreferences stored;
     stored.mode = static_cast<uint8_t>(preferences.mode);
-    stored.tier = static_cast<uint8_t>(preferences.tier);
-    stored.default_source = rust::String(preferences.default_source.toStdString());
-    stored.smart_source = rust::String(preferences.smart_source.toStdString());
+    stored.source = rust::String(preferences.source.toStdString());
     if (!m_state->select_fees(stored)) {
         qWarning() << "Invalid fee preferences";
         return;
@@ -272,17 +269,14 @@ auto PriceFeedCoordinator::feeSources() const -> QList<FeeSource> {
 auto PriceFeedCoordinator::selectedFees() const -> SelectedFees {
     syncFeedLifetimes();
     auto state = m_state->fee_selection();
-    return {.preferences = {.mode = static_cast<FeeMode>(state.preferences.mode),
-                            .default_source = QString::fromStdString(
-                                std::string(state.preferences.default_source)),
-                            .smart_source =
-                                QString::fromStdString(std::string(state.preferences.smart_source)),
-                            .tier = static_cast<FeeTier>(state.preferences.tier)},
-            .default_rate = state.default_rate.available ? std::optional(state.default_rate.value)
-                                                         : std::nullopt,
-            .low = state.low.available ? std::optional(state.low.value) : std::nullopt,
-            .medium = state.medium.available ? std::optional(state.medium.value) : std::nullopt,
-            .fast = state.fast.available ? std::optional(state.fast.value) : std::nullopt};
+    return {
+        .preferences = {.mode = static_cast<FeeMode>(state.preferences.mode),
+                        .source = QString::fromStdString(std::string(state.preferences.source))},
+        .default_rate =
+            state.default_rate.available ? std::optional(state.default_rate.value) : std::nullopt,
+        .low = state.low.available ? std::optional(state.low.value) : std::nullopt,
+        .medium = state.medium.available ? std::optional(state.medium.value) : std::nullopt,
+        .fast = state.fast.available ? std::optional(state.fast.value) : std::nullopt};
 }
 
 void PriceFeedCoordinator::onFeeCapabilities(quint64 registration_id, bool has_default,

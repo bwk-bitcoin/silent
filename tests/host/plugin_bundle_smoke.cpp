@@ -417,10 +417,7 @@ void pluginBundleSmoke(const QString &bundle) {
         auto sources = host->feeSources();
         require(!sources.isEmpty(), "the real fee producer is available before removal");
         selectedSource = sources.first().id;
-        host->selectFees({.mode = FeeMode::Smart,
-                          .default_source = selectedSource,
-                          .smart_source = selectedSource,
-                          .tier = FeeTier::Medium});
+        host->selectFees({.mode = FeeMode::Smart, .source = selectedSource});
     }
     require(stopPlugin(&registry, id, true).isEmpty(), "the plugin is removed");
     require(!isInstalled(id), "a removed plugin is no longer listed");
@@ -431,9 +428,8 @@ void pluginBundleSmoke(const QString &bundle) {
                 "removed price provider stays selected but unavailable, with no fallback");
     } else if (shape == FeedShape::Fee) {
         auto selected = host->selectedFees();
-        require(selected.preferences.smart_source == selectedSource &&
-                    selected.preferences.default_source == selectedSource &&
-                    !selected.medium.has_value() && !selected.default_rate.has_value(),
+        require(selected.preferences.source == selectedSource && !selected.medium.has_value() &&
+                    !selected.default_rate.has_value(),
                 "removed fee provider stays selected but unavailable, with no fallback");
     }
 }

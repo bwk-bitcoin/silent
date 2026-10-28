@@ -118,8 +118,10 @@ void requireLoadedAbi(PluginRegistry *registry) {
         auto *object = dynamic_cast<QObject *>(plugin);
         require(object != nullptr && object->qt_metacast(SILENT_IPlugin_IID) != nullptr &&
                     object->qt_metacast("dev.silent.IPlugin/7.0") == nullptr &&
-                    object->qt_metacast("dev.silent.IPlugin/8.0") == nullptr,
-                "the loaded example plugin exposes ABI 9 only");
+                    object->qt_metacast("dev.silent.IPlugin/8.0") == nullptr &&
+                    object->qt_metacast("dev.silent.IPlugin/9.0") == nullptr &&
+                    object->qt_metacast("dev.silent.IPlugin/11.0") == nullptr,
+                "the loaded example plugin exposes ABI 10 only");
         return;
     }
     qFatal("example storage smoke: the example plugin is not loaded");
@@ -328,7 +330,7 @@ void exampleStorageSmoke(const QString &bundle) {
     install(bundle);
     auto library = installedLibrary();
     require(pluginMetadataError(library, QStringLiteral(SILENT_IPlugin_IID)).isEmpty(),
-            "the sealed example library declares plugin ABI 9, read without loading it");
+            "the sealed example library declares plugin ABI 10, read without loading it");
     auto hash = sha256(library);
     allowSavedData(hash);
     // Any prompt means the preloaded grant was missed: it is denied, and the load fails.

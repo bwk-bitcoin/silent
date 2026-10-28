@@ -341,13 +341,11 @@ mod ffi {
         pub preference_error: String,
     }
 
-    /// Global fee mode (Manual=0, Default=1, Smart=2) and tier (Low=0, Medium=1, Fast=2).
+    /// Global fee mode (Manual=0, Default=1, Smart=2) and selected provider.
     #[derive(Debug, Clone, Default)]
     struct RustFeePreferences {
         mode: u8,
-        default_source: String,
-        smart_source: String,
-        tier: u8,
+        source: String,
     }
 
     /// Notification from the account scanner.
@@ -1772,7 +1770,7 @@ mod ffi {
         /// Set the active app theme name.
         fn app_set_active_theme(name: String);
         fn app_fee_preferences() -> RustFeePreferences;
-        fn app_set_fee_preferences(preferences: RustFeePreferences);
+        fn app_set_fee_preferences(preferences: RustFeePreferences) -> String;
         fn app_price_source() -> String;
         fn app_price_currency() -> String;
         fn app_set_price_selection(source: String, currency: String);

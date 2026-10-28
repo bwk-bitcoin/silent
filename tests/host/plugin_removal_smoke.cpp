@@ -506,7 +506,7 @@ void pluginRemovalSmoke() {
     removeAndWait(registry, probe, id);
     require(probe.error.isEmpty(), "final disabled cleanup succeeds");
 
-    auto oldLibrary = read(QStringLiteral(SILENT_ABI8_FIXTURE_PATH));
+    auto oldLibrary = read(QStringLiteral(SILENT_ABI9_FIXTURE_PATH));
     auto compatibility = libraryCompatibility(oldLibrary);
     auto oldId = QStringLiteral("incompatible.fixture");
     auto payload = QStringLiteral("payload/libold.so");
@@ -521,7 +521,7 @@ void pluginRemovalSmoke() {
     oldBundle.close();
     // Admit with the old host expectation to model an encrypted install surviving an upgrade.
     auto legacy = ::plugin_install(rust::String(oldBundlePath.toStdString()),
-                                   rust::String("dev.silent.IPlugin/8.0"), QT_VERSION_MAJOR,
+                                   rust::String("dev.silent.IPlugin/9.0"), QT_VERSION_MAJOR,
                                    QT_VERSION_MINOR, hostArchRequirements());
     require(legacy.is_ok, "old host admits old installation without executing it");
     auto oldSentinel = directory.filePath(QStringLiteral("old-constructor"));

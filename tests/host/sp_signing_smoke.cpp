@@ -59,10 +59,7 @@ void spSigningSmoke(const QString &name) {
     instance.instanceId = QStringLiteral("sp-signing-fees");
     instance.provider = &feed;
     host->registerInstance(instance.id(), &instance, &feedPlugin.module);
-    host->selectFees({.mode = FeeMode::Default,
-                      .default_source = host->feeSources().first().id,
-                      .smart_source = {},
-                      .tier = FeeTier::Medium});
+    host->selectFees({.mode = FeeMode::Default, .source = host->feeSources().first().id});
     SpController controller(name);
     SpSend send(&controller);
     auto *signing = send.findChild<SpSigning *>();

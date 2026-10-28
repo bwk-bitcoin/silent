@@ -33,9 +33,7 @@ enum class FeeTier { Low, Medium, Fast };
 
 struct FeePreferences {
     FeeMode mode = FeeMode::Manual;
-    QString default_source;
-    QString smart_source;
-    FeeTier tier = FeeTier::Medium;
+    QString source;
     auto operator==(const FeePreferences &) const -> bool = default;
 };
 
@@ -195,5 +193,6 @@ public:
     virtual void selectPrice(const QString &source, const QString &currency) = 0;
     [[nodiscard]] virtual auto feeSources() const -> QList<FeeSource> = 0;
     [[nodiscard]] virtual auto selectedFees() const -> SelectedFees = 0;
+    // Updates runtime fees immediately; asynchronous save errors do not roll back the selection.
     virtual void selectFees(const FeePreferences &preferences) = 0;
 };

@@ -1380,12 +1380,10 @@ struct FeedPrice final {
 
 #ifndef CXXBRIDGE1_STRUCT_RustFeePreferences
 #define CXXBRIDGE1_STRUCT_RustFeePreferences
-// Global fee mode (Manual=0, Default=1, Smart=2) and tier (Low=0, Medium=1, Fast=2).
+// Global fee mode (Manual=0, Default=1, Smart=2) and selected provider.
 struct RustFeePreferences final {
   ::std::uint8_t mode CXX_DEFAULT_VALUE(0);
-  ::rust::String default_source;
-  ::rust::String smart_source;
-  ::std::uint8_t tier CXX_DEFAULT_VALUE(0);
+  ::rust::String source;
 
   using IsRelocatable = ::std::true_type;
 };
@@ -4140,7 +4138,7 @@ void app_set_active_theme(::rust::String name) noexcept;
 
 ::RustFeePreferences app_fee_preferences() noexcept;
 
-void app_set_fee_preferences(::RustFeePreferences preferences) noexcept;
+::rust::String app_set_fee_preferences(::RustFeePreferences preferences) noexcept;
 
 ::rust::String app_price_source() noexcept;
 

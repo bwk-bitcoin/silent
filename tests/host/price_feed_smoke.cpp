@@ -7,6 +7,7 @@
 #include "catalog/form/ValidationMark.h"
 #include "catalog/inputs/Input.h"
 #include "catalog/panels/send/TxFlow.h"
+#include "fee_persistence_smoke.h"
 #include "host/Host.h"
 #include "host/PluginRegistry.h"
 #include "i18n/Tr.h"
@@ -245,8 +246,7 @@ void accountWidgetLifetime(HostImpl *host, PriceModule *module) {
         instance.instanceId = QStringLiteral("account-lifetime-feed");
         instance.provider = &feed;
         host->registerInstance(instance.id(), &instance, module);
-        host->selectFees(
-            {.mode = FeeMode::Default, .default_source = host->feeSources().first().id});
+        host->selectFees({.mode = FeeMode::Default, .source = host->feeSources().first().id});
         auto name = QStringLiteral("smoke-account-lifetime-%1").arg(static_cast<int>(visit));
         auto config = ::new_config(rust::String(name.toStdString()), Network::Testnet,
                                    rust::String(descriptor.toStdString()), rust::String(""),
@@ -324,7 +324,126 @@ void accountWidgetLifetime(HostImpl *host, PriceModule *module) {
     host->selectFees(preferences);
 }
 
+void singleFeeProviderSettings(HostImpl *host, PriceModule *module, bool has_default,
+                               bool has_smart) {
+    auto missingId = QStringLiteral("missing-fee-provider");
+    host->selectFees({.mode = FeeMode::Smart, .source = missingId});
+    modal::AppSettings settings;
+    auto *source = settings.findChild<QComboBox *>(QStringLiteral("settings-fee-source"));
+    auto *mode = settings.findChild<QComboBox *>(QStringLiteral("settings-fee-mode"));
+    require(source != nullptr && mode != nullptr, "settings exposes one fee source and mode");
+    require(source->count() == 2 && source->currentData().toString() == missingId &&
+                source->findData(QString()) >= 0,
+            "no providers keeps both None and the configured missing source");
+    require(mode->currentData().toInt() == static_cast<int>(FeeMode::Smart),
+            "missing source does not change the configured mode");
+    require(settings.findChild<QComboBox *>(QStringLiteral("fee-tier")) == nullptr,
+            "settings has no global tier picker");
+
+    PriceFeed feed;
+    feed.offered.clear();
+    feed.has_default = has_default;
+    feed.has_smart = has_smart;
+    feed.default_rate = 0.625;
+    PriceInstance instance;
+    instance.instanceId = QStringLiteral("fee-settings");
+    instance.provider = &feed;
+    host->registerInstance(instance.id(), &instance, module);
+    auto sourceId = host->feeSources().first().id;
+    require(source->count() == 3 && source->findData(sourceId) >= 0 &&
+                source->currentData().toString() == missingId &&
+                host->selectedFees().preferences.source == missingId,
+            "any capability combination appears without replacing the missing selection");
+
+    auto index = source->findData(QString());
+    source->setCurrentIndex(index);
+    emit source->activated(index);
+    auto empty = host->selectedFees();
+    require(empty.preferences.source.isEmpty() && empty.preferences.mode == FeeMode::Smart &&
+                !empty.default_rate.has_value() && !empty.low.has_value() &&
+                !empty.medium.has_value() && !empty.fast.has_value(),
+            "explicit None clears every recommendation without selecting the only live provider");
+    require(source->count() == 2 && source->currentData().toString().isEmpty(),
+            "explicit None removes only the missing configured item");
+
+    index = source->findData(sourceId);
+    source->setCurrentIndex(index);
+    emit source->activated(index);
+    require(host->selectedFees().preferences ==
+                FeePreferences{.mode = FeeMode::Smart, .source = sourceId},
+            "provider selection keeps Smart and persists no tier");
+    PriceBackend backend;
+    PriceSend send(&backend);
+    input(send, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
+    auto *sendTier = send.findChild<QComboBox *>(QStringLiteral("fee-tier"));
+    auto *sendMode = send.findChild<QComboBox *>(QStringLiteral("fee-mode"));
+    require(sendTier->currentIndex() == static_cast<int>(FeeTier::Medium) &&
+                send.transaction()->fee_rate == (has_smart ? 0.5 : 1) &&
+                sendMode->currentIndex() ==
+                    static_cast<int>(has_smart ? FeeMode::Smart : FeeMode::Manual),
+            "new Smart Send starts Medium or falls back to Manual 1 for default-only providers");
+    if (has_smart) {
+        sendTier->setCurrentIndex(static_cast<int>(FeeTier::Fast));
+        emit sendTier->activated(static_cast<int>(FeeTier::Fast));
+        require(send.transaction()->fee_rate == 0.75, "Send can choose local Fast");
+    }
+
+    index = mode->findData(static_cast<int>(FeeMode::Default));
+    if (has_default) {
+        require(index >= 0, "default-capable provider offers Default mode");
+        mode->setCurrentIndex(index);
+        emit mode->activated(index);
+        require(host->selectedFees().preferences ==
+                    FeePreferences{.mode = FeeMode::Default, .source = sourceId},
+                "settings mode changes preserve the selected provider");
+        require(send.transaction()->fee_rate == (has_smart ? 0.75 : 1),
+                "global mode changes preserve local Fast or sticky Manual fallback");
+        PriceBackend defaultBackend;
+        PriceSend defaultSend(&defaultBackend);
+        input(defaultSend, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
+        require(defaultSend.transaction()->fee_rate == 0.625,
+                "new Default Send uses Default, not the same provider's Medium");
+    } else {
+        require(index < 0, "smart-only provider does not add an unsupported Default mode");
+        sendMode->setCurrentIndex(static_cast<int>(FeeMode::Default));
+        emit sendMode->activated(static_cast<int>(FeeMode::Default));
+        require(send.transaction()->fee_rate == 1 &&
+                    sendMode->currentIndex() == static_cast<int>(FeeMode::Manual),
+                "local Default never substitutes the smart-only provider's Medium");
+    }
+
+    host->removeInstance(instance.id(), module);
+    require(source->count() == 2 && source->currentData().toString() == sourceId &&
+                host->selectedFees().preferences.source == sourceId,
+            "provider disappearance retains its configured ID beside None");
+    host->selectFees({});
+}
+
+void waitForFeePreferences(const FeeWriteProbe &probe, const FeePreferences &preferences) {
+    QElapsedTimer deadline;
+    deadline.start();
+    while (deadline.elapsed() < 30000) {
+        QApplication::processEvents();
+        if (!probe.outcomes().empty()) {
+            const auto &outcome = probe.outcomes().last();
+            if (outcome.mode == static_cast<quint8>(preferences.mode) &&
+                outcome.source == preferences.source) {
+                require(outcome.error.isEmpty(), "fee preferences write completed successfully");
+                auto stored = ::app_fee_preferences();
+                require(stored.mode == static_cast<int>(preferences.mode) &&
+                            QString::fromStdString(std::string(stored.source)) ==
+                                preferences.source,
+                        "completed fee preferences are durable before reopening the host");
+                return;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    qFatal("fee preferences were not persisted before reopening the host");
+}
+
 void feeRecommendations(HostImpl *host, PriceModule *module) {
+    FeeWriteProbe writes(host);
     host->selectFees({});
     PriceFeed first;
     first.offered.clear();
@@ -343,7 +462,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     auto firstId = host->feeSources().first().id;
     require(first.fee_discoveries == 1 && first.default_requests == 1 && first.smart_requests == 0,
             "default-only feed separately discovers capabilities and requests only default");
-    require(host->selectedFees().preferences.default_source.isEmpty(),
+    require(host->selectedFees().preferences.source.isEmpty(),
             "fee discovery never automatically selects a source");
     host->registerInstance(two.id(), &two, module);
     require(second.fee_discoveries == 1 && second.smart_requests == 0,
@@ -353,17 +472,28 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     require(second.default_requests == 0 && second.smart_requests == 1 &&
                 host->feeSources().size() == 2,
             "smart-only source requests only smart rates");
-    host->selectFees({.mode = FeeMode::Smart,
-                      .default_source = firstId,
-                      .smart_source = secondId,
-                      .tier = FeeTier::Medium});
+    host->selectFees({.mode = FeeMode::Default, .source = firstId});
+    auto defaultOnly = host->selectedFees();
+    require(defaultOnly.default_rate == 0.5 && !defaultOnly.low.has_value() &&
+                !defaultOnly.medium.has_value() && !defaultOnly.fast.has_value(),
+            "default-only selection never borrows smart rates from another provider");
+    host->selectFees({.mode = FeeMode::Smart, .source = secondId});
+    auto smartOnly = host->selectedFees();
+    require(!smartOnly.default_rate.has_value() && smartOnly.low == 0.25 &&
+                smartOnly.medium == 0.5 && smartOnly.fast == 0.75,
+            "smart-only selection never borrows a default rate from another provider");
+    second.has_default = true;
+    second.default_rate = 0.625;
+    second.publishFeeCapabilities();
     auto fees = host->selectedFees();
-    require(fees.default_rate == 0.5 && fees.low == 0.25 && fees.medium == 0.5 && fees.fast == 0.75,
-            "independent default/smart providers and all tiers are cached");
+    require(fees.default_rate == 0.625 && fees.low == 0.25 && fees.medium == 0.5 &&
+                fees.fast == 0.75,
+            "all four distinct cached recommendations come from the selected provider");
+    waitForFeePreferences(writes, fees.preferences);
     HostImpl reopened;
     require(reopened.selectedFees().preferences == fees.preferences &&
                 !reopened.selectedFees().medium.has_value(),
-            "mode independent sources and tier persist without inventing quotes");
+            "mode and one source persist without inventing quotes");
     for (auto network : {Network::Bitcoin, Network::Testnet, Network::Signet, Network::Regtest}) {
         PriceBackend networkBackend;
         networkBackend.selected_network = network;
@@ -373,19 +503,21 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
         auto *networkTier = networkSend.findChild<QComboBox *>(QStringLiteral("fee-tier"));
         auto *networkValue = networkSend.findChild<QLineEdit *>(QStringLiteral("fee-value"));
         require(networkSend.transaction()->fee_rate == 0.5 &&
-                    networkMode->currentIndex() == static_cast<int>(FeeMode::Smart),
-                "all networks start with the selected global recommendation");
+                    networkMode->currentIndex() == static_cast<int>(FeeMode::Smart) &&
+                    networkTier->currentIndex() == static_cast<int>(FeeTier::Medium),
+                "all networks start Smart at local Medium");
         edit(networkValue, QStringLiteral("0.125"));
         for (auto feeMode : {FeeMode::Default, FeeMode::Smart}) {
             auto index = static_cast<int>(feeMode);
             networkMode->setCurrentIndex(index);
             emit networkMode->activated(index);
-            require(networkSend.transaction()->fee_rate == 0.5 &&
+            require(networkSend.transaction()->fee_rate ==
+                            (feeMode == FeeMode::Default ? 0.625 : 0.5) &&
                         networkMode->currentIndex() == index,
                     "Default and Smart apply on every network");
         }
         {
-            emit first.defaultFeeRate(3, 4);
+            emit second.defaultFeeRate(3, 4);
             emit second.smartFeeRates(4, 5, 6, 7);
             networkTier->setCurrentIndex(static_cast<int>(FeeTier::Fast));
             emit networkTier->activated(static_cast<int>(FeeTier::Fast));
@@ -403,7 +535,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
                             networkMode->currentIndex() == index,
                         "every network can replace a manual absolute fee with a recommendation");
             }
-            emit first.defaultFeeRate(3, 0.5);
+            emit second.defaultFeeRate(3, 0.625);
             emit second.smartFeeRates(4, 0.25, 0.5, 0.75);
         }
         require(host->selectedFees().preferences == fees.preferences,
@@ -419,26 +551,22 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
         input(testnetSend, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
         auto *mode = testnetSend.findChild<QComboBox *>(QStringLiteral("fee-mode"));
         require(mode->currentIndex() == static_cast<int>(FeeMode::Default) &&
-                    testnetSend.transaction()->fee_rate == 0.5,
+                    testnetSend.transaction()->fee_rate == 0.625,
                 "fresh Testnet Send uses configured Default and its actual selected-feed rate");
         host->selectFees(fees.preferences);
     }
     {
         modal::AppSettings settings;
-        int defaultPickers = 0;
-        int smartPickers = 0;
+        int sourcePickers = 0;
         for (auto *picker : settings.findChildren<QComboBox *>()) {
             if (picker->findData(firstId) >= 0) {
-                ++defaultPickers;
-                require(picker->findData(secondId) < 0,
-                        "default picker excludes smart-only source");
-            }
-            if (picker->findData(secondId) >= 0) {
-                ++smartPickers;
-                require(picker->findData(firstId) < 0, "smart picker excludes default-only source");
+                ++sourcePickers;
+                require(picker->findData(secondId) >= 0 && picker->findData(QString()) >= 0 &&
+                            picker->currentData().toString() == secondId,
+                        "one source picker includes the capability union and None");
             }
         }
-        require(defaultPickers == 1 && smartPickers == 1, "separate capability-specific settings");
+        require(sourcePickers == 1, "settings has exactly one fee provider picker");
     }
     PriceBackend backend;
     backend.selected_network = Network::Bitcoin;
@@ -454,12 +582,12 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
             "unrelated default quote does not rebuild a Smart transaction");
     for (double invalid : {0.0, -1.0, std::numeric_limits<double>::infinity(),
                            std::numeric_limits<double>::quiet_NaN()}) {
-        emit first.defaultFeeRate(3, invalid);
+        emit second.defaultFeeRate(3, invalid);
         require(!host->selectedFees().default_rate.has_value() &&
                     send.transaction()->fee_rate == 0.5,
-                "invalid Default recommendation cannot change independent Smart rate");
+                "invalid Default recommendation cannot change the selected Smart rate");
     }
-    emit first.defaultFeeRate(3, 0.5);
+    emit second.defaultFeeRate(3, 0.625);
     for (auto pair : {std::pair{0, 0.25}, std::pair{1, 0.5}, std::pair{2, 0.75}}) {
         tier->setCurrentIndex(pair.first);
         emit tier->activated(pair.first);
@@ -468,30 +596,78 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     }
     emit second.smartFeeRates(8, 0.1, 0.2, 0.3);
     require(send.transaction()->fee_rate == 0.3 &&
-                host->selectedFees().preferences.tier == FeeTier::Medium,
-            "editable send follows selected tier without changing global tier");
+                host->selectedFees().preferences == fees.preferences,
+            "editable send follows its local tier without changing global preferences");
+    auto unchangedSimulations = backend.simulations;
+    emit second.smartFeeRates(8, 0, 0.2, 0.3);
+    require(!host->selectedFees().low.has_value() && host->selectedFees().medium == 0.2 &&
+                host->selectedFees().fast == 0.3 && send.transaction()->fee_rate == 0.3 &&
+                backend.simulations == unchangedSimulations,
+            "partial unavailability does not substitute another tier or rebuild an unchanged Fast");
+    {
+        modal::AppSettings settings;
+        auto *settingsMode = settings.findChild<QComboBox *>(QStringLiteral("settings-fee-mode"));
+        auto index = settingsMode->findData(static_cast<int>(FeeMode::Default));
+        settingsMode->setCurrentIndex(index);
+        emit settingsMode->activated(index);
+        require(send.transaction()->fee_rate == 0.3 &&
+                    mode->currentIndex() == static_cast<int>(FeeMode::Smart) &&
+                    tier->currentIndex() == static_cast<int>(FeeTier::Fast),
+                "changing global mode in Settings does not reset an existing Send's mode or tier");
+        index = settingsMode->findData(static_cast<int>(FeeMode::Smart));
+        settingsMode->setCurrentIndex(index);
+        emit settingsMode->activated(index);
+        PriceBackend mediumBackend;
+        PriceSend mediumSend(&mediumBackend);
+        input(mediumSend, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
+        require(mediumSend.transaction()->fee_rate == 0.2 &&
+                    mediumSend.findChild<QComboBox *>(QStringLiteral("fee-tier"))->currentIndex() ==
+                        static_cast<int>(FeeTier::Medium) &&
+                    send.transaction()->fee_rate == 0.3,
+                "new Smart Send starts Medium while an existing Send keeps Fast");
+        auto *mediumTier = mediumSend.findChild<QComboBox *>(QStringLiteral("fee-tier"));
+        mediumTier->setCurrentIndex(static_cast<int>(FeeTier::Low));
+        emit mediumTier->activated(static_cast<int>(FeeTier::Low));
+        require(mediumSend.transaction()->fee_rate == 1 &&
+                    mediumSend.findChild<QComboBox *>(QStringLiteral("fee-mode"))->currentIndex() ==
+                        static_cast<int>(FeeMode::Manual),
+                "missing local Low falls back to Manual 1, not selected Default, Medium or Fast");
+        emit second.smartFeeRates(8, 0.1, 0.2, 0.3);
+        require(mediumSend.transaction()->fee_rate == 1,
+                "tier recovery does not resume a fallback transaction");
+        emit mediumBackend.signing->sent();
+        input(mediumSend, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
+        require(mediumSend.transaction()->fee_rate == 0.2 &&
+                    mediumTier->currentIndex() == static_cast<int>(FeeTier::Medium),
+                "starting the next transaction resets the previous local Low to Medium");
+    }
     auto simulations = backend.simulations;
     emit backend.signing->lockedChanged(true);
+    host->selectFees({.mode = FeeMode::Default, .source = firstId});
     emit second.smartFeeRates(8, 1, 2, 3);
     require(send.transaction()->fee_rate == 0.3 && backend.simulations == simulations,
-            "prepared/signing-locked transaction never follows pushes");
+            "prepared/signing-locked transaction never follows provider changes or pushes");
+    host->selectFees(fees.preferences);
     emit backend.signing->lockedChanged(false);
     require(send.transaction()->fee_rate == 3, "unlocked editable Send catches up to cached rate");
     edit(value, QStringLiteral("0.125"));
+    host->selectFees({.mode = FeeMode::Default, .source = firstId});
     emit second.smartFeeRates(8, 4, 5, 6);
     require(send.transaction()->fee_rate == 0.125 && mode->currentIndex() == 0,
             "explicit rate edit switches only this Send to sticky Manual");
+    host->selectFees(fees.preferences);
     mode->setCurrentIndex(1);
     emit mode->activated(1);
-    require(send.transaction()->fee_rate == 0.5, "per-send Default uses its independent provider");
-    emit first.defaultFeeRate(3, 0.1234567);
+    require(send.transaction()->fee_rate == 0.625,
+            "per-send Default uses the same selected provider");
+    emit second.defaultFeeRate(3, 0.1234567);
     require(send.transaction()->fee_rate == 0.123 && host->selectedFees().default_rate == 0.1234567,
             "Send normalizes provider precision through Rust without changing the cached quote");
-    emit first.defaultFeeRate(3, 0.5);
+    emit second.defaultFeeRate(3, 0.625);
     auto *absolute = feeToggle(send);
     absolute->click();
     edit(value, QStringLiteral("1234"));
-    emit first.defaultFeeRate(9, 9);
+    emit second.defaultFeeRate(9, 9);
     require(send.transaction()->fee == 1234 && mode->currentIndex() == 0,
             "absolute override stops following recommendations");
     mode->setCurrentIndex(2);
@@ -516,9 +692,11 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     saved.frozen_template.fee = 2000;
     fresh.restoreSavedPsbt(saved);
     simulations = freshBackend.simulations;
+    host->selectFees({.mode = FeeMode::Default, .source = firstId});
     emit second.smartFeeRates(8, 7, 8, 9);
     require(fresh.transaction()->fee == 2000 && freshBackend.simulations == simulations,
-            "restored PSBT retains actual absolute fee without simulation");
+            "restored PSBT retains actual absolute fee across provider changes without simulation");
+    host->selectFees(fees.preferences);
     std::thread stale([&second]() {
         emit second.smartFeeRates(10, 91, 92, 93);
         emit second.IFeed::feeCapabilities(10, false, false);
@@ -526,7 +704,8 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     stale.join();
     host->removeInstance(two.id(), module);
     require(!host->selectedFees().medium.has_value() &&
-                host->selectedFees().preferences.smart_source == secondId,
+                !host->selectedFees().default_rate.has_value() &&
+                host->selectedFees().preferences.source == secondId,
             "source loss withdraws cache without selecting another provider");
     PriceBackend missingBackend;
     missingBackend.selected_network = Network::Bitcoin;
@@ -551,11 +730,8 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     destroyedFeed->has_default = true;
     one.provider = destroyedFeed;
     host->registerInstance(one.id(), &one, module);
-    host->selectFees({.mode = FeeMode::Default,
-                      .default_source = firstId,
-                      .smart_source = secondId,
-                      .tier = FeeTier::Low});
-    require(host->selectedFees().default_rate == 0.5, "Default source recovers independently");
+    host->selectFees({.mode = FeeMode::Default, .source = firstId});
+    require(host->selectedFees().default_rate == 0.5, "selected Default source recovers");
     PriceBackend defaultBackend;
     defaultBackend.selected_network = Network::Bitcoin;
     PriceSend defaultSend(&defaultBackend);
@@ -647,7 +823,7 @@ void libraryUnload(HostImpl *host, PriceModule *module) {
     PluginLibrary library;
     require(library.load(bytes, QStringLiteral("price-feed-fixture.so")), "test library loads");
     require(qobject_cast<IPlugin *>(library.instance()) != nullptr,
-            "test library has an ABI 6 root");
+            "test library has the current root ABI");
     auto *feed = dynamic_cast<IFeed *>(library.instance());
     require(feed != nullptr, "test library exports its real feed QObject");
     auto pageSize = static_cast<std::uintptr_t>(::sysconf(_SC_PAGESIZE));
@@ -661,10 +837,7 @@ void libraryUnload(HostImpl *host, PriceModule *module) {
     auto sourceId = host->priceSources().first().id;
     host->selectPrice(sourceId, QStringLiteral("EUR"));
     require(host->selectedPrice().rate == 50000, "library's initial quote is cached");
-    host->selectFees({.mode = FeeMode::Smart,
-                      .default_source = sourceId,
-                      .smart_source = sourceId,
-                      .tier = FeeTier::Fast});
+    host->selectFees({.mode = FeeMode::Smart, .source = sourceId});
     require(host->selectedFees().default_rate == 0.5 && host->selectedFees().fast == 0.75,
             "library recommendations cached before unload");
     feed->raw(QByteArrayLiteral("queue"));
@@ -997,6 +1170,9 @@ auto priceFeedSmoke() -> bool {
     require(first.discoveries == 1 && second.discoveries == 1 && second.requests == 1,
             "event processing never polls providers");
     registrationReuse(host, &plugin.module);
+    singleFeeProviderSettings(host, &plugin.module, true, false);
+    singleFeeProviderSettings(host, &plugin.module, false, true);
+    singleFeeProviderSettings(host, &plugin.module, true, true);
     feeRecommendations(host, &plugin.module);
     accountWidgetLifetime(host, &plugin.module);
 #ifdef SILENT_PRICE_FEED_FIXTURE

@@ -61,6 +61,7 @@
 #include "StorageProbe.h"
 #include "access_async_smoke.h"
 #include "example_storage_smoke.h"
+#include "fee_persistence_smoke.h"
 #include "registry_async_errors.h"
 
 namespace {
@@ -283,6 +284,11 @@ auto main(int argc, char *argv[]) -> int {
     // Initialise the host singleton before the registry connects to its events.
     Host::get();
     AppController::init();
+    if (arguments.contains(QStringLiteral("--fee-persistence"))) {
+        smoke::feePersistenceSmoke();
+        std::fprintf(stdout, "Fee persistence smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
     if (arguments.contains(QStringLiteral("--tx-flow-hover"))) {
         Theme::init();
         Theme::get()->apply();
@@ -431,8 +437,10 @@ auto main(int argc, char *argv[]) -> int {
               plugin.qt_metacast("dev.silent.IPlugin/5.0") == nullptr &&
               plugin.qt_metacast("dev.silent.IPlugin/6.0") == nullptr &&
               plugin.qt_metacast("dev.silent.IPlugin/7.0") == nullptr &&
-              plugin.qt_metacast("dev.silent.IPlugin/8.0") == nullptr,
-          "mock plugin metadata exposes ABI 9 only");
+              plugin.qt_metacast("dev.silent.IPlugin/8.0") == nullptr &&
+              plugin.qt_metacast("dev.silent.IPlugin/9.0") == nullptr &&
+              plugin.qt_metacast("dev.silent.IPlugin/11.0") == nullptr,
+          "mock plugin metadata exposes ABI 10 only");
     auto *module = plugin.module();
 
     PluginRegistry registry;
@@ -849,6 +857,8 @@ auto main(int argc, char *argv[]) -> int {
     // musig.create itself opens a modal, so only the unknown id is started here.
     creatorModule.startInstance(QStringLiteral("nope"));
     check(creatorSpy.errors() == 1, "starting an unknown id from the musig creator should error");
+
+    smoke::feePersistenceSmoke();
 
     if (gOk) {
         std::fprintf(stdout, "host smoke: OK\n");

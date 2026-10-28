@@ -175,9 +175,14 @@ fn portable_preview_validates_and_commits_only_the_reviewed_complete_record() {
 fn feed_state_normalizes_and_invalidates_without_substitution_or_expiry() {
     let mut state = new_feed_state();
     assert_eq!(
-        state.fee_selection().preferences.tier,
-        1,
-        "default fee tier remains Medium"
+        state.fee_selection().preferences.mode,
+        0,
+        "default fee mode remains Manual"
+    );
+    assert_eq!(
+        state.fee_selection().preferences.source,
+        "",
+        "default fee selection has no provider"
     );
     state.select_price("configured-but-missing".into(), " eur ".into());
     state.add_feed("other");
@@ -230,16 +235,15 @@ fn feed_state_normalizes_and_invalidates_without_substitution_or_expiry() {
     }
     let mut fees = state.fee_selection().preferences;
     fees.mode = 2;
-    fees.tier = 1;
-    fees.default_source = "default".into();
-    fees.smart_source = "smart".into();
+    fees.source = "selected".into();
     assert!(state.select_fees(fees.clone()), "valid fee selection");
-    state.add_feed("default");
-    state.add_feed("smart");
-    state.set_fee_capabilities("default", true, false);
-    state.set_fee_capabilities("smart", false, true);
-    state.set_default_fee("default", 0.1234567);
-    state.set_smart_fees("smart", 0.25, f64::NAN, 0.75);
+    state.add_feed("selected");
+    state.set_fee_capabilities("selected", true, true);
+    state.set_default_fee("selected", 0.1234567);
+    state.set_smart_fees("selected", 0.25, f64::NAN, 0.75);
+    state.set_fee_capabilities("other", true, true);
+    state.set_default_fee("other", 11.0);
+    state.set_smart_fees("other", 12.0, 13.0, 14.0);
     let selected = state.fee_selection();
     assert_eq!(
         selected.default_rate.value, 0.1234567,
@@ -249,29 +253,200 @@ fn feed_state_normalizes_and_invalidates_without_substitution_or_expiry() {
         selected.low.available && !selected.medium.available && selected.fast.available,
         "tiers independently unavailable"
     );
-    state.set_fee_capabilities("smart", false, false);
-    state.set_fee_capabilities("smart", false, true);
+    assert_eq!(selected.low.value, 0.25, "selected provider's Low quote");
+    assert_eq!(
+        selected.medium.value, 0.0,
+        "no substitute for unavailable Medium"
+    );
+    assert_eq!(selected.fast.value, 0.75, "selected provider's Fast quote");
+    state.set_fee_capabilities("selected", true, false);
+    state.set_fee_capabilities("selected", true, true);
     assert!(
         !state.fee_selection().low.available,
         "capability withdrawal clears cached tiers"
     );
-    state.remove_feed("default");
+    state.remove_feed("selected");
     assert_eq!(
-        state.fee_selection().preferences.default_source,
-        "default",
+        state.fee_selection().preferences.source,
+        "selected",
         "fee selection survives provider removal"
     );
     assert!(
         !state.fee_selection().default_rate.available,
         "removed provider has no cached value"
     );
+    state.set_fee_capabilities("selected", true, true);
+    state.set_default_fee("selected", 8.0);
+    state.set_smart_fees("selected", 9.0, 10.0, 11.0);
+    state.add_feed("selected");
+    state.set_fee_capabilities("selected", true, true);
+    let reloaded = state.fee_selection();
+    assert!(
+        !reloaded.default_rate.available
+            && !reloaded.low.available
+            && !reloaded.medium.available
+            && !reloaded.fast.available,
+        "removed-source updates and reloading cannot revive cached values"
+    );
     fees.mode = 99;
+    fees.source = "other".into();
     assert!(!state.select_fees(fees), "invalid fee enum rejected");
     assert_eq!(
         state.fee_selection().preferences.mode,
         2,
         "invalid request does not mutate preferences"
     );
+    assert_eq!(
+        state.fee_selection().preferences.source,
+        "selected",
+        "invalid request cannot switch providers"
+    );
+}
+
+#[test]
+fn fee_selection_uses_one_provider_for_every_mode_and_capability_combination() {
+    for mode in 0..=2 {
+        for has_default in [false, true] {
+            for has_smart in [false, true] {
+                let mut state = new_feed_state();
+                state.add_feed("selected");
+                state.set_fee_capabilities("selected", has_default, has_smart);
+                state.set_default_fee("selected", 1.25);
+                state.set_smart_fees("selected", 2.5, 3.75, 4.125);
+                state.add_feed("other");
+                state.set_fee_capabilities("other", true, true);
+                state.set_default_fee("other", 11.0);
+                state.set_smart_fees("other", 12.0, 13.0, 14.0);
+                for source in ["selected", "other", "missing", ""] {
+                    let mut preferences = state.fee_selection().preferences;
+                    preferences.mode = mode;
+                    preferences.source = source.into();
+                    assert!(
+                        state.select_fees(preferences),
+                        "select {source:?} in mode {mode}"
+                    );
+                    let selected = state.fee_selection();
+                    assert_eq!(selected.preferences.mode, mode, "selection retains mode");
+                    assert_eq!(
+                        selected.preferences.source, source,
+                        "selection retains identity"
+                    );
+                    let expected = match source {
+                        "selected" => [
+                            (has_default, if has_default { 1.25 } else { 0.0 }),
+                            (has_smart, if has_smart { 2.5 } else { 0.0 }),
+                            (has_smart, if has_smart { 3.75 } else { 0.0 }),
+                            (has_smart, if has_smart { 4.125 } else { 0.0 }),
+                        ],
+                        "other" => [(true, 11.0), (true, 12.0), (true, 13.0), (true, 14.0)],
+                        _ => [(false, 0.0); 4],
+                    };
+                    for (quote, expected) in [
+                        selected.default_rate,
+                        selected.low,
+                        selected.medium,
+                        selected.fast,
+                    ]
+                    .into_iter()
+                    .zip(expected)
+                    {
+                        assert_eq!(
+                            (quote.available, quote.value), expected,
+                            "source {source:?}, mode {mode}, default {has_default}, smart {has_smart}"
+                        );
+                    }
+                }
+                state.set_fee_capabilities("selected", false, false);
+                state.set_default_fee("selected", 21.0);
+                state.set_smart_fees("selected", 22.0, 23.0, 24.0);
+                state.set_fee_capabilities("selected", true, true);
+                let mut preferences = state.fee_selection().preferences;
+                preferences.source = "selected".into();
+                assert!(
+                    state.select_fees(preferences),
+                    "reselect withdrawn provider"
+                );
+                let selected = state.fee_selection();
+                assert!(
+                    !selected.default_rate.available
+                        && !selected.low.available
+                        && !selected.medium.available
+                        && !selected.fast.available,
+                    "withdrawal clears every cached value and ignores unsupported updates"
+                );
+                state.set_default_fee("selected", 5.25);
+                state.set_smart_fees("selected", 6.5, 7.75, 8.125);
+                let updated = state.fee_selection();
+                assert!(
+                    updated.default_rate.available
+                        && updated.low.available
+                        && updated.medium.available
+                        && updated.fast.available,
+                    "fresh updates restore every recommendation"
+                );
+                assert_eq!(
+                    [
+                        updated.default_rate.value,
+                        updated.low.value,
+                        updated.medium.value,
+                        updated.fast.value,
+                    ],
+                    [5.25, 6.5, 7.75, 8.125],
+                    "push updates all come from the selected provider"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn fee_selection_preserves_every_partial_unavailability_combination() {
+    for mode in 0..=2 {
+        for mask in 0..16 {
+            for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let mut state = new_feed_state();
+                state.add_feed("selected");
+                state.set_fee_capabilities("selected", true, true);
+                state.add_feed("other");
+                state.set_fee_capabilities("other", true, true);
+                state.set_default_fee("other", 11.0);
+                state.set_smart_fees("other", 12.0, 13.0, 14.0);
+                let mut preferences = state.fee_selection().preferences;
+                preferences.mode = mode;
+                preferences.source = "selected".into();
+                assert!(state.select_fees(preferences), "select partial provider");
+                let values = [1.25, 2.5, 3.75, 4.125];
+                let offered: [f64; 4] = std::array::from_fn(|index| {
+                    if mask & (1 << index) != 0 {
+                        values[index]
+                    } else {
+                        invalid
+                    }
+                });
+                state.set_default_fee("selected", values[0]);
+                state.set_smart_fees("selected", values[1], values[2], values[3]);
+                state.set_default_fee("selected", offered[0]);
+                state.set_smart_fees("selected", offered[1], offered[2], offered[3]);
+                let selected = state.fee_selection();
+                for (index, quote) in [
+                    selected.default_rate,
+                    selected.low,
+                    selected.medium,
+                    selected.fast,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let available = mask & (1 << index) != 0;
+                    assert_eq!(
+                        (quote.available, quote.value),
+                        (available, if available { values[index] } else { 0.0 }),
+                        "mode {mode}, availability mask {mask}, invalid {invalid}, quote {index}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]
