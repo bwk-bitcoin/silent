@@ -426,6 +426,8 @@ pill-signs-first => "Signs First"
 pill-signed => "Signed"
 
 pill-needed => "Needed"
+pill-cached => "Cached"
+btn-prepare-nonces => "Prepare Nonces"
 
 pill-nonce => "Nonce"
 pill-on-device => "On Device…"
@@ -621,6 +623,16 @@ flow-no-signer-title => "No Signer Available"
 flow-other-devices => "Other Connected Devices"
 
 flow-sign-title => "Sign Transaction"
+flow-nonces-title => "Prepare Nonce Cache"
+flow-nonces-picker-lead => "One session is prepared for the key, bound to no transaction."
+flow-nonces-usb-wait => "Approve the nonce session on %1."
+flow-nonces-qr-title => "Prepare the Nonce Cache"
+flow-nonces-qr-hint => "Scan this code with the signing device to prepare its nonce cache session."
+flow-nonces-scan-title => "Scan the Prepared Answer"
+flow-nonces-scan-hint => "The device shows its prepared answer as a code: scan it to fill the cache."
+flow-nonces-hot-prompt => "Enter the password of “%1” to prepare a nonce session."
+flow-nonces-hot-busy => "Preparing the nonce session"
+flow-nonces-unsupported => "This device does not support nonce cache preparation."
 
 flow-verify-title => "Verify Address"
 
@@ -1281,7 +1293,7 @@ musig-sign-step-nonces => "Nonces"
 
 musig-sign-step-partial => "Partial Signatures"
 
-musig-sign-lead-nonce => "Click each cosigner to add its nonce."
+musig-sign-lead-nonce => "Click each cosigner to prepare its nonce session."
 
 musig-sign-lead-partial => "Click each cosigner to add its partial signature."
 

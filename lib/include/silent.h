@@ -1055,6 +1055,8 @@ struct KeyOpResult;
 struct QrMessageResult;
 struct KeyInfoResult;
 struct SigningCandidate;
+struct QrMusigSignerRoute;
+struct QrMusigCacheResult;
 struct MusigSessionCreateResult;
 struct HotCachedNonceResult;
 struct LedgerNonceSignResult;
@@ -1112,6 +1114,8 @@ struct HwiPoll;
 struct KeysModule;
 struct QrResponse;
 struct HotMaterial;
+struct QrMusigPrepare;
+struct QrMusigSign;
 struct FeedState;
 struct EndpointRetry;
 struct SpEndpointChange;
@@ -1317,6 +1321,8 @@ enum class QrResponseKind : ::std::uint8_t {
   AddressVerified = 2,
   SignedPsbt = 3,
   SpAccount = 4,
+  MusigPrepared = 5,
+  MusigSignedPsbt = 6,
 };
 #endif // CXXBRIDGE1_ENUM_QrResponseKind
 
@@ -1950,6 +1956,9 @@ struct MusigAttemptSnapshot final {
   ::rust::String record_id;
   ::rust::Vec<::rust::String> signers;
   bool reset_pending CXX_DEFAULT_VALUE(false);
+  // A nonce session was durably taken from cache for this attempt: Reset
+  // exists from here on, even when nothing was published with it.
+  bool nonces_allocated CXX_DEFAULT_VALUE(false);
 
   using IsRelocatable = ::std::true_type;
 };
@@ -2458,10 +2467,42 @@ struct SigningCandidate final {
   bool musig_done CXX_DEFAULT_VALUE(false);
   bool nonces_done CXX_DEFAULT_VALUE(false);
   bool signatures_done CXX_DEFAULT_VALUE(false);
+  // Every MuSig policy this key still owes nonces for has a usable cached
+  // session. Always true when nothing is pending.
+  bool cache_ready CXX_DEFAULT_VALUE(false);
+  // The key's route supports transaction-independent cache preparation.
+  bool cache_supported CXX_DEFAULT_VALUE(false);
 
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_SigningCandidate
+
+#ifndef CXXBRIDGE1_STRUCT_QrMusigSignerRoute
+#define CXXBRIDGE1_STRUCT_QrMusigSignerRoute
+// One pending signer's plan route, for the cached signing allocation to bind
+// every required session.
+struct QrMusigSignerRoute final {
+  ::rust::String fingerprint;
+  ::KeyRouteKind route;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_QrMusigSignerRoute
+
+#ifndef CXXBRIDGE1_STRUCT_QrMusigCacheResult
+#define CXXBRIDGE1_STRUCT_QrMusigCacheResult
+// The outcome of a cached MuSig QR exchange: the verified PSBT as v2 hex after
+// a signing answer, or why the exchange failed.
+struct QrMusigCacheResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  // The session the attempt was bound to is gone and signing must restart.
+  bool musig_session CXX_DEFAULT_VALUE(false);
+  ::rust::String psbt_v2_hex;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_QrMusigCacheResult
 
 #ifndef CXXBRIDGE1_STRUCT_MusigSessionCreateResult
 #define CXXBRIDGE1_STRUCT_MusigSessionCreateResult
@@ -3594,6 +3635,8 @@ struct KeysModule final : public ::rust::Opaque {
   // manager's.
   ::KeyInfoResult commit_hot_key(::SealedHotKey const &sealed, ::rust::Str alias) noexcept;
 
+  ::QrMessageResult qr_request_prepare_musig(::rust::Box<::QrMusigPrepare> preparation) noexcept;
+  ::QrMessageResult qr_request_sign_musig(::rust::Box<::QrMusigSign> signing) noexcept;
   ::QrMessageResult qr_request_get_xpubs(::rust::Vec<::rust::String> paths) noexcept;
   ::QrMessageResult qr_request_register_descriptor(::rust::Str descriptor) noexcept;
   ::QrMessageResult qr_request_verify_address(::rust::Str descriptor, ::rust::Str path, ::rust::Str address) noexcept;
@@ -3685,6 +3728,36 @@ private:
   };
 };
 #endif // CXXBRIDGE1_STRUCT_HotMaterial
+
+#ifndef CXXBRIDGE1_STRUCT_QrMusigPrepare
+#define CXXBRIDGE1_STRUCT_QrMusigPrepare
+// Worker results of the cached MuSig QR exchanges, built off-thread and
+// turned into wire requests on the GUI thread.
+struct QrMusigPrepare final : public ::rust::Opaque {
+  ~QrMusigPrepare() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_QrMusigPrepare
+
+#ifndef CXXBRIDGE1_STRUCT_QrMusigSign
+#define CXXBRIDGE1_STRUCT_QrMusigSign
+struct QrMusigSign final : public ::rust::Opaque {
+  ~QrMusigSign() = delete;
+
+private:
+  friend ::rust::layout;
+  struct layout {
+    static ::std::size_t size() noexcept;
+    static ::std::size_t align() noexcept;
+  };
+};
+#endif // CXXBRIDGE1_STRUCT_QrMusigSign
 
 #ifndef CXXBRIDGE1_STRUCT_FeedState
 #define CXXBRIDGE1_STRUCT_FeedState
@@ -4431,6 +4504,12 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 ::SigningPlan musig_session_plan(::Network network, ::rust::Str psbt_v2_hex, ::rust::Vec<::LiveDevice> devices) noexcept;
 
 ::SignResult musig_session_restart(::Network network, ::rust::Str policy, ::rust::Str original, ::rust::Str prepared) noexcept;
+
+::rust::Box<::QrMusigPrepare> qr_musig_prepare_material(::rust::Str fingerprint, ::rust::Str descriptor) noexcept;
+
+::rust::Box<::QrMusigSign> qr_musig_sign_material(::rust::Str fingerprint, ::rust::Str policy, ::rust::Str psbt_v2_hex, ::rust::Vec<::QrMusigSignerRoute> routes) noexcept;
+
+::QrMusigCacheResult qr_musig_accept(::rust::Box<::QrResponse> answer, ::rust::Str fingerprint, ::rust::Str policy, ::rust::Str psbt_v2_hex) noexcept;
 
 ::rust::Box<::LedgerNonceFetch> ledger_nonce_fetch(::rust::Str fingerprint, ::rust::Str policy, ::std::uint32_t quantity) noexcept;
 

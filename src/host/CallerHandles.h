@@ -79,6 +79,8 @@ public:
               const QString &fingerprint) override;
     void signOnDevice(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
                       const QString &descriptor, const QString &fingerprint) override;
+    void prepareNonces(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
+                       const QString &descriptor, const QString &fingerprint) override;
     void verifyAddress(ReqId req_id, plugin::Network network, const QString &descriptor,
                        const QString &path, const QString &address,
                        const QString &fingerprint) override;

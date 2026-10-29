@@ -41,6 +41,7 @@ public:
 public slots:
     void onBackClicked();
     void onNextClicked();
+    void onNoncesFetched(const QString &error);
     void onDeviceSignedPsbt(const QString &psbt_v2_hex);
     void onDeviceSignFailed(UsbError error, const QString &message, plugin::SignError kind);
     void onDeviceXpub(ReqId req_id, const QString &xpub);

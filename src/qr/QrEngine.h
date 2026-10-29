@@ -2,10 +2,13 @@
 
 #include "qr/QrTypes.h"
 
+#include <QHash>
 #include <QList>
 #include <QObject>
 #include <QString>
 #include <QStringList>
+
+#include <silent.h>
 
 namespace qr {
 
@@ -24,6 +27,15 @@ public:
     // sub-accounts' xpubs.
     virtual void getSpAccount() = 0;
     virtual void sign(const QString &psbt_v2_hex, const QString &descriptor) = 0;
+    // A cached MuSig preparation: public nonces for a fresh cache session, bound to
+    // no transaction.
+    virtual void prepareMusig(const QString &fingerprint, const QString &descriptor) = 0;
+    // The first signature request of a prepared cache session: the attempt's sessions
+    // are allocated durably before the request is shown. `routes` names every pending
+    // signer's route, so the allocation binds all of them.
+    virtual void signMusig(const QString &fingerprint, const QString &psbt_v2_hex,
+                           const QString &descriptor,
+                           const QHash<QString, KeyRouteKind> &routes) = 0;
     virtual void verifyAddress(const QString &descriptor, const QString &path,
                                const QString &address) = 0;
     // Ends the exchange: a late answer is dropped.
@@ -36,6 +48,8 @@ signals:
                const qr::QrDevice &device);
     void spAccount(const QString &descriptor, const QList<qr::QrXpub> &xpubs);
     void signedPsbt(const QString &psbt_v2_hex);
+    // The prepared answer checked out and is in the cache.
+    void noncesPrepared();
     void addressVerified(bool matched);
     void error(qr::QrError kind, const QString &message);
 

@@ -632,10 +632,48 @@ void MusigAccountController::signRoundOnDevice(const QString &fingerprint) {
                        toQString(getDescriptor()), fingerprint);
 }
 
+void MusigAccountController::prepareNonces(const QString &fingerprint) {
+    if (m_restart_pending || m_endpoint_busy || m_resetting || m_psbt_v2_hex.isEmpty() ||
+        !m_account.has_value() || !m_prepare_reqs.isEmpty() ||
+        preparingKeys().contains(fingerprint.toLower()) ||
+        signingKeys().contains(fingerprint.toLower())) {
+        return;
+    }
+    auto *keys = Host::get()->keys(MusigModule::get());
+    if (keys == nullptr) {
+        emit signingFailed(TR("musig-send-no-keys"), plugin::SignError::Other);
+        return;
+    }
+    connect(keys, &IKeys::noncesPrepared, this, &MusigAccountController::onNoncesPrepared,
+            qontrol::UNIQUE);
+    connect(keys, &IKeys::error, this, &MusigAccountController::onKeysError, qontrol::UNIQUE);
+    connect(keys, &IKeys::cancelled, this, &MusigAccountController::onKeysCancelled,
+            qontrol::UNIQUE);
+    auto req = keys->newRequest();
+    m_signing_keys = keys;
+    m_prepare_reqs.insert(req, fingerprint);
+    keys->prepareNonces(req, account::toPublic<plugin::Network>(network()), m_psbt_v2_hex,
+                        toQString(getDescriptor()), fingerprint);
+}
+
+auto MusigAccountController::preparingKeys() const -> QSet<QString> {
+    QSet<QString> keys;
+    for (const auto &fingerprint : m_prepare_reqs) {
+        keys.insert(fingerprint.toLower());
+    }
+    return keys;
+}
+
+auto MusigAccountController::noncesAllocated() const -> bool {
+    return m_nonces_allocated;
+}
+
 void MusigAccountController::retireSignRequests() {
     auto requests = m_sign_reqs.keys();
     m_sign_reqs.clear();
     m_accepting_reqs.clear();
+    requests += m_prepare_reqs.keys();
+    m_prepare_reqs.clear();
     if (!m_signing_keys.isNull()) {
         for (auto req : requests) {
             m_signing_keys->cancelRequest(req);
@@ -651,6 +689,7 @@ void MusigAccountController::clearSigning() {
     m_tx_hex.clear();
     m_saved_record_id.clear();
     m_finalizing = false;
+    m_nonces_allocated = false;
     retireSignRequests();
     if (m_account.has_value()) {
         auto *account = &*m_account.value();
@@ -735,7 +774,15 @@ void MusigAccountController::onKeysSigned(ReqId req_id, const QString &psbt_v2_h
 
 void MusigAccountController::onKeysError(std::optional<ReqId> req_id, const QString &message,
                                          plugin::SignError kind) {
-    if (!req_id.has_value() || !m_sign_reqs.contains(req_id.value())) {
+    if (!req_id.has_value()) {
+        return;
+    }
+    if (m_prepare_reqs.contains(req_id.value())) {
+        m_prepare_reqs.remove(req_id.value());
+        emit signingFailed(message, kind);
+        return;
+    }
+    if (!m_sign_reqs.contains(req_id.value())) {
         return;
     }
     m_sign_reqs.remove(req_id.value());
@@ -757,7 +804,27 @@ void MusigAccountController::onKeysError(std::optional<ReqId> req_id, const QStr
         emit roundChanged(roundStatus());
         return;
     }
+    // The request may still have taken sessions before it failed: Reset follows the
+    // durable allocation, not the request's outcome.
+    refreshAttempt();
     emit signingFailed(message, kind);
+}
+
+// Re-reads the active attempt from Rust and refreshes everything that follows it.
+void MusigAccountController::refreshAttempt() {
+    if (!m_account.has_value()) {
+        return;
+    }
+    auto *account = &*m_account.value();
+    auto generation = m_signing_generation;
+    auto snapshot = std::make_shared<MusigAttemptSnapshot>();
+    enqueueStorage([account, snapshot] { *snapshot = account->active_attempt(); },
+                   [this, snapshot, generation] {
+                       if (generation == m_signing_generation) {
+                           applyAttempt(*snapshot);
+                           emit roundChanged(roundStatus());
+                       }
+                   });
 }
 
 void MusigAccountController::onRestartFinished() {
@@ -786,11 +853,26 @@ void MusigAccountController::onRestartFinished() {
 
 // The PSBT keeps the round it was at.
 void MusigAccountController::onKeysCancelled(ReqId req_id) {
+    if (m_prepare_reqs.contains(req_id)) {
+        m_prepare_reqs.remove(req_id);
+        emit signingCancelled();
+        return;
+    }
     if (!m_sign_reqs.contains(req_id)) {
         return;
     }
     m_sign_reqs.remove(req_id);
+    refreshAttempt();
     emit signingCancelled();
+}
+
+void MusigAccountController::onNoncesPrepared(ReqId req_id,
+                                              [[maybe_unused]] const QString &fingerprint) {
+    if (!m_prepare_reqs.contains(req_id)) {
+        return;
+    }
+    m_prepare_reqs.remove(req_id);
+    emit roundChanged(roundStatus());
 }
 
 void MusigAccountController::onBroadcastResult(const TxResult &result) {
@@ -1038,6 +1120,7 @@ void MusigAccountController::applyAttempt(const MusigAttemptSnapshot &snapshot) 
     m_tx_hex = toQString(snapshot.tx_hex);
     m_saved_record_id = toQString(snapshot.record_id);
     m_restart_pending = snapshot.reset_pending;
+    m_nonces_allocated = snapshot.nonces_allocated;
     m_spend_signers.clear();
     for (const auto &fingerprint : snapshot.signers) {
         m_spend_signers.append(toQString(fingerprint));

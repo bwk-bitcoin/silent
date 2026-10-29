@@ -25,14 +25,14 @@ use zeroize::Zeroizing;
 use crate::keys::{
     crypto::{self, Password},
     error::Error,
-    hot, ledger_nonces, network_name,
+    hot, ledger_nonces, musig_sessions, network_name,
     psbt::{
         inspect_bytes, musig_completed_fingerprints, musig_nonces_complete,
         ordinary_signature_complete, parse_v2, PsbtArtifacts,
     },
     record::{DescriptorEntry, DeviceRecord, KeyRecord, RouteKind, SecretEnvelope, XpubEntry},
     store::KeyStore,
-    supports_musig, CAPABILITY_MUSIG,
+    supports_musig, CAPABILITY_MUSIG, CAPABILITY_MUSIG_CACHE,
 };
 
 /// One signing device as currently seen by a hardware backend, for example HWI.
@@ -103,6 +103,12 @@ pub struct SigningCandidate {
     pub musig_done: bool,
     pub nonces_done: bool,
     pub signatures_done: bool,
+    /// Every MuSig policy this key still owes nonces for has a usable cached session.
+    /// Always true when nothing is pending, and only meaningful in round one.
+    pub cache_ready: bool,
+    /// The key's route supports transaction-independent cache preparation. False for
+    /// a QR key whose recorded device does not advertise the cache capability.
+    pub cache_supported: bool,
 }
 
 /// What the signer picker is built from for one PSBT.
@@ -393,6 +399,81 @@ impl KeyManager {
         Ok(())
     }
 
+    /// Whether the route supports transaction-independent cache preparation: a QR
+    /// key only when its recorded device advertises the cache capability.
+    fn cache_support(&self, fingerprint: Fingerprint, route: Option<RouteKind>) -> bool {
+        match route {
+            Some(RouteKind::Qr) => self.records.get(&fingerprint).is_some_and(|record| {
+                record
+                    .devices
+                    .iter()
+                    .any(|device| device.capabilities & CAPABILITY_MUSIG_CACHE != 0)
+            }),
+            Some(RouteKind::SdCard) => false,
+            _ => true,
+        }
+    }
+
+    /// Whether every MuSig policy this key still owes nonces for holds a usable
+    /// cached session, read from the in-memory snapshot only. `round1` false and
+    /// nothing pending both read as ready: there is nothing to prepare.
+    fn cache_ready(
+        &self,
+        fingerprint: Fingerprint,
+        real: &Psbt,
+        policies: &BTreeMap<String, MusigStatus>,
+        round1: bool,
+        route: Option<RouteKind>,
+    ) -> Result<bool, Error> {
+        if !round1 {
+            return Ok(true);
+        }
+        let mut ready = true;
+        let mut pending = false;
+        for (policy, status) in policies {
+            let Some(own) = status
+                .cosigners
+                .iter()
+                .find(|own| own.fingerprint == fingerprint)
+            else {
+                continue;
+            };
+            if own.nonces >= own.expected {
+                continue;
+            }
+            pending = true;
+            ready &= match route {
+                Some(RouteKind::Hot) => {
+                    musig_sessions::count_for(fingerprint, policy, RouteKind::Hot) > 0
+                }
+                Some(RouteKind::Usb) => {
+                    musig_sessions::count_for(fingerprint, policy, RouteKind::Usb) > 0
+                        || self.usb_allocation(fingerprint, policy, real)
+                }
+                Some(RouteKind::Qr) => {
+                    musig_sessions::qr_ready(fingerprint, policy, real).map_err(Error::State)?
+                }
+                _ => false,
+            };
+        }
+        Ok(!pending || ready)
+    }
+
+    /// Whether the USB provider already holds an allocation bound to this attempt.
+    fn usb_allocation(&self, fingerprint: Fingerprint, policy: &str, real: &Psbt) -> bool {
+        let Ok(parsed) = musig_sessions::descriptor(policy) else {
+            return false;
+        };
+        let Ok(binding) = musig_sessions::binding(real, &parsed, fingerprint) else {
+            return false;
+        };
+        musig_sessions::snapshot(fingerprint).is_some_and(|state| {
+            state.allocated.iter().any(|allocation| {
+                allocation.binding == binding && allocation.provider == RouteKind::Usb
+            })
+        })
+    }
+
     pub fn new(store: KeyStore, network: Network) -> Result<Self, Error> {
         let (records, deleted) = split_deleted(store.list()?);
         Ok(Self {
@@ -545,6 +626,8 @@ impl KeyManager {
             musig_done: artifacts.musig_done.contains(&fingerprint),
             nonces_done: false,
             signatures_done: false,
+            cache_ready: true,
+            cache_supported: true,
         };
         let Some(record) = record else {
             return candidate;
@@ -1064,6 +1147,15 @@ impl KeyManagerImpl for KeyManager {
                     || ordinary_signature_complete(&real, candidate.fingerprint);
                 self.ledger_candidate(candidate, &real, &policies, round1)?;
                 candidate.musig_done |= candidate.signatures_done;
+                candidate.cache_ready = self.cache_ready(
+                    candidate.fingerprint,
+                    &real,
+                    &policies,
+                    round1,
+                    candidate.route,
+                )?;
+                candidate.cache_supported =
+                    self.cache_support(candidate.fingerprint, candidate.route);
                 let cached = round1
                     && candidate.route == Some(RouteKind::Usb)
                     && candidate.device_id.is_empty();

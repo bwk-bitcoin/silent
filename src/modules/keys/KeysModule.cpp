@@ -222,6 +222,16 @@ void KeysBus::signOnDevice(ReqId req_id, plugin::Network network, const QString 
     m_module->signOnDevice(req_id, psbt_v2_hex, descriptor, fingerprint);
 }
 
+void KeysBus::prepareNonces(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
+                            const QString &descriptor, const QString &fingerprint) {
+    auto converted = requestNetwork(network, req_id);
+    if (!converted.has_value()) {
+        return;
+    }
+    NetworkScope scope(m_module, *converted);
+    m_module->prepareNonces(req_id, psbt_v2_hex, descriptor, fingerprint);
+}
+
 void KeysBus::verifyAddress(ReqId req_id, plugin::Network network, const QString &descriptor,
                             const QString &path, const QString &address,
                             const QString &fingerprint) {
@@ -347,6 +357,10 @@ void KeysBus::deliverSigned(ReqId req_id, const QString &psbt_v2_hex) {
 
 void KeysBus::deliverVerified(ReqId req_id, bool matched) {
     emit verified(req_id, matched);
+}
+
+void KeysBus::deliverNoncesPrepared(ReqId req_id, const QString &fingerprint) {
+    emit noncesPrepared(req_id, fingerprint);
 }
 
 void KeysBus::deliverError(std::optional<ReqId> req_id, const QString &message,
@@ -701,6 +715,8 @@ auto KeysModule::offlineSignerFor(const QString &fingerprint, const KeyInfo &inf
 void KeysModule::runFlow(flow::SigningFlow *flow) {
     connect(flow, &flow::SigningFlow::psbtSigned, m_bus.get(), &KeysBus::deliverSigned,
             qontrol::UNIQUE);
+    connect(flow, &flow::SigningFlow::noncesPrepared, m_bus.get(), &KeysBus::deliverNoncesPrepared,
+            qontrol::UNIQUE);
     connect(flow, &flow::SigningFlow::addressVerified, m_bus.get(), &KeysBus::deliverVerified,
             qontrol::UNIQUE);
     connect(flow, &flow::SigningFlow::descriptorFetched, this, &KeysModule::onFlowDescriptorFetched,
@@ -749,13 +765,30 @@ void KeysModule::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringLis
         sign->start();
         return;
     }
+    // A QR key whose device advertises the cache capability signs from prepared
+    // sessions: its first request allocates every pending signer's session, over the
+    // routes the plan names.
+    bool cachedMusig = false;
+    QHash<QString, KeyRouteKind> routes;
+    for (const auto &candidate : plan.candidates) {
+        if (!candidate.can_sign || candidate.route == KeyRouteKind::Unknown) {
+            continue;
+        }
+        routes.insert(toQt(candidate.fingerprint).toLower(), candidate.route);
+        if (candidate.route == KeyRouteKind::Qr && candidate.cache_supported &&
+            toQt(candidate.fingerprint).compare(fingerprint, Qt::CaseInsensitive) == 0) {
+            cachedMusig = true;
+        }
+    }
     runFlow(new flow::SigningFlow(
         this, {.context = flow::Context::Sign,
                .req_id = req_id,
                .psbt_v2_hex = psbt_v2_hex,
                .descriptor = descriptors.isEmpty() ? QString() : descriptors.first(),
                .wallet_name = wallet_name,
-               .fingerprint = fingerprint}));
+               .fingerprint = fingerprint,
+               .cached_musig = cachedMusig,
+               .routes = routes}));
 }
 
 void KeysModule::signOnDevice(ReqId req_id, const QString &psbt_v2_hex, const QString &descriptor,
@@ -788,6 +821,41 @@ void KeysModule::signOnDevice(ReqId req_id, const QString &psbt_v2_hex, const QS
     connect(sign, &flow::DeviceSign::failed, this, &KeysModule::onDeviceSignFailed,
             qontrol::UNIQUE);
     sign->start(descriptor);
+}
+
+void KeysModule::prepareNonces(ReqId req_id, const QString &psbt_v2_hex, const QString &descriptor,
+                               const QString &fingerprint) {
+    if (rust() == nullptr) {
+        m_bus->deliverError(req_id, TR("keys-module-not-ready"));
+        return;
+    }
+    // signing_plan() blocks on nothing (no device I/O), so calling it from the GUI
+    // thread is safe: see its doc comment in lib/include/silent.h.
+    auto plan = rust()->signing_plan(rust::String(psbt_v2_hex.toStdString()));
+    if (!plan.is_ok) {
+        m_bus->deliverError(req_id, toQt(plan.error));
+        return;
+    }
+    for (const auto &candidate : plan.candidates) {
+        if (toQt(candidate.fingerprint).compare(fingerprint, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        if (!candidate.can_sign) {
+            m_bus->deliverError(req_id, TR("flow-signer-not-needed"));
+            return;
+        }
+        if (!candidate.cache_supported) {
+            m_bus->deliverError(req_id, TR("flow-nonces-unsupported"));
+            return;
+        }
+        runFlow(new flow::SigningFlow(this, {.context = flow::Context::Nonces,
+                                             .req_id = req_id,
+                                             .psbt_v2_hex = psbt_v2_hex,
+                                             .descriptor = descriptor,
+                                             .fingerprint = fingerprint}));
+        return;
+    }
+    m_bus->deliverError(req_id, TR("flow-signer-not-needed"));
 }
 
 void KeysModule::verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,

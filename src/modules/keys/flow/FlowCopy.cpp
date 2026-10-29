@@ -55,6 +55,18 @@ auto flowCopy(Context context) -> FlowCopy {
                 .sdTitle = TR("flow-fetch-xpub-title"),
                 .hotPrompt = TR("flow-fetch-xpub-hot-prompt"),
                 .hotBusy = TR("flow-fetch-xpub-hot-busy")};
+    case Context::Nonces:
+        return {.title = TR("flow-nonces-title"),
+                .pickerLead = TR("flow-nonces-picker-lead"),
+                .usbTitle = TR("flow-usb-confirm-title"),
+                .usbWait = TR("flow-nonces-usb-wait"),
+                .qrTitle = TR("flow-nonces-qr-title"),
+                .qrHint = TR("flow-nonces-qr-hint"),
+                .scanTitle = TR("flow-nonces-scan-title"),
+                .scanHint = TR("flow-nonces-scan-hint"),
+                .sdTitle = TR("flow-nonces-title"),
+                .hotPrompt = TR("flow-nonces-hot-prompt"),
+                .hotBusy = TR("flow-nonces-hot-busy")};
     }
     return {};
 }
@@ -69,6 +81,8 @@ auto hotProceedButton(Context context) -> catalog::Button * {
         return catalog::btnGetDescriptorHot();
     case Context::FetchXpub:
         return catalog::btnGetXpubHot();
+    case Context::Nonces:
+        return catalog::btnPrepareNoncesHot();
     }
     return catalog::btnProceed();
 }

@@ -97,6 +97,8 @@ public:
               const QString &fingerprint) override;
     void signOnDevice(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
                       const QString &descriptor, const QString &fingerprint) override;
+    void prepareNonces(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
+                       const QString &descriptor, const QString &fingerprint) override;
     void verifyAddress(ReqId req_id, plugin::Network network, const QString &descriptor,
                        const QString &path, const QString &address,
                        const QString &fingerprint) override;
@@ -123,6 +125,7 @@ public slots:
     void onCoordinationReleased();
     // Called by the module and its signing flows, which own every outstanding request.
     void deliverSigned(ReqId req_id, const QString &psbt_v2_hex);
+    void deliverNoncesPrepared(ReqId req_id, const QString &fingerprint);
     // `matched` is the device's own answer; false is a refusal, not a failure.
     void deliverVerified(ReqId req_id, bool matched);
     void deliverError(std::optional<ReqId> req_id, const QString &message,
@@ -243,6 +246,10 @@ public:
     // window; answers `req_id` through the bus.
     void signOnDevice(ReqId req_id, const QString &psbt_v2_hex, const QString &descriptor,
                       const QString &fingerprint);
+    // Prepares one nonce-cache session for the key `fingerprint` over its route; answers
+    // `req_id` through the bus.
+    void prepareNonces(ReqId req_id, const QString &psbt_v2_hex, const QString &descriptor,
+                       const QString &fingerprint);
     // Shows `address` on a device of a key `descriptor` is registered against, or of
     // the key `fingerprint` alone when it is set.
     void verifyAddress(ReqId req_id, const QString &descriptor, const QString &path,

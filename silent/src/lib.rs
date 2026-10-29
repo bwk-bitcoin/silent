@@ -197,6 +197,8 @@ mod ffi {
         AddressVerified,
         SignedPsbt,
         SpAccount,
+        MusigPrepared,
+        MusigSignedPsbt,
     }
 
     /// MuSig2 signing round of a PSBT.
@@ -662,6 +664,9 @@ mod ffi {
         pub record_id: String,
         pub signers: Vec<String>,
         pub reset_pending: bool,
+        /// A nonce session was durably taken from cache for this attempt: Reset
+        /// exists from here on, even when nothing was published with it.
+        pub nonces_allocated: bool,
     }
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1034,6 +1039,30 @@ mod ffi {
         pub musig_done: bool,
         pub nonces_done: bool,
         pub signatures_done: bool,
+        /// Every MuSig policy this key still owes nonces for has a usable cached
+        /// session. Always true when nothing is pending.
+        pub cache_ready: bool,
+        /// The key's route supports transaction-independent cache preparation.
+        pub cache_supported: bool,
+    }
+
+    /// One pending signer's plan route, for the cached signing allocation to bind
+    /// every required session.
+    #[derive(Debug, Clone)]
+    pub struct QrMusigSignerRoute {
+        pub fingerprint: String,
+        pub route: KeyRouteKind,
+    }
+
+    /// The outcome of a cached MuSig QR exchange: the verified PSBT as v2 hex after
+    /// a signing answer, or why the exchange failed.
+    #[derive(Debug, Clone)]
+    pub struct QrMusigCacheResult {
+        pub is_ok: bool,
+        pub error: String,
+        /// The session the attempt was bound to is gone and signing must restart.
+        pub musig_session: bool,
+        pub psbt_v2_hex: String,
     }
 
     #[derive(Debug, Clone)]
@@ -1616,6 +1645,11 @@ mod ffi {
         /// GUI-thread copy of one key's record and the manager's network, for the
         /// free hot-key worker functions to sign/reveal/derive from off-thread.
         type HotMaterial;
+
+        /// Worker results of the cached MuSig QR exchanges, built off-thread and
+        /// turned into wire requests on the GUI thread.
+        type QrMusigPrepare;
+        type QrMusigSign;
         type FeedState;
         type EndpointRetry;
         fn new_endpoint_retry() -> Box<EndpointRetry>;
@@ -2500,6 +2534,30 @@ mod ffi {
             original: &str,
             prepared: &str,
         ) -> SignResult;
+
+        // Disk operations: callers run these on a worker, never the GUI thread.
+        fn qr_musig_prepare_material(fingerprint: &str, descriptor: &str) -> Box<QrMusigPrepare>;
+        fn qr_musig_sign_material(
+            fingerprint: &str,
+            policy: &str,
+            psbt_v2_hex: &str,
+            routes: Vec<QrMusigSignerRoute>,
+        ) -> Box<QrMusigSign>;
+        fn qr_musig_accept(
+            answer: Box<QrResponse>,
+            fingerprint: &str,
+            policy: &str,
+            psbt_v2_hex: &str,
+        ) -> QrMusigCacheResult;
+        // CPU only: builds the wire request and makes it the outstanding one.
+        fn qr_request_prepare_musig(
+            self: &mut KeysModule,
+            preparation: Box<QrMusigPrepare>,
+        ) -> QrMessageResult;
+        fn qr_request_sign_musig(
+            self: &mut KeysModule,
+            signing: Box<QrMusigSign>,
+        ) -> QrMessageResult;
         // Disk operations: callers run these on a worker, never the GUI thread.
         fn ledger_nonce_fetch(
             fingerprint: &str,
@@ -3375,8 +3433,10 @@ pub use keys::{
         ledger_nonce_limit, ledger_nonce_merge, ledger_nonce_plan, ledger_nonce_refresh,
         ledger_nonce_restart, ledger_nonce_sign, merge_signed_psbt, musig_session_count,
         musig_session_limit, musig_session_plan, musig_session_refresh, musig_session_restart,
-        new_keys_module, usb_merge_signed, usb_sign_payload, AccountXpubUsage, HotMaterial,
-        KeyFileCommit, KeyFilePreview, KeysModule, LedgerNonceFetch, QrResponse, SealedHotKey,
+        new_keys_module, qr_musig_accept, qr_musig_prepare_material, qr_musig_sign_material,
+        usb_merge_signed, usb_sign_payload, AccountXpubUsage, HotMaterial, KeyFileCommit,
+        KeyFilePreview, KeysModule, LedgerNonceFetch, QrMusigPrepare, QrMusigSign, QrResponse,
+        SealedHotKey,
     },
     supports_silent_payments,
 };

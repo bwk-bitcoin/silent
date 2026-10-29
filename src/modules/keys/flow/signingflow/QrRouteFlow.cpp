@@ -46,7 +46,15 @@ void QrRouteFlow::start() {
     showDisplay();
     switch (request().context) {
     case Context::Sign:
+        if (request().cached_musig) {
+            m_qr_engine->signMusig(row().fingerprint, psbt(), request().descriptor,
+                                   request().routes);
+            return;
+        }
         m_qr_engine->sign(psbt(), request().descriptor);
+        return;
+    case Context::Nonces:
+        m_qr_engine->prepareMusig(row().fingerprint, request().descriptor);
         return;
     case Context::Verify:
         m_qr_engine->verifyAddress(request().descriptor, request().path, request().address);
@@ -154,6 +162,8 @@ void QrRouteFlow::connectCamera() {
             qontrol::UNIQUE);
     connect(m_qr_engine, &qr::QrEngine::signedPsbt, this, &QrRouteFlow::onQrSigned,
             qontrol::UNIQUE);
+    connect(m_qr_engine, &qr::QrEngine::noncesPrepared, this, &QrRouteFlow::onMusigPrepared,
+            qontrol::UNIQUE);
     connect(m_qr_engine, &qr::QrEngine::addressVerified, this, &QrRouteFlow::onQrVerified,
             qontrol::UNIQUE);
     connect(m_qr_engine, &qr::QrEngine::spAccount, this, &QrRouteFlow::onQrSpAccount,
@@ -245,6 +255,11 @@ void QrRouteFlow::onNextClicked() {
 void QrRouteFlow::onQrSigned(const QString &psbt_v2_hex) {
     m_camera->stop();
     emit psbtSigned(psbt_v2_hex);
+}
+
+void QrRouteFlow::onMusigPrepared() {
+    m_camera->stop();
+    emit noncesPrepared();
 }
 
 void QrRouteFlow::onQrVerified(bool matched) {

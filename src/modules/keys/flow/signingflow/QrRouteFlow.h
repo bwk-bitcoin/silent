@@ -43,6 +43,7 @@ public slots:
     void onBackClicked();
     void onNextClicked();
     void onQrSigned(const QString &psbt_v2_hex);
+    void onMusigPrepared();
     void onQrVerified(bool matched);
     void onQrSpAccount(const QString &descriptor, const QList<qr::QrXpub> &xpubs);
     void onQrXpubs(const QString &fingerprint, const QList<qr::QrXpub> &xpubs,

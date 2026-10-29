@@ -11,6 +11,7 @@ use bitcoin::{
     absolute::LockTime,
     bip32::{ChildNumber, DerivationPath},
     hashes::Hash,
+    secp256k1::{PublicKey, Secp256k1, SecretKey},
     transaction,
 };
 use bwk_qr_protocol::{
@@ -1043,5 +1044,244 @@ fn test_sp_account_private_key_export_refusal_surfaces() {
             }) if message == "scan branch only"
         ),
         "expected the signer's private key export refusal, got {error:?}"
+    );
+}
+
+// ===== Cached MuSig preparation and signing exchanges =====
+
+const MUSIG_POLICY: &str =
+    "tr(musig([a1b2c3d4/87h/1h/0h]xpubA/<0;1>/*,[e5f6a7b8/87h/1h/0h]xpubB/<0;1>/*))";
+
+fn prepare_request(session_id: [u8; 32]) -> request::PrepareMusig {
+    request::PrepareMusig {
+        descriptor: request::Descriptor {
+            alias: "wallet".to_string(),
+            descriptor: Some(request::DescriptorBody::Bip380(MUSIG_POLICY.to_string())),
+            proof: None,
+        },
+        session_id,
+        max_inputs: 1,
+        derivations: vec![request::MusigDerivation {
+            keychain: 0,
+            index: 0,
+        }],
+    }
+}
+
+/// A 66-byte public nonce of two compressed points derived from `tag`.
+fn musig_nonce(tag: u8) -> [u8; 66] {
+    let secp = Secp256k1::new();
+    let point = |seed: u8| {
+        PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&[seed; 32]).expect("secret"))
+            .serialize()
+    };
+    let mut nonce = [0; 66];
+    nonce[..33].copy_from_slice(&point(tag));
+    nonce[33..].copy_from_slice(&point(tag + 1));
+    nonce
+}
+
+/// A compressed point derived from `tag`, for participant and aggregate fields.
+fn musig_point(tag: u8) -> PublicKey {
+    PublicKey::from_secret_key(
+        &Secp256k1::new(),
+        &SecretKey::from_slice(&[tag; 32]).expect("secret"),
+    )
+}
+
+fn prepared_body(session_id: [u8; 32], max_inputs: u8) -> response::Body {
+    response::Body::MusigPrepared(response::MusigPrepared {
+        session_id,
+        max_inputs,
+        nonces: vec![response::MusigNonce {
+            derivation: request::MusigDerivation {
+                keychain: 0,
+                index: 0,
+            },
+            input_index: 0,
+            expression_index: 0,
+            participant: bwk_qr_protocol::types::PublicKey(musig_point(2).serialize()),
+            aggregate: bwk_qr_protocol::types::PublicKey(musig_point(3).serialize()),
+            leaf_hash: None,
+            nonce: musig_nonce(7),
+        }],
+    })
+}
+
+fn respond(session: &QrSession, body: response::Body) -> Vec<u8> {
+    bwk_qr_protocol::encode_response(&Response {
+        id: session.outstanding_id().expect("outstanding request"),
+        body,
+    })
+    .expect("encode response")
+}
+
+#[test]
+fn test_musig_prepare_round_trip_carries_the_asked_coverage() {
+    let mut session = QrSession::new();
+    let session_id = [9u8; 32];
+    let request = session
+        .prepare_musig(prepare_request(session_id))
+        .expect("prepare request");
+    match bwk_qr_protocol::decode(request.message()).expect("decode prepare request") {
+        Message::Request(decoded) => {
+            assert_eq!(
+                decoded.body.message_type(),
+                MessageType::MusigPreparation,
+                "preparation must go out as its own message type"
+            );
+            let request::Body::PrepareMusig(preparation) = decoded.body else {
+                panic!("expected a PrepareMusig body");
+            };
+            assert_eq!(preparation.session_id, session_id, "session id carried");
+            assert_eq!(preparation.max_inputs, 1, "coverage carried");
+        }
+        Message::Response(_) => panic!("expected a request, decoded a response"),
+    }
+
+    let encoded = respond(&session, prepared_body(session_id, 1));
+    match session.decode_response(&encoded).expect("prepared answer") {
+        QrResponse::MusigPrepared {
+            session_id: echoed,
+            max_inputs,
+            nonces,
+        } => {
+            assert_eq!(echoed, session_id, "the session id is echoed");
+            assert_eq!(max_inputs, 1, "the accepted coverage is echoed");
+            assert_eq!(nonces.len(), 1, "the advertised nonce is handed over");
+        }
+        other => panic!("expected a prepared cache answer, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_musig_prepare_refuses_wrong_session_and_keeps_the_exchange_open() {
+    let mut session = QrSession::new();
+    let session_id = [4u8; 32];
+    session
+        .prepare_musig(prepare_request(session_id))
+        .expect("prepare request");
+
+    let encoded = respond(&session, prepared_body([5u8; 32], 1));
+    assert!(
+        matches!(
+            session.decode_response(&encoded),
+            Err(Error::MusigSessionMismatch)
+        ),
+        "a prepared answer for another session must be refused"
+    );
+    assert!(
+        matches!(
+            session.decode_response(&respond(&session, prepared_body(session_id, 1))),
+            Ok(QrResponse::MusigPrepared { .. })
+        ),
+        "the exchange stays open after a refusal, and the right session answers"
+    );
+}
+
+#[test]
+fn test_musig_prepare_refuses_hardened_derivation_before_the_wire() {
+    let mut session = QrSession::new();
+    let mut preparation = prepare_request([6u8; 32]);
+    preparation.derivations[0].index = 1 << 31;
+    assert!(
+        matches!(
+            session.prepare_musig(preparation),
+            Err(Error::MusigPreparationInvalid(_))
+        ),
+        "a hardened derivation index must be refused before encoding"
+    );
+    assert!(
+        session.outstanding_id().is_none(),
+        "a refused preparation leaves no request outstanding"
+    );
+}
+
+#[test]
+fn test_musig_sign_round_trip_and_attempt_echo() {
+    let mut session = QrSession::new();
+    let session_id = [8u8; 32];
+    let attempt_id = [3u8; 32];
+    let psbt = sign_psbt_bytes();
+    let request = session
+        .sign_musig(session_id, attempt_id, &psbt)
+        .expect("cached sign request");
+    match bwk_qr_protocol::decode(request.message()).expect("decode cached sign request") {
+        Message::Request(decoded) => {
+            assert_eq!(
+                decoded.body.message_type(),
+                MessageType::MusigSigning,
+                "cached signing must go out as its own message type"
+            );
+            let request::Body::SignMusig(signing) = decoded.body else {
+                panic!("expected a SignMusig body");
+            };
+            assert_eq!(signing.session_id, session_id, "session id carried");
+            assert_eq!(signing.attempt_id, attempt_id, "attempt id carried");
+            assert_eq!(signing.psbt, psbt, "the v2 psbt is carried unchanged");
+        }
+        Message::Response(_) => panic!("expected a request, decoded a response"),
+    }
+
+    let signed_body = |session_id: [u8; 32], attempt_id: [u8; 32]| {
+        response::Body::MusigSigned(response::MusigSigned {
+            session_id,
+            attempt_id,
+            psbt: psbt.clone(),
+        })
+    };
+    let encoded = respond(&session, signed_body(session_id, [9u8; 32]));
+    assert!(
+        matches!(
+            session.decode_response(&encoded),
+            Err(Error::MusigSessionMismatch)
+        ),
+        "an answer for another attempt must be refused"
+    );
+
+    session
+        .sign_musig(session_id, attempt_id, &psbt)
+        .expect("retry the cached sign request");
+    let encoded = respond(&session, signed_body([7u8; 32], attempt_id));
+    assert!(
+        matches!(
+            session.decode_response(&encoded),
+            Err(Error::MusigSessionMismatch)
+        ),
+        "an answer for another session must be refused"
+    );
+
+    session
+        .sign_musig(session_id, attempt_id, &psbt)
+        .expect("retry the cached sign request");
+    let encoded = respond(&session, signed_body(session_id, attempt_id));
+    match session
+        .decode_response(&encoded)
+        .expect("cached signing answer")
+    {
+        QrResponse::MusigSignedPsbt(bytes) => {
+            assert_eq!(bytes, psbt, "the returned v2 psbt is handed over");
+        }
+        other => panic!("expected a cached signing answer, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_musig_sign_refuses_a_response_that_is_not_a_v2_psbt() {
+    let mut session = QrSession::new();
+    session
+        .sign_musig([2u8; 32], [2u8; 32], &sign_psbt_bytes())
+        .expect("cached sign request");
+    let encoded = respond(
+        &session,
+        response::Body::MusigSigned(response::MusigSigned {
+            session_id: [2u8; 32],
+            attempt_id: [2u8; 32],
+            psbt: b"not a psbt".to_vec(),
+        }),
+    );
+    assert!(
+        matches!(session.decode_response(&encoded), Err(Error::PsbtParse(_))),
+        "an unparsable cached signing answer must be refused"
     );
 }

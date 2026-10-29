@@ -1288,12 +1288,35 @@ impl MusigAccount {
     }
 
     pub fn active_attempt(&self) -> MusigAttemptSnapshot {
-        match self.active.lock() {
+        let mut snapshot = match self.active.lock() {
             Ok(active) => active
                 .clone()
                 .unwrap_or_else(|| attempt_error("No active attempt".into())),
             Err(error) => attempt_error(format!("Active attempt lock failed: {error}")),
-        }
+        };
+        snapshot.nonces_allocated = snapshot.is_ok && self.nonces_allocated(&snapshot);
+        snapshot
+    }
+
+    /// Whether any provider durably took a cache session for this attempt. Read from
+    /// the in-memory snapshots only, so it stays safe next to the attempt lock.
+    fn nonces_allocated(&self, snapshot: &MusigAttemptSnapshot) -> bool {
+        let Ok(real) = decode_psbt(&snapshot.psbt_v2_hex) else {
+            return false;
+        };
+        let Ok(policy) = crate::keys::musig_sessions::descriptor(&self.descriptor()) else {
+            return false;
+        };
+        snapshot.signers.iter().any(|signer| {
+            let Ok(fingerprint) = bitcoin::bip32::Fingerprint::from_str(signer) else {
+                return false;
+            };
+            let Ok(binding) = crate::keys::musig_sessions::binding(&real, &policy, fingerprint)
+            else {
+                return false;
+            };
+            crate::keys::musig_sessions::binding_allocated(fingerprint, binding)
+        })
     }
 
     pub fn active_signing_plan(

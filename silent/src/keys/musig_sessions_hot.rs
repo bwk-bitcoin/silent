@@ -44,7 +44,7 @@ fn random_id() -> Result<MusigSessionId, String> {
     Ok(MusigSessionId(id))
 }
 
-fn create_locked(
+pub(crate) fn create_locked(
     store: &mut LockedCache,
     signer: &HotSigner,
     policy: &str,
@@ -78,6 +78,7 @@ fn create_locked(
             Zeroizing::new(bytes.as_bytes().to_vec()),
             &secret_aad(signer.fingerprint(), policy, id.0),
         )?),
+        qr: None,
     };
     store.insert(entry)
 }
@@ -157,7 +158,7 @@ pub fn publish_hot(fp: Fingerprint, policy: &str, real: &mut Psbt) -> Result<boo
     publish_at(&datadir().join("musig-sessions"), fp, policy, real, None)
 }
 
-fn publish_at(
+pub(crate) fn publish_at(
     root: &Path,
     fp: Fingerprint,
     policy: &str,

@@ -42,6 +42,8 @@ auto btnCreate() -> Button *;
 auto btnDone() -> Button *;
 auto btnGetDescriptorHot() -> Button *;
 auto btnGetXpubHot() -> Button *;
+// The hot nonce-cache password prompt's proceed.
+auto btnPrepareNoncesHot() -> Button *;
 auto btnLoadSignedPsbt() -> Button *;
 auto btnNextScanTheAnswer() -> Button *;
 auto btnPickAnotherFile() -> Button *;
@@ -134,6 +136,8 @@ auto pillSignerSigned() -> Badge *;
 // The MuSig2 Sign modal: a cosigner's part still needed, its round 1 nonce added.
 auto pillMusigNeeded() -> Badge *;
 auto pillMusigNonceAdded() -> Badge *;
+// The key's nonce session already sits in the cache, bound to no transaction.
+auto pillMusigCached() -> Badge *;
 auto pillMusigOnDevice() -> Badge *;
 auto pillMusigSigning() -> Badge *;
 auto pillSignerWaiting() -> Badge *;

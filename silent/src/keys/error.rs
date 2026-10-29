@@ -199,6 +199,10 @@ pub enum Error {
     NoAddressUri,
     #[error("verify_address response arrived with no expected address recorded")]
     MissingExpectedAddress,
+    #[error("cached MuSig preparation failed its bounds: {0}")]
+    MusigPreparationInvalid(String),
+    #[error("cached MuSig response does not match the outstanding session or attempt")]
+    MusigSessionMismatch,
     #[error("file {path} already exists")]
     FileExists { path: PathBuf },
     #[error("psbt file {path} is {len} bytes, over the accepted size limit")]

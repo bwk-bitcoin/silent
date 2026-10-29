@@ -44,10 +44,11 @@ public slots:
                                 const QString &error, bool wrong_password);
     void onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpub, const QString &error,
                           bool wrong_password);
+    void onHotSessionsCreated(ReqId req_id, bool is_ok, const QString &error, bool wrong_password);
 
 protected:
     // The key's answer, kept until the prompt has closed over it.
-    enum class AnswerKind : std::uint8_t { Signed, Descriptor, Xpub };
+    enum class AnswerKind : std::uint8_t { Signed, Descriptor, Xpub, Nonces };
 
     struct Answer {
         AnswerKind kind;

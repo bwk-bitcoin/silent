@@ -33,6 +33,13 @@ void HotRouteFlow::start() {
         module()->publishHotCached(m_hot_req, row().fingerprint, psbt());
         return;
     }
+    if (request().context == Context::Nonces) {
+        showWaiting();
+        m_hot_req = module()->nextReqId();
+        module()->createHotSessions(m_hot_req, row().fingerprint, QString(), request().descriptor,
+                                    1);
+        return;
+    }
     if (!hasPicker()) {
         // The key is named: the password prompt is the only window, over the one that
         // asked (ws-plaude/silent#45). It turns to a spinner itself once the password
@@ -60,8 +67,11 @@ void HotRouteFlow::init() {
 }
 
 void HotRouteFlow::doConnect() {
-    connect(module(), &KeysModule::hotCachedReady, this, &HotRouteFlow::onCachedReady, qontrol::UNIQUE);
+    connect(module(), &KeysModule::hotCachedReady, this, &HotRouteFlow::onCachedReady,
+            qontrol::UNIQUE);
     connect(module(), &KeysModule::hotSigned, this, &HotRouteFlow::onHotSigned, qontrol::UNIQUE);
+    connect(module(), &KeysModule::hotSessionsCreated, this, &HotRouteFlow::onHotSessionsCreated,
+            qontrol::UNIQUE);
     connect(module(), &KeysModule::hotSpDescriptorFetched, this,
             &HotRouteFlow::onHotDescriptorFetched, qontrol::UNIQUE);
     connect(module(), &KeysModule::hotXpubFetched, this, &HotRouteFlow::onHotXpubFetched,
@@ -128,13 +138,17 @@ void HotRouteFlow::deliver(const Answer &answer) {
     case AnswerKind::Xpub:
         emit xpubFetched(answer.value);
         return;
+    case AnswerKind::Nonces:
+        emit noncesPrepared();
+        return;
     }
 }
 
 // ===== Slots =====
 
 void HotRouteFlow::onCachedReady(ReqId req_id, bool needs_password, bool is_ok,
-                                const QString &psbt_v2_hex, const QString &error, bool musig_session) {
+                                 const QString &psbt_v2_hex, const QString &error,
+                                 bool musig_session) {
     if (m_hot_req == 0 || req_id != m_hot_req) {
         return;
     }
@@ -143,8 +157,11 @@ void HotRouteFlow::onCachedReady(ReqId req_id, bool needs_password, bool is_ok,
         onAskPassword();
         return;
     }
-    deliver(Answer{.kind = AnswerKind::Signed, .is_ok = is_ok, .value = psbt_v2_hex,
-                   .error = error, .musig_session = musig_session});
+    deliver(Answer{.kind = AnswerKind::Signed,
+                   .is_ok = is_ok,
+                   .value = psbt_v2_hex,
+                   .error = error,
+                   .musig_session = musig_session});
 }
 
 void HotRouteFlow::onAskPassword() {
@@ -186,6 +203,10 @@ void HotRouteFlow::onPasswordEntered(const QString &password) {
     case Context::Sign:
         module()->signHot(m_hot_req, row().fingerprint, password, psbt());
         break;
+    case Context::Nonces:
+        module()->createHotSessions(m_hot_req, row().fingerprint, password, request().descriptor,
+                                    1);
+        break;
     case Context::Fetch:
         module()->fetchHotSpDescriptor(m_hot_req, row().fingerprint, password);
         break;
@@ -223,6 +244,29 @@ void HotRouteFlow::onHotXpubFetched(ReqId req_id, bool is_ok, const QString &xpu
     }
     m_hot_req = 0;
     answer(AnswerKind::Xpub, is_ok, xpub, error, wrong_password, false);
+}
+
+void HotRouteFlow::onHotSessionsCreated(ReqId req_id, bool is_ok, const QString &error,
+                                        bool wrong_password) {
+    if (m_hot_req == 0 || req_id != m_hot_req) {
+        return;
+    }
+    m_hot_req = 0;
+    if (m_unseal.isNull()) {
+        // The first try ran without a prompt: a wrong password opens it, anything
+        // else ends the route at once.
+        if (is_ok) {
+            emit noncesPrepared();
+            return;
+        }
+        if (wrong_password) {
+            onAskPassword();
+            return;
+        }
+        emit failed(error);
+        return;
+    }
+    answer(AnswerKind::Nonces, is_ok, QString(), error, wrong_password, false);
 }
 
 } // namespace keys::flow

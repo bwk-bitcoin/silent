@@ -455,6 +455,16 @@ void KeysHandle::signOnDevice(ReqId req_id, plugin::Network network, const QStri
     target->signOnDevice(req_id, network, psbt_v2_hex, descriptor, fingerprint);
 }
 
+void KeysHandle::prepareNonces(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
+                               const QString &descriptor, const QString &fingerprint) {
+    auto *target = allowedTarget(req_id, network);
+    if (target == nullptr) {
+        return;
+    }
+    CallerScope scope(target, HostImpl::caller(m_module));
+    target->prepareNonces(req_id, network, psbt_v2_hex, descriptor, fingerprint);
+}
+
 void KeysHandle::verifyAddress(ReqId req_id, plugin::Network network, const QString &descriptor,
                                const QString &path, const QString &address,
                                const QString &fingerprint) {

@@ -192,6 +192,7 @@ auto pluginGnuHashChild(const QString &path, bool expected_admission) -> int;
 void legacyPluginAbiSmoke(const QString &plugin_id);
 void spSigningSmoke(const QString &name);
 void musigResetSmoke();
+void qrCacheExchangeSmoke();
 void boundarySmoke();
 void endpointSmoke();
 void navigationSmoke();
@@ -405,6 +406,12 @@ auto main(int argc, char *argv[]) -> int {
         Theme::init();
         smoke::musigResetSmoke();
         std::fprintf(stdout, "MuSig reset smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.contains(QStringLiteral("--qr-cache-exchange"))) {
+        Theme::init();
+        smoke::qrCacheExchangeSmoke();
+        std::fprintf(stdout, "QR cache exchange smoke: OK\n");
         return gOk ? 0 : 1;
     }
     if (arguments.contains(QStringLiteral("--storage-contract"))) {

@@ -2,13 +2,20 @@
 
 #[path = "musig_sessions_hot.rs"]
 mod hot_provider;
+#[path = "musig_sessions_qr.rs"]
+mod qr_provider;
 #[cfg(test)]
 use crate::keys::ledger_nonces::{
     expression_slots, owned_expressions, synthetic, FETCH_FEE_SATS, FUNDING_SATS,
 };
 pub use crate::keys::{
     ledger_nonces::Fetch,
-    musig_sessions::hot_provider::{create_hot, publish_hot, sign_hot_session},
+    musig_sessions::{
+        hot_provider::{create_hot, publish_hot, sign_hot_session},
+        qr_provider::{
+            accept_prepared, accept_signed, allocate, pin_transcript, prepare_material, qr_ready,
+        },
+    },
 };
 
 use std::{
@@ -98,6 +105,7 @@ fn publish_snapshot(fingerprint: Fingerprint, state: &Cache) {
                 nonces: entry.nonces.clone(),
                 fetched_for: entry.fetched_for,
                 secret: None,
+                qr: entry.qr.clone(),
             })
             .collect(),
         allocated: state
@@ -113,6 +121,7 @@ fn publish_snapshot(fingerprint: Fingerprint, state: &Cache) {
                 round2_nonces: entry.round2_nonces,
                 state: entry.state,
                 source: entry.source,
+                qr_transcript: entry.qr_transcript.clone(),
             })
             .collect(),
         retired: state.retired.clone(),
@@ -163,6 +172,39 @@ pub(crate) struct Session {
     pub(crate) fetched_for: Option<[u8; 32]>,
     #[serde(default)]
     pub(crate) secret: Option<SecretPayload>,
+    /// The finite public coverage a QR peer prepared, with its advertised nonces.
+    /// `None` for every other provider, and never any secret material.
+    #[serde(default)]
+    pub(crate) qr: Option<QrPreparation>,
+}
+
+/// A QR preparation's requested coverage: every policy path at the first
+/// `QR_ADDRESS_COVERAGE` addresses, and the public nonces the peer answered with.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct QrPreparation {
+    pub(crate) max_inputs: u8,
+    pub(crate) derivations: Vec<QrDerivation>,
+    #[serde(default)]
+    pub(crate) nonces: Vec<QrStoredNonce>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct QrDerivation {
+    pub(crate) keychain: u32,
+    pub(crate) index: u32,
+}
+
+/// One advertised public nonce of a prepared QR session, attributed to the
+/// derivation, input position and expression it covers.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct QrStoredNonce {
+    pub(crate) derivation: QrDerivation,
+    pub(crate) input: u32,
+    pub(crate) expression: u32,
+    pub(crate) participant: PublicKey,
+    pub(crate) aggregate: PublicKey,
+    pub(crate) leaf_hash: Option<TapLeafHash>,
+    pub(crate) bytes: Vec<u8>,
 }
 
 fn ledger_provider() -> RouteKind {
@@ -206,6 +248,11 @@ pub(crate) struct Allocation {
     state: AllocationState,
     #[serde(default)]
     source: SessionSource,
+    /// A QR allocation's pinned transcript: one group of concatenated 66-byte
+    /// participant nonces per own slot, in slot order, captured when the session was
+    /// allocated. `None` for every other provider.
+    #[serde(default)]
+    qr_transcript: Option<Vec<Vec<u8>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,7 +314,7 @@ impl Allocation {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct PublishedNonce {
+pub(crate) struct PublishedNonce {
     input: usize,
     participant: PublicKey,
     aggregate: PublicKey,
@@ -540,7 +587,7 @@ impl LockedCache {
             .map(Some)
     }
 
-    fn active(
+    pub(crate) fn active(
         &self,
         binding: [u8; 32],
         policy: &str,
@@ -581,11 +628,23 @@ impl LockedCache {
 
     fn allocate_session(
         &mut self,
+        next: Cache,
+        session: Session,
+        binding: [u8; 32],
+        policy: &str,
+        published: Vec<PublishedNonce>,
+    ) -> Result<Allocation, SigningError> {
+        self.allocate_transcript(next, session, binding, policy, published, None)
+    }
+
+    pub(crate) fn allocate_transcript(
+        &mut self,
         mut next: Cache,
         session: Session,
         binding: [u8; 32],
         policy: &str,
         published: Vec<PublishedNonce>,
+        qr_transcript: Option<Vec<Vec<u8>>>,
     ) -> Result<Allocation, SigningError> {
         let allocation = Allocation {
             provider: session.provider,
@@ -601,6 +660,7 @@ impl LockedCache {
             } else {
                 SessionSource::Cached
             },
+            qr_transcript,
         };
         next.allocated.push(allocation.clone());
         self.save(next)?;
@@ -1056,7 +1116,7 @@ fn retire_restart_binding(
     }
     let binding = binding(real, policy, fingerprint)?;
     let mut store = LockedCache::open(root, fingerprint)?;
-    for provider in [RouteKind::Usb, RouteKind::Hot] {
+    for provider in [RouteKind::Usb, RouteKind::Hot, RouteKind::Qr] {
         if let Some(allocation) = store
             .state
             .allocated
@@ -1070,6 +1130,156 @@ fn retire_restart_binding(
         store.retire_for(binding, AllocationState::Invalid, provider)?;
     }
     Ok(())
+}
+
+/// Whether any provider durably took a cache session for `binding`: an allocation in
+/// any state, or a restart tombstone. Read from the in-memory snapshot only, so it
+/// stays safe on a thread that must not touch the disk.
+pub fn binding_allocated(fingerprint: Fingerprint, binding: [u8; 32]) -> bool {
+    SNAPSHOTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&fingerprint)
+        .is_some_and(|state| {
+            state
+                .allocated
+                .iter()
+                .any(|allocation| allocation.binding == binding)
+                || state.retired.iter().any(|entry| entry.binding == binding)
+        })
+}
+
+/// The in-memory copy of `fingerprint`'s cache, when one was loaded. Disk-free
+/// readers (readiness, display counts) go through here.
+pub(crate) fn snapshot(fingerprint: Fingerprint) -> Option<Cache> {
+    SNAPSHOTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&fingerprint)
+        .cloned()
+}
+
+/// Takes a cached session for every signer still owing nonces, binds them to this
+/// attempt and inserts the complete participant nonce set the first signature
+/// request has to carry. `routes` name each pending signer's plan route; `qr` names
+/// the signer whose signing request is being crafted. Returns that signer's session
+/// id and the transaction as it must ride on the request, with every allocated
+/// nonce inserted. Idempotent on active allocations: a recheck that finds a session
+/// taken by another attempt fails without reviving it, and a partial allocation is
+/// never undone.
+pub fn allocate_first_request(
+    policy_text: &str,
+    bytes: &[u8],
+    routes: &BTreeMap<Fingerprint, RouteKind>,
+    qr_fingerprint: Fingerprint,
+) -> Result<([u8; 32], Vec<u8>), SigningError> {
+    allocate_first_request_at(
+        &datadir().join("musig-sessions"),
+        policy_text,
+        bytes,
+        routes,
+        qr_fingerprint,
+    )
+}
+
+pub(crate) fn allocate_first_request_at(
+    root: &Path,
+    policy_text: &str,
+    bytes: &[u8],
+    routes: &BTreeMap<Fingerprint, RouteKind>,
+    qr_fingerprint: Fingerprint,
+) -> Result<([u8; 32], Vec<u8>), SigningError> {
+    let parsed = psbt::parse_v2(bytes).map_err(|e| e.to_string())?;
+    let mut real = parsed
+        .clone()
+        .into_bitcoin_psbt()
+        .map_err(|e| e.to_string())?;
+    let policy = descriptor(policy_text).map_err(|e| e.to_string())?;
+    let status = musig_status(&real, &policy).map_err(|e| e.to_string())?;
+    let mut deferred: Vec<Fingerprint> = Vec::new();
+    if status.round == MusigRound::Nonces {
+        for own in &status.cosigners {
+            if own.nonces >= own.expected {
+                continue;
+            }
+            let Some(&route) = routes.get(&own.fingerprint) else {
+                return Err(SigningError::Invalid(format!(
+                    "{} has no usable signing route",
+                    own.fingerprint
+                )));
+            };
+            match route {
+                RouteKind::Hot => {
+                    if !hot_provider::publish_at(
+                        root,
+                        own.fingerprint,
+                        policy_text,
+                        &mut real,
+                        None,
+                    )? {
+                        return Err(SigningError::Invalid(format!(
+                            "no cached hot session is ready for {}",
+                            own.fingerprint
+                        )));
+                    }
+                }
+                RouteKind::Usb => {
+                    let request = bwk::bwk_tx::bwk_psbt::PsbtV2::from_bitcoin_psbt(real.clone())
+                        .map_err(|e| e.to_string())?
+                        .serialize()
+                        .map_err(|e| e.to_string())?;
+                    match prepare_at(root, own.fingerprint, policy_text, &request)? {
+                        Signing::Nonces { bytes, .. } => {
+                            real = psbt::parse_v2(&bytes)
+                                .map_err(|e| e.to_string())?
+                                .into_bitcoin_psbt()
+                                .map_err(|e| e.to_string())?;
+                        }
+                        Signing::Missing => {
+                            return Err(SigningError::Invalid(format!(
+                                "no cached Ledger session is ready for {}",
+                                own.fingerprint
+                            )));
+                        }
+                        // Only reachable when the policy already left the nonce
+                        // round, and such cosigners are skipped above: nothing to
+                        // allocate, and the device payload is not ours to build.
+                        Signing::Payload { .. } => {}
+                    }
+                }
+                RouteKind::Qr => deferred.push(own.fingerprint),
+                RouteKind::SdCard => {
+                    return Err(SigningError::Invalid(
+                        "the sd card route cannot prepare MuSig nonces".into(),
+                    ));
+                }
+            }
+        }
+        // QR allocations go last: the transcript pin needs every other signer's
+        // nonces in the transaction first.
+        for fingerprint in &deferred {
+            qr_provider::allocate_at(root, *fingerprint, policy_text, &mut real)?;
+        }
+        for fingerprint in &deferred {
+            qr_provider::pin_transcript_at(root, *fingerprint, policy_text, &real)?;
+        }
+    }
+    let request = bwk::bwk_tx::bwk_psbt::PsbtV2::from_bitcoin_psbt(real)
+        .map_err(|e| e.to_string())?
+        .serialize()
+        .map_err(|e| e.to_string())?;
+    let request_real = psbt::parse_v2(&request)
+        .map_err(|e| e.to_string())?
+        .into_bitcoin_psbt()
+        .map_err(|e| e.to_string())?;
+    let binding = binding(&request_real, &policy, qr_fingerprint).map_err(|e| e.to_string())?;
+    let store = LockedCache::open(root, qr_fingerprint).map_err(|e| e.to_string())?;
+    store
+        .active(binding, policy_text, RouteKind::Qr)?
+        .map(|allocation| (allocation.id, request))
+        .ok_or_else(|| {
+            SigningError::SessionLost("no prepared QR cache session covers this transaction".into())
+        })
 }
 
 pub fn can_publish(
@@ -2293,8 +2503,8 @@ mod tests {
             LockedCache::open(tmp.path(), policy.fingerprint).expect("tombstone persists");
         assert_eq!(
             reopened.state.retired.len(),
-            2,
-            "retired unpublished attempt is remembered for hot and Ledger routes"
+            3,
+            "retired unpublished attempt is remembered for hot, Ledger and QR routes"
         );
         assert_eq!(
             reopened.state.available.len(),

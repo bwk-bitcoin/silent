@@ -689,6 +689,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/account_navigation_smoke.cpp
         tests/host/account_navigation_smoke.h
         tests/host/keys_contract_smoke.cpp
+        tests/host/qr_cache_smoke.cpp
         tests/host/storage_smoke.cpp
         ${SILENT_APP_SOURCES}
     )

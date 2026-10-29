@@ -245,6 +245,11 @@ auto btnGetXpubHot() -> Button * {
     return make({.role = ButtonRole::Primary, .label = TR("btn-get-xpub"), .width = BtnWidth::L});
 }
 
+auto btnPrepareNoncesHot() -> Button * {
+    return make(
+        {.role = ButtonRole::Primary, .label = TR("btn-prepare-nonces"), .width = BtnWidth::L});
+}
+
 auto btnLoadSignedPsbt() -> Button * {
     return make({.role = ButtonRole::Primary,
                  .label = TR("btn-load-signed-psbt"),
@@ -689,6 +694,12 @@ auto pillMusigNeeded() -> Badge * {
 
 auto pillMusigNonceAdded() -> Badge * {
     auto *pill = makePill(Badge::Role::Success, TR("pill-nonce"), PillWidth::L);
+    pill->setIcon(icon::check(IconColor::Success));
+    return pill;
+}
+
+auto pillMusigCached() -> Badge * {
+    auto *pill = makePill(Badge::Role::Success, TR("pill-cached"), PillWidth::L);
     pill->setIcon(icon::check(IconColor::Success));
     return pill;
 }

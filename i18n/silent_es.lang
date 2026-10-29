@@ -57,6 +57,7 @@ btn-open-keys-tab => "Open Keys Tab" => "NONE"
 btn-other-signer => "Other Signer" => "NONE"
 btn-pick-another-file => "Pick Another File…" => "NONE"
 btn-plugin-access => "Access" => "NONE"
+btn-prepare-nonces => "Prepare Nonces" => "Prepare Nonces"
 btn-qr-settings => "QR Settings" => "QR Settings"
 btn-register => "Register" => "NONE"
 btn-register-descriptor => "Register Descriptor" => "Register Descriptor"
@@ -202,6 +203,30 @@ flow-no-signer-title => "No Signer Available" => "NONE"
 flow-no-signer-verify
 => "No key of this account can show addresses. Add a USB or QR route in the Keys tab."
 => "NONE";;
+flow-nonces-hot-busy
+=> "Preparing the nonce session"
+=> "Preparing the nonce session";;
+flow-nonces-hot-prompt
+=> "Enter the password of “%1” to prepare a nonce session."
+=> "Enter the password of “%1” to prepare a nonce session.";;
+flow-nonces-picker-lead
+=> "One session is prepared for the key, bound to no transaction."
+=> "One session is prepared for the key, bound to no transaction.";;
+flow-nonces-qr-hint
+=> "Scan this code with the signing device to prepare its nonce cache session."
+=> "Scan this code with the signing device to prepare its nonce cache session.";;
+flow-nonces-qr-title => "Prepare the Nonce Cache" => "Prepare the Nonce Cache"
+flow-nonces-scan-hint
+=> "The device shows its prepared answer as a code: scan it to fill the cache."
+=> "The device shows its prepared answer as a code: scan it to fill the cache.";;
+flow-nonces-scan-title => "Scan the Prepared Answer" => "Scan the Prepared Answer"
+flow-nonces-title => "Prepare Nonce Cache" => "Prepare Nonce Cache"
+flow-nonces-unsupported
+=> "This device does not support nonce cache preparation."
+=> "This device does not support nonce cache preparation.";;
+flow-nonces-usb-wait
+=> "Approve the nonce session on %1."
+=> "Approve the nonce session on %1.";;
 flow-other-device-other => "Not a key of this account." => "NONE"
 flow-other-device-sign => "Not needed for this transaction." => "NONE"
 flow-other-devices => "Other Connected Devices" => "NONE"
@@ -781,7 +806,7 @@ musig-shape-mandatory => "Mandatory keys and others" => "NONE"
 musig-shape-multi => "Several keys" => "NONE"
 musig-shape-single => "One key" => "NONE"
 musig-sign-lead-nonce
-=> "Click each cosigner to add its nonce."
+=> "Click each cosigner to prepare its nonce session."
 => "Click each cosigner to add its nonce.";;
 musig-sign-lead-partial
 => "Click each cosigner to add its partial signature."
@@ -852,6 +877,7 @@ network-bitcoin => "Bitcoin" => "Bitcoin"
 network-regtest => "Regtest" => "Regtest"
 network-signet => "Signet" => "Signet"
 network-testnet => "Testnet" => "Testnet"
+pill-cached => "Cached" => "Cached"
 pill-checking => "Checking…" => "Checking…"
 pill-confirmed => "Confirmed" => "Confirmado"
 pill-connected => "Connected" => "NONE"
@@ -898,7 +924,9 @@ plugin-access-accounts-sub
 => "NONE";;
 plugin-access-current => "The version loaded now." => "NONE"
 plugin-access-earlier => "An earlier version." => "NONE"
-plugin-access-flow-failed => "Access answers unavailable" => "Access answers unavailable"
+plugin-access-flow-failed
+=> "Access answers unavailable"
+=> "Access answers unavailable";;
 plugin-access-flow-retry
 => "%1. Access controls are unavailable until the saved answers can be checked. Try Again reloads them."
 => "%1. Access controls are unavailable until the saved answers can be checked. Try Again reloads them.";;
@@ -921,17 +949,21 @@ plugin-access-prompt-note
 => "Plugins run inside Silent: allow only one you trust. The answer is kept for this version of the plugin, an update asks again. Change it in Settings, Plugin Manager, Access."
 => "NONE";;
 plugin-access-prompt-title => "Allow Plugin Access?" => "NONE"
+plugin-access-read-failed
+=> "Could not read plugin access"
+=> "Could not read plugin access";;
+plugin-access-read-failed-text
+=> "Access for %1 could not be checked: %2. This request was refused. Unlock or restore access, then request it again."
+=> "Access for %1 could not be checked: %2. This request was refused. Unlock or restore access, then request it again.";;
 plugin-access-refused-account
 => "This plugin may not use your accounts. Allow it in Settings, Plugin Manager, Access."
 => "NONE";;
 plugin-access-refused-keys
 => "This plugin may not use your keys. Allow it in Settings, Plugin Manager, Access."
 => "NONE";;
-plugin-access-read-failed => "Could not read plugin access" => "Could not read plugin access"
-plugin-access-read-failed-text
-=> "Access for %1 could not be checked: %2. This request was refused. Unlock or restore access, then request it again."
-=> "Access for %1 could not be checked: %2. This request was refused. Unlock or restore access, then request it again.";;
-plugin-access-save-failed => "Could not confirm access answers" => "Could not confirm access answers"
+plugin-access-save-failed
+=> "Could not confirm access answers"
+=> "Could not confirm access answers";;
 plugin-access-save-failed-text
 => "Could not confirm saving access for %1: %2. This request was refused. Retry the request to read the saved answers."
 => "Could not confirm saving access for %1: %2. This request was refused. Retry the request to read the saved answers.";;
@@ -1108,12 +1140,6 @@ settings-placeholder-electrum
 => "host:port (e.g. 127.0.0.1:50001)";;
 settings-plugin-add-failed => "Could not add the plugin" => "NONE"
 settings-plugin-added => "%1 added, off: turn it on to load it." => "NONE"
-settings-plugin-state-read-failed
-=> "Could not read pending plugin removals"
-=> "Could not read pending plugin removals";;
-settings-plugin-state-read-failed-text
-=> "Plugin controls are unavailable until application state can be read. Unlock or restore access, then try again. Known removal records have been kept. %1"
-=> "Plugin controls are unavailable until application state can be read. Unlock or restore access, then try again. Known removal records have been kept. %1";;
 settings-plugin-bookkeeping-pending
 => "Bundle and private data were removed. Grant and settings cleanup is pending. Use Remove to finish."
 => "Bundle and private data were removed. Grant and settings cleanup is pending. Use Remove to finish.";;
@@ -1137,6 +1163,12 @@ settings-plugin-removed
 settings-plugin-removing
 => "Removing %1. Waiting for shutdown and private-data cleanup."
 => "Removing %1. Waiting for shutdown and private-data cleanup.";;
+settings-plugin-state-read-failed
+=> "Could not read pending plugin removals"
+=> "Could not read pending plugin removals";;
+settings-plugin-state-read-failed-text
+=> "Plugin controls are unavailable until application state can be read. Unlock or restore access, then try again. Known removal records have been kept. %1"
+=> "Plugin controls are unavailable until application state can be read. Unlock or restore access, then try again. Known removal records have been kept. %1";;
 settings-plugin-stop-failed
 => "Plugin shutdown or removal failed"
 => "Plugin shutdown or removal failed";;

@@ -118,6 +118,9 @@ protected:
     [[nodiscard]] auto failureTitle() const -> QString;
     // Whether the key `fingerprint` signs on its connected USB device.
     [[nodiscard]] auto onDevice(const QString &fingerprint) const -> bool;
+    // Whether every signer that still owes a contribution already holds a usable
+    // cached session, so the nonce step has nothing to prepare.
+    [[nodiscard]] auto everyPendingCached() const -> bool;
 
 private:
     MusigAccountController *m_controller = nullptr;

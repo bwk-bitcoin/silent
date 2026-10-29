@@ -1,5 +1,6 @@
 #include "UsbRouteFlow.h"
 
+#include "LedgerNonces.h"
 #include "LiveDevice.h"
 #include "VerifyResultView.h"
 
@@ -62,6 +63,17 @@ void UsbRouteFlow::start() {
         connect(sign, &DeviceSign::failed, this, &UsbRouteFlow::onDeviceSignFailed,
                 qontrol::UNIQUE);
         sign->start(request().descriptor);
+        break;
+    }
+    case Context::Nonces: {
+        // One device round into the unbound cache: no session is taken for any
+        // transaction. The flow owns the fetch, and the fingerprint lock with it.
+        auto *fetch = new LedgerNonces(module(), m_device, m_device_instance, row().fingerprint,
+                                       request().descriptor, 1, this);
+        connect(fetch, &LedgerNonces::finished, this, &UsbRouteFlow::onNoncesFetched,
+                qontrol::UNIQUE);
+        fetch->start();
+        address = QString();
         break;
     }
     case Context::Verify:
@@ -238,6 +250,15 @@ void UsbRouteFlow::onNextClicked() {
         start();
         return;
     }
+}
+
+void UsbRouteFlow::onNoncesFetched(const QString &error) {
+    releaseDevice();
+    if (!error.isEmpty()) {
+        emit failed(error);
+        return;
+    }
+    emit noncesPrepared();
 }
 
 void UsbRouteFlow::onDeviceSignedPsbt(const QString &psbt_v2_hex) {

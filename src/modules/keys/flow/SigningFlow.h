@@ -93,6 +93,12 @@ public:
         // only this key signs, with no picker, and the flow answers once it has. Verify:
         // when set, only this key shows the address, with no picker.
         QString fingerprint;
+        // Sign: the key exchanges cached MuSig sessions instead of transaction-bound
+        // rounds, so its signing request is a cached one.
+        bool cached_musig = false;
+        // Sign, cached only: every pending signer's route, so the first request's
+        // allocation binds all of them.
+        QHash<QString, KeyRouteKind> routes;
     };
 
     enum class VerifyResult : std::uint8_t { Matched, Mismatch, Error };
@@ -106,6 +112,8 @@ public:
 
 signals:
     void psbtSigned(ReqId req_id, QString psbt_v2_hex);
+    // One nonce-cache session was prepared for the key named.
+    void noncesPrepared(ReqId req_id, QString fingerprint);
     void addressVerified(ReqId req_id, bool matched);
     // `xpubs` are the key's sub-account xpubs the route handed with the descriptor.
     void descriptorFetched(ReqId req_id, QString descriptor, QString fingerprint,
@@ -120,6 +128,7 @@ public slots:
     void onRequestCancelled(ReqId req_id);
     void onNonceSnapshotReady();
     void onRowClicked();
+    void onNoncesPrepared();
     // A device came, went or changed state: the picker on display lists it as it is.
     void onDevicesChanged();
     void onFlowViewChanged(const QString &title, ModalWidth width);
@@ -198,6 +207,8 @@ signals:
     void back();
     // The key signed: the PSBT as signed so far.
     void psbtSigned(const QString &psbt_v2_hex);
+    // The key's nonce cache holds one prepared session.
+    void noncesPrepared();
     // What the device said about the address, none while it is asked again.
     void verifyResultChanged(std::optional<SigningFlow::VerifyResult> result);
     // `xpubs` are the sub-account xpubs handed along, none on a route that has none.

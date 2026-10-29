@@ -22,8 +22,8 @@
 #include "theme/Icon.h"
 
 #include <QDebug>
-#include <Qontrol>
 #include <QThread>
+#include <Qontrol>
 
 #include <algorithm>
 #include <utility>
@@ -166,7 +166,8 @@ void SigningFlow::begin() {
                 }
             }
         });
-        connect(thread, &QThread::finished, this, &SigningFlow::onNonceSnapshotReady, qontrol::UNIQUE);
+        connect(thread, &QThread::finished, this, &SigningFlow::onNonceSnapshotReady,
+                qontrol::UNIQUE);
         connect(thread, &QThread::finished, thread, &QObject::deleteLater, qontrol::UNIQUE);
         thread->start();
         return;
@@ -184,6 +185,16 @@ void SigningFlow::begin() {
             return;
         }
         showPicker();
+        return;
+    }
+    case Context::Nonces: {
+        auto rows = signRows();
+        if (!rows.has_value()) {
+            onFailed(TR("flow-plan-failed"));
+            return;
+        }
+        m_rows = rows.value();
+        startRequestedRow();
         return;
     }
     case Context::Verify:
@@ -372,8 +383,11 @@ auto SigningFlow::verifyRows() const -> QList<FlowRow> {
             bool hasHot = std::ranges::find(info.routes, KeyRouteKind::Hot) != info.routes.end();
             row.status = hasUsb ? SignerStatus::Disconnected : SignerStatus::NoRoute;
             // A hot key keeps its route: its row says it has no screen.
-            row.route =
-                hasUsb ? KeyRouteKind::Usb : (hasHot ? KeyRouteKind::Hot : KeyRouteKind::Unknown);
+            if (hasUsb) {
+                row.route = KeyRouteKind::Usb;
+            } else {
+                row.route = hasHot ? KeyRouteKind::Hot : KeyRouteKind::Unknown;
+            }
             row.device = hasUsb ? rememberedDevice(row.fingerprint) : QString();
         }
         rows.append(row);
@@ -473,6 +487,8 @@ void SigningFlow::startRoute() {
     connect(m_flow, &SigningRouteFlow::back, this, &SigningFlow::onFlowBack, qontrol::UNIQUE);
     connect(m_flow, &SigningRouteFlow::psbtSigned, this, &SigningFlow::onPsbtSigned,
             qontrol::UNIQUE);
+    connect(m_flow, &SigningRouteFlow::noncesPrepared, this, &SigningFlow::onNoncesPrepared,
+            qontrol::UNIQUE);
     connect(m_flow, &SigningRouteFlow::verifyResultChanged, this,
             &SigningFlow::onVerifyResultChanged, qontrol::UNIQUE);
     connect(m_flow, &SigningRouteFlow::descriptorFetched, this, &SigningFlow::onDescriptorFetched,
@@ -524,11 +540,13 @@ void SigningFlow::onNonceSnapshotReady() {
 
 void SigningFlow::onDevicesChanged() {
     // Only the picker lists devices: a route on display keeps its own device.
-    if (m_flow != nullptr || m_answered || (m_request.context == Context::Sign && !m_nonce_loaded)) {
+    if (m_flow != nullptr || m_answered ||
+        (m_request.context == Context::Sign && !m_nonce_loaded)) {
         return;
     }
     switch (m_request.context) {
-    case Context::Sign: {
+    case Context::Sign:
+    case Context::Nonces: {
         auto rows = signRows();
         if (!rows.has_value()) {
             return;
@@ -566,6 +584,16 @@ void SigningFlow::onFlowViewChanged(const QString &title, ModalWidth width) {
 
 void SigningFlow::onFlowBack() {
     showPicker();
+}
+
+// One nonce-cache session is in: the request is answered without a PSBT change.
+void SigningFlow::onNoncesPrepared() {
+    if (m_answered) {
+        return;
+    }
+    m_answered = true;
+    emit noncesPrepared(m_request.req_id, m_request.fingerprint);
+    accept();
 }
 
 void SigningFlow::onPsbtSigned(const QString &psbt_v2_hex) {

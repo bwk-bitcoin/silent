@@ -107,6 +107,13 @@ public:
     // itself. Answers as sign() does, signed_() or error(), never cancelled().
     virtual void signOnDevice(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
                               const QString &descriptor, const QString &fingerprint) = 0;
+    // Fills the key's nonce cache with one session for the PSBT's policy, over its
+    // route: a cache-preparation exchange over QR codes, one generated session on a
+    // hot key, one device round on a connected Ledger. Takes no session for the
+    // transaction and publishes nothing: answers noncesPrepared(), error() or
+    // cancelled().
+    virtual void prepareNonces(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
+                               const QString &descriptor, const QString &fingerprint) = 0;
     // Shows `address` on the device holding the key `descriptor` belongs to, or on the
     // key `fingerprint` alone when it is set (no signer picker).
     virtual void verifyAddress(ReqId req_id, plugin::Network network, const QString &descriptor,
@@ -175,6 +182,9 @@ signals:
     void requestCancelled(ReqId req_id);
     // NOLINTNEXTLINE(readability-identifier-naming)
     void signed_(ReqId req_id, QString psbt_v2_hex);
+    // One nonce-cache session was prepared for the key: no session was taken for any
+    // transaction.
+    void noncesPrepared(ReqId req_id, QString fingerprint);
     // A refusal (verified=false) is the device answering that the address does
     // not match, not a transport failure: it never comes through error().
     void verified(ReqId req_id, bool verified);

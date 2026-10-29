@@ -74,6 +74,11 @@ public:
     // The finalized transaction hex, empty until the PSBT in flight is finalized.
     // The keys asked to sign now, lowercased fingerprints.
     [[nodiscard]] auto signingKeys() const -> QSet<QString>;
+    // The keys preparing a nonce-cache session now, lowercased fingerprints.
+    [[nodiscard]] auto preparingKeys() const -> QSet<QString>;
+    // Whether a nonce session was durably taken from cache for this attempt: Reset
+    // exists from here on, even when the request it rode on failed afterward.
+    [[nodiscard]] auto noncesAllocated() const -> bool;
     [[nodiscard]] auto isRestarting() const -> bool;
     [[nodiscard]] auto restartPending() const -> bool;
     [[nodiscard]] auto finalizedTx() const -> QString;
@@ -141,12 +146,15 @@ public slots:
     // The same over the key's connected USB device, with no window: the caller shows
     // the wait.
     void signRoundOnDevice(const QString &fingerprint);
+    // Fills the key's nonce cache with one session, taking none for the transaction.
+    void prepareNonces(const QString &fingerprint);
     void cancelSigning();
     void restartRounds();
     void broadcast();
     void onKeysSigned(ReqId req_id, const QString &psbt_v2_hex);
     void onKeysError(std::optional<ReqId> req_id, const QString &message, plugin::SignError kind);
     void onKeysCancelled(ReqId req_id);
+    void onNoncesPrepared(ReqId req_id, const QString &fingerprint);
     void onBroadcastResult(const TxResult &result);
     void onWorkerFinished();
     void onEndpointFinished();
@@ -171,6 +179,8 @@ protected:
     [[nodiscard]] auto beginSignRequest(const QString &fingerprint) -> std::pair<IKeys *, ReqId>;
     void finalizeIfReady();
     void retireSignRequests();
+    // Re-reads the active attempt from Rust and refreshes everything that follows it.
+    void refreshAttempt();
     void clearSigning();
     void enqueueStorage(std::function<void()> work, std::function<void()> done);
     void startStorage();
@@ -213,7 +223,11 @@ private:
     // Sign requests in flight, each one key's, by request id. Answers are merged into
     // the PSBT as it is by then, so keys sign at once.
     QHash<ReqId, QString> m_sign_reqs;
+    // Nonce-cache preparations in flight, by request id.
+    QHash<ReqId, QString> m_prepare_reqs;
     QSet<ReqId> m_accepting_reqs;
+    // A nonce session was durably taken from cache for this attempt.
+    bool m_nonces_allocated = false;
     uint64_t m_next_plan_id = 0;
     QPointer<IKeys> m_signing_keys;
     bool m_resetting = false;

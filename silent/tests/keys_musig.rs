@@ -688,10 +688,10 @@ fn qr_0x0d_is_a_musig_session_error() {
     };
     let encoded = bwk_qr_protocol::encode_response(&response).expect("encode response");
 
-    let error = session
-        .decode_response(&encoded)
-        .err()
-        .expect("a 0x0D answer is refused");
+    let error = match session.decode_response(&encoded) {
+        Err(error) => error,
+        Ok(_) => panic!("a 0x0D answer is refused"),
+    };
     assert!(
         matches!(error, Error::MusigSession),
         "expected Error::MusigSession, got {error:?}"

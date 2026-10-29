@@ -82,6 +82,12 @@ public:
         qFatal("SP fixture must use the shared sign request");
     }
 
+    void prepareNonces([[maybe_unused]] ReqId req_id, [[maybe_unused]] plugin::Network network,
+                       [[maybe_unused]] const QString &psbt_v2_hex,
+                       [[maybe_unused]] const QString &descriptor,
+                       [[maybe_unused]] const QString &fingerprint) override {
+    }
+
     void verifyAddress([[maybe_unused]] ReqId req_id, [[maybe_unused]] plugin::Network network,
                        [[maybe_unused]] const QString &descriptor,
                        [[maybe_unused]] const QString &path,

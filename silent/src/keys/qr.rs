@@ -73,6 +73,14 @@ impl KeysRequest {
     }
 }
 
+/// The cached MuSig exchange an outstanding request belongs to: the session the peer
+/// has to echo, and the attempt only a signing request names.
+#[derive(Clone)]
+struct MusigOutstanding {
+    session_id: [u8; 32],
+    attempt_id: Option<[u8; 32]>,
+}
+
 /// What the next response has to match. `keys` is `None` for every request but
 /// `GetKeys`. Read back by `validate_response` to check a decoded response against
 /// what was actually asked.
@@ -87,6 +95,9 @@ struct Outstanding {
     /// the device's answer into it instead of trusting the returned bytes as-is. `None`
     /// for every other request kind.
     original_psbt_v2: Option<Vec<u8>>,
+    /// The cached MuSig session a `PrepareMusig` or `SignMusig` request named. `None`
+    /// for every other request kind.
+    musig: Option<MusigOutstanding>,
 }
 
 /// Allocates request ids, builds the five signing-flow requests, and remembers the one
@@ -151,7 +162,7 @@ impl QrSession {
             })
             .collect();
         let body = request::Body::GetKeys(request::GetKeys { keys: requests });
-        self.issue(body, Some(keys), None, None)
+        self.issue(body, Some(keys), None, None, None)
     }
 
     pub fn register_descriptor(&mut self, descriptor: &str) -> Result<QrRequest, Error> {
@@ -159,7 +170,7 @@ impl QrSession {
             descriptor_alias: hwi::wallet_name(descriptor),
             descriptor: Some(request::DescriptorBody::Bip380(descriptor.to_string())),
         });
-        self.issue(body, None, None, None)
+        self.issue(body, None, None, None, None)
     }
 
     /// A silent payment address is asked for with its account's keys instead of the
@@ -182,7 +193,7 @@ impl QrSession {
             descriptor: Some(body),
             proof: None,
         });
-        self.issue(body, None, Some(address), None)
+        self.issue(body, None, Some(address), None, None)
     }
 
     pub fn sign(
@@ -220,7 +231,56 @@ impl QrSession {
             psbt: payload,
             want_kind: Some(SignResponseKind::Psbt),
         });
-        self.issue(body, None, None, Some(psbt_v2_bytes.to_vec()))
+        self.issue(body, None, None, Some(psbt_v2_bytes.to_vec()), None)
+    }
+
+    /// A cached MuSig preparation: transaction-independent public nonces for the exact
+    /// finite coverage asked. The cache record must be persisted before the returned
+    /// bytes are shown, so a lost exchange never takes a session.
+    pub fn prepare_musig(
+        &mut self,
+        preparation: request::PrepareMusig,
+    ) -> Result<QrRequest, Error> {
+        preparation
+            .validate()
+            .map_err(|error| Error::MusigPreparationInvalid(error.to_string()))?;
+        let musig = MusigOutstanding {
+            session_id: preparation.session_id,
+            attempt_id: None,
+        };
+        self.issue(
+            request::Body::PrepareMusig(preparation),
+            None,
+            None,
+            None,
+            Some(musig),
+        )
+    }
+
+    /// The first signature request of a prepared session: it names the session, the
+    /// attempt the session is durably bound to, and the PSBT carrying the complete
+    /// participant nonce transcript.
+    pub fn sign_musig(
+        &mut self,
+        session_id: [u8; 32],
+        attempt_id: [u8; 32],
+        psbt_v2_bytes: &[u8],
+    ) -> Result<QrRequest, Error> {
+        let musig = MusigOutstanding {
+            session_id,
+            attempt_id: Some(attempt_id),
+        };
+        self.issue(
+            request::Body::SignMusig(request::SignMusig {
+                session_id,
+                attempt_id,
+                psbt: psbt_v2_bytes.to_vec(),
+            }),
+            None,
+            None,
+            None,
+            Some(musig),
+        )
     }
 
     /// Encodes the request and makes it the outstanding one.
@@ -230,6 +290,7 @@ impl QrSession {
         keys: Option<KeysRequest>,
         expected_address: Option<String>,
         original_psbt_v2: Option<Vec<u8>>,
+        musig: Option<MusigOutstanding>,
     ) -> Result<QrRequest, Error> {
         let id = self.next_id();
         let message_type = body.message_type();
@@ -240,6 +301,7 @@ impl QrSession {
             keys,
             expected_address,
             original_psbt_v2,
+            musig,
         });
         Ok(QrRequest { id, message })
     }
@@ -266,6 +328,7 @@ impl QrSession {
         let expected_type = outstanding.message_type;
         let expected_address = outstanding.expected_address.clone();
         let original_psbt_v2 = outstanding.original_psbt_v2.clone();
+        let musig = outstanding.musig.clone();
 
         let body = response.body;
         if let response::Body::Error(e) = body {
@@ -299,6 +362,14 @@ impl QrSession {
             response::Body::AddressUri(address_uri) => {
                 validate_address_uri(address_uri, expected_address)?
             }
+            response::Body::MusigPrepared(prepared) => validate_musig_prepared(
+                prepared,
+                &musig.expect("a MusigPreparation request always records its session"),
+            )?,
+            response::Body::MusigSigned(signed) => validate_musig_signed(
+                signed,
+                &musig.expect("a MusigSigning request always records its session"),
+            )?,
             response::Body::Error(_) => unreachable!("error responses are handled above"),
         };
 
@@ -308,6 +379,7 @@ impl QrSession {
 }
 
 /// A decoded and validated signing-flow QR response.
+#[derive(Debug)]
 pub enum QrResponse {
     Xpubs {
         fingerprint: Fingerprint,
@@ -335,6 +407,17 @@ pub enum QrResponse {
         fingerprint: Fingerprint,
         xpubs: Vec<(DerivationPath, Xpub)>,
     },
+    /// A prepared cache session's public nonces: the session id the peer echoed and
+    /// the exact coverage it accepted. The cache validates the attribution against the
+    /// prepared policy before anything is stored.
+    MusigPrepared {
+        session_id: [u8; 32],
+        max_inputs: u8,
+        nonces: Vec<response::MusigNonce>,
+    },
+    /// The PSBT a cached signing exchange returned, parsed and re-serialized as v2.
+    /// The cache validates it against the allocation before it is used.
+    MusigSignedPsbt(Vec<u8>),
 }
 
 /// A `Keys` response must carry one key per requested key, each of the requested kind.
@@ -450,6 +533,46 @@ fn validate_registration(registration: response::Registration) -> Result<QrRespo
         alias: registration.descriptor_alias,
         registered,
     })
+}
+
+/// A prepared response must stay inside the bounds the codec enforces for any
+/// preparation and echo the session it was asked for; the cache re-derives the
+/// expected slots from the policy before it stores the nonces.
+fn validate_musig_prepared(
+    prepared: response::MusigPrepared,
+    expected: &MusigOutstanding,
+) -> Result<QrResponse, Error> {
+    prepared
+        .validate()
+        .map_err(|error| Error::MusigPreparationInvalid(error.to_string()))?;
+    if prepared.session_id != expected.session_id {
+        return Err(Error::MusigSessionMismatch);
+    }
+    Ok(QrResponse::MusigPrepared {
+        session_id: prepared.session_id,
+        max_inputs: prepared.max_inputs,
+        nonces: prepared.nonces,
+    })
+}
+
+/// A cached signing answer must echo both the session and the attempt it was durably
+/// bound to, so an answer to an earlier exchange is never accepted for this one.
+fn validate_musig_signed(
+    signed: response::MusigSigned,
+    expected: &MusigOutstanding,
+) -> Result<QrResponse, Error> {
+    if signed.session_id != expected.session_id {
+        return Err(Error::MusigSessionMismatch);
+    }
+    match expected.attempt_id {
+        Some(attempt) if attempt == signed.attempt_id => {}
+        _ => return Err(Error::MusigSessionMismatch),
+    }
+    let psbt = psbt::parse_v2(&signed.psbt)?;
+    Ok(QrResponse::MusigSignedPsbt(
+        psbt.serialize()
+            .map_err(|e| Error::PsbtSerialize(e.to_string()))?,
+    ))
 }
 
 /// The device echoes back the address it independently derived as `bitcoin:<address>`,

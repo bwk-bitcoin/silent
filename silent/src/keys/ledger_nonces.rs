@@ -331,6 +331,7 @@ impl Fetch {
             policy: policy.to_owned(),
             nonces: Vec::new(),
             fetched_for,
+            qr: None,
         })
     }
 

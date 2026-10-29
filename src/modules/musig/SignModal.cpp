@@ -240,7 +240,7 @@ void SignModal::render(const MusigRoundStatus &status) {
         renderFinalized();
         return;
     }
-    m_retry_btn->show();
+    m_retry_btn->setVisible(m_controller->noncesAllocated());
     m_retry_btn->setEnabled(!m_controller->isRestarting() && m_controller->signingKeys().isEmpty());
     if (m_controller->restartPending() && !m_controller->isRestarting() &&
         m_failure == Failure::None) {
@@ -346,9 +346,13 @@ void SignModal::render(const MusigRoundStatus &status) {
         }
         bool usable = why.isEmpty();
         if (usable) {
+            auto candidate = candidates.value(fingerprint.toLower());
             if (signing) {
                 pill = entry.route == plugin::KeyRouteKind::Hot ? catalog::pillMusigSigning()
                                                                 : catalog::pillMusigOnDevice();
+            } else if (!in && !partial && candidate.cache_ready && candidate.cache_supported) {
+                // Its session sits in the cache already: nothing to prepare.
+                pill = catalog::pillMusigCached();
             } else if (!in) {
                 pill = catalog::pillMusigNeeded();
             } else if (partial) {
@@ -359,7 +363,10 @@ void SignModal::render(const MusigRoundStatus &status) {
         }
         auto *row = keyRow(entry, fingerprint, pill);
         // Each key answers one request at a time; the others stay clickable meanwhile.
-        row->setClickable(!in && usable && !signing && m_plan->is_ok &&
+        // On the nonce step a key whose session is already cached has nothing to do.
+        bool done = !in && !partial && candidates.value(fingerprint.toLower()).cache_ready &&
+                    candidates.value(fingerprint.toLower()).cache_supported;
+        row->setClickable(!in && usable && !signing && !done && m_plan->is_ok &&
                           !m_controller->restartPending() && !m_controller->isRestarting());
         if (!usable) {
             greyRow(row, why);
@@ -529,8 +536,31 @@ void SignModal::onPlanReady(uint64_t req_id, const SigningPlan &plan) {
     m_plan_ready = true;
     if (!m_plan->is_ok) {
         showFailure(Failure::Sign, toQString(m_plan->error));
+    } else if (!m_partial && everyPendingCached()) {
+        // Every required signer holds a usable cached session: the nonce step has
+        // nothing to prepare, and the display moves on without taking any session.
+        m_partial = true;
     }
     render(m_controller->roundStatus());
+}
+
+// Whether every signer that still owes a contribution already holds a usable cached
+// session. A signer that cannot sign at all keeps the nonce step on display.
+auto SignModal::everyPendingCached() const -> bool {
+    bool pending = false;
+    for (const auto &candidate : m_plan->candidates) {
+        if (!candidate.can_sign) {
+            continue;
+        }
+        if (candidate.musig_done) {
+            continue;
+        }
+        pending = true;
+        if (!candidate.cache_ready) {
+            return false;
+        }
+    }
+    return pending;
 }
 
 void SignModal::onDevicesChanged() {
@@ -566,9 +596,13 @@ void SignModal::onCosignerClicked() {
     }
     auto fingerprint = sender()->property(K_FINGERPRINT).toString();
     bool usable = false;
+    bool cacheSupported = false;
+    bool cacheReady = false;
     for (const auto &candidate : m_plan->candidates) {
         if (toQString(candidate.fingerprint).compare(fingerprint, Qt::CaseInsensitive) == 0) {
             usable = candidate.can_sign && !candidate.musig_done;
+            cacheSupported = candidate.cache_supported;
+            cacheReady = candidate.cache_ready;
             break;
         }
     }
@@ -576,6 +610,19 @@ void SignModal::onCosignerClicked() {
         return;
     }
     m_notice->setVisible(false);
+    // The nonce step only fills the cache: one session for this key, bound to no
+    // transaction. A key whose device cannot prepare stays on transaction-bound
+    // rounds, exactly as it always signed.
+    if (!m_partial) {
+        if (cacheReady) {
+            return;
+        }
+        if (cacheSupported) {
+            m_controller->prepareNonces(fingerprint);
+            refresh();
+            return;
+        }
+    }
     // A key on its connected USB device signs in place, its row On Device while every
     // other key can be asked too; another route runs in its own window, over this one.
     if (onDevice(fingerprint)) {
