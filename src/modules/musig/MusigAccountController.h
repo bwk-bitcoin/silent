@@ -203,6 +203,8 @@ protected:
     void listenNotifications();
     void changeEndpoint(uint64_t req_id, Endpoint endpoint, bool connected, bool retry = false);
     void startEndpointChange();
+    void connectElectrum(bool retry) override;
+    void electrumProbeFailed(bool retry, const EndpointResult &result) override;
     // The account's services, assembled once from this module. False when the host
     // refuses them, or once they retired.
     auto assembleServices() -> bool;

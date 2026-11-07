@@ -85,7 +85,12 @@ void AccountController::onAccountLoaded() {
                                   BackendErrorKind::Other);
         }
     } else if (m_widget != nullptr && !endpointOperationsBusy()) {
-        changeEndpoint(0, Endpoint::Electrum, true, false, true);
+        // Electrum connects at startup only for the sub-accounts, as the Rust startup does.
+        if (m_electrum_expected_count > 0 && !endpointUrl(Endpoint::Electrum).isEmpty()) {
+            probeElectrum(false);
+        } else {
+            changeEndpoint(0, Endpoint::Electrum, true, false, true);
+        }
     }
 }
 
@@ -446,7 +451,31 @@ void AccountController::onElectrumReconnect() {
         m_reconnect_pending = true;
     } else if (m_account.has_value()) {
         m_reconnect_pending = false;
-        changeEndpoint(0, Endpoint::Electrum, true, true);
+        probeElectrum(true);
+    }
+}
+
+void AccountController::connectElectrum(bool retry) {
+    changeEndpoint(0, Endpoint::Electrum, true, retry, !retry);
+}
+
+// The account never left: only the reconnect follows a failed retry. At startup the
+// failure is reported and the startup operation goes on, starting the scanner alone,
+// unless a deletion started meanwhile.
+void AccountController::electrumProbeFailed(bool retry, const EndpointResult &result) {
+    if (!retry && !accountDeletionPending()) {
+        m_reconnect->stopped();
+        m_reconnect_pending = false;
+        reportEndpointFailure(Endpoint::Electrum, result.error, result.kind);
+        startEndpointChange(0, Endpoint::Blindbit, true, false, true);
+        return;
+    }
+    finishEndpointOperation(result);
+    if (retry) {
+        m_reconnect->lost();
+    }
+    if (m_reconnect_pending && !endpointOperationsBusy()) {
+        onElectrumReconnect();
     }
 }
 
@@ -522,6 +551,11 @@ void AccountController::changeEndpoint(uint64_t req_id, Endpoint endpoint, bool 
         emit endpointRequestFinished(req_id, endpoint, result);
         return;
     }
+    startEndpointChange(req_id, endpoint, connected, retry, startup);
+}
+
+void AccountController::startEndpointChange(uint64_t req_id, Endpoint endpoint, bool connected,
+                                            bool retry, bool startup) {
     m_endpoint_busy = true;
     m_endpoint_retry = retry;
     m_endpoint_startup = startup;
@@ -544,7 +578,7 @@ void AccountController::changeEndpoint(uint64_t req_id, Endpoint endpoint, bool 
     auto *thread = endpointChangeWorker(
         m_endpoint_account, m_endpoint_result, m_endpoint_replaced, workers, m_notif_thread,
         [endpoint, connected, startup](rust::Box<Account> account) {
-            if (startup) {
+            if (startup && endpoint == Endpoint::Electrum) {
                 return ::sp_startup_endpoint_change(std::move(account));
             }
             return ::sp_endpoint_change(std::move(account),

@@ -104,6 +104,7 @@ signals:
                             ElectrumTipResult result);
     void endpointInfoFetched(uint64_t req_id, uint64_t generation, Endpoint endpoint,
                              BackendInfo info);
+    void electrumProbed(uint64_t generation, bool retry, EndpointResult result);
 
 public slots:
     void onShutdownDrained(const QString &error);
@@ -111,6 +112,7 @@ public slots:
                               const ElectrumTipResult &result);
     void onEndpointInfoFetched(uint64_t req_id, uint64_t generation, Endpoint endpoint,
                                const BackendInfo &info);
+    void onElectrumProbed(uint64_t generation, bool retry, const EndpointResult &result);
 
 protected:
     template <typename T>
@@ -144,6 +146,14 @@ protected:
     void finishEndpointConnection(Endpoint endpoint, bool connected, const rust::String &error,
                                   BackendErrorKind kind);
     void stopEndpointOperations();
+    // An automatic Electrum connection (at startup, or a `retry` of a lost one): the saved
+    // server is tested first, without the account, so an unreachable server never takes
+    // the account from the requests it serves. Runs as the Electrum Connecting operation.
+    // connectElectrum() follows a server that answered, electrumProbeFailed() one that did
+    // not: it ends the operation with `result`, as a failed connection does.
+    void probeElectrum(bool retry);
+    virtual void connectElectrum(bool retry) = 0;
+    virtual void electrumProbeFailed(bool retry, const EndpointResult &result) = 0;
     void publishEndpointState();
     void requestAccountEndpointTip(uint64_t req_id, Endpoint endpoint);
     void reportEndpointFailure(Endpoint endpoint, const rust::String &error, BackendErrorKind kind);

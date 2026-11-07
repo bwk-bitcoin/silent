@@ -493,6 +493,52 @@ void closeAccount(account::AccountModule *module, const QString &id) {
     waitFor([module, &id] { return !module->accountUnavailable(id); }, "the account closes");
 }
 
+auto electrumConnecting(const AccountBackend &controller) -> bool {
+    return controller.endpointOperation(Endpoint::Electrum) == EndpointOperation::Connecting;
+}
+
+// Selects coins of the account while `controller` tries to connect Electrum: `inputs` are
+// selected, and the attempt still runs once the selection answered.
+void selectWhileConnecting(const host::ServiceAssembly &assembly, Answers &answers,
+                           const AccountBackend &controller, backend::RequestId token,
+                           const QStringList &inputs) {
+    require(electrumConnecting(controller), "a connection attempt runs");
+    answers.selected.reset();
+    assembly.transaction()->selectCoins(token, EMPTY);
+    waitFor([&answers,
+             token] { return answers.selected.has_value() || answers.errors.contains(token); },
+            "coin selection answers");
+    require(!answers.errors.contains(token), "coin selection is not refused during the attempt");
+    require(answers.selected->completion.complete == !inputs.isEmpty() &&
+                answers.selected->transaction.inputs == inputs,
+            "coin selection answers on the account's coins during the attempt");
+    require(electrumConnecting(controller), "the attempt still runs once the selection answered");
+}
+
+// Waits for the attempt on the silent server to fail, Electrum still disconnected.
+void waitForFailedAttempt(const AccountBackend &controller) {
+    waitFor(
+        [&controller] {
+            return controller.endpointOperation(Endpoint::Electrum) == EndpointOperation::Idle &&
+                   !controller.endpointError(Endpoint::Electrum).isEmpty();
+        },
+        "the connection attempt fails");
+    require(!controller.isEndpointRunning(Endpoint::Electrum),
+            "the failed attempt leaves Electrum disconnected");
+}
+
+auto assembleOpen(HostImpl *host, IModule *module, const QString &account)
+    -> std::unique_ptr<host::ServiceAssembly> {
+    host::AssemblyResult result;
+    waitFor(
+        [&] {
+            result = assemble(host, module, account, backend::Network::Regtest);
+            return result.assembly != nullptr;
+        },
+        "the open account's services assemble");
+    return std::move(result.assembly);
+}
+
 } // namespace
 
 void backendServicesSmoke() {
@@ -551,6 +597,65 @@ void backendServicesSmoke() {
     require(assemble(host, multikeyModule, MULTIKEY_ACCOUNT, backend::Network::Regtest).assembly ==
                 nullptr,
             "a closed account supplies no new service");
+}
+
+// The funded Multikey `account`, whose Electrum server never answers, selects its coin
+// `outpoint` while it connects at startup and while it reconnects. An SP account on the
+// same server, which the harness cannot fund, answers its empty selection while it
+// reconnects.
+void offlineSelectionSmoke(const QString &account, const QString &outpoint) {
+    auto electrum = ::config_from_file(rust::String(account.toStdString()))->get_electrum_url();
+    auto spConfig = ::new_config(rust::String(SP_ACCOUNT.toStdString()), Network::Regtest,
+                                 rust::String(SP_DESCRIPTOR), rust::String("http://127.0.0.1:1"),
+                                 electrum, 0, rust::String("sp"));
+    require(spConfig->save().empty(), "the SP fixture account saves");
+    auto sp = std::make_unique<SpPlugin>();
+    auto multikey = std::make_unique<MusigPlugin>();
+    auto *spModule = qobject_cast<account::AccountModule *>(sp->modules().first());
+    auto *multikeyModule = qobject_cast<account::AccountModule *>(multikey->modules().first());
+    require(spModule != nullptr && multikeyModule != nullptr, "both modules are account modules");
+    auto *controller = AppController::get();
+    controller->registerBuiltinPlugin(std::move(sp));
+    controller->registerBuiltinPlugin(std::move(multikey));
+    auto *registry = controller->pluginRegistry();
+    waitFor([registry] { return !registry->pluginStateLoading(); }, "the plugin state loads");
+    MainWindow window;
+    controller->start(&window);
+    auto *host = dynamic_cast<HostImpl *>(Host::get());
+    require(host != nullptr, "the host is the real host");
+
+    multikeyModule->startInstance(account);
+    auto *multikeyWidget = window.findChild<MusigAccountWidget *>();
+    require(multikeyWidget != nullptr, "the Multikey account opens in a tab");
+    auto *multikeyController = multikeyWidget->controller();
+    auto multikeyAssembly = assembleOpen(host, multikeyModule, account);
+    Answers multikeyAnswers;
+    connectAnswers(*multikeyAssembly, multikeyAnswers);
+    selectWhileConnecting(*multikeyAssembly, multikeyAnswers, *multikeyController, 30, {outpoint});
+    waitForFailedAttempt(*multikeyController);
+    // A reconnect, as the retry timer starts it.
+    multikeyController->onElectrumReconnect();
+    selectWhileConnecting(*multikeyAssembly, multikeyAnswers, *multikeyController, 31, {outpoint});
+    waitForFailedAttempt(*multikeyController);
+
+    // With no sub-account, the SP account connects no Electrum at startup.
+    spModule->startInstance(SP_ACCOUNT);
+    auto *spWidget = window.findChild<AccountWidget *>();
+    require(spWidget != nullptr, "the SP account opens in a tab");
+    auto *spController = spWidget->controller();
+    auto spAssembly = assembleIdle(host, spModule, SP_ACCOUNT);
+    Answers spAnswers;
+    connectAnswers(*spAssembly, spAnswers);
+    waitFor([spController] { return !spController->endpointOperationsBusy(); },
+            "the SP startup connection ends");
+    spController->onElectrumReconnect();
+    selectWhileConnecting(*spAssembly, spAnswers, *spController, 32, {});
+    waitForFailedAttempt(*spController);
+
+    multikeyAssembly.reset();
+    spAssembly.reset();
+    closeAccount(multikeyModule, account);
+    closeAccount(spModule, SP_ACCOUNT);
 }
 
 } // namespace smoke

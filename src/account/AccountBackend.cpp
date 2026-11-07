@@ -13,6 +13,8 @@ AccountBackend::AccountBackend(QObject *parent) : QObject(parent) {
             qontrol::UNIQUE);
     connect(this, &AccountBackend::endpointInfoFetched, this,
             &AccountBackend::onEndpointInfoFetched, qontrol::UNIQUE);
+    connect(this, &AccountBackend::electrumProbed, this, &AccountBackend::onElectrumProbed,
+            qontrol::UNIQUE);
 }
 
 void AccountBackend::onShutdownDrained(const QString &error) {
@@ -220,6 +222,17 @@ void AccountBackend::stopEndpointOperations() {
     }
 }
 
+void AccountBackend::probeElectrum(bool retry) {
+    beginEndpointOperation(0, Endpoint::Electrum, EndpointOperation::Connecting);
+    startWorker(QThread::create([this, retry, generation = m_endpoint_generation,
+                                 url = endpointUrl(Endpoint::Electrum).toStdString(),
+                                 verify = verifiesCertificate(), network = network()] {
+        emit electrumProbed(
+            generation, retry,
+            ::test_endpoint(BackendServer::Electrum, rust::String(url), verify, network));
+    }));
+}
+
 void AccountBackend::requestAccountEndpointTip(uint64_t req_id, Endpoint endpoint) {
     auto url = endpointUrl(endpoint).toStdString();
     auto verify = verifiesCertificate();
@@ -264,5 +277,23 @@ void AccountBackend::onEndpointInfoFetched(uint64_t req_id, uint64_t generation,
                                            const BackendInfo &info) {
     if (generation == m_endpoint_generation && !endpointsStopping()) {
         emit endpointInfoReady(req_id, endpoint, info);
+    }
+}
+
+void AccountBackend::onElectrumProbed(uint64_t generation, bool retry,
+                                      const EndpointResult &result) {
+    if (generation != m_endpoint_generation || m_endpoints_stopping) {
+        return;
+    }
+    if (!result.is_ok) {
+        electrumProbeFailed(retry, result);
+        return;
+    }
+    // The connection runs as its own operation: the state stays Connecting until it starts.
+    m_operation = EndpointOperation::Idle;
+    connectElectrum(retry);
+    // A connection refused meanwhile (a signing round or a deletion started) leaves it idle.
+    if (m_operation == EndpointOperation::Idle) {
+        publishEndpointState();
     }
 }

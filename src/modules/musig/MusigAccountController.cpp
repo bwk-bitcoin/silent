@@ -108,7 +108,8 @@ void MusigAccountController::onAccountLoaded() {
         reportEndpointFailure(Endpoint::Electrum, rust::String(error.toStdString()),
                               BackendErrorKind::Other);
     } else if (m_widget != nullptr && !endpointOperationsBusy() && !electrumUrl().isEmpty()) {
-        setEndpointConnected(0, Endpoint::Electrum, true);
+        m_endpoint_connect = true;
+        probeElectrum(false);
     }
 }
 
@@ -496,7 +497,26 @@ void MusigAccountController::onElectrumReconnect() {
         m_reconnect_pending = true;
     } else if (m_account.has_value()) {
         m_reconnect_pending = false;
-        changeEndpoint(0, Endpoint::Electrum, true, true);
+        m_endpoint_connect = true;
+        probeElectrum(true);
+    }
+}
+
+void MusigAccountController::connectElectrum(bool retry) {
+    changeEndpoint(0, Endpoint::Electrum, true, retry);
+}
+
+// The account never left: the failure ends the operation and counts for the reconnect.
+void MusigAccountController::electrumProbeFailed(bool retry, const EndpointResult &result) {
+    finishEndpointOperation(result);
+    if (retry) {
+        m_reconnect->lost();
+    } else {
+        m_reconnect->stopped();
+        m_reconnect_pending = false;
+    }
+    if (m_reconnect_pending && !endpointOperationsBusy()) {
+        onElectrumReconnect();
     }
 }
 

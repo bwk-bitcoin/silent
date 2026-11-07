@@ -205,6 +205,7 @@ void pluginRemovalReadFailureSmoke(const QString &shots);
 void pluginAccessSettingsFailureSmoke(const QString &shots);
 void accountServicesSmoke();
 void backendServicesSmoke();
+void offlineSelectionSmoke(const QString &account, const QString &outpoint);
 void accountViewsSmoke();
 } // namespace smoke
 
@@ -305,6 +306,13 @@ auto main(int argc, char *argv[]) -> int {
         Theme::get()->apply();
         smoke::accountViewsSmoke();
         std::fprintf(stdout, "Account views smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.size() == 4 && arguments.at(1) == QStringLiteral("--offline-selection")) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::offlineSelectionSmoke(arguments.at(2), arguments.at(3));
+        std::fprintf(stdout, "Offline selection smoke: OK\n");
         return gOk ? 0 : 1;
     }
     if (arguments.contains(QStringLiteral("--backend-services"))) {
