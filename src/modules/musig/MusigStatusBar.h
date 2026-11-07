@@ -9,11 +9,11 @@ class MusigAccountController;
 enum class Endpoint : std::uint8_t;
 
 namespace catalog {
-class Separator;
 class StatusBarItem;
 } // namespace catalog
 
-// The Electrum half of sp's StatusBar, a musig account has no scanner.
+// The status details of a Multikey account in the shared status bar: the Electrum half
+// of sp's StatusBar, a musig account has no scanner.
 class MusigStatusBar : public QWidget {
     Q_OBJECT
 
@@ -34,7 +34,6 @@ protected:
 
 private:
     MusigAccountController *m_controller = nullptr;
-    catalog::Separator *m_separator = nullptr;
     catalog::StatusBarItem *m_electrum_item = nullptr;
     QString m_electrum_url;
     uint64_t m_endpoint_req = 0;

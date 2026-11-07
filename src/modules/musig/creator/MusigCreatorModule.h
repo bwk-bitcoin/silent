@@ -5,7 +5,7 @@
 #include <QMap>
 #include <QString>
 
-// Lists the pseudo instance "musig.create".
+// Lists the pseudo instances "musig.create" and "musig.restore".
 class MusigCreatorModule final : public IModule {
     Q_OBJECT
 
@@ -19,8 +19,13 @@ public:
     [[nodiscard]] auto meta() const -> QMap<QString, QString> override;
     auto list() -> ReqId override;
     auto autoStart() -> ReqId override;
-    // "musig.create" opens modal::CreatePolicy, any other id is an error
+    // "musig.create" opens modal::CreatePolicy, "musig.restore" the account restore, any
+    // other id is an error
     void startInstance(const QString &id) override;
+
+public slots:
+    // A restore made an account: the launcher lists it.
+    void onAccountRestored();
 
 protected:
     auto nextReqId() -> ReqId;

@@ -6,6 +6,7 @@
 #include "AppController.h"
 #include "MainWindow.h"
 #include "account/AccountModule.h"
+#include "account/AccountShell.h"
 #include "account/ElectrumReconnect.h"
 #include "account/Extensions.h"
 #include "account/Services.h"
@@ -1093,6 +1094,9 @@ void controllerSettingsPolicy(const QString &name, bool lock_connected_electrum)
     watch(controller, name);
     waitFor([&controller] { return !controller.accountLoading(); },
             "constructor policy fixture opens offline");
+    QWidget page;
+    account::AccountShell shell(account::accountMenuEntries(), new QWidget, &page);
+    controller.setShell(&shell);
     controller.loadPanels();
     auto screen = controller.screen(QStringLiteral("settings"));
     require(screen.has_value(), "real controller constructs its Settings panel");

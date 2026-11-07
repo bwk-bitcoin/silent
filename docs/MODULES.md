@@ -1266,7 +1266,8 @@ class ChainBlockchain final : public backend::IBlockchain {
 
 - `service()` answers this provider's service of one kind for an account (its instance id) on
   a network, or null. GUI thread, no I/O. Each non-null answer is handed back exactly once
-  through `releaseService()`.
+  through `releaseService()`, which destroys it, at once or later (`deleteLater()`, a timer):
+  the plugin is not unloaded while a service it was handed back still lives.
 - Each service class declares `Q_INTERFACES` for its interface. The host checks the kind and
   its IID version with `qobject_cast`, so a service built against another version is refused.
 - The facet is optional. `IPlugin`, `IModule`, `IInstance` and the root plugin IID are
@@ -1301,12 +1302,15 @@ A supplying plugin stays loaded while an assembly uses its services. When it sta
 use of the services and deletes the assembly (`deleteLater()` is fine), which hands each
 service back to its provider. The registry asks the plugin's modules to shut down only once no
 assembly using them is left, a deferred deletion included, so a provider's `shutdown()` never
-runs with services still out. The other providers of a retired assembly keep running.
+runs with services still out. Its library is unloaded only once every service it was handed
+back is destroyed too: a provider may delete one later than its release. The other providers
+of a retired assembly keep running.
 
 `host_smoke --account-services` loads two provider plugins built against the SDK only
 (`tests/host/ServiceProviderPlugin.cpp`, with the guard headers that fail on generated
 Rust/CXX includes). It checks one-provider and split-provider assembly, attribution, the
-unsupported implementation, refusals and retention through a plugin stop.
+unsupported implementation, refusals and retention through a plugin stop, a service its
+provider deletes a while after its release included.
 
 ### Built-in providers
 
@@ -1354,7 +1358,10 @@ account's `account::ServiceContext`, which the account controller owns:
   test found. Both count as an endpoint operation while they run, and both answer `error()`
   while another runs or while the account would refuse an endpoint change.
   `IBlockchain::setConnected()`, `start()` and `stop()` drive the live connections.
-- `rescan()`, account backups and every `raw()` operation answer `error()` for now. The
+- `backup()` seals the account's backup under the password and `inspectBackup()` reads one,
+  both on a worker (see Backup and restore below). `restore()` on an open account answers
+  `error()`: a restore makes a new account, through the module's restore target.
+- `rescan()` and every `raw()` operation answer `error()` for now. The
   `value()` operations below are the only ones the built-in services answer; each is listed
   in `src/account/Extensions.h`:
 
@@ -1378,13 +1385,11 @@ notified consumer.
 
 The account panels (`src/account/views/`: History, Coins, transaction details, Receive, Send
 and Settings) take an `account::Services`, one pointer per interface, and use nothing else of
-the account: no Rust account, controller or worker. The SP and Multikey controllers assemble
-their account's services from their own module once the account has loaded, then build the
-panels with them: Settings at once, the panels reading the funds once the first funds read
-has answered, so none opens on an empty read. When a supplier retires the assembly, the
-controller deletes the panels, then the assembly. The views name no backend: what differs
-between providers comes from the provider (address kinds and their titles, endpoints and
-their presentation), and the amount and fee rules from `account/Money.h`.
+the account: no Rust account, controller or worker, nor any header that reaches the generated
+`silent.h`. They show their modals with `qontrol::Controller::execModal()`. The views name no
+backend: what differs between providers comes from the provider (address kinds and their
+titles, endpoints and their presentation), and the amount and fee rules from
+`account/Money.h`.
 
 - History, Coins and the transaction details read `IBlockchain` and refresh on its change
   signals. The details show at once what the account already fetched of the transaction,
@@ -1414,9 +1419,96 @@ their presentation), and the amount and fee rules from `account/Money.h`.
   PSBTs once it spends the account's coins on one spend path, or merges it into the saved
   PSBT of the same transaction.
 
-`account::AccountBackend` remains the built-in controllers' own base: the account lifecycle
-the module watches, the endpoint connections the status bars drive and read, and the
-requests behind `account::ControllerServices`. The panels no longer use it.
+- Settings ends with Backup, which opens `account::view::BackupAccount` over
+  `IAccountBackend` (see Backup and restore).
+
+### The account shell
+
+`account::AccountShell` (`src/account/AccountShell.h`) is the account page every account kind
+shares: the menu, the status bar and the panels. It is UI composition, not a plugin
+interface, and depends on no controller nor on `account::AccountBackend`.
+
+- `assemble()` takes a `host::AssemblyRequest`: each service from its own source, which the
+  shell neither owns nor parents. It keeps the assembly, and only that. The built-in
+  controllers name their own module for all five (`account::moduleServices()`); another
+  account kind may name several providers.
+- `openSettings()` builds Settings over the services, with the module's own widget under the
+  endpoints (a Multikey account's policy and descriptor); `openFunds()` builds History,
+  Coins, Receive and Send, Send signing with the module's `account::SendSigning`.
+  `insertPanel()` adds a panel of the module's own, named as its menu entry (the Multikey
+  PSBT tab). The module decides when each is built: the built-in ones build Settings once
+  the account has loaded, the funds panels once its first funds read has answered, so none
+  opens on an empty read.
+- The menu entries are `account::accountMenuEntries()`, plus the module's own. The status bar
+  is the shell's (a top separator, its height and padding), the details in it the module's:
+  the SP status bar (BlindBit scanning, Electrum) and the Multikey one (Electrum) read their
+  controller, which no domain interface carries.
+- `showPanel()` shows a panel at once or as soon as it is built.
+- When a supplier retires the assembly, the shell deletes every panel, then the assembly
+  (`deleteLater()`), and assembles nothing again. Deleting the shell deletes the panels first
+  too; the built-in pages delete it before their controller, which the signing steps use.
+
+`account::AccountBackend` remains the built-in controllers' own base, inside the SP and
+Multikey modules: the account lifecycle `account::AccountModule` watches, the endpoint
+connections their status details drive and read, and the requests behind
+`account::ControllerServices`. Neither the shell nor the views use it.
+
+### Backup and restore
+
+A backup is opaque bytes: the generic flows only hand them over. `IAccountBackend::backup()`
+seals one under a password, `inspectBackup()` answers what it holds (`BackupInfo`: the kind of
+account, its id and network, what it includes, what a restore needs, warnings) and
+`restore()` makes the account it holds. A password lives in the generic UI only from its entry
+to the request that takes it, never logged nor saved.
+
+- `account::view::BackupAccount` (from Settings): a password and its confirmation, then
+  `backup()`, then the file the user picks (`.silent-backup`).
+- `account::view::RestoreAccount`: the backup file and its password, then `inspectBackup()`,
+  reviewed, then `restore()`. It runs over a module's restore target: an `IAccountBackend`
+  with no account behind it, so no account is opened nor scanned to restore one. A restore
+  made through an open account's own service answers `error()`.
+- The restore is the module's: each built-in module lists `<id>.restore` among its creators
+  (`sp.restore` in the SP module, `musig.restore` in the Multikey creator), which the account
+  type picker shows with the create entries. `PluginRegistry::isCreatorInstanceId()` takes
+  `.restore` ids as creators. Its restore target is `account::restoreTarget()`; once restored,
+  the module refreshes the launcher, which lists the account.
+
+The built-in backups (`silent/src/account_backup.rs`) are `SILENT-ACCOUNT-BACKUP` then the
+JSON of a password envelope: Argon2id and XChaCha20-Poly1305, as hot keys seal their secret
+(`keys::crypto`), bound to this use. They hold:
+
+| Covered                  | In the backup                                                     |
+|--------------------------|-------------------------------------------------------------------|
+| Config                   | the descriptors (an SP one with its scan key), servers, dust limit |
+| Derivation state         | the receive and change indexes each descriptor handed out          |
+| SP scan start            | the block the account scans from                                   |
+| Labels                   | every label, RAM edits included                                    |
+
+and leave out, as `BackupInfo` says:
+
+- the signing keys: they stay in Keys, which the restored account needs (`requirements`
+  names their fingerprints);
+- coins and history: the restored account finds them again by scanning;
+- a Multikey account's saved PSBTs and signing sessions (`warnings`): restoring them could
+  bring back a signing round whose nonces a signer already used.
+
+A wrong password and a damaged ciphertext are refused alike (`BackupFailure::WrongPassword`:
+the authentication cannot tell them apart), a file that is no backup as `Malformed`, a newer
+backup version or another kind of account as `Unsupported`. A restore never replaces an
+account: one of the same name refuses it (`Exists`). It creates the account as account
+creation does, then puts the indexes and labels in it; when that fails, the account it created
+is removed, so nothing partial is listed. A restored SP account scans from the block every new
+one does: a backup recording another start is refused rather than scanned from the wrong
+block. bwk does not expose the scan start it persisted, so a backup records the one the
+account's config opened with.
+
+`host_smoke --account-shell` checks the shell over services of two providers and its
+retirement, the Backup modal's password rules and refusal, and over the real SP and Multikey
+accounts a backup through the account service, a wrong password, another kind's restore
+target, an existing account, and a restore once the account is gone, which then opens.
+`silent/tests/account_backup.rs` checks both kinds' roundtrips, malformed backups, wrong
+passwords, a newer backup version, existing accounts, another kind, and a restore failing
+once the account is created, which leaves no account.
 
 ## Inter-Account Operation: Send To / Spend From Siblings
 

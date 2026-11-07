@@ -5,6 +5,58 @@
 account-type-title => "Account Type" => "Account Type"
 amount-cycle => "Show as BTC / %1 / hidden" => "Mostrar em BTC / %1 / oculto"
 amount-cycle-no-fiat => "Show as BTC / hidden" => "Mostrar em BTC / oculto"
+backup-failed
+=> "The backup could not be made: %1"
+=> "The backup could not be made: %1";;
+backup-file-filter
+=> "Account backup (*.silent-backup)"
+=> "Account backup (*.silent-backup)";;
+backup-includes-endpoint => "Server: %1" => "Server: %1"
+backup-includes-labels => "Labels: %1" => "Labels: %1"
+backup-includes-policy
+=> "The spending policy (descriptor)"
+=> "The spending policy (descriptor)";;
+backup-includes-scan-start
+=> "Scanning starts at block %1"
+=> "Scanning starts at block %1";;
+backup-includes-sp-descriptor
+=> "The silent payment descriptor, with its scan key: whoever opens the backup sees the account's payments"
+=> "The silent payment descriptor, with its scan key: whoever opens the backup sees the account's payments";;
+backup-includes-tip
+=> "%1 addresses handed out: %2 receive, %3 change"
+=> "%1 addresses handed out: %2 receive, %3 change";;
+backup-kind-segwit => "Segwit" => "Segwit"
+backup-kind-taproot => "Taproot" => "Taproot"
+backup-malformed
+=> "This file is not an account backup, or it is damaged: %1"
+=> "This file is not an account backup, or it is damaged: %1";;
+backup-password-text
+=> "Choose the password that seals the backup. It is needed to restore the account: it is not saved anywhere."
+=> "Choose the password that seals the backup. It is needed to restore the account: it is not saved anywhere.";;
+backup-requires-key
+=> "The account's signing key, in Keys: the backup holds no secret"
+=> "The account's signing key, in Keys: the backup holds no secret";;
+backup-requires-keys
+=> "The signing keys %1, in Keys: the backup holds no secret"
+=> "The signing keys %1, in Keys: the backup holds no secret";;
+backup-requires-scan
+=> "Its coins and history are found again from the Electrum server"
+=> "Its coins and history are found again from the Electrum server";;
+backup-requires-sp-scan
+=> "Its coins and history are found again by scanning from block %1"
+=> "Its coins and history are found again by scanning from block %1";;
+backup-save-failed => "The backup is not saved: %1" => "The backup is not saved: %1"
+backup-save-title => "Save Account Backup" => "Save Account Backup"
+backup-saved => "The backup is saved to %1" => "The backup is saved to %1"
+backup-sealing => "Sealing the backup" => "Sealing the backup"
+backup-sealing-sub => "This takes a few seconds." => "This takes a few seconds."
+backup-title => "Backup Account" => "Backup Account"
+backup-warning-saved-psbts
+=> "Saved PSBTs and signing sessions are not in the backup: a transaction being signed is prepared again."
+=> "Saved PSBTs and signing sessions are not in the backup: a transaction being signed is prepared again.";;
+backup-wrong-password
+=> "Wrong password, or a damaged backup."
+=> "Wrong password, or a damaged backup.";;
 balance-title => "Balance" => "Saldo"
 balance-unconfirmed => "Unconfirmed" => "Não confirmado"
 btn-add-a-key => "+ Add a Key" => "NONE"
@@ -17,9 +69,11 @@ btn-all-settings => "All Settings" => "NONE"
 btn-allow-access => "Allow" => "NONE"
 btn-awaiting-payment => "Addr. awaiting payment (%1)" => "NONE"
 btn-back => "Back" => "NONE"
+btn-backup-account => "Backup Account" => "Backup Account"
 btn-backup-descriptor => "Backup Descriptor" => "Backup Descriptor"
 btn-camera-settings => "Camera Settings" => "NONE"
 btn-check => "Check" => "NONE"
+btn-choose-file => "Choose File…" => "Choose File…"
 btn-connect-blindbit => "Connect Blindbit" => "NONE"
 btn-connect-electrum => "Connect Electrum" => "NONE"
 btn-continue => "Continue" => "NONE"
@@ -63,16 +117,19 @@ btn-pick-another-file => "Pick Another File…" => "NONE"
 btn-plugin-access => "Access" => "NONE"
 btn-prepare-nonces => "Prepare Nonces" => "Prepare Nonces"
 btn-qr-settings => "QR Settings" => "QR Settings"
+btn-read-backup => "Read Backup" => "Read Backup"
 btn-register => "Register" => "NONE"
 btn-register-descriptor => "Register Descriptor" => "Register Descriptor"
 btn-remove-key => "Remove Key" => "NONE"
 btn-remove-path => "Remove Path" => "NONE"
 btn-remove-payment => "Remove Payment" => "NONE"
 btn-remove-plugin => "Remove" => "Remove"
+btn-restore-account => "Restore Account" => "Restore Account"
 btn-retry-disable-plugin => "Retry disable" => "Retry disable"
 btn-reveal-mnemonic => "Reveal Mnemonic" => "NONE"
 btn-save => "Save" => "NONE"
 btn-save-alias => "Save Alias" => "NONE"
+btn-save-backup => "Save Backup" => "Save Backup"
 btn-save-settings => "Save Settings" => "NONE"
 btn-save-spend-path => "Save Path" => "Save Path"
 btn-save-to-file => "Save to File…" => "Save to File…"
@@ -634,6 +691,7 @@ main-settings-tab => "Settings" => "NONE"
 main-window-title
 => "Silent - Silent Payments Wallet"
 => "Silent - Silent Payments Wallet";;
+musig-account-restore => "Restore Multikey Wallet" => "Restore Multikey Wallet"
 musig-account-type => "Multikey Wallet" => "NONE"
 musig-count-block => "1 block" => "1 block"
 musig-count-blocks => "%1 blocks" => "%1 blocks"
@@ -1057,6 +1115,30 @@ receive-verify-tooltip => "Verify on signing device" => "NONE"
 receive-verify-unavailable
 => "No signing device is available for address verification in this build."
 => "Nenhum dispositivo de assinatura esta disponivel para verificar enderecos nesta build.";;
+restore-busy-sub => "This takes a few seconds." => "This takes a few seconds."
+restore-choose-file => "Choose the backup file." => "Choose the backup file."
+restore-done
+=> "%1 is restored. Open it from the account list."
+=> "%1 is restored. Open it from the account list.";;
+restore-enter-password
+=> "Enter the backup's password."
+=> "Enter the backup's password.";;
+restore-failed
+=> "The account is not restored: %1"
+=> "The account is not restored: %1";;
+restore-file-field => "Backup:" => "Backup:"
+restore-includes => "In the Backup" => "In the Backup"
+restore-no-file => "No file chosen" => "No file chosen"
+restore-open-failed => "The file is not read: %1" => "The file is not read: %1"
+restore-open-title => "Open Account Backup" => "Open Account Backup"
+restore-password-text
+=> "Choose the account's backup file and enter the password it was sealed with."
+=> "Choose the account's backup file and enter the password it was sealed with.";;
+restore-reading => "Reading the backup" => "Reading the backup"
+restore-requirements => "Restoring Needs" => "Restoring Needs"
+restore-restoring => "Restoring the account" => "Restoring the account"
+restore-review-account => "%1 · %2 · %3" => "%1 · %2 · %3"
+restore-title => "Restore Account" => "Restore Account"
 route-primary-tooltip => "%1 · Primary" => "NONE"
 scan-progress-done => "All %1 parts received" => "NONE"
 scan-progress-parts => "%1 of %2 parts" => "NONE"
@@ -1113,6 +1195,10 @@ send-transaction-state-lost
 send-transaction-title => "Transaction" => "Transacao"
 send-validation-error => "Validation Error" => "Erro de validacao"
 settings-backend-info => "Backend Info:" => "Info do backend:"
+settings-backup => "Backup" => "Backup"
+settings-backup-text
+=> "Saves this account to a file sealed with a password: its descriptors, servers, address indexes and labels. The signing keys are not in it: they stay in Keys."
+=> "Saves this account to a file sealed with a password: its descriptors, servers, address indexes and labels. The signing keys are not in it: they stay in Keys.";;
 settings-blindbit-address => "BlindBit URL" => "URL BlindBit"
 settings-blindbit-url => "BlindBit URL:" => "URL BlindBit:"
 settings-block-height => "Block Height:" => "Altura do bloco:"
@@ -1231,6 +1317,9 @@ settings-theme-dark => "Dark" => "Escuro"
 settings-theme-light => "Light" => "Claro"
 settings-theme-provided-by => "Provided by %1." => "NONE"
 settings-title => "Settings" => "Configuracoes"
+sp-account-restore
+=> "Restore Silent Payment Wallet"
+=> "Restore Silent Payment Wallet";;
 sp-account-type => "Silent Payment Wallet" => "Silent Payment Wallet"
 sp-instance-not-found
 => "SP instance not found: %1"

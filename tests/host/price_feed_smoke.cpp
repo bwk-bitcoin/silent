@@ -2,6 +2,7 @@
 
 #include "AppController.h"
 #include "MainWindow.h"
+#include "account/AccountShell.h"
 #include "account/views/Send.h"
 #include "catalog/containers/Tabs.h"
 #include "catalog/display/Label.h"
@@ -289,8 +290,8 @@ void accountWidgetLifetime(HostImpl *host, PriceModule *module) {
             }
         }
         auto panels =
-            controller->findChildren<qontrol::Panel *>(QString(), Qt::FindDirectChildrenOnly);
-        require(panels.size() == screens.size(), "controller owns every panel wrapper");
+            widget->shell()->findChildren<qontrol::Panel *>(QString(), Qt::FindDirectChildrenOnly);
+        require(panels.size() == screens.size(), "the account shell owns every panel wrapper");
         QList<QPointer<qontrol::Panel>> panelObservers;
         for (auto *panel : panels) {
             panelObservers.append(panel);

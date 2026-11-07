@@ -2,8 +2,6 @@
 
 #include "account/AccountBackend.h"
 #include "account/ElectrumReconnect.h"
-#include "account/PanelCollection.h"
-#include "host/ServiceAssembly.h"
 #include "interfaces/backend/types.h"
 #include "interfaces/types.h"
 
@@ -25,6 +23,10 @@
 class IKeys;
 class MusigAccountWidget;
 
+namespace account {
+class AccountShell;
+} // namespace account
+
 namespace musig {
 class MusigServices;
 } // namespace musig
@@ -43,7 +45,10 @@ public:
     ~MusigAccountController() override;
     void init(const QString &account);
     void loadPanels();
-    auto screen(const QString &screen) -> std::optional<qontrol::Screen *>;
+    // The page the account's panels show in, null for none: the panels are built in it.
+    void setShell(account::AccountShell *shell);
+    [[nodiscard]] auto shell() const -> account::AccountShell *;
+    [[nodiscard]] auto screen(const QString &screen) const -> std::optional<qontrol::Screen *>;
     auto getAccount() -> std::optional<rust::Box<MusigAccount>> &;
     auto network() -> Network override;
     // A new taproot address, the only kind it receives on. Empty on failure.
@@ -167,8 +172,6 @@ public slots:
     void onStorageFinished();
     void onSavedPsbtDeleteConfirmed(const QString &id);
     void onSavedPsbtDeleteCancelled(const QString &id);
-    // A provider of the account's services stops: the panels using them go first.
-    void onServicesRetired();
     // The first funds read answered: the panels reading them are built.
     void onFundsAnswered();
     void psbtClicked();
@@ -209,16 +212,10 @@ protected:
     void startEndpointChange();
     void connectElectrum(bool retry) override;
     void electrumProbeFailed(bool retry, const EndpointResult &result) override;
-    // The account's services, assembled once from this module. False when the host
-    // refuses them, or once they retired.
-    auto assembleServices() -> bool;
 
 private:
-    // Declared before the panels, which use it: they go first.
-    std::unique_ptr<host::ServiceAssembly> m_assembly;
-    bool m_services_retired = false;
-    account::PanelCollection m_panels{this};
     MusigAccountWidget *m_widget = nullptr;
+    QPointer<account::AccountShell> m_shell;
     account::ServiceContext *m_services = nullptr;
     std::optional<rust::Box<MusigAccount>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;
@@ -262,7 +259,6 @@ private:
     std::uint64_t m_restart_generation = 0;
     bool m_init = false;
     bool m_panels_requested = false;
-    QString m_requested_panel = QStringLiteral("history");
     std::shared_ptr<std::optional<rust::Box<MusigAccount>>> m_loading_account;
     bool m_stopping = false;
     bool m_stop_requested = false;

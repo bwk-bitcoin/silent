@@ -613,6 +613,40 @@ auto btnBackupDescriptor() -> Button * {
                  .width = BtnWidth::XL});
 }
 
+auto btnBackupAccount() -> Button * {
+    return make({.role = ButtonRole::Default,
+                 .label = TR("btn-backup-account"),
+                 .icon = icon::download,
+                 .iconSize = 16,
+                 .width = BtnWidth::XL});
+}
+
+auto btnSaveBackup() -> Button * {
+    return make({.role = ButtonRole::Primary,
+                 .label = TR("btn-save-backup"),
+                 .icon = icon::download,
+                 .iconSize = 16,
+                 .width = BtnWidth::L});
+}
+
+auto btnChooseFile() -> Button * {
+    return make({.role = ButtonRole::Default,
+                 .label = TR("btn-choose-file"),
+                 .icon = icon::folder,
+                 .iconSize = 16,
+                 .width = BtnWidth::L});
+}
+
+auto btnReadBackup() -> Button * {
+    return make(
+        {.role = ButtonRole::Primary, .label = TR("btn-read-backup"), .width = BtnWidth::L});
+}
+
+auto btnRestoreAccount() -> Button * {
+    return make(
+        {.role = ButtonRole::Primary, .label = TR("btn-restore-account"), .width = BtnWidth::L});
+}
+
 auto btnRegisterDescriptor() -> Button * {
     return make({.role = ButtonRole::Default,
                  .label = TR("btn-register-descriptor"),

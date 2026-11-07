@@ -42,6 +42,10 @@ ServiceAssembly::~ServiceAssembly() {
         provider->releaseService(supplied.service);
         if (m_host != nullptr) {
             m_host->leaveFrame(supplied.provider);
+            // Deleted later, most likely: the plugin's code runs until it is.
+            if (supplied.service != nullptr) {
+                m_host->awaitReleasedService(supplied.provider, supplied.service);
+            }
         }
     }
 }

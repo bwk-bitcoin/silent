@@ -1,15 +1,12 @@
 #include "modules/musig/MusigAccountController.h"
 
 #include "AppController.h"
+#include "account/AccountShell.h"
 #include "account/InterfaceEnums.h"
 #include "account/Services.h"
 #include "account/services/Conversions.h"
 #include "account/services/ServiceContext.h"
-#include "account/views/Coins.h"
-#include "account/views/History.h"
-#include "account/views/Receive.h"
 #include "account/views/Send.h"
-#include "account/views/Settings.h"
 #include "catalog/feedback/MessageModal.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
@@ -53,9 +50,7 @@ MusigAccountController::MusigAccountController(const QString &account, MusigAcco
     init(account);
 }
 
-MusigAccountController::~MusigAccountController() {
-    m_panels.clear();
-}
+MusigAccountController::~MusigAccountController() = default;
 
 void MusigAccountController::init(const QString &account) {
     if (m_init) {
@@ -101,7 +96,6 @@ void MusigAccountController::onAccountLoaded() {
     finishAccountLoad(error);
     if ((m_widget != nullptr || m_panels_requested) && hasAccountMetadata()) {
         loadPanels();
-        loadPanel(m_requested_panel);
         pollCoins();
     }
     if (!error.isEmpty()) {
@@ -130,16 +124,16 @@ void MusigAccountController::listenNotifications() {
 
 void MusigAccountController::loadPanels() {
     m_panels_requested = true;
-    if (!hasAccountMetadata() || !assembleServices()) {
+    // The account supplies its services once loaded.
+    if (shell() == nullptr || accountLoading() || !hasAccountMetadata() ||
+        !shell()->assemble(account::moduleServices(module(), m_services->account(),
+                                                   account::services::toNetwork(network())))) {
         return;
     }
-    auto services = account::servicesOf(*m_assembly);
-    if (!m_panels.contains("settings")) {
-        auto *panel = new qontrol::Panel(
-            new account::view::Settings(services, settingsExtras(), true), "settings");
-        m_panels.insert(panel);
+    if (shell()->screen(QStringLiteral("settings")) == std::nullopt) {
+        shell()->openSettings(settingsExtras(), true);
     }
-    if (m_panels.contains("history") || !m_account.has_value() || !m_account.value()->is_ok()) {
+    if (shell()->fundsOpen() || !m_account.has_value() || !m_account.value()->is_ok()) {
         return;
     }
     // The views open on the account's funds, not on an empty read.
@@ -148,50 +142,31 @@ void MusigAccountController::loadPanels() {
                 &MusigAccountController::onFundsAnswered, qontrol::UNIQUE);
         return;
     }
-    m_panels.insert(new qontrol::Panel(new account::view::History(services), "history"));
-    m_panels.insert(new qontrol::Panel(new account::view::Coins(services), "coins"));
-    m_panels.insert(new qontrol::Panel(new account::view::Receive(services, module()), "receive"));
-    auto *send = new account::view::Send(services, new musig::SigningSection(this, services));
-    m_panels.insert(new qontrol::Panel(send, "send"));
+    auto services = shell()->services();
+    auto *send = shell()->openFunds(new musig::SigningSection(this, services), module());
     connect(this, &MusigAccountController::savedPsbtWarningChanged, send,
             &account::view::Send::onSavedWarningChanged, qontrol::UNIQUE);
-    m_panels.insert(new qontrol::Panel(new musig::SavedPsbts(this, services), "psbt"));
+    shell()->insertPanel(new qontrol::Panel(new musig::SavedPsbts(this, services), "psbt"));
 }
 
-auto MusigAccountController::assembleServices() -> bool {
-    if (m_assembly != nullptr) {
-        return true;
-    }
-    // The account supplies its services once loaded.
-    if (m_services_retired || accountLoading()) {
-        return false;
-    }
-    auto result = account::assembleServices(module(), m_services->account(),
-                                            account::services::toNetwork(network()));
-    if (result.assembly == nullptr) {
-        qWarning() << "MusigAccountController: account services refused:" << result.error;
-        return false;
-    }
-    m_assembly = std::move(result.assembly);
-    connect(m_assembly.get(), &host::ServiceAssembly::retired, this,
-            &MusigAccountController::onServicesRetired, qontrol::UNIQUE);
-    return true;
+void MusigAccountController::setShell(account::AccountShell *shell) {
+    m_shell = shell;
+}
+
+auto MusigAccountController::shell() const -> account::AccountShell * {
+    return m_shell;
 }
 
 void MusigAccountController::onFundsAnswered() {
     loadPanels();
-    loadPanel(m_requested_panel);
 }
 
-void MusigAccountController::onServicesRetired() {
-    m_services_retired = true;
-    m_panels.clear();
-    // The assembly is the sender: it goes once its signal returned.
-    m_assembly.release()->deleteLater();
-}
-
-auto MusigAccountController::screen(const QString &screen) -> std::optional<qontrol::Screen *> {
-    return m_panels.screen(screen);
+auto MusigAccountController::screen(const QString &screen) const
+    -> std::optional<qontrol::Screen *> {
+    if (shell() == nullptr) {
+        return std::nullopt;
+    }
+    return shell()->screen(screen);
 }
 
 auto MusigAccountController::getAccount() -> std::optional<rust::Box<MusigAccount>> & {
@@ -415,11 +390,10 @@ auto MusigAccountController::restartPending() const -> bool {
 
 // ===== Slots =====
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void MusigAccountController::loadPanel(const QString &name) {
-    m_requested_panel = name;
-    auto *panel = m_panels.value(name);
-    if (m_widget != nullptr && panel != nullptr) {
-        m_widget->loadPanel(panel);
+    if (shell() != nullptr) {
+        shell()->showPanel(name);
     }
 }
 

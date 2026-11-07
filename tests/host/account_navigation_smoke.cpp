@@ -5,7 +5,6 @@
 #include "PluginStopProbe.h"
 #include "account/AccountModule.h"
 #include "account/AccountShell.h"
-#include "account/PanelCollection.h"
 #include "host/PluginRegistry.h"
 #include "interfaces/host.h"
 #include "interfaces/module.h"
@@ -169,24 +168,22 @@ protected:
 
 void unavailablePanels() {
     QWidget parent;
-    account::PanelCollection panels;
-    panels.insert(new qontrol::Panel(new EmptyScreen, "settings"));
     account::AccountShell shell(account::accountMenuEntries(), new QWidget, &parent);
     shell.widget()->show();
     parent.show();
-    shell.loadPanel(panels.value("settings"));
+    shell.insertPanel(new qontrol::Panel(new EmptyScreen, "settings"));
+    shell.showPanel(QStringLiteral("settings"));
     auto *group = shell.findChild<QButtonGroup *>();
     click(menuButton(*group, QStringLiteral("History")));
     require(group->checkedButton()->text() == QStringLiteral("  Settings"),
             "unavailable clicked panel retains displayed selection");
-    shell.loadPanel(nullptr);
-    qontrol::Panel unknown(new EmptyScreen, "unknown");
-    shell.loadPanel(&unknown);
+    shell.showPanel(QStringLiteral("receive"));
+    shell.insertPanel(new qontrol::Panel(new EmptyScreen, "unknown"));
+    shell.showPanel(QStringLiteral("unknown"));
     require(group->checkedButton()->text() == QStringLiteral("  Settings") &&
-                panels.screen("settings").value()->isVisible() && !unknown.screen()->isVisible(),
-            "null and unknown panels leave current view unchanged");
-    delete unknown.screen();
-    panels.clear();
+                shell.screen(QStringLiteral("settings")).value()->isVisible() &&
+                !shell.screen(QStringLiteral("unknown")).value()->isVisible(),
+            "missing and unknown panels leave current view unchanged");
     click(menuButton(*group, QStringLiteral("Coins")));
 }
 

@@ -254,4 +254,58 @@ auto toSlice(const QByteArray &bytes) -> rust::Slice<const std::uint8_t> {
             static_cast<std::size_t>(bytes.size())};
 }
 
+auto toRustString(const QByteArray &bytes) -> rust::String {
+    return {bytes.constData(), static_cast<std::size_t>(bytes.size())};
+}
+
+auto toBackupInfo(const BackupContents &contents) -> backend::BackupInfo {
+    bool multikey = toQString(contents.plugin_id) == QStringLiteral("musig");
+    backend::BackupInfo info{.backend = multikey ? TR("musig-account-type") : TR("sp-account-type"),
+                             .account = toQString(contents.account),
+                             .network = toNetwork(contents.network)};
+    info.includes.append(multikey ? TR("backup-includes-policy")
+                                  : TR("backup-includes-sp-descriptor"));
+    for (const auto &endpoint : contents.endpoints) {
+        info.includes.append(TR("backup-includes-endpoint").arg(toQString(endpoint)));
+    }
+    for (const auto &tip : contents.tips) {
+        auto kind = toQString(tip.kind) == QStringLiteral("segwit") ? TR("backup-kind-segwit")
+                                                                    : TR("backup-kind-taproot");
+        info.includes.append(TR("backup-includes-tip").arg(kind).arg(tip.receive).arg(tip.change));
+    }
+    if (contents.scan_start != 0) {
+        info.includes.append(TR("backup-includes-scan-start").arg(contents.scan_start));
+    }
+    info.includes.append(TR("backup-includes-labels").arg(contents.labels));
+    QStringList signers;
+    for (const auto &signer : contents.signers) {
+        signers.append(toQString(signer));
+    }
+    info.requirements.append(
+        signers.isEmpty() ? TR("backup-requires-key")
+                          : TR("backup-requires-keys").arg(signers.join(QStringLiteral(", "))));
+    info.requirements.append(contents.scan_start != 0
+                                 ? TR("backup-requires-sp-scan").arg(contents.scan_start)
+                                 : TR("backup-requires-scan"));
+    if (contents.saved_psbts_excluded) {
+        info.warnings.append(TR("backup-warning-saved-psbts"));
+    }
+    return info;
+}
+
+auto backupError(BackupFailure failure, const rust::String &error) -> QString {
+    switch (failure) {
+    case BackupFailure::WrongPassword:
+        return TR("backup-wrong-password");
+    case BackupFailure::Malformed:
+        return TR("backup-malformed").arg(toQString(error));
+    case BackupFailure::None:
+    case BackupFailure::Unsupported:
+    case BackupFailure::Exists:
+    case BackupFailure::Other:
+        return toQString(error);
+    }
+    return toQString(error);
+}
+
 } // namespace account::services

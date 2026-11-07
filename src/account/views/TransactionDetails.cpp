@@ -1,6 +1,5 @@
 #include "account/views/TransactionDetails.h"
 
-#include "AppController.h"
 #include "account/Extensions.h"
 #include "account/RequestId.h"
 #include "account/Same.h"
@@ -157,7 +156,7 @@ auto statusText(const QString &status, uint32_t height, int confirmations) -> QS
 
 void showTransactionDetails(const Services &services, const QString &txid,
                             const QStringList &notes) {
-    AppController::execModal(new TransactionDetails(services, txid, notes));
+    qontrol::Controller::execModal(new TransactionDetails(services, txid, notes));
 }
 
 TransactionDetails::TransactionDetails(const Services &services, const QString &txid,

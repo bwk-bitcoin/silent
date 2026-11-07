@@ -26,13 +26,15 @@ use bwk_sp::{
 };
 
 use crate::{
+    account_backup,
     account_storage::Factory,
     config::Config,
     ffi::{
-        AddressVerifyInfo, BackendErrorKind, BroadcastReport, CoinState, CraftOutcome,
-        FundsSnapshot, LabelEditResult, LabelKind, LabelSnapshot, Notification, NotificationFlag,
-        Output, PsbtImport, ReceiveAddress, ReceiveAddressResult, ReceiveKind, RustCoin, RustTx,
-        RustTxDetails, TransactionSimulation, TransactionTemplate, TxResult, UnsignedPsbt,
+        AccountBackup, AddressVerifyInfo, BackendErrorKind, BroadcastReport, CoinState,
+        CraftOutcome, FundsSnapshot, LabelEditResult, LabelKind, LabelSnapshot, Notification,
+        NotificationFlag, Output, PsbtImport, ReceiveAddress, ReceiveAddressResult, ReceiveKind,
+        RustCoin, RustTx, RustTxDetails, TransactionSimulation, TransactionTemplate, TxResult,
+        UnsignedPsbt,
     },
     psbt_transfer::decode_psbt_text,
     services::{self, Undelivered, FIRST_RECEIVE_INDEX, SEGWIT_KIND, SP_KIND, TAPROOT_KIND},
@@ -1606,6 +1608,49 @@ impl Account {
             warnings.push(format!("The transaction is not recorded locally: {e}"));
         }
         BroadcastReport::accepted(txid, warnings)
+    }
+
+    pub fn backup(&self, password: String) -> AccountBackup {
+        account_backup::backup_result(self.sealed_backup(password))
+    }
+
+    /// The config as saved, the indexes of every sub-account, the scan start the account
+    /// opened with and every label, RAM edits included.
+    fn sealed_backup(&self, password: String) -> Result<Vec<u8>, String> {
+        let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+        let config = Config::from_file(inner.name.clone()).map_err(|e| e.to_string())?;
+        let tips = inner
+            .account
+            .scanners()
+            .map(account_backup::scanner_tip)
+            .collect();
+        let labels = self.labels();
+        if !labels.is_ok {
+            return Err(labels.error);
+        }
+        // bwk keeps the scan start it persisted to itself: the config's is the one the
+        // account was created with.
+        let scan_start = inner.account.get_config().birthday_height;
+        account_backup::seal(
+            &config,
+            scan_start,
+            tips,
+            account_backup::labels_of(labels.labels),
+            password,
+        )
+    }
+
+    /// Puts a backup's indexes and labels in this account, freshly restored.
+    pub(crate) fn restore_state(
+        &self,
+        tips: &[account_backup::Tip],
+        labels: &[account_backup::Label],
+    ) -> Result<(), String> {
+        let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+        for scanner in inner.account.scanners() {
+            account_backup::restore_scanner_tip(scanner, tips)?;
+        }
+        account_backup::restore_labels(labels, |kind, id, text| self.set_label(kind, id, text))
     }
 }
 

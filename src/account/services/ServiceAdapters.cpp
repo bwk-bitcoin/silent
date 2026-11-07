@@ -16,8 +16,11 @@
 #include <QList>
 #include <QPointer>
 #include <QString>
+#include <QThread>
 #include <common.h>
+#include <memory>
 #include <optional>
+#include <silent.h>
 #include <utility>
 
 namespace account {
@@ -104,6 +107,10 @@ public:
                 &IAccountBackend::addressesChanged, qontrol::UNIQUE);
         connect(context, &ServiceContext::addressCreated, this, &AccountService::onAddressCreated,
                 qontrol::UNIQUE);
+        connect(context, &ServiceContext::backupCreated, this, &AccountService::onBackupCreated,
+                qontrol::UNIQUE);
+        connect(context, &ServiceContext::backupInspected, this, &AccountService::onBackupInspected,
+                qontrol::UNIQUE);
         connect(context, &ServiceContext::failed, this, &AccountService::onFailed, qontrol::UNIQUE);
         connect(context, &QObject::destroyed, this, &AccountService::onContextDestroyed,
                 qontrol::UNIQUE);
@@ -155,19 +162,29 @@ public:
         emit valueResult(request_id, services::addressKindTitles());
     }
 
-    // Account backups arrive with the backup and restore flows.
-    void backup(backend::RequestId request_id, [[maybe_unused]] QByteArray password) override {
-        emit error(request_id, backupUnsupported());
+    void backup(backend::RequestId request_id, QByteArray password) override {
+        if (context() == nullptr) {
+            emit error(request_id, closed());
+            return;
+        }
+        context()->backup(track(request_id), password);
     }
 
-    void inspectBackup(backend::RequestId request_id, [[maybe_unused]] QByteArray backup,
-                       [[maybe_unused]] QByteArray password) override {
-        emit error(request_id, backupUnsupported());
+    void inspectBackup(backend::RequestId request_id, QByteArray backup,
+                       QByteArray password) override {
+        if (context() == nullptr) {
+            emit error(request_id, closed());
+            return;
+        }
+        context()->inspectBackup(track(request_id), backup, password);
     }
 
+    // An open account is never restored over: a restore makes a new account, through
+    // its module's restore target.
     void restore(backend::RequestId request_id, [[maybe_unused]] QByteArray backup,
                  [[maybe_unused]] QByteArray password) override {
-        emit error(request_id, backupUnsupported());
+        emit error(request_id, QStringLiteral("An open account is not restored over: restore "
+                                              "the backup from the account list"));
     }
 
 public slots:
@@ -175,6 +192,18 @@ public slots:
     void onAddressCreated(backend::RequestId token, const backend::Address &address) {
         if (auto request = take(token); request.has_value()) {
             emit addressCreated(*request, address);
+        }
+    }
+
+    void onBackupCreated(backend::RequestId token, const QByteArray &backup) {
+        if (auto request = take(token); request.has_value()) {
+            emit backupCreated(*request, backup);
+        }
+    }
+
+    void onBackupInspected(backend::RequestId token, const backend::BackupInfo &info) {
+        if (auto request = take(token); request.has_value()) {
+            emit backupInspected(*request, info);
         }
     }
 
@@ -186,14 +215,149 @@ public slots:
         failPending();
     }
 
-protected:
-    static auto backupUnsupported() -> QString {
-        return QStringLiteral("Account backups are not supported yet");
-    }
-
 private:
     QString m_account;
     backend::Network m_network;
+};
+
+// A built-in module's restore target: no account behind it, only the backups of its kind
+// to read and restore. Each runs on a worker, which outlives the target if it must: its
+// answer is then dropped.
+class RestoreService final : public backend::IAccountBackend {
+    Q_OBJECT
+    Q_INTERFACES(backend::IAccountBackend)
+
+public:
+    RestoreService(QString plugin_id, QObject *parent)
+        : IAccountBackend(parent),
+          m_plugin_id(std::move(plugin_id)) {
+    }
+
+    void raw(backend::RequestId request_id, QString operation,
+             [[maybe_unused]] QByteArray payload) override {
+        emit error(request_id, noAccount(operation));
+    }
+
+    void value(backend::RequestId request_id, QString operation,
+               [[maybe_unused]] QJsonValue payload) override {
+        emit error(request_id, noAccount(operation));
+    }
+
+    // No account yet: empty identity, no address.
+    [[nodiscard]] auto id() const -> QString override {
+        return {};
+    }
+
+    [[nodiscard]] auto name() const -> QString override {
+        return {};
+    }
+
+    [[nodiscard]] auto network() const -> backend::Network override {
+        return {};
+    }
+
+    [[nodiscard]] auto addressKinds() const -> QList<backend::AddressKind> override {
+        return {};
+    }
+
+    [[nodiscard]] auto addresses() const -> QList<backend::Address> override {
+        return {};
+    }
+
+    [[nodiscard]] auto addressVerification([[maybe_unused]] const QString &address) const
+        -> std::optional<backend::AddressVerification> override {
+        return std::nullopt;
+    }
+
+    void newAddress(backend::RequestId request_id, QString kind) override {
+        emit error(request_id, noAccount(kind));
+    }
+
+    void backup(backend::RequestId request_id, [[maybe_unused]] QByteArray password) override {
+        emit error(request_id, noAccount(QStringLiteral("backup")));
+    }
+
+    void inspectBackup(backend::RequestId request_id, QByteArray backup,
+                       QByteArray password) override {
+        auto contents = std::make_shared<BackupContents>();
+        auto *worker = QThread::create([contents, backup, password] {
+            *contents = ::inspect_account_backup(services::toSlice(backup),
+                                                 services::toRustString(password));
+        });
+        m_inspections.insert(worker, {.request = request_id, .contents = contents});
+        start(worker, &RestoreService::onInspected);
+    }
+
+    void restore(backend::RequestId request_id, QByteArray backup, QByteArray password) override {
+        auto restored = std::make_shared<BackupRestore>();
+        auto *worker =
+            QThread::create([restored, plugin = m_plugin_id.toStdString(), backup, password] {
+                *restored = ::restore_account_backup(rust::Str(plugin), services::toSlice(backup),
+                                                     services::toRustString(password));
+            });
+        m_restores.insert(worker, {.request = request_id, .restored = restored});
+        start(worker, &RestoreService::onRestored);
+    }
+
+public slots:
+
+    void onInspected() {
+        auto inspection = m_inspections.take(qobject_cast<QThread *>(sender()));
+        if (inspection.contents == nullptr) {
+            return;
+        }
+        const auto &contents = *inspection.contents;
+        if (!contents.is_ok) {
+            emit error(inspection.request, services::backupError(contents.failure, contents.error));
+            return;
+        }
+        // Read as any backup, then held to this module's kind.
+        if (services::toQString(contents.plugin_id) != m_plugin_id) {
+            emit error(inspection.request,
+                       QStringLiteral("This backup is of another kind of account"));
+            return;
+        }
+        emit backupInspected(inspection.request, services::toBackupInfo(contents));
+    }
+
+    void onRestored() {
+        auto restore = m_restores.take(qobject_cast<QThread *>(sender()));
+        if (restore.restored == nullptr) {
+            return;
+        }
+        const auto &restored = *restore.restored;
+        if (!restored.is_ok) {
+            emit error(restore.request, services::backupError(restored.failure, restored.error));
+            return;
+        }
+        emit this->restored(restore.request);
+    }
+
+protected:
+    void start(QThread *worker, void (RestoreService::*done)()) {
+        connect(worker, &QThread::finished, this, done, qontrol::UNIQUE);
+        connect(worker, &QThread::finished, worker, &QThread::deleteLater, qontrol::UNIQUE);
+        worker->start();
+    }
+
+    static auto noAccount(const QString &operation) -> QString {
+        return QStringLiteral("No account is open here for '%1'").arg(operation);
+    }
+
+private:
+    struct Inspection {
+        backend::RequestId request = 0;
+        std::shared_ptr<BackupContents> contents;
+    };
+
+    struct Restore {
+        backend::RequestId request = 0;
+        std::shared_ptr<BackupRestore> restored;
+    };
+
+    QString m_plugin_id;
+    QHash<QThread *, Inspection> m_inspections;
+    QHash<QThread *, Restore> m_restores;
 };
 
 class BlockchainService final : public Adapter<backend::IBlockchain> {
@@ -570,6 +734,10 @@ auto serviceAdapter(backend::ServiceKind kind, ServiceContext *context, QObject 
         return new SettingsService(context, parent);
     }
     return nullptr;
+}
+
+auto restoreTarget(const QString &plugin_id, QObject *parent) -> backend::IAccountBackend * {
+    return new RestoreService(plugin_id, parent);
 }
 
 } // namespace account

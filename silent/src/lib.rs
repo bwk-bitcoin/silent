@@ -3,6 +3,7 @@
 //! This library provides C++ bindings for the bwk-sp Silent Payment implementation.
 
 pub mod account;
+pub mod account_backup;
 mod account_storage;
 pub mod app_state;
 pub mod backup;
@@ -566,6 +567,70 @@ mod ffi {
         pub is_ok: bool,
         pub error: String,
         pub labels: Vec<LabelEntry>,
+    }
+
+    /// Why an account backup was not made, read or restored.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum BackupFailure {
+        None,
+        /// Not a backup, or a damaged one.
+        Malformed,
+        WrongPassword,
+        /// Made by a newer Silent, or for another kind of account.
+        Unsupported,
+        /// An account of that name exists: a restore never replaces one.
+        Exists,
+        Other,
+    }
+
+    /// An account backup, sealed under its password.
+    #[derive(Debug, Clone)]
+    pub struct AccountBackup {
+        pub is_ok: bool,
+        pub error: String,
+        pub bytes: Vec<u8>,
+    }
+
+    /// The receive and change indexes one descriptor of a backup handed out.
+    #[derive(Debug, Clone)]
+    pub struct BackupTip {
+        /// The receive kind of its addresses ("segwit", "taproot").
+        pub kind: String,
+        pub receive: u32,
+        pub change: u32,
+    }
+
+    /// What an opened account backup holds, and what restoring it needs.
+    #[derive(Debug, Clone)]
+    pub struct BackupContents {
+        pub is_ok: bool,
+        pub error: String,
+        pub failure: BackupFailure,
+        /// The account's module, "sp" or "musig".
+        pub plugin_id: String,
+        pub account: String,
+        pub network: Network,
+        /// The servers the account syncs from.
+        pub endpoints: Vec<String>,
+        pub tips: Vec<BackupTip>,
+        /// The block SP scanning starts from, 0 for an account with no SP scan.
+        pub scan_start: u32,
+        /// How many labels it holds.
+        pub labels: u32,
+        /// The fingerprints of the keys that sign for the account: not in the backup.
+        pub signers: Vec<String>,
+        /// The account keeps saved PSBTs and signing sessions, which it leaves out.
+        pub saved_psbts_excluded: bool,
+    }
+
+    /// An account restored from its backup.
+    #[derive(Debug, Clone)]
+    pub struct BackupRestore {
+        pub is_ok: bool,
+        pub error: String,
+        pub failure: BackupFailure,
+        /// The restored account's id.
+        pub account: String,
     }
 
     /// Coins, balance and history read together from the account's stores.
@@ -2111,6 +2176,17 @@ mod ffi {
             path: &str,
             store_common_paths: bool,
         ) -> DescriptorBackupResult;
+
+        /// What the account backup `backup` holds, opened with `password`. Blocking:
+        /// the password key takes a while to derive.
+        fn inspect_account_backup(backup: &[u8], password: String) -> BackupContents;
+        /// Restores the `plugin_id` account `backup` holds as a new account of the same
+        /// name, refused when one exists. Nothing stays of a failed restore. Blocking.
+        fn restore_account_backup(
+            plugin_id: &str,
+            backup: &[u8],
+            password: String,
+        ) -> BackupRestore;
     }
 
     // ===== Config Methods =====
@@ -2369,6 +2445,8 @@ mod ffi {
         fn finalize_transaction(self: &Account, tx_template: TransactionTemplate) -> UnsignedPsbt;
         /// Broadcasts consensus-encoded `transaction`, then records it locally.
         fn broadcast_report(self: &Account, transaction: &[u8]) -> BroadcastReport;
+        /// The account's backup, sealed under `password`. Blocking.
+        fn backup(self: &Account, password: String) -> AccountBackup;
     }
 
     // ===== Poll Methods =====
@@ -3002,6 +3080,9 @@ mod ffi {
             psbt: &[u8],
         ) -> Box<PsbtResult>;
         fn broadcast_report(self: &MusigAccount, transaction: &[u8]) -> BroadcastReport;
+        /// The account's backup, sealed under `password`, its saved PSBTs left out.
+        /// Blocking.
+        fn backup(self: &MusigAccount, password: String) -> AccountBackup;
     }
 }
 
@@ -3551,6 +3632,7 @@ fn failed_psbt_file(error: String) -> ffi::PsbtFileResult {
 }
 
 // Re-export main types
+pub use account_backup::{inspect_account_backup, restore_account_backup};
 pub use account_storage::{
     delete_musig_account, delete_sp_account, musig_account_delete_check, sp_account_delete_check,
 };
@@ -3587,28 +3669,29 @@ pub use endpoint::{
 pub use error::{notification_error_kind, validation_error_kind};
 pub use feed::{new_feed_state, FeedState};
 pub use ffi::{
-    AccountCreationResult, AmountParseResult, BackendErrorKind, BackendInfo, BackendServer,
-    BroadcastOutcome, BroadcastReport, CameraFrameResult, CameraListResult, ConnectionResult,
-    CoordinationResult, CraftOutcome, EndpointPhase, EndpointResult, EndpointSetting,
-    FeeParseResult, FeedPrice, FeedQuote, FeedSelection, FeedSourceState, FingerprintsResult,
-    FundsSnapshot, KeyDescriptor, KeyDevice, KeyFileFailure, KeyInfo, KeyInfoResult, KeyOpResult,
-    KeyRouteKind, KeyUnusableReason, KeyXpub, LabelEditResult, LabelEntry, LabelKind,
-    LabelSnapshot, LiveDevice, LogLevel, MnemonicResult, MusigAttemptSnapshot,
-    MusigCreationRequest, MusigFinalizeResult, MusigRound, MusigSpendLeaf, Network, Notification,
-    NotificationFlag, Output, PluginAccess, PluginAccessHistory, PluginAccessRequest, PluginGrant,
-    PluginGrantedAccess, PluginMetadata, PluginMetadataField, PluginMetadataKind,
-    PluginRemovalEntry, PluginRemovalListResult, PluginRemovalPhase, PolicyCompileResult,
-    PolicyDraft, PolicyDraftError, PolicyDraftResult, PolicyDurationUnit, PolicyKey, PolicyKeyType,
-    PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey, PolicyReviewPath, PolicySemantic,
-    PolicySpec, PsbtExport, PsbtFileResult, PsbtImport, PsbtPayloadResult, PsbtValidation,
-    QrErrorKind, QrMessageResult, QrMusigSignerRoute, QrResponseKind, ReceiveAddress,
-    ReceiveAddressResult, ReceiveKind, RegtestDefaults, RetryDecision, RustCoin, RustSelectedInput,
-    RustSpendCoin, RustSpendLock, RustSpendVariant, RustTx, RustTxDetails, RustTxIo,
-    SavedPsbtAttempt, SavedPsbtEntry, SavedPsbtImport, SavedPsbtInput, SavedPsbtList,
-    SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore, SendAmounts, SignResult,
-    SigningCandidate, SigningPlan, SigningProgress, SigningStage, SpCreationRequest,
-    SpendAvailability, SpendCoinStatus, SpendCoinsResult, SpendError, SpendLockKind, SpendMaturity,
-    TransactionSimulation, TransactionTemplate, UnsignedPsbt,
+    AccountBackup, AccountCreationResult, AmountParseResult, BackendErrorKind, BackendInfo,
+    BackendServer, BackupContents, BackupFailure, BackupRestore, BackupTip, BroadcastOutcome,
+    BroadcastReport, CameraFrameResult, CameraListResult, ConnectionResult, CoordinationResult,
+    CraftOutcome, EndpointPhase, EndpointResult, EndpointSetting, FeeParseResult, FeedPrice,
+    FeedQuote, FeedSelection, FeedSourceState, FingerprintsResult, FundsSnapshot, KeyDescriptor,
+    KeyDevice, KeyFileFailure, KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind,
+    KeyUnusableReason, KeyXpub, LabelEditResult, LabelEntry, LabelKind, LabelSnapshot, LiveDevice,
+    LogLevel, MnemonicResult, MusigAttemptSnapshot, MusigCreationRequest, MusigFinalizeResult,
+    MusigRound, MusigSpendLeaf, Network, Notification, NotificationFlag, Output, PluginAccess,
+    PluginAccessHistory, PluginAccessRequest, PluginGrant, PluginGrantedAccess, PluginMetadata,
+    PluginMetadataField, PluginMetadataKind, PluginRemovalEntry, PluginRemovalListResult,
+    PluginRemovalPhase, PolicyCompileResult, PolicyDraft, PolicyDraftError, PolicyDraftResult,
+    PolicyDurationUnit, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicyReview,
+    PolicyReviewKey, PolicyReviewPath, PolicySemantic, PolicySpec, PsbtExport, PsbtFileResult,
+    PsbtImport, PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult,
+    QrMusigSignerRoute, QrResponseKind, ReceiveAddress, ReceiveAddressResult, ReceiveKind,
+    RegtestDefaults, RetryDecision, RustCoin, RustSelectedInput, RustSpendCoin, RustSpendLock,
+    RustSpendVariant, RustTx, RustTxDetails, RustTxIo, SavedPsbtAttempt, SavedPsbtEntry,
+    SavedPsbtImport, SavedPsbtInput, SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord,
+    SavedPsbtReset, SavedPsbtRestore, SendAmounts, SignResult, SigningCandidate, SigningPlan,
+    SigningProgress, SigningStage, SpCreationRequest, SpendAvailability, SpendCoinStatus,
+    SpendCoinsResult, SpendError, SpendLockKind, SpendMaturity, TransactionSimulation,
+    TransactionTemplate, UnsignedPsbt,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{

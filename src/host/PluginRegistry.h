@@ -56,6 +56,7 @@ public:
     // The open accounts that close with the plugin.
     [[nodiscard]] auto pluginAccountNames(const QString &plugin_id) const -> QStringList;
 
+    // A launcher entry that makes an account: "create", "<id>.create" or "<id>.restore".
     [[nodiscard]] static bool isCreatorInstanceId(const QString &id);
     [[nodiscard]] QList<IPlugin *> plugins() const;
     [[nodiscard]] QList<IModule *> enabledModulesForLauncher() const;

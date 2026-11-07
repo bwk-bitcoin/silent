@@ -662,7 +662,9 @@ fn persist_xpub_usage(config: &Config) -> Result<(), String> {
     Ok(())
 }
 
-fn persist_creation(config: Config) -> AccountCreationResult {
+/// Validates `config` and writes it as a new account: refused with "already_exists"
+/// when an account of that name exists.
+pub(crate) fn persist_creation(config: Config) -> AccountCreationResult {
     let create = || -> Result<(), String> {
         validate_creation(&config)?;
         // Built-in IDs share the host's global instance namespace.

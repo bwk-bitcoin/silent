@@ -434,7 +434,8 @@ void commonServices(const host::ServiceAssembly &assembly, Answers &answers,
             "an undecodable transaction is rejected, never sent");
 
     assembly.blockchain()->rescan(15, std::nullopt);
-    assembly.accountBackend()->backup(16, QByteArrayLiteral("password"));
+    // An open account is never restored over.
+    assembly.accountBackend()->restore(16, QByteArrayLiteral("backup"), QByteArrayLiteral("pw"));
     assembly.settings()->value(17, QStringLiteral("anything"), QJsonValue());
     require(answers.errors.size() >= 3 && answers.errors.sliced(answers.errors.size() - 3) ==
                                               QList<backend::RequestId>{15, 16, 17},

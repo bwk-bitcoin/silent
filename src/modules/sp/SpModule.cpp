@@ -3,7 +3,10 @@
 #include "AccountController.h"
 #include "AppController.h"
 #include "SpInstance.h"
+#include "account/services/ServiceAdapters.h"
+#include "account/views/RestoreAccount.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/account.h"
 #include "interfaces/host.h"
 #include "modals/CreateAccount.h"
 #include <QDebug>
@@ -17,6 +20,7 @@
 
 namespace {
 const QString K_CREATE_INSTANCE_ID = QStringLiteral("sp.create");
+const QString K_RESTORE_INSTANCE_ID = QStringLiteral("sp.restore");
 SpModule *gSpModule = nullptr;
 } // namespace
 
@@ -58,6 +62,7 @@ auto SpModule::instanceEntries(const QStringList &account_ids) const
     -> QList<QPair<QString, QString>> {
     auto entries = AccountModule::instanceEntries(account_ids);
     entries.append({K_CREATE_INSTANCE_ID, TR("sp-account-type")});
+    entries.append({K_RESTORE_INSTANCE_ID, TR("sp-account-restore")});
     return entries;
 }
 
@@ -74,6 +79,13 @@ void SpModule::startInstance(const QString &id) {
     }
     if (id == K_CREATE_INSTANCE_ID) {
         AppController::execModal(new modal::CreateAccount);
+        return;
+    }
+    if (id == K_RESTORE_INSTANCE_ID) {
+        auto *target = account::restoreTarget(QString::fromLatin1(SP_PLUGIN_ID), nullptr);
+        connect(target, &backend::IAccountBackend::restored, this, &SpModule::onAccountRestored,
+                qontrol::UNIQUE);
+        AppController::execModal(new account::view::RestoreAccount(target));
         return;
     }
 
@@ -101,4 +113,9 @@ void SpModule::deleteInstance(const QString &id) {
 
 void SpModule::onInstanceRemoved(const QString &id) {
     deleteInstance(id);
+}
+
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+void SpModule::onAccountRestored() {
+    Host::get()->refreshLauncher();
 }

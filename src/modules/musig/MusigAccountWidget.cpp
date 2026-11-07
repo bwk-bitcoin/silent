@@ -15,14 +15,17 @@ MusigAccountWidget::MusigAccountWidget(const QString &account, QWidget *parent) 
     initUI();
 }
 
-MusigAccountWidget::~MusigAccountWidget() = default;
+// The panels go before the controller their signing step uses.
+MusigAccountWidget::~MusigAccountWidget() {
+    delete m_shell;
+}
 
 auto MusigAccountWidget::controller() -> MusigAccountController * {
     return m_controller;
 }
 
-void MusigAccountWidget::loadPanel(qontrol::Panel *panel) {
-    m_shell->loadPanel(panel);
+auto MusigAccountWidget::shell() const -> account::AccountShell * {
+    return m_shell;
 }
 
 void MusigAccountWidget::initUI() {
@@ -31,8 +34,7 @@ void MusigAccountWidget::initUI() {
                    {.name = "psbt", .label = TR("musig-menu-psbt"), .icon = icon::history()});
     m_shell =
         new account::AccountShell(std::move(entries), new MusigStatusBar(m_controller, this), this);
-    connect(m_shell, &account::AccountShell::panelRequested, m_controller,
-            &MusigAccountController::loadPanel, qontrol::UNIQUE);
+    m_controller->setShell(m_shell);
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_shell->widget());

@@ -4,6 +4,11 @@
 #include "interfaces/backend/service.h"
 
 class QObject;
+class QString;
+
+namespace backend {
+class IAccountBackend;
+} // namespace backend
 
 namespace account {
 
@@ -15,5 +20,10 @@ class ServiceContext;
 // included. Every getter and request is GUI thread only.
 auto serviceAdapter(backend::ServiceKind kind, ServiceContext *context, QObject *parent)
     -> backend::IService *;
+// The restore target of the built-in module `plugin_id` ("sp", "musig"), a child of
+// `parent`: no account behind it, its inspectBackup() reads a backup of that module's
+// accounts and its restore() makes the account it holds. Every other request answers
+// error().
+auto restoreTarget(const QString &plugin_id, QObject *parent) -> backend::IAccountBackend *;
 
 } // namespace account

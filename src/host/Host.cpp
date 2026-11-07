@@ -739,9 +739,13 @@ auto HostImpl::callerDrained(IModule *module) const -> bool {
     auto storage = m_draining_storage.value(module);
     auto transactions = m_draining_transactions.value(module);
     auto keys = m_draining_keys.value(module);
+    auto released = m_released_services.value(module);
     return callerFramesIdle(module) && (storage == nullptr || storage->drained()) &&
            (transactions == nullptr || transactions->drained()) &&
-           (keys == nullptr || keys->drained());
+           (keys == nullptr || keys->drained()) &&
+           std::ranges::all_of(released, [](const QPointer<backend::IService> &service) {
+               return service == nullptr;
+           });
 }
 
 auto HostImpl::callerDrainError(IModule *module) const -> QString {
@@ -852,6 +856,12 @@ auto HostImpl::servicesReleased(IModule *module) const -> bool {
                                 [module](const QPointer<host::ServiceAssembly> &assembly) {
                                     return assembly != nullptr && assembly->uses(module);
                                 });
+}
+
+void HostImpl::awaitReleasedService(IModule *module, backend::IService *service) {
+    auto &released = m_released_services[module];
+    released.removeIf([](const QPointer<backend::IService> &entry) { return entry == nullptr; });
+    released.append(service);
 }
 
 void HostImpl::dropInstanceHandles(IInstance *instance) {

@@ -100,6 +100,10 @@ public:
     auto assembleServices(const host::AssemblyRequest &request) -> host::AssemblyResult;
     // No assembly holds a service `module` supplied.
     [[nodiscard]] auto servicesReleased(IModule *module) const -> bool;
+    // `service` was handed back to `module` through releaseService(): the module counts as
+    // drained, and its plugin unloads, only once the service is destroyed, a deferred
+    // deletion included.
+    void awaitReleasedService(IModule *module, backend::IService *service);
 
     void onInstanceStopped(const QString &id);
     void onInstanceStopped(IInstance *instance);
@@ -226,6 +230,8 @@ private:
     QHash<IModule *, QList<QPointer<QWidget>>> m_closed_ui;
     // Every live assembly, so a supplier that starts closing retires the ones it serves.
     QList<QPointer<host::ServiceAssembly>> m_assemblies;
+    // The services handed back to each provider and not destroyed yet.
+    QHash<IModule *, QList<QPointer<backend::IService>>> m_released_services;
     std::map<std::pair<IModule *, IInstance *>, std::unique_ptr<host::InstanceHandle>>
         m_instance_handles;
     // The grant modal open, and the module it is for: while it is, a call made meanwhile

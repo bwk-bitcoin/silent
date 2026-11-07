@@ -1021,6 +1021,11 @@ struct LabelEditResult;
 enum class LabelKind : ::std::uint8_t;
 struct LabelEntry;
 struct LabelSnapshot;
+enum class BackupFailure : ::std::uint8_t;
+struct AccountBackup;
+struct BackupTip;
+struct BackupContents;
+struct BackupRestore;
 struct FundsSnapshot;
 struct ReceiveKind;
 struct ReceiveAddress;
@@ -1853,6 +1858,88 @@ struct LabelSnapshot final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_LabelSnapshot
+
+#ifndef CXXBRIDGE1_ENUM_BackupFailure
+#define CXXBRIDGE1_ENUM_BackupFailure
+// Why an account backup was not made, read or restored.
+enum class BackupFailure : ::std::uint8_t {
+  None = 0,
+  // Not a backup, or a damaged one.
+  Malformed = 1,
+  WrongPassword = 2,
+  // Made by a newer Silent, or for another kind of account.
+  Unsupported = 3,
+  // An account of that name exists: a restore never replaces one.
+  Exists = 4,
+  Other = 5,
+};
+#endif // CXXBRIDGE1_ENUM_BackupFailure
+
+#ifndef CXXBRIDGE1_STRUCT_AccountBackup
+#define CXXBRIDGE1_STRUCT_AccountBackup
+// An account backup, sealed under its password.
+struct AccountBackup final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::Vec<::std::uint8_t> bytes;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_AccountBackup
+
+#ifndef CXXBRIDGE1_STRUCT_BackupTip
+#define CXXBRIDGE1_STRUCT_BackupTip
+// The receive and change indexes one descriptor of a backup handed out.
+struct BackupTip final {
+  // The receive kind of its addresses ("segwit", "taproot").
+  ::rust::String kind;
+  ::std::uint32_t receive CXX_DEFAULT_VALUE(0);
+  ::std::uint32_t change CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_BackupTip
+
+#ifndef CXXBRIDGE1_STRUCT_BackupContents
+#define CXXBRIDGE1_STRUCT_BackupContents
+// What an opened account backup holds, and what restoring it needs.
+struct BackupContents final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::BackupFailure failure;
+  // The account's module, "sp" or "musig".
+  ::rust::String plugin_id;
+  ::rust::String account;
+  ::Network network;
+  // The servers the account syncs from.
+  ::rust::Vec<::rust::String> endpoints;
+  ::rust::Vec<::BackupTip> tips;
+  // The block SP scanning starts from, 0 for an account with no SP scan.
+  ::std::uint32_t scan_start CXX_DEFAULT_VALUE(0);
+  // How many labels it holds.
+  ::std::uint32_t labels CXX_DEFAULT_VALUE(0);
+  // The fingerprints of the keys that sign for the account: not in the backup.
+  ::rust::Vec<::rust::String> signers;
+  // The account keeps saved PSBTs and signing sessions, which it leaves out.
+  bool saved_psbts_excluded CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_BackupContents
+
+#ifndef CXXBRIDGE1_STRUCT_BackupRestore
+#define CXXBRIDGE1_STRUCT_BackupRestore
+// An account restored from its backup.
+struct BackupRestore final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::BackupFailure failure;
+  // The restored account's id.
+  ::rust::String account;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_BackupRestore
 
 #ifndef CXXBRIDGE1_STRUCT_FundsSnapshot
 #define CXXBRIDGE1_STRUCT_FundsSnapshot
@@ -3578,6 +3665,9 @@ struct Account final : public ::rust::Opaque {
   // Broadcasts consensus-encoded `transaction`, then records it locally.
   ::BroadcastReport broadcast_report(::rust::Slice<::std::uint8_t const> transaction) const noexcept;
 
+  // The account's backup, sealed under `password`. Blocking.
+  ::AccountBackup backup(::rust::String password) const noexcept;
+
   ~Account() = delete;
 
 private:
@@ -4298,6 +4388,11 @@ struct MusigAccount final : public ::rust::Opaque {
   ::rust::Box<::PsbtResult> adopt_transaction(::TransactionTemplate tx_template, ::MusigSpendLeaf spend, ::rust::Slice<::std::uint8_t const> psbt) const noexcept;
 
   ::BroadcastReport broadcast_report(::rust::Slice<::std::uint8_t const> transaction) const noexcept;
+
+  // The account's backup, sealed under `password`, its saved PSBTs left out.
+  // Blocking.
+  ::AccountBackup backup(::rust::String password) const noexcept;
+
   ~MusigAccount() = delete;
 
 private:
@@ -4615,6 +4710,14 @@ void storage_request_forget(::std::uint64_t session, ::rust::String id) noexcept
 // any file there. `store_common_paths` false is the privacy mode: the common
 // derivation paths stay out of the clear part.
 ::DescriptorBackupResult save_descriptor_backup(::rust::Str descriptor, ::rust::Str path, bool store_common_paths) noexcept;
+
+// What the account backup `backup` holds, opened with `password`. Blocking:
+// the password key takes a while to derive.
+::BackupContents inspect_account_backup(::rust::Slice<::std::uint8_t const> backup, ::rust::String password) noexcept;
+
+// Restores the `plugin_id` account `backup` holds as a new account of the same
+// name, refused when one exists. Nothing stays of a failed restore. Blocking.
+::BackupRestore restore_account_backup(::rust::Str plugin_id, ::rust::Slice<::std::uint8_t const> backup, ::rust::String password) noexcept;
 
 // Create a new config.
 ::AmountParseResult parse_btc_amount(::rust::Str text) noexcept;

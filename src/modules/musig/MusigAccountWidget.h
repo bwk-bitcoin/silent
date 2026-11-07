@@ -9,10 +9,6 @@ namespace account {
 class AccountShell;
 }
 
-namespace qontrol {
-class Panel;
-}
-
 // Tab content: menu and panel container.
 class MusigAccountWidget : public QWidget {
     Q_OBJECT
@@ -21,7 +17,7 @@ public:
     explicit MusigAccountWidget(const QString &account, QWidget *parent = nullptr);
     ~MusigAccountWidget() override;
     auto controller() -> MusigAccountController *;
-    void loadPanel(qontrol::Panel *panel);
+    [[nodiscard]] auto shell() const -> account::AccountShell *;
 
 protected:
     void initUI();

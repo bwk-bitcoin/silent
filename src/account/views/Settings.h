@@ -28,8 +28,9 @@ namespace account::view {
 // One row per server the account syncs from, as IBackendSettings lists them and presents
 // them (extension::ENDPOINT_PRESENTATION): a passing Test saves the server and leaves it
 // disconnected, Connect waits for a saved server. A server's capabilities under its row,
-// then `extras`, what the account adds below. With `lock_connected`, the address of a server
-// reached over a transport (SSL and certificate toggles) cannot change while it is connected.
+// then `extras`, what the account adds below, then Backup (BackupAccount). With `lock_connected`,
+// the address of a server reached over a transport (SSL and certificate toggles) cannot change
+// while it is connected.
 class Settings : public qontrol::Screen {
     Q_OBJECT
 
@@ -52,6 +53,7 @@ public slots:
     void onSettingsValue(backend::RequestId request_id, const QJsonValue &payload);
     void onSettingsEvent(const QString &operation, const QJsonValue &payload);
     void onHeightTimeout();
+    void onBackupClicked();
 
 protected:
     // What a row's request in flight is doing. A Test runs Testing, Saving, then
@@ -119,7 +121,6 @@ protected:
     [[nodiscard]] auto row(const QString &id) -> ServerRow *;
     // The row whose request `request_id` is, its action or its height.
     [[nodiscard]] auto rowOfRequest(backend::RequestId request_id) -> ServerRow *;
-    [[nodiscard]] static auto networkName(backend::Network network) -> QString;
     [[nodiscard]] auto connection(const QString &id) const -> std::optional<backend::Connection>;
     [[nodiscard]] auto isRunning(const ServerRow &row) const -> bool;
     // What Test would save: the input, its scheme set by SSL when it states one.
@@ -157,6 +158,8 @@ private:
     bool m_endpoints_busy = false;
     QTimer *m_height_timer = nullptr;
     QWidget *m_extras = nullptr;
+    catalog::Label *m_backup_text = nullptr;
+    catalog::Button *m_backup = nullptr;
 };
 
 } // namespace account::view

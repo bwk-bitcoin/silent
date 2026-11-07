@@ -2,10 +2,9 @@
 
 #include "account/AccountBackend.h"
 #include "account/ElectrumReconnect.h"
-#include "account/PanelCollection.h"
-#include "host/ServiceAssembly.h"
 
 #include <QList>
+#include <QPointer>
 #include <QString>
 #include <QThread>
 #include <Qontrol>
@@ -15,6 +14,10 @@
 
 class AccountWidget;
 
+namespace account {
+class AccountShell;
+} // namespace account
+
 class AccountController : public AccountBackend {
     Q_OBJECT
 
@@ -22,8 +25,11 @@ public:
     AccountController(const QString &account, AccountWidget *widget);
     ~AccountController() override;
     auto init(const QString &account) -> void;
-    auto screen(const QString &screen) -> std::optional<qontrol::Screen *>;
+    [[nodiscard]] auto screen(const QString &screen) const -> std::optional<qontrol::Screen *>;
     virtual auto loadPanels() -> void;
+    // The page the account's panels show in, null for none: the panels are built in it.
+    void setShell(account::AccountShell *shell);
+    [[nodiscard]] auto shell() const -> account::AccountShell *;
     virtual auto getSpAddress() -> rust::String;
     auto network() -> Network override;
     virtual auto hasSegwit() -> bool;
@@ -36,7 +42,7 @@ public:
     [[nodiscard]] auto isEndpointRunning(Endpoint endpoint) const -> bool override;
     [[nodiscard]] auto services() const -> account::ServiceContext * override;
     auto module() -> IModule * override;
-    auto coins() -> qontrol::Screen *;
+    [[nodiscard]] auto coins() const -> qontrol::Screen *;
     auto getAccount() -> std::optional<rust::Box<Account>> &;
     // stop() waits for the worker before it drops the account and before stopped()
     // lets the owner delete them.
@@ -69,8 +75,6 @@ public slots:
     void onElectrumGaveUp(int losses);
     // A reconnect held back by a settings test or save runs.
     void onSettingsIdle();
-    // A provider of the account's services stops: the panels using them go first.
-    void onServicesRetired();
     // The first funds read answered: the panels reading them are built.
     void onFundsAnswered();
 
@@ -94,16 +98,10 @@ protected:
                              bool startup);
     void connectElectrum(bool retry) override;
     void electrumProbeFailed(bool retry, const EndpointResult &result) override;
-    // The account's services, assembled once from this module. False when the host
-    // refuses them, or once they retired.
-    auto assembleServices() -> bool;
 
 private:
-    // Declared before the panels, which use it: they go first.
-    std::unique_ptr<host::ServiceAssembly> m_assembly;
-    bool m_services_retired = false;
-    account::PanelCollection m_panels{this};
     AccountWidget *m_widget;
+    QPointer<account::AccountShell> m_shell;
     account::ServiceContext *m_services = nullptr;
     std::optional<rust::Box<Account>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;
@@ -112,7 +110,6 @@ private:
     rust::Box<SyncEstimator> m_estimator = new_sync_estimator();
     bool m_init = false;
     bool m_panels_requested = false;
-    QString m_requested_panel = QStringLiteral("history");
     std::shared_ptr<std::optional<rust::Box<Account>>> m_loading_account;
     bool m_stopping = false;
     bool m_scanner_running = false;

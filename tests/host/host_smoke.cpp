@@ -208,6 +208,7 @@ void backendServicesSmoke();
 void offlineSelectionSmoke(const QString &account, const QString &outpoint);
 void psbtTransferSmoke(const QString &account, const QString &psbt_file, const QString &txid);
 void accountViewsSmoke();
+void accountShellSmoke();
 } // namespace smoke
 
 auto main(int argc, char *argv[]) -> int {
@@ -309,6 +310,13 @@ auto main(int argc, char *argv[]) -> int {
         std::fprintf(stdout, "Account views smoke: OK\n");
         return gOk ? 0 : 1;
     }
+    if (arguments.contains(QStringLiteral("--account-shell"))) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::accountShellSmoke();
+        std::fprintf(stdout, "Account shell smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
     if (arguments.size() == 4 && arguments.at(1) == QStringLiteral("--offline-selection")) {
         Theme::init();
         Theme::get()->apply();
@@ -332,6 +340,9 @@ auto main(int argc, char *argv[]) -> int {
     }
 #ifdef SILENT_SERVICE_FULL_FIXTURE
     if (arguments.contains(QStringLiteral("--account-services"))) {
+        // The account shell is themed.
+        Theme::init();
+        Theme::get()->apply();
         smoke::accountServicesSmoke();
         std::fprintf(stdout, "Account services smoke: OK\n");
         return gOk ? 0 : 1;
@@ -896,9 +907,10 @@ auto main(int argc, char *argv[]) -> int {
     check(creatorModule.meta().value(QStringLiteral("id")) == QStringLiteral("musig.creator"),
           "the musig creator module id should be musig.creator");
     creatorModule.list();
-    check(creatorSpy.instances().size() == 1 &&
-              creatorSpy.instances().first().first == QStringLiteral("musig.create"),
-          "the musig creator should list exactly the musig.create entry");
+    check(creatorSpy.instances().size() == 2 &&
+              creatorSpy.instances().first().first == QStringLiteral("musig.create") &&
+              creatorSpy.instances().last().first == QStringLiteral("musig.restore"),
+          "the musig creator should list exactly the musig.create and musig.restore entries");
     check(PluginRegistry::isCreatorInstanceId(QStringLiteral("musig.create")),
           "musig.create should be a creator instance id");
     // musig.create itself opens a modal, so only the unknown id is started here.

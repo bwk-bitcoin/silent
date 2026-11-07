@@ -315,6 +315,10 @@ set(SILENT_APP_SOURCES
     src/account/views/Receive.cpp
     src/account/views/Settings.h
     src/account/views/Settings.cpp
+    src/account/views/BackupAccount.h
+    src/account/views/BackupAccount.cpp
+    src/account/views/RestoreAccount.h
+    src/account/views/RestoreAccount.cpp
     src/account/SendSigning.h
     src/account/views/Send.h
     src/account/views/Send.cpp
@@ -739,6 +743,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/backend_services_smoke.cpp
         tests/host/psbt_transfer_smoke.cpp
         tests/host/account_views_smoke.cpp
+        tests/host/account_shell_smoke.cpp
         tests/host/keys_contract_smoke.cpp
         tests/host/qr_cache_smoke.cpp
         tests/host/storage_smoke.cpp

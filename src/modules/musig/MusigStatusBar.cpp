@@ -2,10 +2,8 @@
 
 #include "account/RequestId.h"
 #include "catalog/StatusBarItem.h"
-#include "catalog/containers/Separator.h"
 #include "i18n/Tr.h"
 #include "modules/musig/MusigAccountController.h"
-#include "theme/Palette.h"
 #include "views/BackendErrors.h"
 #include "views/utils.h"
 
@@ -21,8 +19,6 @@ MusigStatusBar::MusigStatusBar(MusigAccountController *controller, QWidget *pare
 }
 
 void MusigStatusBar::init() {
-    setFixedHeight(metric::STATUS_BAR_HEIGHT);
-    m_separator = new catalog::Separator(catalog::Separator::Role::Horizontal, this);
     m_electrum_item = new catalog::StatusBarItem(this);
     onReloadUrl();
 }
@@ -40,14 +36,9 @@ void MusigStatusBar::doConnect() {
 
 void MusigStatusBar::view() {
     auto *contentRow = (new qontrol::Row)->push(m_electrum_item)->pushSpacer();
-    contentRow->layout()->setContentsMargins(resolve(Padding::S), resolve(Padding::XXS),
-                                             resolve(Padding::S), resolve(Padding::XXS));
+    contentRow->layout()->setContentsMargins(0, 0, 0, 0);
     contentRow->layout()->setSpacing(0);
-
-    auto *mainCol = (new qontrol::Column)->push(m_separator)->push(contentRow);
-    mainCol->layout()->setContentsMargins(0, 0, 0, 0);
-    mainCol->layout()->setSpacing(0);
-    setLayout(mainCol->layout());
+    setLayout(contentRow->layout());
 }
 
 // ===== Slots =====

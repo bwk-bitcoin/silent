@@ -31,14 +31,19 @@ struct Services {
 
 auto servicesOf(const host::ServiceAssembly &assembly) -> Services;
 
-// Every service of the open account `id` on `network`, all supplied by `module`. Null,
-// with the reason, when the host refuses the assembly.
-auto assembleServices(IModule *module, const QString &id, backend::Network network)
-    -> host::AssemblyResult;
+// The services `request` names, assembled by the host. Null, with the reason, when it
+// refuses the assembly.
+auto assembleServices(const host::AssemblyRequest &request) -> host::AssemblyResult;
+// Every service of the account `id` on `network`, all from `module`.
+auto moduleServices(IModule *module, const QString &id, backend::Network network)
+    -> host::AssemblyRequest;
 
 // The tip `state` counts confirmations from: its own, else the highest a connection
 // reported. 0 when none is known.
 auto stateTip(const backend::BlockchainState &state) -> quint32;
+
+// The name of `network` in the current language.
+auto networkName(backend::Network network) -> QString;
 
 // The public network of `network`, nullopt for one the public interfaces do not know.
 auto publicNetwork(backend::Network network) -> std::optional<plugin::Network>;

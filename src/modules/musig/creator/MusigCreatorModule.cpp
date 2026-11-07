@@ -1,16 +1,23 @@
 #include "modules/musig/creator/MusigCreatorModule.h"
 
 #include "AppController.h"
+#include "account/services/ServiceAdapters.h"
+#include "account/views/RestoreAccount.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/account.h"
+#include "interfaces/host.h"
+#include "modules/musig/MusigModule.h"
 #include "modules/musig/creator/CreatePolicy.h"
 
 #include <QList>
 #include <QPair>
 #include <QStringList>
+#include <common.h>
 #include <optional>
 
 namespace {
 const QString K_CREATE_INSTANCE_ID = QStringLiteral("musig.create");
+const QString K_RESTORE_INSTANCE_ID = QStringLiteral("musig.restore");
 MusigCreatorModule *gMusigCreatorModule = nullptr;
 } // namespace
 
@@ -37,7 +44,8 @@ auto MusigCreatorModule::meta() const -> QMap<QString, QString> {
 
 auto MusigCreatorModule::list() -> ReqId {
     ReqId reqId = nextReqId();
-    QList<QPair<QString, QString>> instances{{K_CREATE_INSTANCE_ID, TR("musig-account-type")}};
+    QList<QPair<QString, QString>> instances{{K_CREATE_INSTANCE_ID, TR("musig-account-type")},
+                                             {K_RESTORE_INSTANCE_ID, TR("musig-account-restore")}};
     emit IModule::instances(reqId, instances);
     return reqId;
 }
@@ -53,7 +61,19 @@ void MusigCreatorModule::startInstance(const QString &id) {
         AppController::execModal(new musig::modal::CreatePolicy);
         return;
     }
+    if (id == K_RESTORE_INSTANCE_ID) {
+        auto *target = account::restoreTarget(QString::fromLatin1(MUSIG_PLUGIN_ID), nullptr);
+        connect(target, &backend::IAccountBackend::restored, this,
+                &MusigCreatorModule::onAccountRestored, qontrol::UNIQUE);
+        AppController::execModal(new account::view::RestoreAccount(target));
+        return;
+    }
     emit error(std::nullopt, TR("musig-creator-unknown-instance").arg(id));
+}
+
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+void MusigCreatorModule::onAccountRestored() {
+    Host::get()->refreshLauncher();
 }
 
 auto MusigCreatorModule::nextReqId() -> ReqId {

@@ -109,6 +109,12 @@ auto btnSaveSpendPath() -> Button *;
 // default one to save it again.
 auto btnBackupDescriptorPrimary() -> Button *;
 auto btnBackupDescriptor() -> Button *;
+// Account Settings' Backup section, and its backup and restore modals.
+auto btnBackupAccount() -> Button *;
+auto btnSaveBackup() -> Button *;
+auto btnChooseFile() -> Button *;
+auto btnReadBackup() -> Button *;
+auto btnRestoreAccount() -> Button *;
 auto btnRegisterDescriptor() -> Button *;
 auto btnScanAddress() -> Button *;
 auto btnRemoveRoute() -> Button *;

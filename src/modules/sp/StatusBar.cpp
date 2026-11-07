@@ -39,11 +39,6 @@ StatusBar::StatusBar(AccountController *controller, QWidget *parent)
 }
 
 void StatusBar::initUI() {
-    setFixedHeight(metric::STATUS_BAR_HEIGHT);
-
-    // Top separator line
-    auto *separator = new catalog::Separator(catalog::Separator::Role::Horizontal, this);
-
     // Blindbit toggle + status
     m_blindbit_item = new catalog::StatusBarItem(this);
 
@@ -62,16 +57,10 @@ void StatusBar::initUI() {
 
     // Combine with equal proportions
     auto *contentRow = (new qontrol::Row)->push(leftRow)->push(vline)->push(rightRow);
-    contentRow->layout()->setContentsMargins(resolve(Padding::S), resolve(Padding::XXS),
-                                             resolve(Padding::S), resolve(Padding::XXS));
+    contentRow->layout()->setContentsMargins(0, 0, 0, 0);
     contentRow->layout()->setSpacing(0);
 
-    // Vertical layout: separator on top, content below
-    auto *mainCol = (new qontrol::Column)->push(separator)->push(contentRow);
-    mainCol->layout()->setContentsMargins(0, 0, 0, 0);
-    mainCol->layout()->setSpacing(0);
-
-    setLayout(mainCol->layout());
+    setLayout(contentRow->layout());
 }
 
 void StatusBar::onUpdateConnectionState(bool connected) {

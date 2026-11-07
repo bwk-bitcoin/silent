@@ -106,6 +106,37 @@ public:
                   }));
     }
 
+    // On a worker: deriving the password key takes a while.
+    void backup(backend::RequestId token, const QByteArray &password) override {
+        auto *wallet = rustAccount();
+        if (wallet == nullptr) {
+            emit failed(token, busy());
+            return;
+        }
+        startWork(token, QThread::create([this, wallet, token, password] {
+                      auto result = wallet->backup(services::toRustString(password));
+                      if (result.is_ok) {
+                          emit backupCreated(token, services::toBytes(result.bytes));
+                      } else {
+                          emit failed(token, services::toQString(result.error));
+                      }
+                  }));
+    }
+
+    void inspectBackup(backend::RequestId token, const QByteArray &backup,
+                       const QByteArray &password) override {
+        startWork(token, QThread::create([this, token, backup, password] {
+                      auto contents = ::inspect_account_backup(services::toSlice(backup),
+                                                               services::toRustString(password));
+                      if (contents.is_ok) {
+                          emit backupInspected(token, services::toBackupInfo(contents));
+                      } else {
+                          emit failed(token,
+                                      services::backupError(contents.failure, contents.error));
+                      }
+                  }));
+    }
+
 protected:
     // The account, null while the controller has none (loading, closing, or handed to an
     // endpoint change).

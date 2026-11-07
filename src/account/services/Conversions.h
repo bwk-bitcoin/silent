@@ -37,5 +37,11 @@ auto toCraftResult(const CraftOutcome &outcome) -> backend::CraftResult;
 auto toBroadcastResult(const BroadcastReport &report) -> backend::BroadcastResult;
 auto toBytes(const rust::Vec<std::uint8_t> &bytes) -> QByteArray;
 auto toSlice(const QByteArray &bytes) -> rust::Slice<const std::uint8_t>;
+// `bytes` as UTF-8 text, a password.
+auto toRustString(const QByteArray &bytes) -> rust::String;
+// What a backup holds and needs, said in the current language.
+auto toBackupInfo(const BackupContents &contents) -> backend::BackupInfo;
+// Why a backup was not made, read or restored, said in the current language.
+auto backupError(BackupFailure failure, const rust::String &error) -> QString;
 
 } // namespace account::services

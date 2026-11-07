@@ -8,10 +8,6 @@ namespace account {
 class AccountShell;
 }
 
-namespace qontrol {
-class Panel;
-}
-
 class AccountWidget : public QWidget {
     Q_OBJECT
 
@@ -20,7 +16,7 @@ public:
     ~AccountWidget() override;
 
     auto controller() -> AccountController *;
-    void loadPanel(qontrol::Panel *panel);
+    [[nodiscard]] auto shell() const -> account::AccountShell *;
 
 protected:
     void initUI();

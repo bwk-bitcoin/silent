@@ -1,6 +1,5 @@
 #include "account/views/Receive.h"
 
-#include "AppController.h"
 #include "account/Extensions.h"
 #include "account/RequestId.h"
 #include "catalog/containers/FoldSection.h"
@@ -222,7 +221,7 @@ void Receive::showAddressHistory(Section *section) {
                 &Receive::onVerifyHistoryAddress, qontrol::UNIQUE);
         connect(historyModal, &modal::AddressHistoryModal::labelEdited, this,
                 &Receive::onHistoryLabelEdited, qontrol::UNIQUE);
-        AppController::execModal(historyModal);
+        qontrol::Controller::execModal(historyModal);
         if (m_history_verify_address.isEmpty()) {
             m_history_section = nullptr;
             return;

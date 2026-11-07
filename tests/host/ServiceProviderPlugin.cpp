@@ -1,6 +1,7 @@
 // An account service provider built against the published SDK only. Built twice:
 // services.full supplies every service, services.chain (SILENT_SERVICE_CHAIN_FIXTURE)
-// only the blockchain and labels. Every getter answers this plugin's id so a consumer
+// only the blockchain and labels, and deletes a service it is handed back only a while
+// later. Every getter answers this plugin's id so a consumer
 // can tell which provider served it. Payloads are heap copies: they outlive no unload.
 
 #include "interfaces/backend/account.h"
@@ -17,6 +18,7 @@
 #include <QMap>
 #include <QObject>
 #include <QString>
+#include <QTimer>
 #include <optional>
 #include <utility>
 
@@ -24,6 +26,8 @@ namespace {
 
 #ifdef SILENT_SERVICE_CHAIN_FIXTURE
 constexpr auto PLUGIN_ID = "services.chain";
+// How long a released service lives on.
+constexpr int HELD_MS = 1500;
 #else
 constexpr auto PLUGIN_ID = "services.full";
 #endif
@@ -310,7 +314,12 @@ public:
 
     void releaseService(backend::IService *service) override {
         setProperty("outstanding", --m_outstanding);
+#ifdef SILENT_SERVICE_CHAIN_FIXTURE
+        // Deleted a while after its release: the plugin must stay loaded until it is.
+        QTimer::singleShot(HELD_MS, service, &QObject::deleteLater);
+#else
         service->deleteLater();
+#endif
     }
 
 private:

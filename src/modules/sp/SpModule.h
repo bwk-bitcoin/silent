@@ -26,10 +26,12 @@ public:
 
 private slots:
     void onInstanceRemoved(const QString &id);
+    // A restore made an account: the launcher lists it.
+    void onAccountRestored();
 
 protected:
     [[nodiscard]] static bool isSpAccount(const QString &account_id);
-    // The listed accounts, then the create-account entry.
+    // The listed accounts, then the create-account and restore-account entries.
     [[nodiscard]] auto instanceEntries(const QStringList &account_ids) const
         -> QList<QPair<QString, QString>> override;
 

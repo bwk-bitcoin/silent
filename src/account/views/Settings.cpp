@@ -2,8 +2,10 @@
 
 #include "account/Extensions.h"
 #include "account/RequestId.h"
+#include "account/views/BackupAccount.h"
 #include "catalog/Button.h"
 #include "catalog/Variants.h"
+#include "catalog/containers/Section.h"
 #include "catalog/display/Badge.h"
 #include "catalog/display/InfoTip.h"
 #include "catalog/display/Label.h"
@@ -98,6 +100,11 @@ void Settings::init() {
 
     m_capabilities = new catalog::Label("--");
     m_capabilities->setAlignment(Qt::AlignTop);
+    m_backup_text = new catalog::Label(catalog::LabelRole::Body);
+    m_backup_text->setTone(catalog::LabelTone::Secondary);
+    m_backup_text->setWordWrap(true);
+    m_backup_text->setText(TR("settings-backup-text"));
+    m_backup = catalog::btnBackupAccount();
     m_height_timer = new QTimer(this);
     m_height_timer->setInterval(HEIGHT_REFRESH_MS);
 
@@ -123,6 +130,7 @@ void Settings::doConnect() {
         }
     }
     connect(m_height_timer, &QTimer::timeout, this, &Settings::onHeightTimeout, qontrol::UNIQUE);
+    connect(m_backup, &QPushButton::clicked, this, &Settings::onBackupClicked, qontrol::UNIQUE);
     // A provider without the extension answers error(): its operations are never busy here.
     m_busy_req = nextRequestId();
     m_services.settings->value(m_busy_req, extension::ENDPOINTS_BUSY, QJsonValue());
@@ -169,6 +177,11 @@ void Settings::view() {
     if (m_extras != nullptr) {
         col->push(m_extras);
     }
+    auto *backupRow = (new qontrol::Row)->pushSpacer()->push(m_backup);
+    auto *backup = new catalog::Section(TR("settings-backup"));
+    backup->setContent(
+        (new qontrol::Column)->spacing(resolve(Spacing::S))->push(m_backup_text)->push(backupRow));
+    col->push(backup);
     col->pushSpacer();
     setScreenContent(this, m_main_widget, dashboard(TR("settings-title"), col, false, network));
 }
@@ -195,6 +208,7 @@ void Settings::hideEvent(QHideEvent *event) {
 
 // The provider says the texts in the language now in use.
 void Settings::retranslateUi() {
+    m_backup_text->setText(TR("settings-backup-text"));
     m_presentation_req = nextRequestId();
     m_services.settings->value(m_presentation_req, extension::ENDPOINT_PRESENTATION, QJsonValue());
     showPresentation();
@@ -283,21 +297,6 @@ auto Settings::presentationOf(const backend::Endpoint &endpoint) const -> Presen
             .disconnect = text("disconnect"),
             .transport = known.value(QStringLiteral("transport")).toBool(),
             .capabilities = known.value(QStringLiteral("capabilities")).toBool()};
-}
-
-auto Settings::networkName(backend::Network network) -> QString {
-    switch (network) {
-    case backend::Network::Regtest:
-        return TR("network-regtest");
-    case backend::Network::Signet:
-        return TR("network-signet");
-    case backend::Network::Testnet:
-    case backend::Network::Testnet4:
-        return TR("network-testnet");
-    case backend::Network::Bitcoin:
-        return TR("network-bitcoin");
-    }
-    return {};
 }
 
 auto Settings::connection(const QString &id) const -> std::optional<backend::Connection> {
@@ -743,6 +742,11 @@ void Settings::onHeightTimeout() {
     for (auto &serverRow : m_rows) {
         requestHeight(serverRow);
     }
+}
+
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void Settings::onBackupClicked() {
+    qontrol::Controller::execModal(new BackupAccount(m_services.account));
 }
 
 } // namespace account::view

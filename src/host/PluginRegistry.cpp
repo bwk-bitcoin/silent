@@ -445,7 +445,8 @@ QString PluginRegistry::instanceOwnerPluginId(const QString &id) const {
 
 bool PluginRegistry::isCreatorInstanceId(const QString &id) {
     QString trimmed = id.trimmed();
-    return trimmed == QStringLiteral("create") || trimmed.endsWith(QStringLiteral(".create"));
+    return trimmed == QStringLiteral("create") || trimmed.endsWith(QStringLiteral(".create")) ||
+           trimmed.endsWith(QStringLiteral(".restore"));
 }
 
 bool PluginRegistry::isBuiltinModule(IModule *module) const {

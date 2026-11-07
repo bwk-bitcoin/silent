@@ -3,14 +3,10 @@
 #include "AppController.h"
 #include "SpModule.h"
 #include "SpSigning.h"
+#include "account/AccountShell.h"
 #include "account/Services.h"
 #include "account/services/AccountServices.h"
 #include "account/services/ServiceContext.h"
-#include "account/views/Coins.h"
-#include "account/views/History.h"
-#include "account/views/Receive.h"
-#include "account/views/Send.h"
-#include "account/views/Settings.h"
 #include "catalog/feedback/MessageModal.h"
 #include "i18n/Tr.h"
 #include "metatypes.h"
@@ -76,7 +72,6 @@ void AccountController::onAccountLoaded() {
     finishAccountLoad(error);
     if ((m_widget != nullptr || m_panels_requested) && hasAccountMetadata()) {
         loadPanels();
-        loadPanel(m_requested_panel);
         pollCoins();
     }
     if (!error.isEmpty()) {
@@ -94,40 +89,18 @@ void AccountController::onAccountLoaded() {
     }
 }
 
-AccountController::~AccountController() {
-    m_panels.clear();
+AccountController::~AccountController() = default;
+
+void AccountController::setShell(account::AccountShell *shell) {
+    m_shell = shell;
 }
 
-auto AccountController::assembleServices() -> bool {
-    if (m_assembly != nullptr) {
-        return true;
-    }
-    // The account supplies its services once loaded.
-    if (m_services_retired || m_services == nullptr || accountLoading()) {
-        return false;
-    }
-    auto result = account::assembleServices(module(), m_services->account(),
-                                            account::services::toNetwork(network()));
-    if (result.assembly == nullptr) {
-        qWarning() << "AccountController: account services refused:" << result.error;
-        return false;
-    }
-    m_assembly = std::move(result.assembly);
-    connect(m_assembly.get(), &host::ServiceAssembly::retired, this,
-            &AccountController::onServicesRetired, qontrol::UNIQUE);
-    return true;
+auto AccountController::shell() const -> account::AccountShell * {
+    return m_shell;
 }
 
 void AccountController::onFundsAnswered() {
     loadPanels();
-    loadPanel(m_requested_panel);
-}
-
-void AccountController::onServicesRetired() {
-    m_services_retired = true;
-    m_panels.clear();
-    // The assembly is the sender: it goes once its signal returned.
-    m_assembly.release()->deleteLater();
 }
 
 void AccountController::listenNotifications() {
@@ -146,20 +119,28 @@ void AccountController::listenNotifications() {
     m_notif_thread->start();
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 auto AccountController::loadPanel(const QString &name) -> void {
-    m_requested_panel = name;
-    auto *panel = m_panels.value(name);
-    if (m_widget != nullptr && panel != nullptr) {
-        m_widget->loadPanel(panel);
+    if (shell() != nullptr) {
+        shell()->showPanel(name);
     }
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 auto AccountController::insertPanel(qontrol::Panel *panel) -> void {
-    m_panels.insert(panel);
+    if (shell() == nullptr) {
+        delete panel->screen();
+        delete panel;
+        return;
+    }
+    shell()->insertPanel(panel);
 }
 
-auto AccountController::screen(const QString &screen) -> std::optional<qontrol::Screen *> {
-    return m_panels.screen(screen);
+auto AccountController::screen(const QString &screen) const -> std::optional<qontrol::Screen *> {
+    if (shell() == nullptr) {
+        return std::nullopt;
+    }
+    return shell()->screen(screen);
 }
 
 auto AccountController::pollCoins() -> void {
@@ -293,19 +274,14 @@ auto AccountController::handleNotification(Notification notif) -> void {
 
 auto AccountController::loadPanels() -> void {
     m_panels_requested = true;
-    if (m_init && !hasAccountMetadata()) {
+    // The account supplies its services once loaded.
+    if (shell() == nullptr || m_services == nullptr || accountLoading() || !hasAccountMetadata() ||
+        !shell()->assemble(account::moduleServices(module(), m_services->account(),
+                                                   account::services::toNetwork(network())))) {
         return;
     }
-    if (!assembleServices()) {
-        return;
-    }
-    auto services = account::servicesOf(*m_assembly);
-    if (!m_panels.contains("settings")) {
-        auto *settingsScreen = new account::view::Settings(services, nullptr);
-        this->insertPanel(new qontrol::Panel(settingsScreen, "settings"));
-    }
-    if (m_panels.contains("history") ||
-        (m_init && (!m_account.has_value() || !m_account.value()->is_ok()))) {
+    shell()->openSettings(nullptr, false);
+    if (shell()->fundsOpen() || !m_account.has_value() || !m_account.value()->is_ok()) {
         return;
     }
     // The views open on the account's funds, not on an empty read.
@@ -314,11 +290,7 @@ auto AccountController::loadPanels() -> void {
                 &AccountController::onFundsAnswered, qontrol::UNIQUE);
         return;
     }
-    insertPanel(new qontrol::Panel(new account::view::History(services), "history"));
-    insertPanel(new qontrol::Panel(new account::view::Coins(services), "coins"));
-    insertPanel(new qontrol::Panel(new account::view::Receive(services, module()), "receive"));
-    insertPanel(new qontrol::Panel(new account::view::Send(services, new SpSigning(this, services)),
-                                   "send"));
+    shell()->openFunds(new SpSigning(this, shell()->services()), module());
 }
 
 auto AccountController::historyClicked() -> void {
@@ -502,8 +474,7 @@ auto AccountController::services() const -> account::ServiceContext * {
     return m_services;
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-auto AccountController::coins() -> qontrol::Screen * {
+auto AccountController::coins() const -> qontrol::Screen * {
     auto scr = screen("coins");
     if (scr.has_value()) {
         return scr.value();

@@ -1,9 +1,12 @@
 // Account UI service assembly: one provider, split providers (two external plugins, a
 // built-in module and the host's explicit unsupported implementation), refusals that keep
-// nothing, and a supplying plugin retained until the assembly using it is deleted.
+// nothing, a supplying plugin retained until the assembly using it is deleted and every
+// service it was handed back is destroyed, and the account shell over two plugins.
 
 #include "AppController.h"
 #include "PluginBundleFixture.h"
+#include "account/AccountShell.h"
+#include "account/SendSigning.h"
 #include "host/Host.h"
 #include "host/PluginRegistry.h"
 #include "host/ServiceAssembly.h"
@@ -21,9 +24,13 @@
 #include <QFile>
 #include <QJsonValue>
 #include <QPointer>
+#include <QStringList>
 #include <QThread>
+#include <QWidget>
+#include <Qontrol>
 #include <common.h>
 #include <memory>
+#include <optional>
 #include <silent.h>
 
 namespace smoke {
@@ -392,11 +399,18 @@ void retention(HostImpl *host, PluginRegistry *registry,
     require(registry->pluginStopPending(CHAIN) && !replies.stopFinished && chainModule != nullptr &&
                 outstanding(chain) == 2,
             "the chain plugin stays loaded while its services are assembled");
+    QPointer<QObject> held = split->blockchain();
     split.release()->deleteLater();
     spin(RETAINED_MS);
     require(outstanding(chain) == 2 && registry->pluginStopPending(CHAIN),
             "a deferred deletion still holds the services");
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(outstanding(chain) == 0 && held != nullptr,
+            "the chain provider holds the services it was handed back");
+    spin(RETAINED_MS);
+    require(held != nullptr && registry->pluginStopPending(CHAIN) && chainModule != nullptr &&
+                !replies.stopFinished,
+            "the chain plugin stays loaded while a service it was handed back lives");
     waitFor([&replies] { return replies.stopFinished; }, "the chain plugin stop finishes");
     require(replies.stopError.isEmpty(), "the chain plugin stops cleanly once released");
     waitFor([registry] { return !registry->pluginStopPending(CHAIN); },
@@ -405,6 +419,86 @@ void retention(HostImpl *host, PluginRegistry *registry,
     require(outstanding(full) == 0 && builtin->outstanding == 0,
             "the other providers got their services back");
     require(registry->isPluginEnabled(FULL), "the other providers are not stopped");
+}
+
+// A signing step that signs nothing: Send only needs one.
+class IdleSigning final : public account::SendSigning {
+public:
+    auto actions() -> QWidget * override {
+        return m_actions;
+    }
+
+    auto coinsWidget() -> QWidget * override {
+        return nullptr;
+    }
+
+    void setTransaction([[maybe_unused]] const std::optional<backend::TransactionTemplate> &tx,
+                        [[maybe_unused]] const QStringList &outpoints) override {
+    }
+
+    [[nodiscard]] auto estimatesFee() const -> bool override {
+        return false;
+    }
+
+private:
+    QWidget *m_actions = new QWidget(this);
+};
+
+// The account shell takes each service from its own plugin, parents none of them, builds
+// its panels over them, and drops the panels, then the assembly, when a supplier stops.
+void shellRetirement(PluginRegistry *registry, IModule *full) {
+    require(registry->setEnabled(CHAIN, true), "the chain plugin enable is admitted again");
+    waitFor(
+        [registry] {
+            return !registry->pluginEnablePending(CHAIN) && !registry->pluginStateLoading();
+        },
+        "the chain plugin enable completes");
+    require(registry->isPluginEnabled(CHAIN), "the chain plugin is enabled again");
+    auto *chain = fixtureModule(registry, CHAIN);
+    QWidget page;
+    account::AccountShell shell(account::accountMenuEntries(), new QWidget, &page);
+    host::AssemblyRequest request{.account = ACCOUNT,
+                                  .network = backend::Network::Regtest,
+                                  .account_backend = full,
+                                  .blockchain = chain,
+                                  .transaction = full,
+                                  .labels = chain,
+                                  .settings = full};
+    require(shell.assemble(request), "the shell assembles services of two plugins");
+    auto services = shell.services();
+    require(services.account->name() == FULL &&
+                services.blockchain->history().first().txid == CHAIN &&
+                services.labels->label({}) == CHAIN &&
+                services.settings->settings().endpoints.first().id == FULL,
+            "each service the shell holds comes from the plugin the request names");
+    require(services.account->parent() == full && services.blockchain->parent() == chain,
+            "the shell parents no service: each stays its provider's");
+    require(outstanding(full) == 3 && outstanding(chain) == 2, "five services handed out");
+    shell.openSettings(nullptr, false);
+    shell.openFunds(new IdleSigning, full);
+    for (const auto *name : {"history", "coins", "send", "receive", "settings"}) {
+        require(shell.screen(QString::fromLatin1(name)).has_value(),
+                "the shell builds every shared panel over them");
+    }
+    page.show();
+    shell.showPanel(QStringLiteral("coins"));
+    QPointer<qontrol::Screen> coins = shell.screen(QStringLiteral("coins")).value();
+    require(coins->isVisible() && !shell.screen(QStringLiteral("history")).value()->isVisible(),
+            "the shell shows the panel asked for");
+
+    Replies replies;
+    QObject::connect(registry, &PluginRegistry::pluginStopFinished, &replies,
+                     &Replies::onStopFinished, qontrol::UNIQUE);
+    require(registry->setEnabled(CHAIN, false), "the chain plugin disable is admitted");
+    require(coins == nullptr && !shell.screen(QStringLiteral("settings")).has_value(),
+            "a stopping supplier takes every panel down at once");
+    require(!shell.assemble(request), "a retired shell assembles nothing again");
+    require(outstanding(full) == 3 && registry->pluginStopPending(CHAIN),
+            "the shell's assembly holds its services until it is deleted");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(outstanding(full) == 0, "the deleted assembly hands every service back");
+    waitFor([&replies] { return replies.stopFinished; }, "the chain plugin stop finishes");
+    require(replies.stopError.isEmpty(), "the chain plugin stops cleanly");
 }
 
 } // namespace
@@ -428,6 +522,7 @@ void accountServicesSmoke() {
     require(builtin->outstanding == 1, "the built-in provider handed out its service");
     refusals(host, full, chain);
     retention(host, registry, std::move(split), full, chain, builtin);
+    shellRetirement(registry, full);
 }
 
 } // namespace smoke

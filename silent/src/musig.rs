@@ -37,10 +37,11 @@ use crate::{
         broadcast_via_electrum, convert_notification, parse_outpoint, rust_txs,
         NotificationReceiver, Poll, PsbtResult, TemplateError,
     },
+    account_backup,
     account_storage::{AccountStorage, Factory},
     config::{parse_electrum_url, Config},
     ffi::{
-        AddressVerifyInfo, BroadcastReport, CoinState, CraftOutcome, FundsSnapshot,
+        AccountBackup, AddressVerifyInfo, BroadcastReport, CoinState, CraftOutcome, FundsSnapshot,
         LabelEditResult, LabelKind, LabelSnapshot, MusigAttemptSnapshot, MusigCosignerStatus,
         MusigDescriptorResult, MusigElectrumUrlResult, MusigFinalizeResult, MusigReceiveAddress,
         MusigRound, MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, Output,
@@ -1841,6 +1842,39 @@ impl MusigAccount {
             ));
         }
         BroadcastReport::accepted(txid, warnings)
+    }
+
+    pub fn backup(&self, password: String) -> AccountBackup {
+        account_backup::backup_result(self.sealed_backup(password))
+    }
+
+    /// The config, the indexes the account handed out and every label, RAM edits
+    /// included. The saved PSBTs stay out: restoring them could not bring back the
+    /// nonces their signers already used.
+    fn sealed_backup(&self, password: String) -> Result<Vec<u8>, String> {
+        let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+        let labels = self.labels();
+        if !labels.is_ok {
+            return Err(labels.error);
+        }
+        account_backup::seal(
+            &inner.config,
+            None,
+            vec![account_backup::scanner_tip(inner.account.scanner())],
+            account_backup::labels_of(labels.labels),
+            password,
+        )
+    }
+
+    /// Puts a backup's indexes and labels in this account, freshly restored.
+    pub(crate) fn restore_state(
+        &self,
+        tips: &[account_backup::Tip],
+        labels: &[account_backup::Label],
+    ) -> Result<(), String> {
+        let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+        account_backup::restore_scanner_tip(inner.account.scanner(), tips)?;
+        account_backup::restore_labels(labels, |kind, id, text| self.set_label(kind, id, text))
     }
 }
 

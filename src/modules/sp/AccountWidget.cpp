@@ -30,19 +30,21 @@ void AccountWidget::initUI() {
     connect(m_controller, &AccountController::waitingForBlocks, status,
             &StatusBar::onUpdateWaitingForBlocks, qontrol::UNIQUE);
     m_shell = new account::AccountShell(account::accountMenuEntries(), status, this);
-    connect(m_shell, &account::AccountShell::panelRequested, m_controller,
-            &AccountController::loadPanel, qontrol::UNIQUE);
+    m_controller->setShell(m_shell);
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_shell->widget());
 }
 
-void AccountWidget::loadPanel(qontrol::Panel *panel) {
-    m_shell->loadPanel(panel);
+auto AccountWidget::shell() const -> account::AccountShell * {
+    return m_shell;
 }
 
 auto AccountWidget::controller() -> AccountController * {
     return m_controller;
 }
 
-AccountWidget::~AccountWidget() = default;
+// The panels go before the controller their signing step uses.
+AccountWidget::~AccountWidget() {
+    delete m_shell;
+}
