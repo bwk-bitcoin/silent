@@ -1308,6 +1308,47 @@ runs with services still out. The other providers of a retired assembly keep run
 Rust/CXX includes). It checks one-provider and split-provider assembly, attribution, the
 unsupported implementation, refusals and retention through a plugin stop.
 
+### Built-in providers
+
+The SP and Multikey modules supply all five services of their open accounts (the shared
+`account::AccountModule` implements the facet). `service()` answers null for an account that
+is not open, still loading, being deleted, or on another network: a Rust network has no
+Testnet4, so no built-in account is supplied on it. Each service is its own QObject over the
+account's `account::ServiceContext`, which the account controller owns:
+
+- The context publishes the coins, balance, history, labels, receive addresses, connection
+  state and endpoint settings as the controller changes them, whether or not anyone listens.
+  Getters copy them under a short lock and never reach the Rust account. Every getter and
+  request of a built-in service is GUI thread only.
+- A coin is spendable when a spend path can spend it now: a Multikey coin whose only paths
+  are timelocked is not, until the validated tip meets the lock.
+- A coin may be published before the transaction funding it is written (the pinned bwk SP
+  scanner notifies coins first). Such a read is not taken as complete: the context reads the
+  funds again every second, for up to two minutes or until the history covers every coin,
+  and publishes the history before `historyChanged()`.
+- `craft()` and `finalize()` run on RAM state. Without inputs a template stays incomplete and
+  `finalize()` builds nothing: only `selectCoins()` picks coins. A Multikey PSBT pays change
+  to the change index after the registered tip and leaves it unregistered; the signing owner
+  (`MusigAccount::adopt_transaction`, also behind the existing prepare path) registers it
+  durably when it takes that exact PSBT, and refuses it with a craft-again error when another
+  adoption took the index first.
+- `setLabel()` with an empty text removes the label. A save failing after the RAM edit
+  publishes the edit (`labelsChanged()`) and answers `error()`, not `saved()`.
+- `broadcast()` takes consensus-encoded transaction bytes. It answers `Rejected` when the
+  transaction never reached a server or the server refused it, `Unknown` when it was sent with
+  no usable answer, and `Accepted` with warnings when recording it locally then failed. A
+  server answering that it already holds the transaction accepts it. A transaction never sent
+  says so in its error, with the `InvalidInput` or `Network` kind, never `Broadcast`.
+- `testEndpoint()` saves nothing and leaves the live connection alone; `save()` writes the
+  endpoints to the account config untested. Both answer `error()` while an endpoint
+  operation runs; `IBlockchain::setConnected()`, `start()` and
+  `stop()` drive the live connections.
+- `rescan()`, account backups and every `raw()`/`value()` operation answer `error()` for now.
+
+`host_smoke --backend-services` assembles both providers over Regtest fixture accounts and
+checks a history published after its coin through the same getters for a polling and a
+notified consumer.
+
 ## Inter-Account Operation: Send To / Spend From Siblings
 
 A key use case is moving funds between sibling accounts (e.g. a consolidation or

@@ -17,6 +17,7 @@ class QWidget;
 
 namespace account {
 class SendSigning;
+class ServiceContext;
 } // namespace account
 
 // A kind of address an account receives on. The silent payment address is static;
@@ -62,6 +63,8 @@ public:
     [[nodiscard]] virtual auto verifiesCertificate() const -> bool = 0;
     [[nodiscard]] virtual auto isEndpointRunning(Endpoint endpoint) const -> bool = 0;
     [[nodiscard]] auto endpointOperationsBusy() const -> bool;
+    // A settings service save writing the same config: endpoint operations wait for it.
+    void setSettingsSaving(bool saving);
     [[nodiscard]] auto endpointsStopping() const -> bool;
     [[nodiscard]] auto endpointOperation(Endpoint endpoint) const -> EndpointOperation;
     [[nodiscard]] auto endpointError(Endpoint endpoint) const -> QString;
@@ -73,6 +76,11 @@ public:
     [[nodiscard]] auto hasAccountMetadata() const -> bool;
     // What Settings shows below the endpoints, nullptr when nothing. Owned by the caller.
     virtual auto settingsExtras() -> QWidget * = 0;
+    // The state and requests behind the account's UI services, a child of this backend.
+    // Null for a backend serving none, such as a mock account.
+    [[nodiscard]] virtual auto services() const -> account::ServiceContext *;
+    // Records `url` as the saved endpoint, as the account's config now holds it.
+    void setSavedEndpoint(Endpoint endpoint, const rust::String &url, bool verify_certificate);
 
     // Fee, inputs and validity of `tx`, without building it.
     virtual auto simulateTx(TransactionTemplate tx) -> TransactionSimulation = 0;
@@ -157,7 +165,6 @@ protected:
     void stopEndpointOperations();
     void publishEndpointState();
     void requestAccountEndpointTip(uint64_t req_id, Endpoint endpoint);
-    void setSavedEndpoint(Endpoint endpoint, const rust::String &url, bool verify_certificate);
     void reportEndpointFailure(Endpoint endpoint, const rust::String &error, BackendErrorKind kind);
     void clearEndpointFailure(Endpoint endpoint);
     [[nodiscard]] auto savedEndpointUrl(Endpoint endpoint) const -> QString;
@@ -270,5 +277,6 @@ private:
     std::shared_ptr<std::optional<rust::Box<Config>>> m_loading_config;
     bool m_account_loading = false;
     bool m_deletion_pending = false;
+    bool m_settings_saving = false;
     QString m_account_load_error;
 };

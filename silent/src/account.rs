@@ -7,29 +7,38 @@ use std::{
     time::Duration,
 };
 
-use bwk_sp::account::recipient::SpRecipientAddress;
-use bwk_sp::account::{Account as SpAccount, ScanMode};
-use bwk_sp::bwk::bwk_coin::KeyChain;
-use bwk_sp::bwk::bwk_electrum::{
-    coin_store::{Payment, PaymentType},
-    notification::{Notification as BwkNotification, SpNotification, TxListenerNotif},
+use bwk_sp::{
+    account::{recipient::SpRecipientAddress, Account as SpAccount, ScanMode},
+    bwk::{
+        bwk_coin::KeyChain,
+        bwk_electrum::{
+            coin_store::{Payment, PaymentType},
+            label_store::LabelKey,
+            notification::{Notification as BwkNotification, SpNotification, TxListenerNotif},
+        },
+    },
+    bwk_sign::{
+        bwk_descriptor::wallet::WalletDescriptor, miniscript::Descriptor as MiniscriptDescriptor,
+    },
+    receiver::RecipientAddress,
 };
-use bwk_sp::bwk_sign::bwk_descriptor::wallet::WalletDescriptor;
-use bwk_sp::bwk_sign::miniscript::Descriptor as MiniscriptDescriptor;
-use bwk_sp::receiver::RecipientAddress;
 
 use crate::{
     account_storage::Factory,
     config::Config,
-    error::BackendFailure,
     ffi::{
-        AddressVerifyInfo, BackendErrorKind, CoinState, Notification, NotificationFlag, RustCoin,
-        RustTx, RustTxDetails, TransactionSimulation, TransactionTemplate, TxResult,
+        AddressVerifyInfo, BackendErrorKind, BroadcastReport, CoinState, CraftOutcome,
+        FundsSnapshot, LabelEditResult, LabelKind, LabelSnapshot, Notification, NotificationFlag,
+        ReceiveAddress, ReceiveAddressResult, ReceiveKind, RustCoin, RustTx, RustTxDetails,
+        TransactionSimulation, TransactionTemplate, TxResult, UnsignedPsbt,
     },
-    tx_details::{details_result, TxSnapshot},
+    services::{self, Undelivered, FIRST_RECEIVE_INDEX, SEGWIT_KIND, SP_KIND, TAPROOT_KIND},
+    tx_details::{details_result, edit_scanner_label, TxSnapshot},
 };
 
 pub(crate) const MSATS_PER_SAT: u64 = 1000;
+
+const NOT_INITIALIZED: &str = "Account not initialized";
 
 /// Valid account state (created successfully).
 struct AccountInner {
@@ -41,6 +50,8 @@ struct AccountInner {
     network: bitcoin::Network,
     electrum_url: String,
     verify_certificate: bool,
+    /// The sp() descriptor of the config the account opened.
+    descriptor: String,
 }
 
 /// Account wrapping bwk-sp::Account.
@@ -64,6 +75,22 @@ impl SubAccountScript {
         match descriptor {
             MiniscriptDescriptor::Wpkh(_) => Some(Self::Segwit),
             MiniscriptDescriptor::Tr(_) => Some(Self::Taproot),
+            _ => None,
+        }
+    }
+
+    /// The receive kind id of its addresses.
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Segwit => SEGWIT_KIND,
+            Self::Taproot => TAPROOT_KIND,
+        }
+    }
+
+    fn of_kind(kind: &str) -> Option<Self> {
+        match kind {
+            SEGWIT_KIND => Some(Self::Segwit),
+            TAPROOT_KIND => Some(Self::Taproot),
             _ => None,
         }
     }
@@ -120,6 +147,7 @@ impl Account {
             network,
             electrum_url: config.electrum_url.clone(),
             verify_certificate: config.verify_certificate,
+            descriptor: config.get_descriptor(),
         })
     }
 
@@ -603,16 +631,7 @@ impl Account {
         outpoint: String,
         label: String,
     ) -> crate::ffi::LabelEditResult {
-        self.edit_coin_label(&outpoint, label).into()
-    }
-
-    fn edit_coin_label(&self, outpoint: &str, label: String) -> Result<(), String> {
-        let inner = self.inner.as_ref().ok_or("Account not initialized")?;
-        let outpoint = parse_outpoint(outpoint).map_err(|e| e.to_string())?;
-        inner
-            .account
-            .try_update_coin_label(outpoint, label)
-            .map_err(|e| format!("Label is not saved: {e}. Edit it again to retry."))
+        self.set_label(crate::ffi::LabelKind::Outpoint, outpoint, label)
     }
 
     /// Get payment history (SP + sub-accounts), newest first.
@@ -697,38 +716,14 @@ impl Account {
     }
 
     pub fn update_tx_label(&self, txid: String, label: String) -> crate::ffi::LabelEditResult {
-        self.edit_tx_label(&txid, label).into()
-    }
-
-    fn edit_tx_label(&self, txid: &str, label: String) -> Result<(), String> {
-        let inner = self.inner.as_ref().ok_or("Account not initialized")?;
-        let txid = txid.parse::<bitcoin::Txid>().map_err(|e| e.to_string())?;
-        let mut result = inner
-            .account
-            .try_update_tx_label(txid, label.clone())
-            .map_err(|e| format!("Label is not saved: {e}. Edit it again to retry."));
-        for scanner in inner.account.scanners() {
-            let edited = crate::tx_details::edit_scanner_label(
-                scanner,
-                bwk::bwk_electrum::label_store::LabelKey::Transaction(txid),
-                label.clone(),
-            );
-            result = result.and(edited);
-        }
-        result
+        self.set_label(crate::ffi::LabelKind::Transaction, txid, label)
     }
 
     /// Get the account SP descriptor.
     pub fn descriptor(&self) -> String {
-        let Some(inner) = &self.inner else {
-            return String::new();
-        };
-        match crate::config::Config::from_file(inner.name.clone()) {
-            Ok(config) => config.get_descriptor(),
-            Err(e) => {
-                log::error!("failed to load descriptor: {e}");
-                String::new()
-            }
+        match &self.inner {
+            Some(inner) => inner.descriptor.clone(),
+            None => String::new(),
         }
     }
 
@@ -902,45 +897,45 @@ impl Account {
             ));
         };
 
-        let mut builder = match Self::build_tx_builder(inner, &tx_template) {
-            Ok(b) => b,
-            Err(e) => {
-                log_failed_prepare(inner, &tx_template, &e.to_string());
-                return err_psbt(e.to_string());
+        let psbt = match Self::unsigned_v2(inner, &tx_template) {
+            Ok(psbt) => psbt,
+            Err(error) => {
+                log_failed_prepare(inner, &tx_template, &error);
+                return err_psbt(error);
             }
         };
-
-        match builder.generate_v2() {
-            Ok(psbt) => {
-                let bytes_v2 = match psbt.serialize() {
-                    Ok(bytes) => bytes,
-                    Err(e) => {
-                        let error = format!("{e:?}");
-                        log_failed_prepare(inner, &tx_template, &error);
-                        return err_psbt(error);
-                    }
-                };
-                match psbt.to_bitcoin_psbt_with_empty_sp_outputs() {
-                    Ok(psbt_v0) => Box::new(PsbtResult::prepared(
-                        psbt_v0.serialize(),
-                        bytes_v2,
-                        psbt.unsigned_tx()
-                            .map(|tx| tx.compute_txid().to_string())
-                            .unwrap_or_default(),
-                    )),
-                    Err(e) => {
-                        let error = format!("{e:?}");
-                        log_failed_prepare(inner, &tx_template, &error);
-                        err_psbt(error)
-                    }
-                }
+        let bytes_v2 = match psbt.serialize() {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                let error = format!("{e:?}");
+                log_failed_prepare(inner, &tx_template, &error);
+                return err_psbt(error);
             }
+        };
+        match psbt.to_bitcoin_psbt_with_empty_sp_outputs() {
+            Ok(psbt_v0) => Box::new(PsbtResult::prepared(
+                psbt_v0.serialize(),
+                bytes_v2,
+                psbt.unsigned_tx()
+                    .map(|tx| tx.compute_txid().to_string())
+                    .unwrap_or_default(),
+            )),
             Err(e) => {
                 let error = format!("{e:?}");
                 log_failed_prepare(inner, &tx_template, &error);
                 err_psbt(error)
             }
         }
+    }
+
+    /// The unsigned PSBTv2 of `tx_template`. The SP change address is static: building
+    /// changes no account state.
+    fn unsigned_v2(
+        inner: &AccountInner,
+        tx_template: &TransactionTemplate,
+    ) -> Result<bwk_sp::bwk_tx::bwk_psbt::PsbtV2, String> {
+        let mut builder = Self::build_tx_builder(inner, tx_template).map_err(|e| e.to_string())?;
+        builder.generate_v2().map_err(|e| format!("{e:?}"))
     }
 
     /// Sign a prepared transaction.
@@ -960,38 +955,14 @@ impl Account {
     }
 
     /// Broadcast a signed transaction to the network via Electrum.
-    ///
     pub fn broadcast_transaction(&self, signed_tx_hex: String) -> TxResult {
-        use bitcoin::consensus::encode::deserialize_hex;
-        use bitcoin::Transaction;
-
-        let Some(inner) = &self.inner else {
-            return TxResult::failed(BackendErrorKind::Other, "Account not initialized".into());
-        };
-
-        let tx: Transaction = match deserialize_hex(&signed_tx_hex) {
-            Ok(tx) => tx,
-            Err(e) => {
-                return TxResult::failed(
-                    BackendErrorKind::InvalidInput,
-                    format!("Invalid transaction hex: {e}"),
-                );
-            }
-        };
-
-        let txid = tx.compute_txid();
-
-        if let Err(e) = broadcast_via_electrum(&inner.electrum_url, inner.verify_certificate, &tx) {
-            return TxResult::failed(e.kind, e.message);
+        match hex::decode(&signed_tx_hex) {
+            Ok(transaction) => self.broadcast_report(&transaction).tx_result(),
+            Err(e) => TxResult::failed(
+                BackendErrorKind::InvalidInput,
+                format!("Invalid transaction hex: {e}"),
+            ),
         }
-
-        // Reflect the spend locally so spent SP coins drop from spendable at once
-        // (sub-account inputs are handled by their own Electrum listeners).
-        if let Err(e) = inner.account.record_unconfirmed_spend(&tx) {
-            log::warn!("record_unconfirmed_spend after broadcast failed: {e}");
-        }
-
-        TxResult::succeeded(txid.to_string())
     }
 
     /// Finalize a signed PSBT and return transaction hex.
@@ -1439,6 +1410,199 @@ fn validate_psbt_via_electrum(
     })
 }
 
+// Account UI services
+impl Account {
+    pub fn funds_snapshot(&self) -> FundsSnapshot {
+        if self.inner.is_none() {
+            return services::funds_failed(NOT_INITIALIZED.into());
+        }
+        // Coins first: a transaction written meanwhile still covers them.
+        let coins = self.coins();
+        let balance = self.spendable_coins();
+        match self.tx_snapshot() {
+            Ok(snapshot) => {
+                // A silent payment or single-key coin has no timelocked path.
+                let spendable = coins
+                    .iter()
+                    .filter(|coin| !coin.spent)
+                    .map(|coin| coin.outpoint.clone())
+                    .collect();
+                services::funds(coins, spendable, balance, snapshot.history)
+            }
+            Err(error) => services::funds_failed(error),
+        }
+    }
+
+    pub fn labels(&self) -> LabelSnapshot {
+        let Some(inner) = &self.inner else {
+            return services::labels_failed(NOT_INITIALIZED.into());
+        };
+        let mut stores = vec![inner.account.label_store().as_ref()];
+        stores.extend(
+            inner
+                .account
+                .scanners()
+                .map(|scanner| scanner.label_store().as_ref()),
+        );
+        services::label_snapshot(&stores)
+    }
+
+    /// Coin and address labels live in the root store; a transaction label is written to
+    /// the root and every sub-account store.
+    pub fn set_label(&self, kind: LabelKind, id: String, text: String) -> LabelEditResult {
+        let Some(inner) = &self.inner else {
+            return services::label_failed(NOT_INITIALIZED.into());
+        };
+        let key = match services::label_key(kind, &id, inner.network) {
+            Ok(key) => key,
+            Err(error) => return services::label_failed(error),
+        };
+        let root = inner.account.label_store();
+        services::label_edit(root, &key, || match &key {
+            LabelKey::Transaction(txid) => {
+                let mut result = inner
+                    .account
+                    .try_update_tx_label(*txid, text.clone())
+                    .map_err(|e| format!("Label is not saved: {e}. Edit it again to retry."));
+                for scanner in inner.account.scanners() {
+                    result = result.and(edit_scanner_label(scanner, key.clone(), text.clone()));
+                }
+                result
+            }
+            LabelKey::OutPoint(outpoint) => inner
+                .account
+                .try_update_coin_label(*outpoint, text.clone())
+                .map_err(|e| format!("Label is not saved: {e}. Edit it again to retry.")),
+            LabelKey::Address(_) => services::edit_store_label(root, key.clone(), text.clone()),
+        })
+    }
+
+    pub fn receive_kinds(&self) -> Vec<ReceiveKind> {
+        let mut kinds = vec![ReceiveKind {
+            id: SP_KIND.into(),
+            reusable: true,
+        }];
+        for script in [SubAccountScript::Segwit, SubAccountScript::Taproot] {
+            if self.sub_account_index(script).is_some() {
+                kinds.push(ReceiveKind {
+                    id: script.kind().into(),
+                    reusable: false,
+                });
+            }
+        }
+        kinds
+    }
+
+    pub fn receive_addresses(&self) -> Vec<ReceiveAddress> {
+        let Some(inner) = &self.inner else {
+            return Vec::new();
+        };
+        let mut addresses = vec![ReceiveAddress {
+            kind: SP_KIND.into(),
+            address: inner.account.sp_address().to_string(),
+            descriptor: inner.descriptor.clone(),
+            path: "m".into(),
+        }];
+        for scanner in inner.account.scanners() {
+            let Some(script) = SubAccountScript::of(&scanner.descriptor()) else {
+                continue;
+            };
+            let (receive, _) = scanner.generated_addresses();
+            for entry in receive
+                .into_iter()
+                .filter(|entry| entry.index >= FIRST_RECEIVE_INDEX)
+            {
+                addresses.push(ReceiveAddress {
+                    kind: script.kind().into(),
+                    address: entry.address.assume_checked().to_string(),
+                    descriptor: scanner.descriptor_str(),
+                    path: format!("0/{}", entry.index),
+                });
+            }
+        }
+        addresses
+    }
+
+    /// Through the scanner's locked store, so it runs beside the account's other readers.
+    pub fn new_receive_address(&self, kind: &str) -> ReceiveAddressResult {
+        let address = match (kind, SubAccountScript::of_kind(kind)) {
+            (SP_KIND, _) => self.sp_address(),
+            (_, Some(script)) => {
+                let scanner = self.sub_account_index(script).and_then(|index| {
+                    self.inner
+                        .as_ref()
+                        .and_then(|inner| inner.account.scanners().nth(index))
+                });
+                match scanner.map(services::next_receive_address) {
+                    Some(Ok(address)) => address,
+                    Some(Err(error)) => return services::address_failed(error),
+                    None => String::new(),
+                }
+            }
+            _ => return services::address_failed(format!("Unknown address kind '{kind}'")),
+        };
+        if address.is_empty() {
+            return services::address_failed(format!("This account has no {kind} address"));
+        }
+        let verify = self.address_verify_info(&address);
+        ReceiveAddressResult {
+            is_ok: true,
+            error: String::new(),
+            address: ReceiveAddress {
+                kind: kind.into(),
+                address,
+                descriptor: verify.descriptor,
+                path: verify.path,
+            },
+        }
+    }
+
+    pub fn craft_transaction(&self, tx_template: TransactionTemplate) -> CraftOutcome {
+        services::craft(tx_template, |template| self.simulate_transaction(template))
+    }
+
+    pub fn select_transaction_coins(&self, tx_template: TransactionTemplate) -> CraftOutcome {
+        services::select(tx_template, |template| self.simulate_transaction(template))
+    }
+
+    pub fn finalize_transaction(&self, tx_template: TransactionTemplate) -> UnsignedPsbt {
+        services::finalizable(&tx_template)
+            .and_then(|()| {
+                let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+                Self::unsigned_v2(inner, &tx_template)?
+                    .serialize()
+                    .map_err(|e| format!("{e:?}"))
+            })
+            .into()
+    }
+
+    pub fn broadcast_report(&self, transaction: &[u8]) -> BroadcastReport {
+        let tx = match services::decode_transaction(transaction) {
+            Ok(tx) => tx,
+            Err(undelivered) => return BroadcastReport::undelivered(String::new(), undelivered),
+        };
+        let txid = tx.compute_txid().to_string();
+        let Some(inner) = &self.inner else {
+            return BroadcastReport::undelivered(
+                txid,
+                Undelivered::not_sent(BackendErrorKind::Other, NOT_INITIALIZED),
+            );
+        };
+        if let Err(undelivered) =
+            broadcast_via_electrum(&inner.electrum_url, inner.verify_certificate, &tx)
+        {
+            return BroadcastReport::undelivered(txid, undelivered);
+        }
+        // Reflect the spend locally so spent SP coins drop from spendable at once
+        // (sub-account inputs are handled by their own Electrum listeners).
+        let mut warnings = Vec::new();
+        if let Err(e) = inner.account.record_unconfirmed_spend(&tx) {
+            warnings.push(format!("The transaction is not recorded locally: {e}"));
+        }
+        BroadcastReport::accepted(txid, warnings)
+    }
+}
+
 /// Fetch a transaction, using cache to avoid duplicate requests.
 fn fetch_or_cache_tx(
     client: &mut bwk_sp::bwk::bwk_electrum::client::Client,
@@ -1455,18 +1619,19 @@ fn fetch_or_cache_tx(
     Ok(tx)
 }
 
-/// Broadcast a transaction via Electrum server.
+/// Broadcast a transaction via Electrum server. A failure says whether the transaction
+/// may have reached the server.
 pub(crate) fn broadcast_via_electrum(
     electrum_url: &str,
     verify_certificate: bool,
     tx: &bitcoin::Transaction,
-) -> Result<(), BackendFailure> {
+) -> Result<(), Undelivered> {
     use bitcoin::consensus::encode::serialize_hex;
     use bwk_sp::bwk::bwk_electrum::electrum::{request::Request, response::Response};
     use std::collections::HashMap;
 
     if electrum_url.is_empty() {
-        return Err(BackendFailure::new(
+        return Err(Undelivered::not_sent(
             BackendErrorKind::InvalidInput,
             "Electrum server address not configured",
         ));
@@ -1474,19 +1639,19 @@ pub(crate) fn broadcast_via_electrum(
 
     let (host, port, scheme) = bwk_sp::bwk::bwk_electrum::url::parse_electrum_url(electrum_url)
         .map_err(|e| {
-            BackendFailure::new(
+            Undelivered::not_sent(
                 BackendErrorKind::InvalidInput,
                 format!("Invalid electrum URL '{electrum_url}': {e}"),
             )
         })?;
     let host = host.ok_or_else(|| {
-        BackendFailure::new(
+        Undelivered::not_sent(
             BackendErrorKind::InvalidInput,
             "Invalid electrum URL: missing host",
         )
     })?;
     let port = port.ok_or_else(|| {
-        BackendFailure::new(
+        Undelivered::not_sent(
             BackendErrorKind::InvalidInput,
             "Invalid electrum URL: missing port",
         )
@@ -1496,7 +1661,7 @@ pub(crate) fn broadcast_via_electrum(
     let mut client = bwk_sp::bwk::bwk_electrum::raw_client::Client::new_ssl_maybe(&host, port, ssl)
         .certificate_check(crate::config::certificate_check(verify_certificate))
         .map_err(|e| {
-            BackendFailure::new(
+            Undelivered::not_sent(
                 BackendErrorKind::InvalidInput,
                 format!("Invalid electrum URL '{electrum_url}': {e}"),
             )
@@ -1506,15 +1671,16 @@ pub(crate) fn broadcast_via_electrum(
         .map_err(|e| {
             let msg = format!("Connection to {electrum_url} failed:\n{e}");
             log::error!("{msg}");
-            BackendFailure::new(BackendErrorKind::Network, msg)
+            Undelivered::not_sent(BackendErrorKind::Network, msg)
         })?;
 
     let raw_tx = serialize_hex(tx);
     let request = Request::tx_broadcast(raw_tx);
+    // From here on the server may hold part or all of the request.
     client.try_send(&request).map_err(|e| {
         let msg = format!("Failed to send to {electrum_url}:\n{e}");
         log::error!("{msg}");
-        BackendFailure::new(BackendErrorKind::Network, msg)
+        Undelivered::unknown(BackendErrorKind::Network, msg)
     })?;
 
     let req_id = request.id;
@@ -1524,19 +1690,26 @@ pub(crate) fn broadcast_via_electrum(
     let responses = client.recv(&index).map_err(|e| {
         let msg = format!("No response from {electrum_url}:\n{e}");
         log::error!("{msg}");
-        BackendFailure::new(BackendErrorKind::Network, msg)
+        Undelivered::unknown(BackendErrorKind::Network, msg)
     })?;
 
     for r in responses {
         match r {
             Response::TxBroadcast(resp) if resp.id == req_id => return Ok(()),
+            Response::Error(e) if e.id == req_id && services::already_known(&e.error.message) => {
+                log::info!(
+                    "{electrum_url} already holds the transaction: {}",
+                    e.error.message
+                );
+                return Ok(());
+            }
             Response::Error(e) if e.id == req_id => {
                 let msg = format!(
                     "Server {electrum_url} rejected transaction:\n{}",
                     e.error.message
                 );
                 log::error!("{msg}");
-                return Err(BackendFailure::new(BackendErrorKind::Broadcast, msg));
+                return Err(Undelivered::rejected(msg));
             }
             _ => {}
         }
@@ -1544,7 +1717,7 @@ pub(crate) fn broadcast_via_electrum(
 
     let msg = format!("Unexpected response from {electrum_url}");
     log::error!("{msg}");
-    Err(BackendFailure::new(BackendErrorKind::Electrum, msg))
+    Err(Undelivered::unknown(BackendErrorKind::Electrum, msg))
 }
 
 /// Convert unified bwk Notification to Silent FFI Notification.

@@ -25,6 +25,7 @@ pub mod policy;
 #[cfg(all(test, unix))]
 mod removal_process_tests;
 pub mod saved_psbt;
+mod services;
 pub mod spending;
 pub mod state_crypt;
 pub mod storage;
@@ -539,6 +540,118 @@ mod ffi {
     pub struct LabelEditResult {
         pub is_ok: bool,
         pub error: String,
+        /// The label held in RAM changed, even when saving it failed.
+        pub changed: bool,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum LabelKind {
+        Address,
+        Outpoint,
+        Transaction,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct LabelEntry {
+        pub kind: LabelKind,
+        /// The address, the `txid:vout` outpoint or the txid.
+        pub id: String,
+        pub text: String,
+    }
+
+    /// Every label the account holds in RAM, saved or not.
+    #[derive(Debug, Clone)]
+    pub struct LabelSnapshot {
+        pub is_ok: bool,
+        pub error: String,
+        pub labels: Vec<LabelEntry>,
+    }
+
+    /// Coins, balance and history read together from the account's stores.
+    #[derive(Debug, Clone)]
+    pub struct FundsSnapshot {
+        pub is_ok: bool,
+        pub error: String,
+        /// Spent coins included.
+        pub coins: Vec<RustCoin>,
+        /// The outpoints of the unspent coins a spend path can spend now.
+        pub spendable: Vec<String>,
+        pub balance: CoinState,
+        pub history: Vec<RustTx>,
+        /// Every coin's funding transaction is in the history: false while a store
+        /// writes a coin before its transaction.
+        pub history_complete: bool,
+    }
+
+    /// A kind of address the account receives on.
+    #[derive(Debug, Clone)]
+    pub struct ReceiveKind {
+        /// "sp", "segwit" or "taproot".
+        pub id: String,
+        /// One static address, handed out again and again.
+        pub reusable: bool,
+    }
+
+    /// A receive address the account handed out, with what a device needs to show it.
+    #[derive(Debug, Clone)]
+    pub struct ReceiveAddress {
+        pub kind: String,
+        pub address: String,
+        pub descriptor: String,
+        pub path: String,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ReceiveAddressResult {
+        pub is_ok: bool,
+        pub error: String,
+        pub address: ReceiveAddress,
+    }
+
+    /// A transaction template checked against the account's coins.
+    #[derive(Debug, Clone)]
+    pub struct CraftOutcome {
+        /// Buildable as it is: inputs given, funds enough, recipients valid.
+        pub complete: bool,
+        pub error: String,
+        /// The template, with the MAX output's amount resolved once complete.
+        pub transaction: TransactionTemplate,
+    }
+
+    /// The unsigned PSBTv2 of a complete template.
+    #[derive(Debug, Clone)]
+    pub struct UnsignedPsbt {
+        pub is_ok: bool,
+        pub error: String,
+        pub psbt: Vec<u8>,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum BroadcastOutcome {
+        /// The server took the transaction.
+        Accepted,
+        /// The transaction did not reach the network, or the server refused it.
+        Rejected,
+        /// Sent, but whether the server took it is not known.
+        Unknown,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct BroadcastReport {
+        pub outcome: BroadcastOutcome,
+        pub txid: String,
+        pub kind: BackendErrorKind,
+        pub error: String,
+        /// After acceptance: what the account failed to record locally.
+        pub warnings: Vec<String>,
+    }
+
+    /// One endpoint to save, as Settings edits it.
+    #[derive(Debug, Clone)]
+    pub struct EndpointSetting {
+        pub server: BackendServer,
+        pub url: String,
+        pub verify_certificate: bool,
     }
 
     #[derive(Debug, Clone, Default)]
@@ -1780,6 +1893,16 @@ mod ffi {
             url: String,
             verify_certificate: bool,
         ) -> EndpointResult;
+        /// Tests the endpoint against `network`, saving nothing. Blocking.
+        fn test_endpoint(
+            server: BackendServer,
+            url: String,
+            verify_certificate: bool,
+            network: Network,
+        ) -> EndpointResult;
+        /// Persists `endpoints` to the account's config, untested, all or none. Does
+        /// not touch a live connection.
+        fn save_endpoints(account_name: String, endpoints: Vec<EndpointSetting>) -> EndpointResult;
 
         /// The height of the chain tip the Electrum server at `address` follows.
         /// Blocking: call it off the GUI thread.
@@ -2211,6 +2334,29 @@ mod ffi {
         /// Checks for output address reuse and already-spent inputs.
         /// Blocking call - must be called from a background thread.
         fn validate_before_sign(self: &Account, psbt_result: &PsbtResult) -> PsbtValidation;
+
+        /// Coins, balance and history for the published account read model.
+        fn funds_snapshot(self: &Account) -> FundsSnapshot;
+        /// The root and every sub-account label, RAM edits included.
+        fn labels(self: &Account) -> LabelSnapshot;
+        /// An empty text removes the label.
+        fn set_label(self: &Account, kind: LabelKind, id: String, text: String) -> LabelEditResult;
+        fn receive_kinds(self: &Account) -> Vec<ReceiveKind>;
+        /// The silent payment address, then every generated sub-account address.
+        fn receive_addresses(self: &Account) -> Vec<ReceiveAddress>;
+        /// Hands out an address of `kind`: the static one for "sp". Persists the tip.
+        fn new_receive_address(self: &Account, kind: &str) -> ReceiveAddressResult;
+        /// Checks the template against its own inputs: none given is incomplete.
+        fn craft_transaction(self: &Account, tx_template: TransactionTemplate) -> CraftOutcome;
+        /// Replaces the template's inputs by the ones coin selection picks.
+        fn select_transaction_coins(
+            self: &Account,
+            tx_template: TransactionTemplate,
+        ) -> CraftOutcome;
+        /// The unsigned PSBTv2 of a template with inputs. Changes no account state.
+        fn finalize_transaction(self: &Account, tx_template: TransactionTemplate) -> UnsignedPsbt;
+        /// Broadcasts consensus-encoded `transaction`, then records it locally.
+        fn broadcast_report(self: &Account, transaction: &[u8]) -> BroadcastReport;
     }
 
     // ===== Poll Methods =====
@@ -2815,6 +2961,41 @@ mod ffi {
         fn broadcast_transaction(self: &MusigAccount, signed_tx_hex: String) -> TxResult;
         /// Blocking: call from a background thread.
         fn validate_before_sign(self: &MusigAccount, psbt_result: &PsbtResult) -> PsbtValidation;
+
+        fn funds_snapshot(self: &MusigAccount) -> FundsSnapshot;
+        fn labels(self: &MusigAccount) -> LabelSnapshot;
+        fn set_label(
+            self: &MusigAccount,
+            kind: LabelKind,
+            id: String,
+            text: String,
+        ) -> LabelEditResult;
+        fn receive_kinds(self: &MusigAccount) -> Vec<ReceiveKind>;
+        /// Every generated receive address.
+        fn receive_addresses(self: &MusigAccount) -> Vec<ReceiveAddress>;
+        fn new_receive_address(self: &MusigAccount, kind: &str) -> ReceiveAddressResult;
+        fn craft_transaction(self: &MusigAccount, tx_template: TransactionTemplate)
+            -> CraftOutcome;
+        fn select_transaction_coins(
+            self: &MusigAccount,
+            tx_template: TransactionTemplate,
+        ) -> CraftOutcome;
+        /// The change goes to the next unused change index, which stays unused:
+        /// adopt_transaction registers it.
+        fn finalize_transaction(
+            self: &MusigAccount,
+            tx_template: TransactionTemplate,
+        ) -> UnsignedPsbt;
+        /// Takes `psbt`, a finalize_transaction answer, as the transaction in flight:
+        /// registers its change index durably, refusing one another adoption took,
+        /// restricts it to `spend` and saves it.
+        fn adopt_transaction(
+            self: &MusigAccount,
+            tx_template: TransactionTemplate,
+            spend: MusigSpendLeaf,
+            psbt: &[u8],
+        ) -> Box<PsbtResult>;
+        fn broadcast_report(self: &MusigAccount, transaction: &[u8]) -> BroadcastReport;
     }
 }
 
@@ -3401,24 +3582,27 @@ pub use error::{notification_error_kind, validation_error_kind};
 pub use feed::{new_feed_state, FeedState};
 pub use ffi::{
     AccountCreationResult, AmountParseResult, BackendErrorKind, BackendInfo, BackendServer,
-    CameraFrameResult, CameraListResult, ConnectionResult, CoordinationResult, EndpointPhase,
-    EndpointResult, FeeParseResult, FeedPrice, FeedQuote, FeedSelection, FeedSourceState,
-    FingerprintsResult, KeyDescriptor, KeyDevice, KeyFileFailure, KeyInfo, KeyInfoResult,
-    KeyOpResult, KeyRouteKind, KeyUnusableReason, KeyXpub, LiveDevice, LogLevel, MnemonicResult,
-    MusigAttemptSnapshot, MusigCreationRequest, MusigFinalizeResult, MusigRound, MusigSpendLeaf,
-    Network, Notification, NotificationFlag, Output, PluginAccess, PluginAccessHistory,
-    PluginAccessRequest, PluginGrant, PluginGrantedAccess, PluginMetadata, PluginMetadataField,
-    PluginMetadataKind, PluginRemovalEntry, PluginRemovalListResult, PluginRemovalPhase,
-    PolicyCompileResult, PolicyDraft, PolicyDraftError, PolicyDraftResult, PolicyDurationUnit,
-    PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey,
-    PolicyReviewPath, PolicySemantic, PolicySpec, PsbtFileResult, PsbtPayloadResult,
-    PsbtValidation, QrErrorKind, QrMessageResult, QrMusigSignerRoute, QrResponseKind,
+    BroadcastOutcome, BroadcastReport, CameraFrameResult, CameraListResult, ConnectionResult,
+    CoordinationResult, CraftOutcome, EndpointPhase, EndpointResult, EndpointSetting,
+    FeeParseResult, FeedPrice, FeedQuote, FeedSelection, FeedSourceState, FingerprintsResult,
+    FundsSnapshot, KeyDescriptor, KeyDevice, KeyFileFailure, KeyInfo, KeyInfoResult, KeyOpResult,
+    KeyRouteKind, KeyUnusableReason, KeyXpub, LabelEditResult, LabelEntry, LabelKind,
+    LabelSnapshot, LiveDevice, LogLevel, MnemonicResult, MusigAttemptSnapshot,
+    MusigCreationRequest, MusigFinalizeResult, MusigRound, MusigSpendLeaf, Network, Notification,
+    NotificationFlag, Output, PluginAccess, PluginAccessHistory, PluginAccessRequest, PluginGrant,
+    PluginGrantedAccess, PluginMetadata, PluginMetadataField, PluginMetadataKind,
+    PluginRemovalEntry, PluginRemovalListResult, PluginRemovalPhase, PolicyCompileResult,
+    PolicyDraft, PolicyDraftError, PolicyDraftResult, PolicyDurationUnit, PolicyKey, PolicyKeyType,
+    PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey, PolicyReviewPath, PolicySemantic,
+    PolicySpec, PsbtFileResult, PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult,
+    QrMusigSignerRoute, QrResponseKind, ReceiveAddress, ReceiveAddressResult, ReceiveKind,
     RegtestDefaults, RetryDecision, RustCoin, RustSelectedInput, RustSpendCoin, RustSpendLock,
     RustSpendVariant, RustTx, RustTxDetails, RustTxIo, SavedPsbtAttempt, SavedPsbtEntry,
     SavedPsbtInput, SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset,
     SavedPsbtRestore, SendAmounts, SignResult, SigningCandidate, SigningPlan, SigningProgress,
     SigningStage, SpCreationRequest, SpendAvailability, SpendCoinStatus, SpendCoinsResult,
     SpendError, SpendLockKind, SpendMaturity, TransactionSimulation, TransactionTemplate,
+    UnsignedPsbt,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{
@@ -3465,6 +3649,7 @@ pub use policy::{
     bip87_account_path, compile_policy, policy_duration_blocks, policy_threshold, preview_policy,
     renewable_height, resolve_policy_draft, review_policy,
 };
+pub use services::{save_endpoints, test_endpoint};
 pub use state_crypt::{
     state_clear_file, state_create_with_device, state_create_with_password, state_device_path,
     state_draw_index, state_lock, state_unlock_info, state_unlock_with_device,

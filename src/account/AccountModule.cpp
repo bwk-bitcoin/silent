@@ -1,6 +1,8 @@
 #include "account/AccountModule.h"
 
 #include "account/AccountBackend.h"
+#include "account/services/ServiceAdapters.h"
+#include "account/services/ServiceContext.h"
 #include "interfaces/host.h"
 
 #include <QPointer>
@@ -94,6 +96,24 @@ void AccountModule::watchAccount(const QString &id, AccountBackend *backend) {
     backend->setProperty("logicalAccountId", id);
     connect(backend, &AccountBackend::shutdownFinished, this, &AccountModule::onShutdownFinished,
             qontrol::UNIQUE);
+}
+
+auto AccountModule::service(const QString &account, backend::Network network,
+                            backend::ServiceKind kind) -> backend::IService * {
+    auto runtime = m_runtimes.value(account);
+    if (runtime.backend == nullptr || runtime.stopped || m_pending.contains(account) ||
+        runtime.backend->accountLoading() || !runtime.backend->hasAccountMetadata()) {
+        return nullptr;
+    }
+    auto *context = runtime.backend->services();
+    if (context == nullptr || context->network() != network) {
+        return nullptr;
+    }
+    return serviceAdapter(kind, context, this);
+}
+
+void AccountModule::releaseService(backend::IService *service) {
+    service->deleteLater();
 }
 
 void AccountModule::deleteAccount(ReqId req_id, const QString &id) {

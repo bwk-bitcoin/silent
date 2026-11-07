@@ -1,23 +1,34 @@
 //! MusigAccount: CXX surface over bwk::Account and saved transaction progress.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     str::FromStr,
     sync::{mpsc, Arc, Mutex, MutexGuard},
 };
 
-use bitcoin::consensus::encode::{deserialize_hex, serialize_hex};
-use bitcoin::taproot::TapLeafHash;
-use bwk::account::{Account as BwkAccount, SpendLeaf, SpendPath};
-use bwk::bwk_coin::{CoinStatus, KeyChain};
-use bwk::bwk_descriptor::{
-    descriptor::{Descriptor, DescriptorDerivator},
-    wallet::WalletDescriptorExt,
+use bitcoin::{
+    consensus::encode::{deserialize_hex, serialize_hex},
+    taproot::TapLeafHash,
+    ScriptBuf,
 };
-use bwk::bwk_electrum::notification::Notification as BwkNotification;
-use bwk::bwk_sign::musig::MusigRound as BwkMusigRound;
-use bwk::bwk_tx::{
-    bwk_psbt::PsbtV2, recipient::Recipient, transaction::Amount, tx_builder::TxBuilder,
+use bwk::{
+    account::{Account as BwkAccount, SpendLeaf, SpendPath},
+    bwk_coin::{CoinStatus, KeyChain},
+    bwk_descriptor::{
+        descriptor::{Descriptor, DescriptorDerivator},
+        wallet::WalletDescriptorExt,
+    },
+    bwk_electrum::{
+        label_store::LabelKey, notification::Notification as BwkNotification,
+        scanner::ElectrumScanner,
+    },
+    bwk_sign::musig::MusigRound as BwkMusigRound,
+    bwk_tx::{
+        bwk_psbt::PsbtV2,
+        recipient::{ChangeRecipientProvider, Recipient},
+        transaction::Amount,
+        tx_builder::TxBuilder,
+    },
 };
 use bwk_sp::receiver::RecipientAddress;
 
@@ -29,18 +40,21 @@ use crate::{
     account_storage::{AccountStorage, Factory},
     config::{parse_electrum_url, Config},
     ffi::{
-        AddressVerifyInfo, CoinState, MusigAttemptSnapshot, MusigCosignerStatus,
+        AddressVerifyInfo, BroadcastReport, CoinState, CraftOutcome, FundsSnapshot,
+        LabelEditResult, LabelKind, LabelSnapshot, MusigAttemptSnapshot, MusigCosignerStatus,
         MusigDescriptorResult, MusigElectrumUrlResult, MusigFinalizeResult, MusigReceiveAddress,
         MusigRound, MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, PsbtValidation,
-        RustCoin, RustTx, RustTxDetails, SavedPsbtEntry, SavedPsbtList, SavedPsbtMutation,
-        SavedPsbtReset, SavedPsbtRestore, TransactionSimulation, TransactionTemplate, TxResult,
+        ReceiveAddress, ReceiveAddressResult, ReceiveKind, RustCoin, RustTx, RustTxDetails,
+        SavedPsbtEntry, SavedPsbtList, SavedPsbtMutation, SavedPsbtReset, SavedPsbtRestore,
+        TransactionSimulation, TransactionTemplate, TxResult, UnsignedPsbt,
     },
     keys::{
         bridge::{merge_signed_psbt, musig_session_restart},
         psbt::ordinary_signature_complete,
     },
     saved_psbt::{apply_chain_state, frozen_entry, mutation_error, SavedPsbtStore},
-    tx_details::{details_result, TxSnapshot},
+    services::{self, Undelivered, FIRST_RECEIVE_INDEX, TAPROOT_KIND},
+    tx_details::{details_result, edit_scanner_label, TxSnapshot},
 };
 
 /// A MuSig2 policy account, wrapping bwk::Account.
@@ -63,9 +77,6 @@ struct MusigAccountInner {
 }
 
 pub const MUSIG_PLUGIN_ID: &str = "musig";
-
-/// The receive index a new account hands out first: bwk moves its tip off 0 before use.
-const FIRST_RECEIVE_INDEX: u32 = 1;
 
 const NOT_INITIALIZED: &str = "Account not initialized";
 
@@ -621,27 +632,13 @@ impl MusigAccount {
         outpoint: String,
         label: String,
     ) -> crate::ffi::LabelEditResult {
-        self.edit_coin_label(&outpoint, label).into()
-    }
-
-    fn edit_coin_label(&self, outpoint: &str, label: String) -> Result<(), String> {
-        let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
-        let outpoint = parse_outpoint(outpoint).map_err(|e| e.to_string())?;
-        inner
-            .account
-            .scanner()
-            .try_update_coin_label(outpoint, label)
-            .map_err(|e| format!("Label is not saved: {e}. Edit it again to retry."))
+        self.set_label(LabelKind::Outpoint, outpoint, label)
     }
 
     /// Payment history, newest first.
     pub fn payment_history(&self) -> Vec<RustTx> {
         match self.tx_snapshot() {
-            Ok(snapshot) => snapshot
-                .history
-                .into_iter()
-                .filter(|tx| tx.status != "finalized" && tx.status != "broadcast")
-                .collect(),
+            Ok(snapshot) => wallet_history(snapshot.history),
             Err(error) => {
                 log::error!("payment_history: {error}");
                 Vec::new()
@@ -709,17 +706,7 @@ impl MusigAccount {
     }
 
     pub fn update_tx_label(&self, txid: String, label: String) -> crate::ffi::LabelEditResult {
-        self.edit_tx_label(&txid, label).into()
-    }
-
-    fn edit_tx_label(&self, txid: &str, label: String) -> Result<(), String> {
-        let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
-        let txid = txid.parse::<bitcoin::Txid>().map_err(|e| e.to_string())?;
-        crate::tx_details::edit_scanner_label(
-            inner.account.scanner(),
-            bwk::bwk_electrum::label_store::LabelKey::Transaction(txid),
-            label,
-        )
+        self.set_label(LabelKind::Transaction, txid, label)
     }
 
     /// Descriptor and derivation path to verify `address` on a signing device. Empty
@@ -747,6 +734,7 @@ impl MusigAccount {
     fn build_tx_builder(
         inner: &MusigAccountInner,
         tx_template: &TransactionTemplate,
+        builder: TxBuilder,
     ) -> Result<TxBuilder, TemplateError> {
         let network: bitcoin::Network = inner.config.network.into();
         let mut max_addr = None;
@@ -768,7 +756,7 @@ impl MusigAccount {
 
         let feerate_msats_vb =
             crate::account::fee_rate_msats(tx_template.fee_rate, tx_template.fee)?;
-        let mut builder = inner.account.tx_builder();
+        let mut builder = builder;
         if tx_template.fee > 0 {
             builder = builder.fee(tx_template.fee);
         } else {
@@ -831,7 +819,8 @@ impl MusigAccount {
             );
         };
 
-        let builder = match Self::build_tx_builder(inner, &tx_template) {
+        let builder = match Self::build_tx_builder(inner, &tx_template, inner.account.tx_builder())
+        {
             Ok(b) => b,
             Err(e) => return err_sim(crate::ffi::BackendErrorKind::InvalidInput, e.to_string()),
         };
@@ -868,14 +857,71 @@ impl MusigAccount {
         }
     }
 
-    /// Prepare the PSBT, then restrict it to `spend` before round 1.
+    /// Prepare the PSBT, then restrict it to `spend` before round 1. Inputs left empty
+    /// are picked by coin selection, as before.
     pub fn prepare_transaction(
         &self,
         tx_template: TransactionTemplate,
         spend: MusigSpendLeaf,
     ) -> Box<PsbtResult> {
+        let Some(inner) = &self.inner else {
+            return Box::new(PsbtResult::failed_kind(
+                crate::ffi::BackendErrorKind::Other,
+                NOT_INITIALIZED.to_string(),
+            ));
+        };
+        match Self::unsigned_psbt(inner, &tx_template) {
+            Ok(psbt) => self.adopt(tx_template, spend, psbt),
+            Err(error) => {
+                log::error!("prepare_transaction: {error}");
+                Box::new(PsbtResult::failed(error))
+            }
+        }
+    }
+
+    /// The unsigned PSBT of `tx_template`. Its change goes to the change index after the
+    /// registered tip, left unregistered: building changes no account state.
+    fn unsigned_psbt(
+        inner: &MusigAccountInner,
+        tx_template: &TransactionTemplate,
+    ) -> Result<bitcoin::Psbt, String> {
+        let scanner = inner.account.scanner();
+        let change = ChangeRecipientProvider::new(scanner.descriptor(), scanner.network())
+            .tip(change_tip(scanner));
+        let base = TxBuilder::new(Box::new(change)).coin_source(Box::new(scanner.coin_source()));
+        let mut builder =
+            Self::build_tx_builder(inner, tx_template, base).map_err(|e| e.to_string())?;
+        builder.generate().map_err(|e| format!("{e:?}"))
+    }
+
+    pub fn adopt_transaction(
+        &self,
+        tx_template: TransactionTemplate,
+        spend: MusigSpendLeaf,
+        psbt: &[u8],
+    ) -> Box<PsbtResult> {
+        let psbt = match crate::keys::psbt::parse_v2(psbt)
+            .map_err(|e| format!("Invalid PSBT: {e}"))
+            .and_then(|v2| {
+                v2.into_bitcoin_psbt()
+                    .map_err(|e| format!("Invalid PSBT: {e:?}"))
+            }) {
+            Ok(psbt) => psbt,
+            Err(error) => return Box::new(PsbtResult::failed(error)),
+        };
+        self.adopt(tx_template, spend, psbt)
+    }
+
+    /// Registers the change of `psbt`, restricts it to `spend`, saves it and makes it the
+    /// active attempt.
+    fn adopt(
+        &self,
+        tx_template: TransactionTemplate,
+        spend: MusigSpendLeaf,
+        mut psbt: bitcoin::Psbt,
+    ) -> Box<PsbtResult> {
         let failed = |error: String| {
-            log::error!("prepare_transaction: {error}");
+            log::error!("adopt_transaction: {error}");
             Box::new(PsbtResult::failed(error))
         };
         let mut active = match self.active.lock() {
@@ -888,15 +934,6 @@ impl MusigAccount {
                 crate::ffi::BackendErrorKind::Other,
                 NOT_INITIALIZED.to_string(),
             ));
-        };
-
-        let mut builder = match Self::build_tx_builder(inner, &tx_template) {
-            Ok(b) => b,
-            Err(e) => return failed(e.to_string()),
-        };
-        let mut psbt = match builder.generate() {
-            Ok(psbt) => psbt,
-            Err(e) => return failed(format!("{e:?}")),
         };
 
         let path = if spend.key_path {
@@ -922,6 +959,17 @@ impl MusigAccount {
             },
             Err(error) => return failed(format!("Cannot resolve selected spend path: {error}")),
         };
+        // A recipient on one of the account's change addresses is no change.
+        let network = inner.config.network.into();
+        let recipients: BTreeSet<_> = tx_template
+            .outputs
+            .iter()
+            .filter_map(|output| parse_recipient(&output.address, network).ok())
+            .map(|address| address.script_pubkey())
+            .collect();
+        if let Err(error) = register_change(inner.account.scanner(), &psbt, &recipients) {
+            return failed(error);
+        }
         if let Err(e) = inner.account.restrict_spend_path(&mut psbt, path) {
             return failed(format!("Failed to restrict the spend path: {e}"));
         }
@@ -1042,43 +1090,12 @@ impl MusigAccount {
 
     /// Broadcast a signed transaction via Electrum; the value is the txid.
     pub fn broadcast_transaction(&self, signed_tx_hex: String) -> TxResult {
-        let Some(inner) = &self.inner else {
-            return TxResult::failed(
-                crate::ffi::BackendErrorKind::Other,
-                NOT_INITIALIZED.to_string(),
-            );
-        };
-        let tx: bitcoin::Transaction = match deserialize_hex(&signed_tx_hex) {
-            Ok(tx) => tx,
-            Err(e) => {
-                return TxResult::failed(
-                    crate::ffi::BackendErrorKind::InvalidInput,
-                    format!("Invalid transaction hex: {e}"),
-                )
-            }
-        };
-        if let Err(e) = broadcast_via_electrum(
-            &inner.config.electrum_url,
-            inner.config.verify_certificate,
-            &tx,
-        ) {
-            return TxResult::failed(e.kind, e.message);
-        }
-        // Reflect the spend locally so the spent coins drop from spendable at once.
-        inner.account.scanner().record_unconfirmed_spend(&tx);
-        match self.saved_store() {
-            Ok(mut store) => {
-                if let Err(error) = store.broadcast(&tx) {
-                    log::error!("broadcast saved PSBT: {error}");
-                }
-            }
-            Err(error) => log::error!("broadcast saved PSBT: {error}"),
-        }
-        TxResult {
-            is_ok: true,
-            kind: crate::ffi::BackendErrorKind::None,
-            error: String::new(),
-            value: tx.compute_txid().to_string(),
+        match hex::decode(&signed_tx_hex) {
+            Ok(transaction) => self.broadcast_report(&transaction).tx_result(),
+            Err(e) => TxResult::failed(
+                crate::ffi::BackendErrorKind::InvalidInput,
+                format!("Invalid transaction hex: {e}"),
+            ),
         }
     }
 
@@ -1539,6 +1556,273 @@ fn attempt_error(error: String) -> MusigAttemptSnapshot {
         error,
         ..Default::default()
     }
+}
+
+// Account UI services
+impl MusigAccount {
+    pub fn funds_snapshot(&self) -> FundsSnapshot {
+        if self.inner.is_none() {
+            return services::funds_failed(NOT_INITIALIZED.into());
+        }
+        // Coins first: a transaction written meanwhile still covers them.
+        let coins = self.coins();
+        let balance = self.spendable_coins();
+        match self.tx_snapshot() {
+            Ok(snapshot) => {
+                let spendable = self.spendable_now(&coins);
+                services::funds(coins, spendable, balance, wallet_history(snapshot.history))
+            }
+            Err(error) => services::funds_failed(error),
+        }
+    }
+
+    /// The unspent coins a spend path can spend at the validated tip: a timelocked path
+    /// counts only once its lock is met.
+    fn spendable_now(&self, coins: &[RustCoin]) -> Vec<String> {
+        let Some(inner) = &self.inner else {
+            return Vec::new();
+        };
+        coins
+            .iter()
+            .filter(|coin| !coin.spent)
+            .filter(|coin| {
+                parse_outpoint(&coin.outpoint).is_ok_and(|outpoint| {
+                    inner
+                        .account
+                        .spend_leaves(&[outpoint])
+                        .is_ok_and(|leaves| leaves.iter().any(|leaf| leaf.spendable))
+                })
+            })
+            .map(|coin| coin.outpoint.clone())
+            .collect()
+    }
+
+    pub fn labels(&self) -> LabelSnapshot {
+        match &self.inner {
+            Some(inner) => {
+                services::label_snapshot(&[inner.account.scanner().label_store().as_ref()])
+            }
+            None => services::labels_failed(NOT_INITIALIZED.into()),
+        }
+    }
+
+    pub fn set_label(&self, kind: LabelKind, id: String, text: String) -> LabelEditResult {
+        let Some(inner) = &self.inner else {
+            return services::label_failed(NOT_INITIALIZED.into());
+        };
+        let key = match services::label_key(kind, &id, inner.config.network.into()) {
+            Ok(key) => key,
+            Err(error) => return services::label_failed(error),
+        };
+        let scanner = inner.account.scanner();
+        services::label_edit(scanner.label_store(), &key, || match &key {
+            // The scanner regenerates its coin view, which carries coin labels.
+            LabelKey::OutPoint(outpoint) => scanner
+                .try_update_coin_label(*outpoint, text.clone())
+                .map_err(|e| format!("Label is not saved: {e}. Edit it again to retry.")),
+            _ => edit_scanner_label(scanner, key.clone(), text.clone()),
+        })
+    }
+
+    pub fn receive_kinds(&self) -> Vec<ReceiveKind> {
+        vec![ReceiveKind {
+            id: TAPROOT_KIND.into(),
+            reusable: false,
+        }]
+    }
+
+    pub fn receive_addresses(&self) -> Vec<ReceiveAddress> {
+        let Some(inner) = &self.inner else {
+            return Vec::new();
+        };
+        let descriptor = inner.account.descriptor();
+        let (receive, _) = inner.account.scanner().generated_addresses();
+        receive
+            .into_iter()
+            .filter(|entry| entry.index >= FIRST_RECEIVE_INDEX)
+            .map(|entry| {
+                let verify = verify_info(&descriptor, KeyChain::Receive, entry.index);
+                ReceiveAddress {
+                    kind: TAPROOT_KIND.into(),
+                    address: entry.address.assume_checked().to_string(),
+                    descriptor: verify.descriptor,
+                    path: verify.path,
+                }
+            })
+            .collect()
+    }
+
+    /// Through the scanner's locked store, so it runs beside the account's other readers.
+    pub fn new_receive_address(&self, kind: &str) -> ReceiveAddressResult {
+        if kind != TAPROOT_KIND {
+            return services::address_failed(format!("Unknown address kind '{kind}'"));
+        }
+        let Some(inner) = &self.inner else {
+            return services::address_failed(NOT_INITIALIZED.into());
+        };
+        let address = match services::next_receive_address(inner.account.scanner()) {
+            Ok(address) => address,
+            Err(error) => return services::address_failed(error),
+        };
+        let verify = self.address_verify_info(&address);
+        ReceiveAddressResult {
+            is_ok: true,
+            error: String::new(),
+            address: ReceiveAddress {
+                kind: kind.into(),
+                address,
+                descriptor: verify.descriptor,
+                path: verify.path,
+            },
+        }
+    }
+
+    pub fn craft_transaction(&self, tx_template: TransactionTemplate) -> CraftOutcome {
+        services::craft(tx_template, |template| self.simulate_transaction(template))
+    }
+
+    pub fn select_transaction_coins(&self, tx_template: TransactionTemplate) -> CraftOutcome {
+        services::select(tx_template, |template| self.simulate_transaction(template))
+    }
+
+    pub fn finalize_transaction(&self, tx_template: TransactionTemplate) -> UnsignedPsbt {
+        services::finalizable(&tx_template)
+            .and_then(|()| {
+                let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+                let psbt = Self::unsigned_psbt(inner, &tx_template)?;
+                PsbtV2::from_bitcoin_psbt(psbt)
+                    .and_then(|v2| v2.serialize())
+                    .map_err(|e| format!("{e:?}"))
+            })
+            .into()
+    }
+
+    pub fn broadcast_report(&self, transaction: &[u8]) -> BroadcastReport {
+        let tx = match services::decode_transaction(transaction) {
+            Ok(tx) => tx,
+            Err(undelivered) => return BroadcastReport::undelivered(String::new(), undelivered),
+        };
+        let txid = tx.compute_txid().to_string();
+        let Some(inner) = &self.inner else {
+            return BroadcastReport::undelivered(
+                txid,
+                Undelivered::not_sent(crate::ffi::BackendErrorKind::Other, NOT_INITIALIZED),
+            );
+        };
+        if let Err(undelivered) = broadcast_via_electrum(
+            &inner.config.electrum_url,
+            inner.config.verify_certificate,
+            &tx,
+        ) {
+            return BroadcastReport::undelivered(txid, undelivered);
+        }
+        // Reflect the spend locally so the spent coins drop from spendable at once.
+        let scanner = inner.account.scanner();
+        scanner.record_unconfirmed_spend(&tx);
+        let mut warnings = Vec::new();
+        let recorded = match scanner.coin_store().lock() {
+            Ok(mut coins) => coins
+                .tx_store_mut()
+                .try_persist()
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        };
+        if let Err(error) = recorded {
+            warnings.push(format!("The transaction is not saved locally: {error}"));
+        }
+        let saved = self.saved_store().and_then(|mut store| {
+            store.broadcast(&tx)?;
+            match store.error() {
+                error if error.is_empty() => Ok(()),
+                error => Err(error),
+            }
+        });
+        if let Err(error) = saved {
+            log::error!("broadcast saved PSBT: {error}");
+            warnings.push(format!(
+                "The saved transaction is not marked broadcast: {error}"
+            ));
+        }
+        BroadcastReport::accepted(txid, warnings)
+    }
+}
+
+/// The wallet's own history, without the saved transactions it only finalized or
+/// broadcast.
+fn wallet_history(history: Vec<RustTx>) -> Vec<RustTx> {
+    history
+        .into_iter()
+        .filter(|tx| tx.status != "finalized" && tx.status != "broadcast")
+        .collect()
+}
+
+/// The last change index registered: the next PSBT pays change to the one after.
+fn change_tip(scanner: &ElectrumScanner) -> u32 {
+    scanner
+        .generated_addresses()
+        .1
+        .last()
+        .map_or(0, |entry| entry.index)
+}
+
+/// The change index `psbt` pays to, found among the scanner's change addresses past the
+/// `recipients` scripts. None when it pays no change.
+fn change_index(
+    scanner: &ElectrumScanner,
+    psbt: &bitcoin::Psbt,
+    recipients: &BTreeSet<ScriptBuf>,
+) -> Result<Option<u32>, String> {
+    let change: BTreeMap<_, _> = scanner
+        .address_entries()
+        .into_iter()
+        .filter(|entry| matches!(entry.account, KeyChain::Change))
+        .map(|entry| (entry.script(), entry.index))
+        .collect();
+    let mut indices = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .filter(|output| !recipients.contains(&output.script_pubkey))
+        .filter_map(|output| change.get(&output.script_pubkey).copied());
+    let found = indices.next();
+    if indices.next().is_some() {
+        return Err("The transaction pays change to two addresses".into());
+    }
+    Ok(found)
+}
+
+/// Registers the change index of `psbt` durably. An index at or below the registered
+/// tip is another adopted transaction's: this one must be crafted again.
+fn register_change(
+    scanner: &ElectrumScanner,
+    psbt: &bitcoin::Psbt,
+    recipients: &BTreeSet<ScriptBuf>,
+) -> Result<(), String> {
+    let Some(index) = change_index(scanner, psbt, recipients)? else {
+        return Ok(());
+    };
+    let mut coins = scanner.coin_store().lock().map_err(|e| e.to_string())?;
+    let persisted = {
+        let addresses = coins.address_store();
+        let mut addresses = addresses.lock().map_err(|e| e.to_string())?;
+        let tip = addresses
+            .get_generated_addresses()
+            .1
+            .last()
+            .map_or(0, |entry| entry.index);
+        if index <= tip {
+            return Err(format!(
+                "The change address {index} is already used by another transaction: \
+                 craft this transaction again"
+            ));
+        }
+        addresses.update_change(index);
+        addresses.try_persist()
+    };
+    // The coin view follows the new address entries, as bwk's own change tip does.
+    coins.generate();
+    persisted
+        .map_err(|e| format!("The change address is not saved: {e}. Craft this transaction again."))
 }
 
 /// A recipient as a bitcoin address of `network`; a silent payment address is refused.

@@ -1,0 +1,135 @@
+#pragma once
+
+#include "interfaces/backend/types.h"
+
+#include <QByteArray>
+#include <QHash>
+#include <QList>
+#include <QMutex>
+#include <QObject>
+#include <QString>
+#include <optional>
+
+class QTimer;
+
+namespace account {
+
+// What one account's UI services share: the read models its adapters publish, and the
+// requests they forward. Getters read the published models under a short lock, never
+// the account itself; the account side publishes them as its state changes, whether
+// or not anyone listens, so polling and notified consumers read the same data.
+// Requests answer through the completion signals, keyed by the token they were given,
+// possibly before the request call returns. GUI thread only, getters included: the
+// adapters reach the context through a QPointer, which another thread cannot read safely.
+class ServiceContext : public QObject {
+    Q_OBJECT
+
+public:
+    // One read of the coins, balance and history.
+    struct Funds {
+        QList<backend::Coin> coins;
+        backend::Balance balance;
+        QList<backend::Transaction> history;
+        // Every coin's funding transaction is in the history.
+        bool historyComplete = true;
+    };
+
+    struct Receiving {
+        QList<backend::AddressKind> kinds;
+        QList<backend::Address> addresses;
+        QHash<QString, backend::AddressVerification> verification;
+    };
+
+    ServiceContext(QString account, QObject *parent);
+
+    [[nodiscard]] auto account() const -> QString;
+    [[nodiscard]] auto network() const -> backend::Network;
+    [[nodiscard]] auto coins() const -> QList<backend::Coin>;
+    [[nodiscard]] auto balance() const -> backend::Balance;
+    [[nodiscard]] auto history() const -> QList<backend::Transaction>;
+    [[nodiscard]] auto transactionDetails(const QString &txid) const
+        -> std::optional<backend::TransactionDetails>;
+    [[nodiscard]] auto labels() const -> QList<backend::Label>;
+    [[nodiscard]] auto label(const backend::LabelKey &key) const -> QString;
+    [[nodiscard]] auto addressKinds() const -> QList<backend::AddressKind>;
+    [[nodiscard]] auto addresses() const -> QList<backend::Address>;
+    [[nodiscard]] auto addressVerification(const QString &address) const
+        -> std::optional<backend::AddressVerification>;
+    [[nodiscard]] auto state() const -> backend::BlockchainState;
+    [[nodiscard]] auto settings() const -> backend::Settings;
+
+    // Local and pure: no selection, persistence or network.
+    virtual auto craft(const backend::TransactionTemplate &transaction) -> backend::CraftResult = 0;
+    virtual auto finalize(const backend::TransactionTemplate &transaction)
+        -> std::optional<QByteArray> = 0;
+
+    virtual void selectCoins(backend::RequestId token,
+                             backend::TransactionTemplate transaction) = 0;
+    virtual void newAddress(backend::RequestId token, QString kind) = 0;
+    virtual void setLabel(backend::RequestId token, backend::LabelKey key, QString text) = 0;
+    virtual void fetchTransactionDetails(backend::RequestId token, QString txid) = 0;
+    // Connects, then disconnects with `start` false, every connection in turn.
+    virtual void connectAll(backend::RequestId token, bool start) = 0;
+    virtual void setConnected(backend::RequestId token, QString connection, bool connected) = 0;
+    virtual void refreshTip(backend::RequestId token, QString connection) = 0;
+    virtual void testEndpoint(backend::RequestId token, backend::Endpoint endpoint) = 0;
+    virtual void saveSettings(backend::RequestId token, backend::Settings settings) = 0;
+    virtual void broadcast(backend::RequestId token, QByteArray transaction) = 0;
+
+signals:
+    void coinsChanged();
+    void balanceChanged();
+    void historyChanged();
+    void transactionDetailsChanged(QString txid);
+    void labelsChanged();
+    void addressesChanged();
+    void stateChanged();
+    void settingsChanged();
+
+    void coinsSelected(backend::RequestId token, backend::CraftResult result);
+    void addressCreated(backend::RequestId token, backend::Address address);
+    void labelSaved(backend::RequestId token);
+    void transactionDetailsFetched(backend::RequestId token, backend::TransactionDetails details);
+    // A connection, tip or settings request is done.
+    void completed(backend::RequestId token);
+    void endpointTested(backend::RequestId token);
+    void broadcastFinished(backend::RequestId token, backend::BroadcastResult result);
+    void failed(backend::RequestId token, QString message);
+
+public slots:
+    // Reads the funds again and publishes them. While their history lags their coins,
+    // it reads them again every second for a while, notified or not.
+    void onFundsChanged();
+    void onLabelsChanged();
+    void onReceivingChanged();
+    void onReconcileTimeout();
+
+protected:
+    // The account's current state, nullopt while it cannot be read (closed, busy).
+    virtual auto readFunds() -> std::optional<Funds> = 0;
+    virtual auto readLabels() -> std::optional<QList<backend::Label>> = 0;
+    virtual auto readReceiving() -> std::optional<Receiving> = 0;
+
+    void publishFunds(const Funds &funds);
+    void publishNetwork(backend::Network network);
+    void publishDetails(const backend::TransactionDetails &details);
+    void publishState(const backend::BlockchainState &state);
+    void publishSettings(const backend::Settings &settings);
+    void reconcileFunds();
+
+private:
+    QString m_account;
+    mutable QMutex m_mutex;
+    backend::Network m_network = backend::Network::Bitcoin;
+    Funds m_funds;
+    QHash<QString, backend::TransactionDetails> m_details;
+    QList<backend::Label> m_labels;
+    Receiving m_receiving;
+    backend::BlockchainState m_state;
+    backend::Settings m_settings;
+    QTimer *m_reconcile = nullptr;
+    int m_reconcile_attempts = 0;
+    bool m_history_pending = false;
+};
+
+} // namespace account

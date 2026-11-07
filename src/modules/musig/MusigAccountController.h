@@ -21,6 +21,10 @@
 
 class IKeys;
 class MusigAccountWidget;
+
+namespace musig {
+class MusigServices;
+} // namespace musig
 class QThread;
 
 // Owns the Rust account and the PSBT in flight. Drives MuSig2 as one
@@ -54,6 +58,7 @@ public:
     [[nodiscard]] auto isEndpointRunning(Endpoint endpoint) const -> bool override;
     // The descriptor, the cosigners and Delete.
     auto settingsExtras() -> QWidget * override;
+    [[nodiscard]] auto services() const -> account::ServiceContext * override;
     auto module() -> IModule * override;
     auto simulateTx(TransactionTemplate tx) -> TransactionSimulation override;
     // The spend path, Prepare and the MuSig2 rounds.
@@ -171,6 +176,9 @@ public slots:
     void settingsClicked();
 
 protected:
+    // Broadcasts through the storage queue, behind the saved progress writes.
+    friend class musig::MusigServices;
+
     void startAcceptedWorker(QThread *worker);
     // Listens to the keys module and allocates the request of a round's signature, null
     // when no round can be signed now.
@@ -196,6 +204,7 @@ protected:
 private:
     account::PanelCollection m_panels{this};
     MusigAccountWidget *m_widget = nullptr;
+    account::ServiceContext *m_services = nullptr;
     std::optional<rust::Box<MusigAccount>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;
     uint64_t m_notif_generation = 0;

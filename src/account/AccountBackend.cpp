@@ -20,9 +20,17 @@ void AccountBackend::onShutdownDrained(const QString &error) {
     emit stopped();
 }
 
+auto AccountBackend::services() const -> account::ServiceContext * {
+    return nullptr;
+}
+
 auto AccountBackend::endpointOperationsBusy() const -> bool {
-    return m_deletion_pending || m_account_loading || m_endpoints_stopping ||
+    return m_deletion_pending || m_account_loading || m_endpoints_stopping || m_settings_saving ||
            m_operation != EndpointOperation::Idle;
+}
+
+void AccountBackend::setSettingsSaving(bool saving) {
+    m_settings_saving = saving;
 }
 
 void AccountBackend::setAccountDeletionPending(bool pending) {

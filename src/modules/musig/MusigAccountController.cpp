@@ -16,6 +16,7 @@
 #include "modules/keys/KeysModule.h"
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigModule.h"
+#include "modules/musig/MusigServices.h"
 #include "modules/musig/SavedPsbts.h"
 #include "modules/musig/SettingsExtras.h"
 #include "modules/musig/SigningSection.h"
@@ -42,7 +43,9 @@ auto toQString(const rust::String &value) -> QString {
 // The widget owns the controller: deleting it on stopped() frees both.
 MusigAccountController::MusigAccountController(const QString &account, MusigAccountWidget *widget)
     : AccountBackend(widget),
-      m_widget(widget) {
+      m_widget(widget),
+      // Before the account loads, so its services follow the load.
+      m_services(new musig::MusigServices(account, this)) {
     init(account);
 }
 
@@ -245,6 +248,10 @@ auto MusigAccountController::module() -> IModule * {
 
 auto MusigAccountController::settingsExtras() -> QWidget * {
     return new musig::SettingsExtras(this);
+}
+
+auto MusigAccountController::services() const -> account::ServiceContext * {
+    return m_services;
 }
 
 auto MusigAccountController::sendSigning() -> account::SendSigning * {

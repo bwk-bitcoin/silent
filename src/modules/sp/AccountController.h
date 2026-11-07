@@ -42,6 +42,7 @@ public:
     [[nodiscard]] auto verifiesCertificate() const -> bool override;
     [[nodiscard]] auto isEndpointRunning(Endpoint endpoint) const -> bool override;
     auto settingsExtras() -> QWidget * override;
+    [[nodiscard]] auto services() const -> account::ServiceContext * override;
     auto module() -> IModule * override;
     auto simulateTx(TransactionTemplate tx) -> TransactionSimulation override;
     // Sign, then Broadcast.
@@ -103,6 +104,7 @@ protected:
 private:
     account::PanelCollection m_panels{this};
     AccountWidget *m_widget;
+    account::ServiceContext *m_services = nullptr;
     std::optional<rust::Box<Account>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;
     uint64_t m_notif_generation = 0;

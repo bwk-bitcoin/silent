@@ -1,5 +1,6 @@
 #pragma once
 
+#include "interfaces/backend/provider.h"
 #include "interfaces/module.h"
 
 #include <QHash>
@@ -17,9 +18,11 @@ class AccountBackend;
 
 namespace account {
 
-// Shared built-in lifecycle coordinator, not a required external plugin base.
-class AccountModule : public IModule {
+// Shared built-in lifecycle coordinator, not a required external plugin base. Supplies
+// every UI service of its open accounts.
+class AccountModule : public IModule, public backend::IServiceProvider {
     Q_OBJECT
+    Q_INTERFACES(backend::IServiceProvider)
 
 public:
     using Operation = rust::String (*)(rust::String);
@@ -30,6 +33,10 @@ public:
     void deleteAccount(ReqId req_id, const QString &id) override;
     [[nodiscard]] auto accountUnavailable(const QString &id) const -> bool;
     void watchAccount(const QString &id, AccountBackend *backend);
+    // A service of the open, loaded account `account` on `network`, null otherwise.
+    [[nodiscard]] auto service(const QString &account, backend::Network network,
+                               backend::ServiceKind kind) -> backend::IService * override;
+    void releaseService(backend::IService *service) override;
 
 signals:
     void deletionChecked(QString id, QString error);

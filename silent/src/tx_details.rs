@@ -7,36 +7,15 @@ use bwk::bwk_electrum::{client::Client, label_store::LabelKey, scanner::Electrum
 
 use crate::{
     config::{certificate_check, parse_electrum_url},
-    ffi::{LabelEditResult, RustTx, RustTxDetails, RustTxIo},
+    ffi::{RustTx, RustTxDetails, RustTxIo},
 };
-
-impl From<Result<(), String>> for LabelEditResult {
-    fn from(result: Result<(), String>) -> Self {
-        match result {
-            Ok(()) => Self {
-                is_ok: true,
-                error: String::new(),
-            },
-            Err(error) => Self {
-                is_ok: false,
-                error,
-            },
-        }
-    }
-}
 
 pub(crate) fn edit_scanner_label(
     scanner: &ElectrumScanner,
     key: LabelKey,
     label: String,
 ) -> Result<(), String> {
-    let mut labels = scanner.label_store().lock().map_err(|e| e.to_string())?;
-    labels
-        .try_edit(key, (!label.is_empty()).then_some(label))
-        .map_err(|e| e.to_string())?;
-    labels
-        .try_persist()
-        .map_err(|e| format!("Label is not saved: {e}. Edit it again to retry."))
+    crate::services::edit_store_label(scanner.label_store(), key, label)
 }
 
 impl Default for crate::ffi::Network {
@@ -386,38 +365,21 @@ pub fn test_and_save_endpoint(
     let result = (|| {
         let mut config = crate::config::Config::from_file(account_name)
             .map_err(|e| (crate::ffi::BackendErrorKind::Storage, e.to_string()))?;
-        let url = match server {
-            crate::ffi::BackendServer::Electrum => {
-                let tested = crate::test_electrum(url, verify_certificate);
-                if !tested.is_ok {
-                    return Err((tested.kind, tested.error));
-                }
-                config.set_electrum_url(tested.url.clone());
-                config.set_verify_certificate(verify_certificate);
-                tested.url
-            }
-            crate::ffi::BackendServer::Blindbit => {
-                if config.plugin_id == crate::musig::MUSIG_PLUGIN_ID {
-                    return Err((
-                        crate::ffi::BackendErrorKind::InvalidInput,
-                        "This account has no BlindBit endpoint".into(),
-                    ));
-                }
-                let tested = crate::get_backend_info(url);
-                if !tested.is_ok {
-                    return Err((tested.kind, tested.error));
-                }
-                if tested.network != config.network {
-                    return Err((
-                        crate::ffi::BackendErrorKind::InvalidInput,
-                        "Backend network does not match the account".into(),
-                    ));
-                }
-                config.set_blindbit_url(tested.url.clone());
-                tested.url
-            }
-            _ => unreachable!("CXX enum type safety guarantees no other variants exist"),
-        };
+        if server == crate::ffi::BackendServer::Blindbit
+            && config.plugin_id == crate::musig::MUSIG_PLUGIN_ID
+        {
+            return Err((
+                crate::ffi::BackendErrorKind::InvalidInput,
+                "This account has no BlindBit endpoint".into(),
+            ));
+        }
+        let url = crate::services::tested_url(server, url, verify_certificate, config.network)?;
+        if server == crate::ffi::BackendServer::Electrum {
+            config.set_electrum_url(url.clone());
+            config.set_verify_certificate(verify_certificate);
+        } else {
+            config.set_blindbit_url(url.clone());
+        }
         config
             .write_file()
             .map_err(|e| (crate::ffi::BackendErrorKind::Storage, e))?;

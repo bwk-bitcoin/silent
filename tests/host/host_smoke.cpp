@@ -204,6 +204,7 @@ void pluginRemovalUiSmoke(const QString &shots);
 void pluginRemovalReadFailureSmoke(const QString &shots);
 void pluginAccessSettingsFailureSmoke(const QString &shots);
 void accountServicesSmoke();
+void backendServicesSmoke();
 } // namespace smoke
 
 auto main(int argc, char *argv[]) -> int {
@@ -296,6 +297,13 @@ auto main(int argc, char *argv[]) -> int {
         Theme::get()->apply();
         smoke::txFlowHoverSmoke();
         std::fprintf(stdout, "TxFlow hover smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.contains(QStringLiteral("--backend-services"))) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::backendServicesSmoke();
+        std::fprintf(stdout, "Backend services smoke: OK\n");
         return gOk ? 0 : 1;
     }
 #ifdef SILENT_SERVICE_FULL_FIXTURE

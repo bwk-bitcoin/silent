@@ -1018,6 +1018,18 @@ struct CoinState;
 struct RustTx;
 struct RustTxIo;
 struct LabelEditResult;
+enum class LabelKind : ::std::uint8_t;
+struct LabelEntry;
+struct LabelSnapshot;
+struct FundsSnapshot;
+struct ReceiveKind;
+struct ReceiveAddress;
+struct ReceiveAddressResult;
+struct CraftOutcome;
+struct UnsignedPsbt;
+enum class BroadcastOutcome : ::std::uint8_t;
+struct BroadcastReport;
+struct EndpointSetting;
 struct RustTxDetails;
 struct EndpointResult;
 struct Output;
@@ -1799,10 +1811,183 @@ struct RustTxIo final {
 struct LabelEditResult final {
   bool is_ok CXX_DEFAULT_VALUE(false);
   ::rust::String error;
+  // The label held in RAM changed, even when saving it failed.
+  bool changed CXX_DEFAULT_VALUE(false);
 
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_LabelEditResult
+
+#ifndef CXXBRIDGE1_ENUM_LabelKind
+#define CXXBRIDGE1_ENUM_LabelKind
+enum class LabelKind : ::std::uint8_t {
+  Address = 0,
+  Outpoint = 1,
+  Transaction = 2,
+};
+#endif // CXXBRIDGE1_ENUM_LabelKind
+
+#ifndef CXXBRIDGE1_STRUCT_LabelEntry
+#define CXXBRIDGE1_STRUCT_LabelEntry
+struct LabelEntry final {
+  ::LabelKind kind;
+  // The address, the `txid:vout` outpoint or the txid.
+  ::rust::String id;
+  ::rust::String text;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_LabelEntry
+
+#ifndef CXXBRIDGE1_STRUCT_LabelSnapshot
+#define CXXBRIDGE1_STRUCT_LabelSnapshot
+// Every label the account holds in RAM, saved or not.
+struct LabelSnapshot final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::Vec<::LabelEntry> labels;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_LabelSnapshot
+
+#ifndef CXXBRIDGE1_STRUCT_FundsSnapshot
+#define CXXBRIDGE1_STRUCT_FundsSnapshot
+// Coins, balance and history read together from the account's stores.
+struct FundsSnapshot final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  // Spent coins included.
+  ::rust::Vec<::RustCoin> coins;
+  // The outpoints of the unspent coins a spend path can spend now.
+  ::rust::Vec<::rust::String> spendable;
+  ::CoinState balance;
+  ::rust::Vec<::RustTx> history;
+  // Every coin's funding transaction is in the history: false while a store
+  // writes a coin before its transaction.
+  bool history_complete CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_FundsSnapshot
+
+#ifndef CXXBRIDGE1_STRUCT_ReceiveKind
+#define CXXBRIDGE1_STRUCT_ReceiveKind
+// A kind of address the account receives on.
+struct ReceiveKind final {
+  // "sp", "segwit" or "taproot".
+  ::rust::String id;
+  // One static address, handed out again and again.
+  bool reusable CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_ReceiveKind
+
+#ifndef CXXBRIDGE1_STRUCT_ReceiveAddress
+#define CXXBRIDGE1_STRUCT_ReceiveAddress
+// A receive address the account handed out, with what a device needs to show it.
+struct ReceiveAddress final {
+  ::rust::String kind;
+  ::rust::String address;
+  ::rust::String descriptor;
+  ::rust::String path;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_ReceiveAddress
+
+#ifndef CXXBRIDGE1_STRUCT_ReceiveAddressResult
+#define CXXBRIDGE1_STRUCT_ReceiveAddressResult
+struct ReceiveAddressResult final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::ReceiveAddress address;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_ReceiveAddressResult
+
+#ifndef CXXBRIDGE1_STRUCT_TransactionTemplate
+#define CXXBRIDGE1_STRUCT_TransactionTemplate
+// Template for creating a transaction.
+struct TransactionTemplate final {
+  // List of output specifications
+  ::rust::Vec<::Output> outputs;
+  // Fee rate in sat/vbyte (used when fee == 0)
+  double fee_rate CXX_DEFAULT_VALUE(0);
+  // Absolute fee in satoshis (takes precedence over fee_rate when > 0)
+  ::std::uint64_t fee CXX_DEFAULT_VALUE(0);
+  // Optional: specific UTXOs to use (empty = automatic selection)
+  ::rust::Vec<::rust::String> input_outpoints;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_TransactionTemplate
+
+#ifndef CXXBRIDGE1_STRUCT_CraftOutcome
+#define CXXBRIDGE1_STRUCT_CraftOutcome
+// A transaction template checked against the account's coins.
+struct CraftOutcome final {
+  // Buildable as it is: inputs given, funds enough, recipients valid.
+  bool complete CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  // The template, with the MAX output's amount resolved once complete.
+  ::TransactionTemplate transaction;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_CraftOutcome
+
+#ifndef CXXBRIDGE1_STRUCT_UnsignedPsbt
+#define CXXBRIDGE1_STRUCT_UnsignedPsbt
+// The unsigned PSBTv2 of a complete template.
+struct UnsignedPsbt final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::Vec<::std::uint8_t> psbt;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_UnsignedPsbt
+
+#ifndef CXXBRIDGE1_ENUM_BroadcastOutcome
+#define CXXBRIDGE1_ENUM_BroadcastOutcome
+enum class BroadcastOutcome : ::std::uint8_t {
+  // The server took the transaction.
+  Accepted = 0,
+  // The transaction did not reach the network, or the server refused it.
+  Rejected = 1,
+  // Sent, but whether the server took it is not known.
+  Unknown = 2,
+};
+#endif // CXXBRIDGE1_ENUM_BroadcastOutcome
+
+#ifndef CXXBRIDGE1_STRUCT_BroadcastReport
+#define CXXBRIDGE1_STRUCT_BroadcastReport
+struct BroadcastReport final {
+  ::BroadcastOutcome outcome;
+  ::rust::String txid;
+  ::BackendErrorKind kind;
+  ::rust::String error;
+  // After acceptance: what the account failed to record locally.
+  ::rust::Vec<::rust::String> warnings;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_BroadcastReport
+
+#ifndef CXXBRIDGE1_STRUCT_EndpointSetting
+#define CXXBRIDGE1_STRUCT_EndpointSetting
+// One endpoint to save, as Settings edits it.
+struct EndpointSetting final {
+  ::BackendServer server;
+  ::rust::String url;
+  bool verify_certificate CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_EndpointSetting
 
 #ifndef CXXBRIDGE1_STRUCT_RustTxDetails
 #define CXXBRIDGE1_STRUCT_RustTxDetails
@@ -1864,23 +2049,6 @@ struct Output final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_Output
-
-#ifndef CXXBRIDGE1_STRUCT_TransactionTemplate
-#define CXXBRIDGE1_STRUCT_TransactionTemplate
-// Template for creating a transaction.
-struct TransactionTemplate final {
-  // List of output specifications
-  ::rust::Vec<::Output> outputs;
-  // Fee rate in sat/vbyte (used when fee == 0)
-  double fee_rate CXX_DEFAULT_VALUE(0);
-  // Absolute fee in satoshis (takes precedence over fee_rate when > 0)
-  ::std::uint64_t fee CXX_DEFAULT_VALUE(0);
-  // Optional: specific UTXOs to use (empty = automatic selection)
-  ::rust::Vec<::rust::String> input_outpoints;
-
-  using IsRelocatable = ::std::true_type;
-};
-#endif // CXXBRIDGE1_STRUCT_TransactionTemplate
 
 #ifndef CXXBRIDGE1_STRUCT_TransactionSimulation
 #define CXXBRIDGE1_STRUCT_TransactionSimulation
@@ -3350,6 +3518,35 @@ struct Account final : public ::rust::Opaque {
   // Blocking call - must be called from a background thread.
   ::PsbtValidation validate_before_sign(::PsbtResult const &psbt_result) const noexcept;
 
+  // Coins, balance and history for the published account read model.
+  ::FundsSnapshot funds_snapshot() const noexcept;
+
+  // The root and every sub-account label, RAM edits included.
+  ::LabelSnapshot labels() const noexcept;
+
+  // An empty text removes the label.
+  ::LabelEditResult set_label(::LabelKind kind, ::rust::String id, ::rust::String text) const noexcept;
+
+  ::rust::Vec<::ReceiveKind> receive_kinds() const noexcept;
+
+  // The silent payment address, then every generated sub-account address.
+  ::rust::Vec<::ReceiveAddress> receive_addresses() const noexcept;
+
+  // Hands out an address of `kind`: the static one for "sp". Persists the tip.
+  ::ReceiveAddressResult new_receive_address(::rust::Str kind) const noexcept;
+
+  // Checks the template against its own inputs: none given is incomplete.
+  ::CraftOutcome craft_transaction(::TransactionTemplate tx_template) const noexcept;
+
+  // Replaces the template's inputs by the ones coin selection picks.
+  ::CraftOutcome select_transaction_coins(::TransactionTemplate tx_template) const noexcept;
+
+  // The unsigned PSBTv2 of a template with inputs. Changes no account state.
+  ::UnsignedPsbt finalize_transaction(::TransactionTemplate tx_template) const noexcept;
+
+  // Broadcasts consensus-encoded `transaction`, then records it locally.
+  ::BroadcastReport broadcast_report(::rust::Slice<::std::uint8_t const> transaction) const noexcept;
+
   ~Account() = delete;
 
 private:
@@ -4052,6 +4249,28 @@ struct MusigAccount final : public ::rust::Opaque {
   // Blocking: call from a background thread.
   ::PsbtValidation validate_before_sign(::PsbtResult const &psbt_result) const noexcept;
 
+  ::FundsSnapshot funds_snapshot() const noexcept;
+  ::LabelSnapshot labels() const noexcept;
+  ::LabelEditResult set_label(::LabelKind kind, ::rust::String id, ::rust::String text) const noexcept;
+  ::rust::Vec<::ReceiveKind> receive_kinds() const noexcept;
+
+  // Every generated receive address.
+  ::rust::Vec<::ReceiveAddress> receive_addresses() const noexcept;
+
+  ::ReceiveAddressResult new_receive_address(::rust::Str kind) const noexcept;
+  ::CraftOutcome craft_transaction(::TransactionTemplate tx_template) const noexcept;
+  ::CraftOutcome select_transaction_coins(::TransactionTemplate tx_template) const noexcept;
+
+  // The change goes to the next unused change index, which stays unused:
+  // adopt_transaction registers it.
+  ::UnsignedPsbt finalize_transaction(::TransactionTemplate tx_template) const noexcept;
+
+  // Takes `psbt`, a finalize_transaction answer, as the transaction in flight:
+  // registers its change index durably, refusing one another adoption took,
+  // restricts it to `spend` and saves it.
+  ::rust::Box<::PsbtResult> adopt_transaction(::TransactionTemplate tx_template, ::MusigSpendLeaf spend, ::rust::Slice<::std::uint8_t const> psbt) const noexcept;
+
+  ::BroadcastReport broadcast_report(::rust::Slice<::std::uint8_t const> transaction) const noexcept;
   ~MusigAccount() = delete;
 
 private:
@@ -4182,6 +4401,13 @@ bool validate_sp_descriptor(::rust::String descriptor) noexcept;
 
 // Test, then persist the complete endpoint. Does not start a wallet listener.
 ::EndpointResult test_and_save_endpoint(::rust::String account_name, ::BackendServer server, ::rust::String url, bool verify_certificate) noexcept;
+
+// Tests the endpoint against `network`, saving nothing. Blocking.
+::EndpointResult test_endpoint(::BackendServer server, ::rust::String url, bool verify_certificate, ::Network network) noexcept;
+
+// Persists `endpoints` to the account's config, untested, all or none. Does
+// not touch a live connection.
+::EndpointResult save_endpoints(::rust::String account_name, ::rust::Vec<::EndpointSetting> endpoints) noexcept;
 
 // The height of the chain tip the Electrum server at `address` follows.
 // Blocking: call it off the GUI thread.

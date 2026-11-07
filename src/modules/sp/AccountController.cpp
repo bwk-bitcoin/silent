@@ -3,6 +3,7 @@
 #include "AppController.h"
 #include "SpModule.h"
 #include "SpSigning.h"
+#include "account/services/AccountServices.h"
 #include "account/views/Coins.h"
 #include "account/views/History.h"
 #include "account/views/Receive.h"
@@ -21,6 +22,8 @@
 AccountController::AccountController(const QString &account, AccountWidget *widget)
     : AccountBackend(widget) {
     m_widget = widget;
+    // Before the account loads, so its services follow the load.
+    m_services = new account::AccountServices<AccountController, Account>(account, this);
     init(account);
 }
 
@@ -501,6 +504,10 @@ auto AccountController::module() -> IModule * {
 
 auto AccountController::settingsExtras() -> QWidget * {
     return nullptr;
+}
+
+auto AccountController::services() const -> account::ServiceContext * {
+    return m_services;
 }
 
 auto AccountController::sendSigning() -> account::SendSigning * {

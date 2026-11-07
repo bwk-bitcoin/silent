@@ -234,6 +234,8 @@ set(SILENT_APP_SOURCES
     src/modules/musig/MusigAccountAdapter.cpp
     src/modules/musig/MusigAccountController.h
     src/modules/musig/MusigAccountController.cpp
+    src/modules/musig/MusigServices.h
+    src/modules/musig/MusigServices.cpp
     src/modules/musig/MusigAccountWidget.h
     src/modules/musig/MusigAccountWidget.cpp
     src/modules/musig/MusigStatusBar.h
@@ -278,6 +280,15 @@ set(SILENT_APP_SOURCES
     src/account/AccountBackend.cpp
     src/account/AccountModule.h
     src/account/AccountModule.cpp
+    src/account/services/AccountServices.h
+    src/account/services/ControllerServices.h
+    src/account/services/ControllerServices.cpp
+    src/account/services/Conversions.h
+    src/account/services/Conversions.cpp
+    src/account/services/ServiceAdapters.h
+    src/account/services/ServiceAdapters.cpp
+    src/account/services/ServiceContext.h
+    src/account/services/ServiceContext.cpp
     src/account/AccountShell.h
     src/account/AccountShell.cpp
     src/account/PanelCollection.h
@@ -715,6 +726,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/boundary_smoke.cpp
         tests/host/account_navigation_smoke.cpp
         tests/host/account_navigation_smoke.h
+        tests/host/backend_services_smoke.cpp
         tests/host/keys_contract_smoke.cpp
         tests/host/qr_cache_smoke.cpp
         tests/host/storage_smoke.cpp
