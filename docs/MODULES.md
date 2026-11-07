@@ -1406,7 +1406,13 @@ their presentation), and the amount and fee rules from `account/Money.h`.
   `finalize()` and signs through the keys module: an SP account at once, a Multikey account
   through its signing owner, which adopts the PSBT and keeps the saved PSBTs, Reset and the
   nonce allocation. The signed transaction goes out with `IBlockchain::broadcast()`; only
-  `Accepted` is shown sent.
+  `Accepted` is shown sent. The step also exports the PSBT it would sign as base64 text
+  (a `.psbt` file or the clipboard, `account::ExportPsbt`) and imports one
+  (`account::ImportPsbt`) through the account itself, not a service: an SP account checks
+  that it spends only its unspent coins and shows it in Send as if crafted there
+  (`restoreTransaction()`), Sign signing it; a Multikey account saves it among its saved
+  PSBTs once it spends the account's coins on one spend path, or merges it into the saved
+  PSBT of the same transaction.
 
 `account::AccountBackend` remains the built-in controllers' own base: the account lifecycle
 the module watches, the endpoint connections the status bars drive and read, and the

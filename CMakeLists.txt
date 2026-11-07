@@ -300,6 +300,8 @@ set(SILENT_APP_SOURCES
     src/account/Money.cpp
     src/account/Same.h
     src/account/Same.cpp
+    src/account/PsbtTransfer.h
+    src/account/PsbtTransfer.cpp
     src/account/RequestId.h
     src/account/ElectrumReconnect.h
     src/account/ElectrumReconnect.cpp
@@ -735,6 +737,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/account_navigation_smoke.cpp
         tests/host/account_navigation_smoke.h
         tests/host/backend_services_smoke.cpp
+        tests/host/psbt_transfer_smoke.cpp
         tests/host/account_views_smoke.cpp
         tests/host/keys_contract_smoke.cpp
         tests/host/qr_cache_smoke.cpp

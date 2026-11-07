@@ -1,7 +1,9 @@
 #include "SpSigning.h"
 #include "account/InterfaceEnums.h"
+#include "account/PsbtTransfer.h"
 #include "account/RequestId.h"
 #include "account/services/Conversions.h"
+#include "account/views/Send.h"
 
 #include "AccountController.h"
 #include "AppController.h"
@@ -52,7 +54,7 @@ auto SpSigning::coinsWidget() -> QWidget * {
 
 void SpSigning::setTransaction(const std::optional<backend::TransactionTemplate> &tx,
                                [[maybe_unused]] const QStringList &outpoints) {
-    if (m_tx_template.has_value()) {
+    if (m_tx_template.has_value() || !m_imported_psbt.isEmpty()) {
         return;
     }
     m_tx = tx;
@@ -69,6 +71,8 @@ void SpSigning::init() {
     m_sign_btn = catalog::btnSign();
     m_sign_btn->setEnabled(false);
     m_broadcast_btn = catalog::btnBroadcast();
+    m_export_btn = catalog::btnExportPsbt();
+    m_import_btn = catalog::btnImportPsbt();
     m_status_label = new Label;
     m_status_label->setVisible(false);
 }
@@ -78,6 +82,10 @@ void SpSigning::doConnect() {
     connect(m_broadcast_btn, &QPushButton::clicked, this, &SpSigning::onBroadcastClicked,
             qontrol::UNIQUE);
     connect(m_cancel_btn, &QPushButton::clicked, this, &SpSigning::onCancelClicked,
+            qontrol::UNIQUE);
+    connect(m_export_btn, &QPushButton::clicked, this, &SpSigning::onExportClicked,
+            qontrol::UNIQUE);
+    connect(m_import_btn, &QPushButton::clicked, this, &SpSigning::onImportClicked,
             qontrol::UNIQUE);
     connect(this, &SpSigning::validationReady, this, &SpSigning::onValidationResult,
             qontrol::UNIQUE);
@@ -91,14 +99,18 @@ void SpSigning::doConnect() {
 }
 
 void SpSigning::view() {
+    // Spacing, not spacers: a hidden button leaves no gap.
     m_actions = (new qontrol::Row)
+                    ->spacing(resolve(Spacing::S))
                     ->push(m_signed_pill)
-                    ->pushSpacer(resolve(Spacing::S))
                     ->push(m_cancel_btn)
-                    ->pushSpacer(resolve(Spacing::S))
+                    ->push(m_export_btn)
                     ->push(m_sign_btn)
                     ->push(m_broadcast_btn);
-    auto *col = (new qontrol::Column)->push(m_status_label);
+    // The step's own widget, under the fee row: Import there, the fee row being full.
+    auto *importRow = (new qontrol::Row)->push(m_import_btn)->pushSpacer();
+    auto *col =
+        (new qontrol::Column)->spacing(resolve(Spacing::S))->push(m_status_label)->push(importRow);
     col->layout()->setContentsMargins(0, 0, 0, 0);
     setLayout(col->layout());
     updateButtons();
@@ -154,16 +166,49 @@ void SpSigning::disconnectSigner() const {
 
 void SpSigning::updateButtons() {
     bool isSigned = !m_signed_tx_hex.isEmpty();
+    bool imported = !m_imported_psbt.isEmpty();
+    bool signable = !m_tx_template.has_value() && m_tx.has_value();
     m_signed_pill->setVisible(isSigned);
-    m_cancel_btn->setVisible(isSigned);
+    m_cancel_btn->setVisible(isSigned || imported);
     m_sign_btn->setVisible(!isSigned);
     m_broadcast_btn->setVisible(isSigned);
-    m_sign_btn->setEnabled(!m_tx_template.has_value() && m_tx.has_value());
+    m_export_btn->setVisible(!isSigned);
+    m_import_btn->setVisible(!isSigned && !imported);
+    m_sign_btn->setEnabled(signable);
+    m_export_btn->setEnabled(signable);
+    m_import_btn->setEnabled(!m_tx_template.has_value());
+}
+
+auto SpSigning::unsignedPsbt() -> std::optional<QByteArray> {
+    if (!m_imported_psbt.isEmpty()) {
+        return m_imported_psbt;
+    }
+    if (!m_tx.has_value()) {
+        return std::nullopt;
+    }
+    m_finalize_error.clear();
+    return m_services.transaction->finalize(m_tx.value());
+}
+
+void SpSigning::restoreImported() {
+    auto *send =
+        qobject_cast<account::view::Send *>(m_controller->screen("send").value_or(nullptr));
+    if (send == nullptr || !m_tx.has_value()) {
+        return;
+    }
+    QList<backend::Coin> inputs;
+    for (const auto &coin : m_services.blockchain->coins()) {
+        if (m_tx->inputs.contains(coin.outpoint)) {
+            inputs.append(coin);
+        }
+    }
+    send->restoreTransaction(*m_tx, inputs, QString());
 }
 
 void SpSigning::dropTransaction() {
     disconnectSigner();
     m_signed_tx_hex.clear();
+    m_imported_psbt.clear();
     m_psbt.clear();
     m_tx_template = std::nullopt;
     m_sign_req_id = 0;
@@ -185,10 +230,9 @@ void SpSigning::onSignClicked() {
         return;
     }
 
-    // Finalized on the main thread: pure computation over the crafted transaction. Its
-    // reason, on failure, comes as error() during the call.
-    m_finalize_error.clear();
-    auto psbt = m_services.transaction->finalize(m_tx.value());
+    // The imported PSBT, or the crafted transaction finalized on the main thread: pure
+    // computation. Its reason, on failure, comes as error() during the call.
+    auto psbt = unsignedPsbt();
     if (!psbt.has_value()) {
         AppController::execModal(
             new catalog::MessageModal(TR("send-prepare-failed"), failureText(m_finalize_error)));
@@ -229,9 +273,57 @@ void SpSigning::onBroadcastClicked() {
 }
 
 void SpSigning::onCancelClicked() {
-    if (!m_signed_tx_hex.isEmpty()) {
+    if (!m_signed_tx_hex.isEmpty() || !m_imported_psbt.isEmpty()) {
         dropTransaction();
     }
+}
+
+void SpSigning::onExportClicked() {
+    auto psbt = unsignedPsbt();
+    if (!psbt.has_value()) {
+        AppController::execModal(
+            new catalog::MessageModal(TR("send-prepare-failed"), failureText(m_finalize_error)));
+        return;
+    }
+    auto exported = ::export_psbt(account::services::toSlice(*psbt));
+    if (!exported.is_ok) {
+        AppController::execModal(new catalog::MessageModal(
+            TR("common-error"), account::services::toQString(exported.error)));
+        return;
+    }
+    AppController::execModal(new account::ExportPsbt(account::services::toQString(exported.base64),
+                                                     account::services::toQString(exported.txid)));
+}
+
+void SpSigning::onImportClicked() {
+    auto *modal = new account::ImportPsbt;
+    m_import = modal;
+    connect(modal, &account::ImportPsbt::textChosen, this, &SpSigning::onImportText,
+            qontrol::UNIQUE);
+    AppController::execModal(modal);
+}
+
+void SpSigning::onImportText(const QByteArray &text) {
+    if (m_import == nullptr) {
+        return;
+    }
+    auto &wallet = m_controller->getAccount();
+    if (!wallet.has_value()) {
+        m_import->showError(TR("send-no-account-loaded"));
+        return;
+    }
+    auto result = wallet.value()->import_psbt(account::services::toSlice(text));
+    if (!result.is_ok) {
+        m_import->showError(account::services::toQString(result.error));
+        return;
+    }
+    m_imported_psbt = account::services::toBytes(result.psbt);
+    m_tx = account::services::fromTemplate(result.tx_template);
+    restoreImported();
+    updateButtons();
+    emit lockedChanged(true);
+    // Done: the transaction shows in Send.
+    m_import->accept();
 }
 
 void SpSigning::onValidationResult(PsbtValidation result) {

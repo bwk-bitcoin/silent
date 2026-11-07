@@ -1,5 +1,6 @@
 #include "SigningSection.h"
 #include "account/InterfaceEnums.h"
+#include "account/PsbtTransfer.h"
 #include "account/services/Conversions.h"
 
 #include "AppController.h"
@@ -98,10 +99,15 @@ void SigningSection::init() {
 
     m_cancel_btn = catalog::btnCancelSigned();
     m_cancel_btn->setVisible(false);
+    m_export_btn = catalog::btnExportPsbt();
+    m_export_btn->setVisible(false);
     m_sign_btn = catalog::btnSign();
     m_sign_btn->setEnabled(false);
-    m_actions =
-        (new qontrol::Row)->spacing(resolve(Spacing::S))->push(m_cancel_btn)->push(m_sign_btn);
+    m_actions = (new qontrol::Row)
+                    ->spacing(resolve(Spacing::S))
+                    ->push(m_cancel_btn)
+                    ->push(m_export_btn)
+                    ->push(m_sign_btn);
 }
 
 void SigningSection::doConnect() {
@@ -116,6 +122,8 @@ void SigningSection::doConnect() {
     connect(m_sign_btn, &QPushButton::clicked, this, &SigningSection::onSignClicked,
             qontrol::UNIQUE);
     connect(m_cancel_btn, &QPushButton::clicked, this, &SigningSection::onCancelClicked,
+            qontrol::UNIQUE);
+    connect(m_export_btn, &QPushButton::clicked, this, &SigningSection::onExportClicked,
             qontrol::UNIQUE);
 
     connect(m_controller, &MusigAccountController::prepared, this, &SigningSection::onPrepared,
@@ -154,6 +162,7 @@ void SigningSection::retranslateUi() {
     }
     m_sign_btn->setText(TR("btn-sign"));
     m_cancel_btn->setText(TR("common-cancel"));
+    m_export_btn->setText(TR("btn-export-psbt"));
     updateSignState();
 }
 
@@ -239,10 +248,13 @@ void SigningSection::updateSignState() {
         m_sign_btn->setEnabled(false);
         return;
     }
-    // While a session runs, Sign opens its modal again and Cancel drops it.
+    // While a session runs, Sign opens its modal again, Cancel drops it and Export hands
+    // its PSBT out.
     m_cancel_btn->setVisible(m_session);
+    m_export_btn->setVisible(m_session);
     if (m_session) {
         m_sign_btn->setEnabled(!m_loading);
+        m_export_btn->setEnabled(!m_loading && !m_controller->psbtInFlight().isEmpty());
         m_reason_label->setVisible(false);
         return;
     }
@@ -422,6 +434,18 @@ void SigningSection::onSent() {
 
 void SigningSection::onCancelClicked() {
     m_controller->cancelSigning();
+}
+
+void SigningSection::onExportClicked() {
+    auto psbt = QByteArray::fromHex(m_controller->psbtInFlight().toLatin1());
+    auto exported = ::export_psbt(account::services::toSlice(psbt));
+    if (!exported.is_ok) {
+        AppController::execModal(
+            new catalog::MessageModal(TR("common-error"), toQString(exported.error)));
+        return;
+    }
+    AppController::execModal(
+        new account::ExportPsbt(toQString(exported.base64), toQString(exported.txid)));
 }
 
 void SigningSection::onSessionCleared() {

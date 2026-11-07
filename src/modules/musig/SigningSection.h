@@ -28,8 +28,8 @@ namespace musig {
 // The signing step of a Multikey account's Send: the spend path under the coins, then
 // Sign, which finalizes the crafted transaction into a PSBT (ITransaction::finalize()),
 // has the controller adopt it and runs its MuSig2 rounds in the Sign modal, ending on
-// Broadcast. While a session runs, Cancel drops it and Sign opens the modal again at its
-// round.
+// Broadcast. While a session runs, Cancel drops it, Export hands its PSBT out as base64
+// and Sign opens the modal again at its round.
 class SigningSection final : public account::SendSigning {
     Q_OBJECT
 
@@ -60,6 +60,7 @@ public slots:
     void onPrepareFailed(const QString &message);
     void onSent();
     void onCancelClicked();
+    void onExportClicked();
     void onSavedPsbtRestored(const SavedPsbtEntry &entry);
     void onSessionCleared();
     void onSaveWarningChanged(const QString &message);
@@ -109,6 +110,7 @@ private:
     catalog::Label *m_save_warning_label = nullptr;
     QWidget *m_actions = nullptr;
     catalog::Button *m_cancel_btn = nullptr;
+    catalog::Button *m_export_btn = nullptr;
     catalog::Button *m_sign_btn = nullptr;
     QString m_keys_error;
     QString m_finalize_error;

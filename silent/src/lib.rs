@@ -22,6 +22,7 @@ pub mod musig;
 pub mod plugin_admission;
 pub mod plugin_bundle;
 pub mod policy;
+pub mod psbt_transfer;
 #[cfg(all(test, unix))]
 mod removal_process_tests;
 pub mod saved_psbt;
@@ -865,6 +866,36 @@ mod ffi {
         pub error: String,
         pub save_error: String,
         pub record_id: String,
+    }
+
+    /// A PSBT as base64 text, to save to a `.psbt` file or copy to the clipboard.
+    #[derive(Debug, Clone, Default)]
+    pub struct PsbtExport {
+        pub is_ok: bool,
+        pub error: String,
+        pub base64: String,
+        /// Empty while a silent payment output has no script yet.
+        pub txid: String,
+    }
+
+    /// An imported PSBT the account can sign: its PSBTv2 and the transaction it states.
+    #[derive(Debug, Clone, Default)]
+    pub struct PsbtImport {
+        pub is_ok: bool,
+        pub error: String,
+        pub psbt: Vec<u8>,
+        /// Its recipients, absolute fee and inputs.
+        pub tx_template: TransactionTemplate,
+    }
+
+    /// An imported PSBT saved, or merged into the saved PSBT of the same transaction.
+    #[derive(Debug, Clone, Default)]
+    pub struct SavedPsbtImport {
+        pub is_ok: bool,
+        pub error: String,
+        pub save_error: String,
+        pub record_id: String,
+        pub merged: bool,
     }
 
     /// Result of decoding an SP descriptor QR response.
@@ -2065,6 +2096,9 @@ mod ffi {
             expected_version: u64,
         ) -> String;
 
+        /// `psbt`, a serialized PSBTv2, as base64 text with its txid when it has one.
+        fn export_psbt(psbt: &[u8]) -> PsbtExport;
+
         /// Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
         fn sd_save_psbt(path: &str, psbt_hex: &str) -> PsbtFileResult;
         fn sd_load_psbt(path: &str) -> PsbtFileResult;
@@ -2309,6 +2343,9 @@ mod ffi {
         /// Validates an unsigned PSBTv2, a finalize_transaction answer, via Electrum before
         /// signing: output address reuse and already-spent inputs. Blocking.
         fn validate_unsigned_psbt(self: &Account, psbt: &[u8]) -> PsbtValidation;
+        /// The PSBT `text` (base64, or binary) holds, spending only the account's unspent
+        /// coins, with the transaction it states. Pure: changes no account state.
+        fn import_psbt(self: &Account, text: &[u8]) -> PsbtImport;
 
         /// Coins, balance and history for the published account read model.
         fn funds_snapshot(self: &Account) -> FundsSnapshot;
@@ -2917,6 +2954,10 @@ mod ffi {
         fn label_saved_psbt(self: &MusigAccount, id: &str, label: String) -> SavedPsbtMutation;
         fn delete_saved_psbt(self: &MusigAccount, id: &str) -> SavedPsbtMutation;
         fn retry_saved_psbts(self: &MusigAccount) -> SavedPsbtMutation;
+        /// Saves the PSBT `text` (base64, or binary) holds once it spends the account's
+        /// coins on one of its spend paths. A PSBT of a saved transaction is merged into
+        /// it instead.
+        fn import_psbt(self: &MusigAccount, text: &[u8]) -> SavedPsbtImport;
         fn saved_psbt_error(self: &MusigAccount) -> String;
         fn active_attempt(self: &MusigAccount) -> MusigAttemptSnapshot;
         fn clear_active_attempt(self: &MusigAccount) -> bool;
@@ -3559,15 +3600,15 @@ pub use ffi::{
     PluginRemovalEntry, PluginRemovalListResult, PluginRemovalPhase, PolicyCompileResult,
     PolicyDraft, PolicyDraftError, PolicyDraftResult, PolicyDurationUnit, PolicyKey, PolicyKeyType,
     PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey, PolicyReviewPath, PolicySemantic,
-    PolicySpec, PsbtFileResult, PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult,
-    QrMusigSignerRoute, QrResponseKind, ReceiveAddress, ReceiveAddressResult, ReceiveKind,
-    RegtestDefaults, RetryDecision, RustCoin, RustSelectedInput, RustSpendCoin, RustSpendLock,
-    RustSpendVariant, RustTx, RustTxDetails, RustTxIo, SavedPsbtAttempt, SavedPsbtEntry,
-    SavedPsbtInput, SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset,
-    SavedPsbtRestore, SendAmounts, SignResult, SigningCandidate, SigningPlan, SigningProgress,
-    SigningStage, SpCreationRequest, SpendAvailability, SpendCoinStatus, SpendCoinsResult,
-    SpendError, SpendLockKind, SpendMaturity, TransactionSimulation, TransactionTemplate,
-    UnsignedPsbt,
+    PolicySpec, PsbtExport, PsbtFileResult, PsbtImport, PsbtPayloadResult, PsbtValidation,
+    QrErrorKind, QrMessageResult, QrMusigSignerRoute, QrResponseKind, ReceiveAddress,
+    ReceiveAddressResult, ReceiveKind, RegtestDefaults, RetryDecision, RustCoin, RustSelectedInput,
+    RustSpendCoin, RustSpendLock, RustSpendVariant, RustTx, RustTxDetails, RustTxIo,
+    SavedPsbtAttempt, SavedPsbtEntry, SavedPsbtImport, SavedPsbtInput, SavedPsbtList,
+    SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore, SendAmounts, SignResult,
+    SigningCandidate, SigningPlan, SigningProgress, SigningStage, SpCreationRequest,
+    SpendAvailability, SpendCoinStatus, SpendCoinsResult, SpendError, SpendLockKind, SpendMaturity,
+    TransactionSimulation, TransactionTemplate, UnsignedPsbt,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{
@@ -3614,6 +3655,7 @@ pub use policy::{
     bip87_account_path, compile_policy, policy_duration_blocks, policy_threshold, preview_policy,
     renewable_height, resolve_policy_draft, review_policy,
 };
+pub use psbt_transfer::export_psbt;
 pub use services::{save_endpoints, test_endpoint};
 pub use state_crypt::{
     state_clear_file, state_create_with_device, state_create_with_password, state_device_path,

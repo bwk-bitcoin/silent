@@ -43,15 +43,16 @@ use crate::{
         AddressVerifyInfo, BroadcastReport, CoinState, CraftOutcome, FundsSnapshot,
         LabelEditResult, LabelKind, LabelSnapshot, MusigAttemptSnapshot, MusigCosignerStatus,
         MusigDescriptorResult, MusigElectrumUrlResult, MusigFinalizeResult, MusigReceiveAddress,
-        MusigRound, MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, ReceiveAddress,
-        ReceiveAddressResult, ReceiveKind, RustCoin, RustTx, RustTxDetails, SavedPsbtEntry,
-        SavedPsbtList, SavedPsbtMutation, SavedPsbtReset, SavedPsbtRestore, TransactionSimulation,
-        TransactionTemplate, UnsignedPsbt,
+        MusigRound, MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, Output,
+        ReceiveAddress, ReceiveAddressResult, ReceiveKind, RustCoin, RustTx, RustTxDetails,
+        SavedPsbtEntry, SavedPsbtImport, SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord,
+        SavedPsbtReset, SavedPsbtRestore, TransactionSimulation, TransactionTemplate, UnsignedPsbt,
     },
     keys::{
         bridge::{merge_signed_psbt, musig_session_restart},
         psbt::ordinary_signature_complete,
     },
+    psbt_transfer::decode_psbt_text,
     saved_psbt::{apply_chain_state, frozen_entry, mutation_error, SavedPsbtStore},
     services::{self, Undelivered, FIRST_RECEIVE_INDEX, TAPROOT_KIND},
     tx_details::{details_result, edit_scanner_label, TxSnapshot},
@@ -1248,6 +1249,150 @@ impl MusigAccount {
         }
     }
 
+    /// Saves the PSBT `text` holds, ready to sign: it must spend the account's coins on
+    /// one of its spend paths, its change carrying the derivation of its index. A PSBT of
+    /// a transaction already saved is merged into that saved PSBT instead.
+    pub fn import_psbt(&self, text: &[u8]) -> SavedPsbtImport {
+        self.imported_psbt(text).unwrap_or_else(|error| {
+            log::error!("import_psbt: {error}");
+            SavedPsbtImport {
+                error,
+                ..SavedPsbtImport::default()
+            }
+        })
+    }
+
+    fn imported_psbt(&self, text: &[u8]) -> Result<SavedPsbtImport, String> {
+        let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+        let v2 = decode_psbt_text(text)?;
+        let psbt_v2_hex = hex::encode(v2.serialize().map_err(|e| format!("{e:?}"))?);
+        let psbt = v2
+            .into_bitcoin_psbt()
+            .map_err(|e| format!("Invalid PSBT: {e:?}"))?;
+        let saved = self
+            .saved_store()?
+            .records()
+            .iter()
+            .find(|record| {
+                decode_psbt(&record.original_psbt_v2_hex)
+                    .is_ok_and(|original| original.unsigned_tx == psbt.unsigned_tx)
+            })
+            .cloned();
+        if let Some(record) = saved {
+            return self.merge_import(&record, &psbt_v2_hex);
+        }
+
+        let outpoints: Vec<_> = psbt
+            .unsigned_tx
+            .input
+            .iter()
+            .map(|input| input.previous_output)
+            .collect();
+        let leaves = inner
+            .account
+            .spend_leaves(&outpoints)
+            .map_err(|e| format!("The PSBT does not spend this account's coins: {e}"))?;
+        // Restricting a PSBT to the path it is restricted to leaves it as it is.
+        let spend = leaves
+            .into_iter()
+            .find(|leaf| {
+                let mut restricted = psbt.clone();
+                inner
+                    .account
+                    .restrict_spend_path(&mut restricted, leaf.path)
+                    .is_ok()
+                    && restricted == psbt
+            })
+            .map(spend_leaf)
+            .ok_or("The PSBT is not restricted to one spend path of this account")?;
+        let network: bitcoin::Network = inner.config.network.into();
+        let scanner = inner.account.scanner();
+        let change: BTreeSet<_> = scanner
+            .address_entries()
+            .into_iter()
+            .filter(|entry| matches!(entry.account, KeyChain::Change))
+            .map(|entry| entry.script())
+            .collect();
+        let outputs = psbt
+            .unsigned_tx
+            .output
+            .iter()
+            .filter(|output| !change.contains(&output.script_pubkey))
+            .map(|output| {
+                bitcoin::Address::from_script(&output.script_pubkey, network)
+                    .map(|address| Output {
+                        address: address.to_string(),
+                        amount: output.value.to_sat(),
+                        label: String::new(),
+                        max: false,
+                    })
+                    .map_err(|_| "The PSBT pays a script with no address".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let tx_template = TransactionTemplate {
+            outputs,
+            fee_rate: 0.0,
+            fee: psbt
+                .fee()
+                .map_err(|e| format!("Cannot read the PSBT fee: {e}"))?
+                .to_sat(),
+            input_outpoints: outpoints.iter().map(ToString::to_string).collect(),
+        };
+        import_change(scanner, &psbt)?;
+        let saved = self
+            .saved_store()?
+            .create(tx_template, spend, psbt_v2_hex)?;
+        Ok(SavedPsbtImport {
+            is_ok: true,
+            error: String::new(),
+            save_error: saved.save_error,
+            record_id: saved.record_id,
+            merged: false,
+        })
+    }
+
+    /// Merges the imported `psbt_v2_hex` into `record`, the saved PSBT of its transaction:
+    /// through the active attempt when it is that one.
+    fn merge_import(
+        &self,
+        record: &SavedPsbtRecord,
+        psbt_v2_hex: &str,
+    ) -> Result<SavedPsbtImport, String> {
+        if !record.finalized_tx_hex.is_empty() {
+            return Err("This transaction is already saved and finalized".into());
+        }
+        let active = self
+            .active
+            .lock()
+            .map_err(|e| format!("Active attempt lock failed: {e}"))?
+            .as_ref()
+            .is_some_and(|active| active.record_id == record.id);
+        let save_error = if active {
+            let snapshot = self.accept_signed_progress(psbt_v2_hex);
+            if !snapshot.is_ok {
+                return Err(snapshot.error);
+            }
+            snapshot.save_error
+        } else {
+            let merged = merge_signed_psbt(&record.current_psbt_v2_hex, psbt_v2_hex);
+            if !merged.is_ok {
+                return Err(merged.error);
+            }
+            let saved = self.update_saved_psbt(&record.id, &merged.psbt_v2_hex);
+            if !saved.is_ok {
+                return Err(saved.error);
+            }
+            saved.save_error
+        };
+        Ok(SavedPsbtImport {
+            is_ok: true,
+            error: String::new(),
+            save_error,
+            record_id: record.id.clone(),
+            merged: true,
+        })
+    }
+
     pub fn saved_psbt_error(&self) -> String {
         match self.saved_store() {
             Ok(store) => store.error(),
@@ -1868,6 +2013,35 @@ fn register_change(
         return Ok(());
     };
     carries_change_derivation(scanner, psbt, recipients, index)?;
+    match advance_change_tip(scanner, index) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!(
+            "The change address {index} is already used by another transaction: craft this \
+             transaction again"
+        )),
+        Err(e) => Err(format!(
+            "The change address is not saved: {e}. Craft this transaction again."
+        )),
+    }
+}
+
+/// Registers the change index of an imported `psbt` durably once it is past the
+/// registered tip. One at or below it is kept as it is: the PSBT was built elsewhere,
+/// on that address.
+fn import_change(scanner: &ElectrumScanner, psbt: &bitcoin::Psbt) -> Result<(), String> {
+    let recipients = BTreeSet::new();
+    let Some(index) = change_index(scanner, psbt, &recipients)? else {
+        return Ok(());
+    };
+    carries_change_derivation(scanner, psbt, &recipients, index)?;
+    advance_change_tip(scanner, index)
+        .map(|_| ())
+        .map_err(|e| format!("The change address is not saved: {e}"))
+}
+
+/// Registers change `index` durably when it is past the registered tip: false, nothing
+/// written, when it is not.
+fn advance_change_tip(scanner: &ElectrumScanner, index: u32) -> Result<bool, String> {
     let mut coins = scanner.coin_store().lock().map_err(|e| e.to_string())?;
     let persisted = {
         let addresses = coins.address_store();
@@ -1878,18 +2052,14 @@ fn register_change(
             .last()
             .map_or(0, |entry| entry.index);
         if index <= tip {
-            return Err(format!(
-                "The change address {index} is already used by another transaction: \
-                 craft this transaction again"
-            ));
+            return Ok(false);
         }
         addresses.update_change(index);
         addresses.try_persist()
     };
     // The coin view follows the new address entries, as bwk's own change tip does.
     coins.generate();
-    persisted
-        .map_err(|e| format!("The change address is not saved: {e}. Craft this transaction again."))
+    persisted.map(|()| true).map_err(|e| e.to_string())
 }
 
 /// A recipient as a bitcoin address of `network`; a silent payment address is refused.

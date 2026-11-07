@@ -293,6 +293,46 @@ auto btnSaveUnsignedPsbt() -> Button * {
                  .width = BtnWidth::XL});
 }
 
+auto btnExportPsbt() -> Button * {
+    return make({.role = ButtonRole::Default,
+                 .label = TR("btn-export-psbt"),
+                 .icon = icon::upload,
+                 .iconSize = 16,
+                 .width = BtnWidth::L});
+}
+
+auto btnImportPsbt() -> Button * {
+    return make({.role = ButtonRole::Default,
+                 .label = TR("btn-import-psbt"),
+                 .icon = icon::download,
+                 .iconSize = 16,
+                 .width = BtnWidth::L});
+}
+
+auto btnSaveToFile() -> Button * {
+    return make({.role = ButtonRole::Default,
+                 .label = TR("btn-save-to-file"),
+                 .icon = icon::download,
+                 .iconSize = 16,
+                 .width = BtnWidth::L});
+}
+
+auto btnCopyToClipboard() -> Button * {
+    return make({.role = ButtonRole::Primary,
+                 .label = TR("btn-copy-to-clipboard"),
+                 .icon = icon::copy,
+                 .iconSize = 16,
+                 .width = BtnWidth::XL});
+}
+
+auto btnPasteFromClipboard() -> Button * {
+    return make({.role = ButtonRole::Default,
+                 .label = TR("btn-paste-from-clipboard"),
+                 .icon = icon::copy,
+                 .iconSize = 16,
+                 .width = BtnWidth::XL});
+}
+
 auto btnSealKey() -> Button * {
     return make({.role = ButtonRole::Primary, .label = TR("btn-seal-key"), .width = BtnWidth::M});
 }
@@ -496,6 +536,14 @@ auto btnDeleteRow() -> Button * {
                  .icon = icon::trash,
                  .iconSize = 15,
                  .tooltip = TR("common-delete"),
+                 .width = BtnWidth::Icon});
+}
+
+auto btnExportRow() -> Button * {
+    return make({.role = ButtonRole::InlineIcon,
+                 .icon = icon::upload,
+                 .iconSize = 15,
+                 .tooltip = TR("btn-export-psbt"),
                  .width = BtnWidth::Icon});
 }
 

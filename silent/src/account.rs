@@ -20,6 +20,8 @@ use bwk_sp::{
     bwk_sign::{
         bwk_descriptor::wallet::WalletDescriptor, miniscript::Descriptor as MiniscriptDescriptor,
     },
+    bwk_tx::bwk_psbt::sp::sp_v0_output,
+    core::{utils::common::SilentPaymentAddress, SpVersion},
     receiver::RecipientAddress,
 };
 
@@ -29,9 +31,10 @@ use crate::{
     ffi::{
         AddressVerifyInfo, BackendErrorKind, BroadcastReport, CoinState, CraftOutcome,
         FundsSnapshot, LabelEditResult, LabelKind, LabelSnapshot, Notification, NotificationFlag,
-        ReceiveAddress, ReceiveAddressResult, ReceiveKind, RustCoin, RustTx, RustTxDetails,
-        TransactionSimulation, TransactionTemplate, TxResult, UnsignedPsbt,
+        Output, PsbtImport, ReceiveAddress, ReceiveAddressResult, ReceiveKind, RustCoin, RustTx,
+        RustTxDetails, TransactionSimulation, TransactionTemplate, TxResult, UnsignedPsbt,
     },
+    psbt_transfer::decode_psbt_text,
     services::{self, Undelivered, FIRST_RECEIVE_INDEX, SEGWIT_KIND, SP_KIND, TAPROOT_KIND},
     tx_details::{details_result, edit_scanner_label, TxSnapshot},
 };
@@ -938,6 +941,89 @@ impl Account {
                 spent_input_count: 0,
             },
         }
+    }
+
+    /// The PSBT `text` holds, spending only the account's unspent coins, with the
+    /// transaction it states: a recipient per output, the silent payment change left out,
+    /// and the absolute fee. Pure: changes no account state.
+    pub fn import_psbt(&self, text: &[u8]) -> PsbtImport {
+        self.imported_psbt(text).unwrap_or_else(|error| PsbtImport {
+            error,
+            ..PsbtImport::default()
+        })
+    }
+
+    fn imported_psbt(&self, text: &[u8]) -> Result<PsbtImport, String> {
+        let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+        let psbt = decode_psbt_text(text)?;
+        let coins = self.coins();
+        let mut input_outpoints = Vec::new();
+        let mut input_total: u64 = 0;
+        for input in &psbt.inputs {
+            let outpoint = input.previous_output.to_string();
+            let coin = coins
+                .iter()
+                .find(|coin| coin.outpoint == outpoint)
+                .ok_or_else(|| {
+                    format!("The PSBT spends {outpoint}, a coin this account does not hold")
+                })?;
+            if coin.spent {
+                return Err(format!("The PSBT spends {outpoint}, a coin already spent"));
+            }
+            input_total += coin.value;
+            input_outpoints.push(outpoint);
+        }
+        let change = inner.account.sp_receiver().receiver.get_change_address();
+        let mut outputs = Vec::new();
+        let mut output_total: u64 = 0;
+        for (index, output) in psbt.outputs.iter().enumerate() {
+            let amount = output.amount.to_sat();
+            output_total += amount;
+            let address = match sp_v0_output(&output.psbt)
+                .map_err(|e| format!("Output #{index} has invalid silent payment fields: {e:?}"))?
+            {
+                Some(sp)
+                    if sp.scan_key == change.get_scan_key()
+                        && sp.spend_key == change.get_spend_key() =>
+                {
+                    continue;
+                }
+                Some(sp) => SilentPaymentAddress::new(
+                    sp.scan_key,
+                    sp.spend_key,
+                    change.get_network(),
+                    SpVersion::V0,
+                )
+                .map_err(|e| format!("Output #{index} pays no silent payment address: {e}"))?
+                .to_string(),
+                None => output
+                    .script_pubkey
+                    .as_ref()
+                    .and_then(|script| bitcoin::Address::from_script(script, inner.network).ok())
+                    .ok_or_else(|| format!("Output #{index} pays a script with no address"))?
+                    .to_string(),
+            };
+            outputs.push(Output {
+                address,
+                amount,
+                label: String::new(),
+                max: false,
+            });
+        }
+        let fee = input_total
+            .checked_sub(output_total)
+            .ok_or("The PSBT pays more than its inputs hold")?;
+        Ok(PsbtImport {
+            is_ok: true,
+            error: String::new(),
+            psbt: psbt.serialize().map_err(|e| format!("{e:?}"))?,
+            tx_template: TransactionTemplate {
+                outputs,
+                fee_rate: 0.0,
+                fee,
+                input_outpoints,
+            },
+        })
     }
 
     /// Log all details of a failed broadcast for debugging/reproduction.

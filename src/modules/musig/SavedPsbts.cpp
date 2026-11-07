@@ -1,6 +1,8 @@
 #include "SavedPsbts.h"
 
 #include "AppController.h"
+#include "account/PsbtTransfer.h"
+#include "account/services/Conversions.h"
 #include "account/views/TransactionDetails.h"
 #include "catalog/Button.h"
 #include "catalog/Variants.h"
@@ -9,6 +11,7 @@
 #include "catalog/display/InfoTip.h"
 #include "catalog/display/Label.h"
 #include "catalog/display/TxIndicators.h"
+#include "catalog/feedback/MessageModal.h"
 #include "catalog/form/LabelCell.h"
 #include "catalog/inputs/Checkbox.h"
 #include "catalog/panels/home/RowClickTable.h"
@@ -179,6 +182,7 @@ void SavedPsbts::init() {
     m_table = new catalog::RowClickTable;
     m_confirmed = new catalog::Checkbox(TR("psbt-show-confirmed"));
     m_confirmed->setChecked(false);
+    m_import_btn = catalog::btnImportPsbt();
     m_error_label = new catalog::Label;
     m_error_label->setWordWrap(true);
     m_error_label->hide();
@@ -198,6 +202,10 @@ void SavedPsbts::doConnect() {
             &SavedPsbts::onDeleteConfirmationNeeded, qontrol::UNIQUE);
     connect(m_confirmed, &QCheckBox::clicked, this, &SavedPsbts::onRefresh, qontrol::UNIQUE);
     connect(m_retry_btn, &QPushButton::clicked, this, &SavedPsbts::onRetryClicked, qontrol::UNIQUE);
+    connect(m_import_btn, &QPushButton::clicked, this, &SavedPsbts::onImportClicked,
+            qontrol::UNIQUE);
+    connect(m_controller, &MusigAccountController::psbtImported, this, &SavedPsbts::onPsbtImported,
+            qontrol::UNIQUE);
     connect(m_table, &catalog::RowClickTable::rowClicked, this, &SavedPsbts::onRowClicked,
             qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::savedPsbtsChanged, this, &SavedPsbts::onRefresh,
@@ -219,8 +227,10 @@ void SavedPsbts::view() {
                         ->push(m_empty_label)
                         ->push(m_table)
                         ->pushSpacer();
+    auto *titleRight =
+        (new qontrol::Row)->spacing(resolve(Spacing::M))->push(m_confirmed)->push(m_import_btn);
     setScreenContent(this, m_main_widget,
-                     dashboard(TR("musig-menu-psbt"), content, false, m_confirmed));
+                     dashboard(TR("musig-menu-psbt"), content, false, titleRight));
 }
 
 void SavedPsbts::showEvent(QShowEvent *event) {
@@ -255,6 +265,7 @@ void SavedPsbts::renderRows() {
                         .alignment = Qt::AlignRight,
                         .headerAlignment = Qt::AlignRight});
     m_table->addColumn({.width = resolve(BtnWidth::Icon), .icon = true});
+    m_table->addColumn({.width = resolve(BtnWidth::Icon), .icon = true});
     m_empty_label->setVisible(m_list.is_ok);
     for (const auto &entry : m_list.entries) {
         if (entry.confirmed_height != 0 && !m_confirmed->isChecked()) {
@@ -278,15 +289,21 @@ void SavedPsbts::addRow(const SavedPsbtEntry &entry) {
     connect(label, &catalog::LabelCell::edited, this, &SavedPsbts::onLabelEdited, qontrol::UNIQUE);
     m_label_cells.insert(id, label);
 
+    auto *exportButton = catalog::btnExportRow();
+    exportButton->setProperty(K_SAVED_ID, id);
+    connect(exportButton, &QPushButton::clicked, this, &SavedPsbts::onExportClicked,
+            qontrol::UNIQUE);
     auto *remove = catalog::btnDeleteRow();
     remove->setProperty(K_SAVED_ID, id);
     connect(remove, &QPushButton::clicked, this, &SavedPsbts::onDeleteClicked, qontrol::UNIQUE);
-    // In a cell of its own: the row's click filter sits on the cells, not their children.
+    // Each in a cell of its own: the row's click filter sits on the cells, not their
+    // children.
+    auto *exportCell = (new qontrol::Row)->push(exportButton);
     auto *removeCell = (new qontrol::Row)->push(remove);
 
     m_table->addClickableRow(id, {catalog::dateStamp(entry.record.updated_at, false, m_compact),
                                   signatures, label, label->takeEditButton(), statusCell(entry),
-                                  catalog::amountLabel(amount(entry)), removeCell});
+                                  catalog::amountLabel(amount(entry)), exportCell, removeCell});
 }
 
 auto SavedPsbts::shownRows() const -> QStringList {
@@ -303,6 +320,15 @@ auto SavedPsbts::shownRows() const -> QStringList {
                         .join(QStringLiteral("\t")));
     }
     return rows;
+}
+
+void SavedPsbts::execOverRows(QDialog *modal) {
+    m_modal_open = true;
+    QPointer<SavedPsbts> self(this);
+    AppController::execModal(modal);
+    if (self != nullptr) {
+        m_modal_open = false;
+    }
 }
 
 auto SavedPsbts::held() const -> bool {
@@ -372,18 +398,55 @@ void SavedPsbts::onDeleteClicked() {
     m_controller->deleteSavedPsbt(sender()->property(K_SAVED_ID).toString());
 }
 
+void SavedPsbts::onExportClicked() {
+    auto id = sender()->property(K_SAVED_ID).toString();
+    for (const auto &entry : m_list.entries) {
+        if (text(entry.record.id) != id) {
+            continue;
+        }
+        auto exported = ::export_psbt(account::services::toSlice(
+            QByteArray::fromHex(text(entry.record.current_psbt_v2_hex).toLatin1())));
+        if (!exported.is_ok) {
+            execOverRows(new catalog::MessageModal(TR("common-error"), text(exported.error)));
+            return;
+        }
+        // Named after its label, else its transaction.
+        auto name = entry.record.label.empty() ? text(entry.txid) : text(entry.record.label);
+        execOverRows(new account::ExportPsbt(text(exported.base64), name));
+        return;
+    }
+}
+
+void SavedPsbts::onImportClicked() {
+    auto *modal = new account::ImportPsbt;
+    m_import = modal;
+    connect(modal, &account::ImportPsbt::textChosen, this, &SavedPsbts::onImportText,
+            qontrol::UNIQUE);
+    execOverRows(modal);
+}
+
+void SavedPsbts::onImportText(const QByteArray &contents) {
+    m_controller->importSavedPsbt(contents);
+}
+
+void SavedPsbts::onPsbtImported(const SavedPsbtImport &result) {
+    if (m_import == nullptr) {
+        return;
+    }
+    if (!result.is_ok) {
+        m_import->showError(text(result.error));
+        return;
+    }
+    m_import->showImported(result.merged ? TR("psbt-import-merged") : TR("psbt-import-saved"));
+}
+
 void SavedPsbts::onDeleteConfirmationNeeded(const QString &id) {
     auto *confirm = new ConfirmPsbtDelete(id);
     connect(confirm, &ConfirmPsbtDelete::confirmed, m_controller,
             &MusigAccountController::onSavedPsbtDeleteConfirmed, qontrol::UNIQUE);
     connect(confirm, &ConfirmPsbtDelete::cancelled, m_controller,
             &MusigAccountController::onSavedPsbtDeleteCancelled, qontrol::UNIQUE);
-    m_modal_open = true;
-    QPointer<SavedPsbts> self(this);
-    AppController::execModal(confirm);
-    if (self != nullptr) {
-        m_modal_open = false;
-    }
+    execOverRows(confirm);
 }
 
 void SavedPsbts::onLabelEdited(const QString &label) {

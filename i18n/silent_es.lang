@@ -25,6 +25,7 @@ btn-connect-electrum => "Connect Electrum" => "NONE"
 btn-continue => "Continue" => "NONE"
 btn-copied => "Copied" => "NONE"
 btn-copy-address => "Copy Address" => "NONE"
+btn-copy-to-clipboard => "Copy to Clipboard" => "Copy to Clipboard"
 btn-create => "Create" => "NONE"
 btn-create-account => "+ Create Account" => "+ Create Account"
 btn-delete-wallet => "Delete wallet" => "NONE"
@@ -35,6 +36,7 @@ btn-disconnect-electrum => "Disconnect Electrum" => "NONE"
 btn-dismiss => "Dismiss" => "NONE"
 btn-done => "Done" => "NONE"
 btn-edit-label => "Edit label" => "NONE"
+btn-export-psbt => "Export PSBT…" => "Export PSBT…"
 btn-fetch-xpub => "Fetch Xpub" => "NONE"
 btn-fetch-xpubs-from-the-device => "Fetch Xpubs From the Device" => "NONE"
 btn-forget-access => "Forget" => "NONE"
@@ -45,6 +47,7 @@ btn-get-silent-payment => "Silent Payment" => "Silent Payment"
 btn-get-taproot => "Taproot" => "Taproot"
 btn-get-xpub => "Get Xpub" => "Get Xpub"
 btn-hide-words => "Hide Words" => "NONE"
+btn-import-psbt => "Import PSBT…" => "Import PSBT…"
 btn-less => "Less" => "NONE"
 btn-load-signed-psbt => "Load Signed PSBT…" => "NONE"
 btn-more => "More" => "NONE"
@@ -55,6 +58,7 @@ btn-open => "Open" => "NONE"
 btn-open-file => "Open File…" => "NONE"
 btn-open-keys-tab => "Open Keys Tab" => "NONE"
 btn-other-signer => "Other Signer" => "NONE"
+btn-paste-from-clipboard => "Paste from Clipboard" => "Paste from Clipboard"
 btn-pick-another-file => "Pick Another File…" => "NONE"
 btn-plugin-access => "Access" => "NONE"
 btn-prepare-nonces => "Prepare Nonces" => "Prepare Nonces"
@@ -71,6 +75,7 @@ btn-save => "Save" => "NONE"
 btn-save-alias => "Save Alias" => "NONE"
 btn-save-settings => "Save Settings" => "NONE"
 btn-save-spend-path => "Save Path" => "Save Path"
+btn-save-to-file => "Save to File…" => "Save to File…"
 btn-save-unsigned-psbt => "Save Unsigned PSBT…" => "NONE"
 btn-scan-address => "Scan an Address QR Code" => "Scan an Address QR Code"
 btn-scan-again => "Scan Again" => "NONE"
@@ -982,7 +987,32 @@ psbt-delete-title => "Delete saved PSBT?" => "Delete saved PSBT?"
 psbt-empty
 => "No saved PSBTs. Transactions are saved when prepared for signing."
 => "No saved PSBTs. Transactions are saved when prepared for signing.";;
+psbt-export-copied => "Copied to the clipboard" => "Copied to the clipboard"
+psbt-export-message
+=> "Save the PSBT as a base64 .psbt file, or copy its base64 text to the clipboard, to sign it in another wallet or hand it to a cosigner."
+=> "Save the PSBT as a base64 .psbt file, or copy its base64 text to the clipboard, to sign it in another wallet or hand it to a cosigner.";;
+psbt-export-save-failed => "The PSBT is not saved: %1" => "The PSBT is not saved: %1"
+psbt-export-save-title => "Save PSBT" => "Save PSBT"
+psbt-export-saved => "Saved to %1" => "Saved to %1"
+psbt-export-title => "Export PSBT" => "Export PSBT"
 psbt-finalized => "Finalized, ready to broadcast" => "Finalized, ready to broadcast"
+psbt-import-clipboard-empty
+=> "The clipboard holds no text"
+=> "The clipboard holds no text";;
+psbt-import-failed
+=> "The PSBT is not imported: %1"
+=> "The PSBT is not imported: %1";;
+psbt-import-merged
+=> "This transaction is already saved: the signatures and nonces of the PSBT are merged into it."
+=> "This transaction is already saved: the signatures and nonces of the PSBT are merged into it.";;
+psbt-import-message
+=> "Import a PSBT in base64 from a .psbt file or the clipboard. It must spend this account's coins."
+=> "Import a PSBT in base64 from a .psbt file or the clipboard. It must spend this account's coins.";;
+psbt-import-open-title => "Open PSBT" => "Open PSBT"
+psbt-import-saved
+=> "Imported: the PSBT is in the list, ready to sign."
+=> "Imported: the PSBT is in the list, ready to sign.";;
+psbt-import-title => "Import PSBT" => "Import PSBT"
 psbt-last-edited => "Last Edited" => "Última edición"
 psbt-reset => "Reset" => "Restablecer"
 psbt-reset-confirm => "Yes, reset" => "Sí, restablecer"

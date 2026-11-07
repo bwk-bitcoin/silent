@@ -6,12 +6,17 @@
 #include "interfaces/types.h"
 
 #include <QByteArray>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <optional>
 #include <silent.h>
 
 class AccountController;
+
+namespace account {
+class ImportPsbt;
+} // namespace account
 
 namespace catalog {
 class Button;
@@ -20,7 +25,9 @@ class Label;
 
 // The signing step of an sp account's Send: Sign finalizes the crafted transaction into
 // a PSBT (ITransaction::finalize()) and has the keys module sign it at once, then
-// Broadcast sends it (IBlockchain::broadcast()), or Cancel lets it go.
+// Broadcast sends it (IBlockchain::broadcast()), or Cancel lets it go. Export, in the
+// actions, hands that PSBT out as base64; Import, under them, takes one in, shown in Send
+// as if crafted here, Sign signing it in place of the crafted one.
 class SpSigning final : public account::SendSigning {
     Q_OBJECT
 
@@ -42,6 +49,9 @@ public slots:
     void onSignClicked();
     void onBroadcastClicked();
     void onCancelClicked();
+    void onExportClicked();
+    void onImportClicked();
+    void onImportText(const QByteArray &text);
     void onValidationResult(PsbtValidation result);
     void onSignerSigned(ReqId req_id, const QString &psbt_v2_hex);
     void onSignerError(std::optional<ReqId> req_id, const QString &message);
@@ -63,8 +73,14 @@ protected:
     void showSignerStep();
     // Stops listening to the keys module once the signing request has its answer.
     void disconnectSigner() const;
-    // Sign before signing, the signed pill, Cancel and Broadcast after.
+    // Sign, Export and Import before signing, the signed pill, Cancel and Broadcast
+    // after. Cancel also lets go of an imported PSBT.
     void updateButtons();
+    // The PSBT Sign would sign: the imported one, else the crafted transaction finalized
+    // (its reason, on failure, in m_finalize_error).
+    auto unsignedPsbt() -> std::optional<QByteArray>;
+    // Shows the imported transaction in Send, frozen.
+    void restoreImported();
     // Lets go of the prepared or signed transaction, and Send of its payments.
     void dropTransaction();
     // A prepare failure as the user reads it: what failed, then why when known.
@@ -80,7 +96,12 @@ private:
     catalog::Button *m_cancel_btn = nullptr;
     catalog::Button *m_sign_btn = nullptr;
     catalog::Button *m_broadcast_btn = nullptr;
+    catalog::Button *m_export_btn = nullptr;
+    catalog::Button *m_import_btn = nullptr;
     catalog::Label *m_status_label = nullptr;
+    QPointer<account::ImportPsbt> m_import;
+    // The PSBT imported and held, empty when none: m_tx is the transaction it states.
+    QByteArray m_imported_psbt;
     // The transaction Send forms now.
     std::optional<backend::TransactionTemplate> m_tx = std::nullopt;
     // The transaction being signed or held signed, and its unsigned PSBTv2 until it is

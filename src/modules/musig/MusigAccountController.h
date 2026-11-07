@@ -94,6 +94,9 @@ public:
     void deleteSavedPsbt(const QString &id);
     void labelSavedPsbt(const QString &id, const QString &label);
     void retrySavedPsbts();
+    // Saves the PSBT `text` holds (base64, or binary) ready to sign, or merges it into
+    // the saved PSBT of its transaction; psbtImported() answers.
+    void importSavedPsbt(const QByteArray &text);
 
 signals:
     void signingPlanReady(uint64_t req_id, SigningPlan plan);
@@ -123,6 +126,7 @@ signals:
     void savedPsbtFailed(QString message);
     void savedPsbtWarningChanged(QString message);
     void savedPsbtDeleteConfirmationNeeded(QString id);
+    void psbtImported(SavedPsbtImport result);
     void sessionCleared();
 
 public slots:

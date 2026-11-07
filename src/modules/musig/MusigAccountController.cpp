@@ -1287,6 +1287,30 @@ void MusigAccountController::retrySavedPsbts() {
                    });
 }
 
+void MusigAccountController::importSavedPsbt(const QByteArray &text) {
+    if (!m_account.has_value()) {
+        SavedPsbtImport result{};
+        result.error = rust::String(NOT_LOADED);
+        emit psbtImported(result);
+        return;
+    }
+    auto *musigAccount = &*m_account.value();
+    auto result = std::make_shared<SavedPsbtImport>();
+    enqueueStorage(
+        [musigAccount, result, text] {
+            *result = musigAccount->import_psbt(account::services::toSlice(text));
+        },
+        [this, result] {
+            setSaveWarning(toQString(result->save_error));
+            // Merged into the transaction in flight: its progress is read again.
+            if (result->merged && toQString(result->record_id) == m_saved_record_id) {
+                refreshAttempt();
+            }
+            emit savedPsbtsChanged();
+            emit psbtImported(*result);
+        });
+}
+
 void MusigAccountController::psbtClicked() {
     loadPanel("psbt");
 }

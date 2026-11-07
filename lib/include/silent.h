@@ -1046,6 +1046,9 @@ struct SavedPsbtEntry;
 struct SavedPsbtList;
 struct SavedPsbtRestore;
 struct SavedPsbtMutation;
+struct PsbtExport;
+struct PsbtImport;
+struct SavedPsbtImport;
 struct SpDescriptorResult;
 struct QrPayload;
 struct BbqrScanResult;
@@ -2268,6 +2271,48 @@ struct SavedPsbtMutation final {
   using IsRelocatable = ::std::true_type;
 };
 #endif // CXXBRIDGE1_STRUCT_SavedPsbtMutation
+
+#ifndef CXXBRIDGE1_STRUCT_PsbtExport
+#define CXXBRIDGE1_STRUCT_PsbtExport
+// A PSBT as base64 text, to save to a `.psbt` file or copy to the clipboard.
+struct PsbtExport final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::String base64;
+  // Empty while a silent payment output has no script yet.
+  ::rust::String txid;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PsbtExport
+
+#ifndef CXXBRIDGE1_STRUCT_PsbtImport
+#define CXXBRIDGE1_STRUCT_PsbtImport
+// An imported PSBT the account can sign: its PSBTv2 and the transaction it states.
+struct PsbtImport final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::Vec<::std::uint8_t> psbt;
+  // Its recipients, absolute fee and inputs.
+  ::TransactionTemplate tx_template;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_PsbtImport
+
+#ifndef CXXBRIDGE1_STRUCT_SavedPsbtImport
+#define CXXBRIDGE1_STRUCT_SavedPsbtImport
+// An imported PSBT saved, or merged into the saved PSBT of the same transaction.
+struct SavedPsbtImport final {
+  bool is_ok CXX_DEFAULT_VALUE(false);
+  ::rust::String error;
+  ::rust::String save_error;
+  ::rust::String record_id;
+  bool merged CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SavedPsbtImport
 
 #ifndef CXXBRIDGE1_STRUCT_SpDescriptorResult
 #define CXXBRIDGE1_STRUCT_SpDescriptorResult
@@ -3500,6 +3545,10 @@ struct Account final : public ::rust::Opaque {
   // signing: output address reuse and already-spent inputs. Blocking.
   ::PsbtValidation validate_unsigned_psbt(::rust::Slice<::std::uint8_t const> psbt) const noexcept;
 
+  // The PSBT `text` (base64, or binary) holds, spending only the account's unspent
+  // coins, with the transaction it states. Pure: changes no account state.
+  ::PsbtImport import_psbt(::rust::Slice<::std::uint8_t const> text) const noexcept;
+
   // Coins, balance and history for the published account read model.
   ::FundsSnapshot funds_snapshot() const noexcept;
 
@@ -4212,6 +4261,12 @@ struct MusigAccount final : public ::rust::Opaque {
   ::SavedPsbtMutation label_saved_psbt(::rust::Str id, ::rust::String label) const noexcept;
   ::SavedPsbtMutation delete_saved_psbt(::rust::Str id) const noexcept;
   ::SavedPsbtMutation retry_saved_psbts() const noexcept;
+
+  // Saves the PSBT `text` (base64, or binary) holds once it spends the account's
+  // coins on one of its spend paths. A PSBT of a saved transaction is merged into
+  // it instead.
+  ::SavedPsbtImport import_psbt(::rust::Slice<::std::uint8_t const> text) const noexcept;
+
   ::rust::String saved_psbt_error() const noexcept;
   ::MusigAttemptSnapshot active_attempt() const noexcept;
   bool clear_active_attempt() const noexcept;
@@ -4547,6 +4602,9 @@ void storage_request_forget(::std::uint64_t session, ::rust::String id) noexcept
 
 // Also refuses a stale persisted grant version, checked under both state locks.
 ::rust::String app_set_plugin_access_if_current(::PluginAccess access, ::std::uint64_t expected_epoch, ::std::uint64_t expected_version) noexcept;
+
+// `psbt`, a serialized PSBTv2, as base64 text with its txid when it has one.
+::PsbtExport export_psbt(::rust::Slice<::std::uint8_t const> psbt) noexcept;
 
 // Writes the PSBT to `path` exactly as serialized. Refuses to overwrite.
 ::PsbtFileResult sd_save_psbt(::rust::Str path, ::rust::Str psbt_hex) noexcept;

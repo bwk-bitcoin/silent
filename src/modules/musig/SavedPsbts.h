@@ -3,6 +3,7 @@
 #include "account/Services.h"
 #include "catalog/containers/Modal.h"
 
+#include <QByteArray>
 #include <QHash>
 #include <QPointer>
 #include <QStringList>
@@ -10,7 +11,12 @@
 #include <silent.h>
 
 class MusigAccountController;
+class QDialog;
 class QResizeEvent;
+
+namespace account {
+class ImportPsbt;
+} // namespace account
 
 namespace catalog {
 class Button;
@@ -50,9 +56,9 @@ private:
 };
 
 // The Multikey PSBT tab: one row per saved transaction, last edited, signatures in,
-// label, status, amount. A click on a row opens it: a draft in Send, a broadcast one in
-// its transaction details, a deprecated one in the details of the transaction that
-// replaced it.
+// label, status, amount, Export (its PSBT as base64). A click on a row opens it: a draft
+// in Send, a broadcast one in its transaction details, a deprecated one in the details
+// of the transaction that replaced it. Import PSBT saves one more, or merges it.
 class SavedPsbts final : public qontrol::Screen {
     Q_OBJECT
 
@@ -64,6 +70,10 @@ public slots:
     void onListed(const SavedPsbtList &result);
     void onRowClicked(const QString &id);
     void onDeleteClicked();
+    void onExportClicked();
+    void onImportClicked();
+    void onImportText(const QByteArray &contents);
+    void onPsbtImported(const SavedPsbtImport &result);
     void onDeleteConfirmationNeeded(const QString &id);
     void onLabelEdited(const QString &label);
     void onFailure(const QString &message);
@@ -83,6 +93,8 @@ protected:
     [[nodiscard]] auto shownRows() const -> QStringList;
     // A label is being edited or a modal runs over the rows: they are not rebuilt.
     [[nodiscard]] auto held() const -> bool;
+    // Runs `modal` over the rows, which stay while it runs.
+    void execOverRows(QDialog *modal);
 
 private:
     MusigAccountController *m_controller = nullptr;
@@ -90,6 +102,8 @@ private:
     QWidget *m_main_widget = nullptr;
     catalog::RowClickTable *m_table = nullptr;
     catalog::Checkbox *m_confirmed = nullptr;
+    catalog::Button *m_import_btn = nullptr;
+    QPointer<account::ImportPsbt> m_import;
     catalog::Label *m_error_label = nullptr;
     catalog::Label *m_warning_label = nullptr;
     catalog::Label *m_empty_label = nullptr;

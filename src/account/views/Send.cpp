@@ -290,7 +290,7 @@ void Send::restoreTransaction(const backend::TransactionTemplate &transaction,
     onFeeToggled();
     m_fee_value_input->setText(QString::number(m_estimated_fee));
     onUpdateFeeValidation();
-    m_fee_estimate_label->setText(toBitcoin(m_estimated_fee));
+    m_fee_estimate_label->setText(TR("send-fee-estimate").arg(toBitcoin(m_estimated_fee)));
     m_fee_estimate_label->setVisible(true);
     m_warning_label->setText(warning);
     m_warning_label->setVisible(!warning.isEmpty());
