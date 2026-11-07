@@ -65,6 +65,10 @@ set(SILENT_APP_SOURCES
     src/host/PluginRegistry.cpp
     src/host/PluginStateJob.h
     src/host/PluginStateJob.cpp
+    src/host/ServiceAssembly.h
+    src/host/ServiceAssembly.cpp
+    src/host/UnsupportedServices.h
+    src/host/UnsupportedServices.cpp
     src/views/modals/appsettings/RemoveFlow.h
     src/views/modals/appsettings/RemoveFlow.cpp
     src/host/StorageHandle.h
@@ -81,6 +85,14 @@ set(SILENT_APP_SOURCES
     src/interfaces/signer.h
     src/interfaces/theme.h
     src/interfaces/instance.h
+    src/interfaces/backend/types.h
+    src/interfaces/backend/service.h
+    src/interfaces/backend/account.h
+    src/interfaces/backend/blockchain.h
+    src/interfaces/backend/transaction.h
+    src/interfaces/backend/labels.h
+    src/interfaces/backend/settings.h
+    src/interfaces/backend/provider.h
     src/theme/Theme.h
     src/theme/Theme.cpp
     src/theme/Palette.h
@@ -653,6 +665,21 @@ if(SILENT_BUILD_HOST_SMOKE)
             $<TARGET_PROPERTY:Qt6::Core,INTERFACE_INCLUDE_DIRECTORIES>)
         target_compile_definitions(storage_fixture PRIVATE
             $<TARGET_PROPERTY:Qt6::Core,INTERFACE_COMPILE_DEFINITIONS>)
+        # Account service providers built against the published SDK only: the guard
+        # headers fail the build if an interface pulls generated Rust/CXX headers.
+        foreach(SERVICE_FIXTURE full chain)
+            qt_add_library(service_${SERVICE_FIXTURE}_fixture MODULE
+                tests/host/ServiceProviderPlugin.cpp)
+            add_dependencies(service_${SERVICE_FIXTURE}_fixture RunBeforeBuild)
+            target_link_libraries(service_${SERVICE_FIXTURE}_fixture PRIVATE silent_interfaces)
+            target_include_directories(service_${SERVICE_FIXTURE}_fixture BEFORE PRIVATE
+                ${CMAKE_SOURCE_DIR}/tests/interfaces/generated_guard)
+            target_include_directories(service_${SERVICE_FIXTURE}_fixture PRIVATE
+                $<TARGET_PROPERTY:Qt6::Core,INTERFACE_INCLUDE_DIRECTORIES>)
+            target_compile_definitions(service_${SERVICE_FIXTURE}_fixture PRIVATE
+                $<TARGET_PROPERTY:Qt6::Core,INTERFACE_COMPILE_DEFINITIONS>)
+        endforeach()
+        target_compile_definitions(service_chain_fixture PRIVATE SILENT_SERVICE_CHAIN_FIXTURE)
         qt_add_library(custom_widget_fixture MODULE tests/host/CustomWidgetPlugin.cpp)
         add_dependencies(custom_widget_fixture RunBeforeBuild)
         target_link_libraries(custom_widget_fixture PRIVATE silent_interfaces)
@@ -727,6 +754,13 @@ if(SILENT_BUILD_HOST_SMOKE)
         add_dependencies(${SMOKE} storage_fixture)
         target_compile_definitions(${SMOKE} PRIVATE
             SILENT_STORAGE_FIXTURE="$<TARGET_FILE:storage_fixture>")
+    endif()
+    if(TARGET service_full_fixture)
+        target_sources(${SMOKE} PRIVATE tests/host/account_services_smoke.cpp)
+        add_dependencies(${SMOKE} service_full_fixture service_chain_fixture)
+        target_compile_definitions(${SMOKE} PRIVATE
+            SILENT_SERVICE_FULL_FIXTURE="$<TARGET_FILE:service_full_fixture>"
+            SILENT_SERVICE_CHAIN_FIXTURE="$<TARGET_FILE:service_chain_fixture>")
     endif()
     if(TARGET custom_widget_fixture)
         add_dependencies(${SMOKE} custom_widget_fixture)

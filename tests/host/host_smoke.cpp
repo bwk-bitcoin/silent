@@ -203,6 +203,7 @@ void pluginRemovalSmoke();
 void pluginRemovalUiSmoke(const QString &shots);
 void pluginRemovalReadFailureSmoke(const QString &shots);
 void pluginAccessSettingsFailureSmoke(const QString &shots);
+void accountServicesSmoke();
 } // namespace smoke
 
 auto main(int argc, char *argv[]) -> int {
@@ -297,6 +298,13 @@ auto main(int argc, char *argv[]) -> int {
         std::fprintf(stdout, "TxFlow hover smoke: OK\n");
         return gOk ? 0 : 1;
     }
+#ifdef SILENT_SERVICE_FULL_FIXTURE
+    if (arguments.contains(QStringLiteral("--account-services"))) {
+        smoke::accountServicesSmoke();
+        std::fprintf(stdout, "Account services smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+#endif
 #ifdef SILENT_REMOVAL_FIXTURE
     if (arguments.contains(QStringLiteral("--registry-async-errors"))) {
         Theme::init();

@@ -1251,8 +1251,9 @@ void PluginRegistry::advancePluginStops() {
             waiting = true;
             auto *host = dynamic_cast<HostImpl *>(Host::get());
             auto modules = m_records.value(id).modules;
+            // A module shuts down only once no account UI uses a service it supplied.
             if (host != nullptr && std::ranges::any_of(modules, [host](IModule *module) {
-                    return !host->callerFramesIdle(module);
+                    return !host->callerFramesIdle(module) || !host->servicesReleased(module);
                 })) {
                 continue;
             }

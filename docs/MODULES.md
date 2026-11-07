@@ -1204,6 +1204,110 @@ Every request talks to a physical device, so (per the Threading Model) it return
 Qt/std projection of the trait across the module boundary; a signer module typically
 wraps a `bwk` `HwSigner` internally via CXX.
 
+## Account UI Services
+
+The generic account UI reads an account through the headers under `interfaces/backend/`,
+apart from the public `IAccount` other accounts use, which they leave unchanged:
+
+| Header          | Interface                                                           | IID                                       |
+|-----------------|---------------------------------------------------------------------|-------------------------------------------|
+| `types.h`       | Payload structs, `backend::Network`, `backend::RequestId`           |                                           |
+| `service.h`     | `IService`: byte (`raw`) and Qt JSON (`value`) extensions, `error()` | none, base class only                     |
+| `account.h`     | `IAccountBackend`: identity, receiving, backup and restore          | `dev.silent.backend.IAccountBackend/1.0`  |
+| `blockchain.h`  | `IBlockchain`: scanning, coins, history, broadcast                  | `dev.silent.backend.IBlockchain/1.0`      |
+| `transaction.h` | `ITransaction`: crafting, unsigned PSBTs, coin selection            | `dev.silent.backend.ITransaction/1.0`     |
+| `labels.h`      | `ILabels`                                                           | `dev.silent.backend.ILabels/1.0`          |
+| `settings.h`    | `IBackendSettings`: network and endpoints                           | `dev.silent.backend.IBackendSettings/1.0` |
+| `provider.h`    | `IServiceProvider`: optional `IModule` facet supplying the others   | `dev.silent.backend.IServiceProvider/1.0` |
+
+Getters read local state under short locks: no network I/O, persistence or worker join.
+Commands are slots taking a `RequestId` scoped to the receiving object. They return at once
+and answer with their result signal or `error()`, possibly inline, so connect and record the
+request before calling. An unsupported request answers `error()`, never nothing.
+Notifications (`historyChanged()`, ...) only say state changed: polling the same getters works
+without subscribing.
+
+The moc code of these classes is compiled into the host and exported with the other
+interfaces (`--export-dynamic` on Linux, the curated export table on Windows). A plugin
+compiles the headers without running moc on them. The host registers every payload type for
+queued delivery before any module activates.
+
+### Supplying services
+
+A module supplies services by also implementing `backend::IServiceProvider`, declared with
+`Q_INTERFACES`:
+
+```cpp
+class ChainModule final : public IModule, public backend::IServiceProvider {
+    Q_OBJECT
+    Q_INTERFACES(backend::IServiceProvider)
+
+public:
+    auto service(const QString &account, backend::Network network, backend::ServiceKind kind)
+        -> backend::IService * override {
+        if (kind != backend::ServiceKind::Blockchain) {
+            return nullptr; // this module supplies the blockchain only
+        }
+        return new ChainBlockchain(account, network, this);
+    }
+
+    void releaseService(backend::IService *service) override {
+        service->deleteLater();
+    }
+    // meta(), list(), autoStart(), startInstance(), shutdown() as for any module.
+};
+
+class ChainBlockchain final : public backend::IBlockchain {
+    Q_OBJECT
+    Q_INTERFACES(backend::IBlockchain)
+    // getters, slots, raw() and value()
+};
+```
+
+- `service()` answers this provider's service of one kind for an account (its instance id) on
+  a network, or null. GUI thread, no I/O. Each non-null answer is handed back exactly once
+  through `releaseService()`.
+- Each service class declares `Q_INTERFACES` for its interface. The host checks the kind and
+  its IID version with `qobject_cast`, so a service built against another version is refused.
+- The facet is optional. `IPlugin`, `IModule`, `IInstance` and the root plugin IID are
+  unchanged: a module without the facet supplies nothing.
+- Values, results and events own their data. Never hand out a `QStringLiteral` or other data
+  borrowed from the library: a consumer may keep it.
+
+### Assembly
+
+The host assembles the services of one account UI with `HostImpl::assembleServices()`. The
+request names the account, its network and, for each of the five services, its source: a
+provider module, or `host::Unsupported`, the host's explicit implementation whose getters
+answer empty data (the account id and network for identity) and whose requests answer
+`error()`. Sources are independent: the account from its own module, the blockchain from
+another plugin, the settings from a built-in module.
+
+Assembly is all or nothing. It is refused, handing back every service already obtained, when a
+source is not an active module or is stopping, does not implement the facet, supplies no
+service of that kind or one of another interface version, or when the account service reports
+another account id or network. A missing provider is never replaced, neither by another one
+nor by the unsupported implementation.
+
+The result attributes each service to its supplier: `supplier(kind)` gives the plugin id,
+module id, external flag and library hash the registry holds, empty for the unsupported
+implementation. Every getter answers a live object. Providers own their services; the
+assembly owns only the unsupported ones and never stops a provider.
+
+### Retention
+
+A supplying plugin stays loaded while an assembly uses its services. When it starts stopping
+(disable or remove), every assembly using it emits `retired()`. The consumer then drops every
+use of the services and deletes the assembly (`deleteLater()` is fine), which hands each
+service back to its provider. The registry asks the plugin's modules to shut down only once no
+assembly using them is left, a deferred deletion included, so a provider's `shutdown()` never
+runs with services still out. The other providers of a retired assembly keep running.
+
+`host_smoke --account-services` loads two provider plugins built against the SDK only
+(`tests/host/ServiceProviderPlugin.cpp`, with the guard headers that fail on generated
+Rust/CXX includes). It checks one-provider and split-provider assembly, attribution, the
+unsupported implementation, refusals and retention through a plugin stop.
+
 ## Inter-Account Operation: Send To / Spend From Siblings
 
 A key use case is moving funds between sibling accounts (e.g. a consolidation or
@@ -1406,7 +1510,8 @@ The current plugin IID is `dev.silent.IPlugin/10.0`, the module IID is
 `dev.silent.ISigner/3.0`, the account IID is
 `dev.silent.IAccount/3.0`, the keys IID is `dev.silent.IKeys/3.0`, and the transaction
 service IID is `dev.silent.ITransactions/2.0`. The feed IID remains
-`dev.silent.IFeed/3.0`. Public Keys and spending enums are SDK-owned, not generated
+`dev.silent.IFeed/3.0`. The account UI services carry their own IIDs (see Account UI
+Services) and change no existing one. Public Keys and spending enums are SDK-owned, not generated
 Rust types. Root ABI 10 changes `FeePreferences` to mode and one source, removing the
 global tier. The `IFeed` methods, signals and IID are unchanged. Rebuild plugins
 against this checkout and use `SILENT_IPlugin_IID` in plugin metadata. Include both

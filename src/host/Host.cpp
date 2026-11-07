@@ -7,9 +7,17 @@
 #include "host/PluginAccess.h"
 #include "host/PluginRegistry.h"
 #include "host/PriceFeedCoordinator.h"
+#include "host/ServiceAssembly.h"
 #include "host/StorageHandle.h"
+#include "host/UnsupportedServices.h"
 #include "i18n/I18nManager.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/account.h"
+#include "interfaces/backend/blockchain.h"
+#include "interfaces/backend/labels.h"
+#include "interfaces/backend/provider.h"
+#include "interfaces/backend/settings.h"
+#include "interfaces/backend/transaction.h"
 #include "interfaces/instance.h"
 #include "interfaces/keys.h"
 #include "interfaces/module.h"
@@ -17,6 +25,9 @@
 #include "views/modals/PluginAccessPrompt.h"
 
 #include <algorithm>
+#include <array>
+#include <utility>
+#include <variant>
 
 #include <QApplication>
 #include <QDebug>
@@ -48,6 +59,39 @@ public:
         setMainWidget(content);
     }
 };
+
+auto serviceName(backend::ServiceKind kind) -> QString {
+    switch (kind) {
+    case backend::ServiceKind::Account:
+        return QStringLiteral("account");
+    case backend::ServiceKind::Blockchain:
+        return QStringLiteral("blockchain");
+    case backend::ServiceKind::Transaction:
+        return QStringLiteral("transaction");
+    case backend::ServiceKind::Labels:
+        return QStringLiteral("labels");
+    case backend::ServiceKind::Settings:
+        return QStringLiteral("settings");
+    }
+    return QStringLiteral("unknown");
+}
+
+// The interface of `kind` at this SDK's IID: Q_INTERFACES in the provider's class says so.
+auto implementsKind(backend::IService *service, backend::ServiceKind kind) -> bool {
+    switch (kind) {
+    case backend::ServiceKind::Account:
+        return qobject_cast<backend::IAccountBackend *>(service) != nullptr;
+    case backend::ServiceKind::Blockchain:
+        return qobject_cast<backend::IBlockchain *>(service) != nullptr;
+    case backend::ServiceKind::Transaction:
+        return qobject_cast<backend::ITransaction *>(service) != nullptr;
+    case backend::ServiceKind::Labels:
+        return qobject_cast<backend::ILabels *>(service) != nullptr;
+    case backend::ServiceKind::Settings:
+        return qobject_cast<backend::IBackendSettings *>(service) != nullptr;
+    }
+    return false;
+}
 
 class HostI18nImpl final : public HostI18n {
 public:
@@ -82,6 +126,7 @@ HostImpl::HostImpl() : QObject(nullptr), m_i18n(new HostI18nImpl()) {
             &HostEvents::selectedPriceChanged, qontrol::UNIQUE);
     // IInstance is not a QObject, so Qt cannot register the pointer itself.
     qRegisterMetaType<IInstance *>();
+    host::registerServiceTypes();
     connect(this, &HostImpl::registerInstanceRequested, this,
             &HostImpl::onRegisterInstanceRequested, qontrol::UNIQUE);
     connect(this, &HostImpl::removeInstanceRequested, this, &HostImpl::onRemoveInstanceRequested,
@@ -662,6 +707,13 @@ void HostImpl::setCallerClosing(IModule *module, bool closing) {
         if (m_access_modal != nullptr && m_access_modal_caller == module) {
             m_access_modal->reject();
         }
+        // Consumers drop the services it supplied; it stops once their assemblies are gone.
+        auto assemblies = m_assemblies;
+        for (const auto &assembly : assemblies) {
+            if (assembly != nullptr && assembly->uses(module)) {
+                emit assembly->retired();
+            }
+        }
     } else {
         m_closing_callers.remove(module);
     }
@@ -713,6 +765,93 @@ void HostImpl::leaveFrame(IModule *module) {
     if (module != nullptr && --m_active_calls[module] == 0) {
         m_active_calls.remove(module);
     }
+}
+
+auto HostImpl::assembleServices(const host::AssemblyRequest &request) -> host::AssemblyResult {
+    assertGuiThread();
+    m_assemblies.removeIf(
+        [](const QPointer<host::ServiceAssembly> &entry) { return entry == nullptr; });
+    std::unique_ptr<host::ServiceAssembly> assembly(
+        new host::ServiceAssembly(this, request.account, request.network));
+    std::array<std::pair<backend::ServiceKind, host::ServiceSource>, host::SERVICE_KINDS> sources{{
+        {backend::ServiceKind::Account, request.account_backend},
+        {backend::ServiceKind::Blockchain, request.blockchain},
+        {backend::ServiceKind::Transaction, request.transaction},
+        {backend::ServiceKind::Labels, request.labels},
+        {backend::ServiceKind::Settings, request.settings},
+    }};
+    // Listed before any provider is asked, so a supplier that starts stopping meanwhile (a
+    // provider may spin a nested event loop) waits for it and sees it retired.
+    m_assemblies.append(assembly.get());
+    for (const auto &[kind, source] : sources) {
+        auto error = supplyService(*assembly, kind, source);
+        if (!error.isEmpty()) {
+            // Deleting the partial assembly hands back what it was given.
+            return {.error = error};
+        }
+    }
+    auto *registry = AppController::get()->pluginRegistry();
+    for (const auto &[kind, source] : sources) {
+        auto *const *module = std::get_if<IModule *>(&source);
+        if (module != nullptr && (registry == nullptr || !registry->caller(*module).has_value() ||
+                                  m_closing_callers.contains(*module))) {
+            return {.error = QStringLiteral("The %1 provider stopped during assembly")
+                                 .arg(serviceName(kind))};
+        }
+    }
+    return {.assembly = std::move(assembly)};
+}
+
+auto HostImpl::supplyService(host::ServiceAssembly &assembly, backend::ServiceKind kind,
+                             const host::ServiceSource &source) -> QString {
+    auto name = serviceName(kind);
+    if (std::holds_alternative<std::monostate>(source)) {
+        return QStringLiteral("No source was chosen for the %1 service").arg(name);
+    }
+    if (std::holds_alternative<host::Unsupported>(source)) {
+        assembly.supply(kind, {.service = host::unsupportedService(kind, assembly.account(),
+                                                                   assembly.network(), &assembly)});
+        return {};
+    }
+    auto *module = std::get<IModule *>(source);
+    auto *registry = AppController::get()->pluginRegistry();
+    auto known = registry == nullptr ? std::nullopt : registry->caller(module);
+    if (!known.has_value() || m_closing_callers.contains(module)) {
+        return QStringLiteral("The %1 provider is not an active module").arg(name);
+    }
+    auto *provider = qobject_cast<backend::IServiceProvider *>(module);
+    if (provider == nullptr) {
+        return QStringLiteral("Module %1 provides no account services").arg(known->moduleId);
+    }
+    enterFrame(module);
+    auto frame = qScopeGuard([this, module] { leaveFrame(module); });
+    auto *service = provider->service(assembly.account(), assembly.network(), kind);
+    if (service == nullptr) {
+        return QStringLiteral("Module %1 supplies no %2 service for this account")
+            .arg(known->moduleId, name);
+    }
+    // Kept before any check, so the assembly hands it back when one refuses it.
+    assembly.supply(kind, {.service = service, .provider = module, .caller = *known});
+    if (!implementsKind(service, kind)) {
+        return QStringLiteral("Module %1 supplies a %2 service of another interface version")
+            .arg(known->moduleId, name);
+    }
+    if (kind == backend::ServiceKind::Account) {
+        auto *account = assembly.accountBackend();
+        if (account->id() != assembly.account() || account->network() != assembly.network()) {
+            return QStringLiteral("Module %1 supplies the account service of another account "
+                                  "or network")
+                .arg(known->moduleId);
+        }
+    }
+    return {};
+}
+
+auto HostImpl::servicesReleased(IModule *module) const -> bool {
+    return std::ranges::none_of(m_assemblies,
+                                [module](const QPointer<host::ServiceAssembly> &assembly) {
+                                    return assembly != nullptr && assembly->uses(module);
+                                });
 }
 
 void HostImpl::dropInstanceHandles(IInstance *instance) {

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "host/CallerHandles.h"
+#include "host/ServiceAssembly.h"
+#include "interfaces/backend/provider.h"
 #include "interfaces/host.h"
 #include <QHash>
 #include <QList>
@@ -93,6 +95,11 @@ public:
     [[nodiscard]] auto callerDrainError(IModule *module) const -> QString;
     void enterFrame(IModule *module);
     void leaveFrame(IModule *module);
+    // The services of one account UI, each from the source `request` names. Refused, with
+    // nothing kept, when a provider is not an active module or does not supply its service.
+    auto assembleServices(const host::AssemblyRequest &request) -> host::AssemblyResult;
+    // No assembly holds a service `module` supplied.
+    [[nodiscard]] auto servicesReleased(IModule *module) const -> bool;
 
     void onInstanceStopped(const QString &id);
     void onInstanceStopped(IInstance *instance);
@@ -160,6 +167,9 @@ protected:
     [[nodiscard]] auto callerCurrent(IModule *caller, const plugin::Caller &known,
                                      uint64_t revision) const -> bool;
     void rememberClosedUi(IModule *module, QWidget *widget);
+    // Asks `source` for the `kind` service of `assembly`. Empty on success.
+    auto supplyService(host::ServiceAssembly &assembly, backend::ServiceKind kind,
+                       const host::ServiceSource &source) -> QString;
 
 private:
     struct TabEntry {
@@ -214,6 +224,8 @@ private:
     // is not handed out.
     QHash<IModule *, uint64_t> m_caller_revisions;
     QHash<IModule *, QList<QPointer<QWidget>>> m_closed_ui;
+    // Every live assembly, so a supplier that starts closing retires the ones it serves.
+    QList<QPointer<host::ServiceAssembly>> m_assemblies;
     std::map<std::pair<IModule *, IInstance *>, std::unique_ptr<host::InstanceHandle>>
         m_instance_handles;
     // The grant modal open, and the module it is for: while it is, a call made meanwhile
