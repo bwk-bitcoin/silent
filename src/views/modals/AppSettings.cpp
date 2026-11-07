@@ -453,7 +453,10 @@ auto AppSettings::pluginRow(const QString &id, const QString &meta) -> catalog::
     }
     auto *removeBtn = catalog::btnRemovePlugin();
     removeBtn->setProperty(K_PLUGIN_ID, id);
-    removeBtn->setEnabled(!m_plugin_registry->pluginStopPending(id));
+    // A running plugin is disabled first; one that failed has no toggle to do it with.
+    bool running = !failed && (m_plugin_registry->isPluginEnabled(id) ||
+                               m_plugin_registry->pluginEnablePending(id));
+    removeBtn->setEnabled(!running && !m_plugin_registry->pluginStopPending(id));
     connect(removeBtn, &QPushButton::clicked, this, &AppSettings::onPluginRemoveClicked,
             qontrol::UNIQUE);
     actions->push(removeBtn);

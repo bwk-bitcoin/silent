@@ -809,6 +809,18 @@ void pluginRemovalUiSmoke(const QString &shots) {
         }
     }
     capture(QStringLiteral("issue71-enabled-wip.png"));
+    require(!removeButton()->isEnabled(), "Remove is disabled while the plugin is enabled");
+    mouseClick(visibleToggle(settings, id));
+    disableFlow = settings->findChild<modal::DisableFlow *>();
+    require(disableFlow != nullptr, "disabling before removal opens its confirmation");
+    PluginStopProbe disabledFirst(registry, id);
+    click(disableFlow, QStringLiteral("Disable Plugin"));
+    require(disabledFirst.wait().isEmpty(), "the plugin disables before removal");
+    waitForStop(registry, id);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(!registry->isPluginEnabled(id) && removeButton()->isEnabled(),
+            "Remove is enabled once the plugin is disabled");
+    capture(QStringLiteral("issue80-disabled-wip.png"));
     removeButton()->click();
     QCoreApplication::processEvents();
     flow = settings->findChild<modal::RemoveFlow *>();
