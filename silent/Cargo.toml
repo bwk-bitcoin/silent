@@ -10,12 +10,12 @@ doctest = false
 [dependencies]
 # When changing rev, also update flake.lock:
 #   nix --extra-experimental-features 'nix-command flakes' flake update bwk
-bwk = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "cb1f583f57dec34ba581c283b8e221a1deebee89", features = ["musig"] }
-bwk-bup = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "cb1f583f57dec34ba581c283b8e221a1deebee89", features = ["musig"] }
-bwk-sp = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "cb1f583f57dec34ba581c283b8e221a1deebee89" }
-bwk-hwi = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "cb1f583f57dec34ba581c283b8e221a1deebee89", features = ["service", "musig"] }
-bwk-qr = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "cb1f583f57dec34ba581c283b8e221a1deebee89" }
-bwk-qr-protocol = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "cb1f583f57dec34ba581c283b8e221a1deebee89", features = ["bitcoin"] }
+bwk = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "f24c6829db460327bc7da248c380cbf5ee393495", features = ["musig"] }
+bwk-bup = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "f24c6829db460327bc7da248c380cbf5ee393495", features = ["musig"] }
+bwk-sp = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "f24c6829db460327bc7da248c380cbf5ee393495" }
+bwk-hwi = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "f24c6829db460327bc7da248c380cbf5ee393495", features = ["service", "musig"] }
+bwk-qr = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "f24c6829db460327bc7da248c380cbf5ee393495" }
+bwk-qr-protocol = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "f24c6829db460327bc7da248c380cbf5ee393495", features = ["bitcoin"] }
 crossbeam = "0.8"
 # `log` feature: bwk-hwi reports device detection through `tracing`, and this forwards
 # those events into the `log` crate so env_logger prints them. Without it every device
@@ -59,7 +59,7 @@ v4l = "0.14"
 
 [dev-dependencies]
 blindbitd = { git = "https://github.com/pythcoiner/blindbitd.git", features = ["electrum"] }
-bwk-utils = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "cb1f583f57dec34ba581c283b8e221a1deebee89", features = ["test"] }
+bwk-utils = { git = "https://github.com/bwk-bitcoin/bwk.git", rev = "f24c6829db460327bc7da248c380cbf5ee393495", features = ["test"] }
 temp-dir = "0.1"
 
 [build-dependencies]
