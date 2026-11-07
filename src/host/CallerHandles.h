@@ -112,6 +112,7 @@ private slots:
     void onRetirementFinished();
     void onCoordinationError(ReqId req_id, plugin::SpendError kind, const QString &message);
     void onSigned(ReqId req_id, const QString &psbt_v2_hex);
+    void onNoncesPrepared(ReqId req_id, const QString &fingerprint);
     void onVerified(ReqId req_id, bool verified);
     void onSpDescriptorReady(ReqId req_id, const QString &descriptor, const QString &fingerprint);
     void onXpubReady(ReqId req_id, const QString &xpub, const QString &fingerprint,

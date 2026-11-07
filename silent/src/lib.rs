@@ -3412,13 +3412,13 @@ pub use ffi::{
     PolicyCompileResult, PolicyDraft, PolicyDraftError, PolicyDraftResult, PolicyDurationUnit,
     PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey,
     PolicyReviewPath, PolicySemantic, PolicySpec, PsbtFileResult, PsbtPayloadResult,
-    PsbtValidation, QrErrorKind, QrMessageResult, QrResponseKind, RegtestDefaults, RetryDecision,
-    RustCoin, RustSelectedInput, RustSpendCoin, RustSpendLock, RustSpendVariant, RustTx,
-    RustTxDetails, RustTxIo, SavedPsbtAttempt, SavedPsbtEntry, SavedPsbtInput, SavedPsbtList,
-    SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore, SendAmounts, SignResult,
-    SigningCandidate, SigningPlan, SigningProgress, SigningStage, SpCreationRequest,
-    SpendAvailability, SpendCoinStatus, SpendCoinsResult, SpendError, SpendLockKind, SpendMaturity,
-    TransactionSimulation, TransactionTemplate,
+    PsbtValidation, QrErrorKind, QrMessageResult, QrMusigSignerRoute, QrResponseKind,
+    RegtestDefaults, RetryDecision, RustCoin, RustSelectedInput, RustSpendCoin, RustSpendLock,
+    RustSpendVariant, RustTx, RustTxDetails, RustTxIo, SavedPsbtAttempt, SavedPsbtEntry,
+    SavedPsbtInput, SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset,
+    SavedPsbtRestore, SendAmounts, SignResult, SigningCandidate, SigningPlan, SigningProgress,
+    SigningStage, SpCreationRequest, SpendAvailability, SpendCoinStatus, SpendCoinsResult,
+    SpendError, SpendLockKind, SpendMaturity, TransactionSimulation, TransactionTemplate,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{

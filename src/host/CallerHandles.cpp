@@ -24,6 +24,7 @@ KeysHandle::KeysHandle(HostImpl *host, IModule *module, IKeys *target)
     connect(target, &IKeys::coordinationError, this, &KeysHandle::onCoordinationError,
             qontrol::UNIQUE);
     connect(target, &IKeys::signed_, this, &KeysHandle::onSigned, qontrol::UNIQUE);
+    connect(target, &IKeys::noncesPrepared, this, &KeysHandle::onNoncesPrepared, qontrol::UNIQUE);
     connect(target, &IKeys::verified, this, &KeysHandle::onVerified, qontrol::UNIQUE);
     connect(target, &IKeys::spDescriptorReady, this, &KeysHandle::onSpDescriptorReady,
             qontrol::UNIQUE);
@@ -569,6 +570,12 @@ void KeysHandle::checkDescriptorRegistered(ReqId req_id, plugin::Network network
 void KeysHandle::onSigned(ReqId req_id, const QString &psbt_v2_hex) {
     if (finish(req_id)) {
         emit signed_(req_id, psbt_v2_hex);
+    }
+}
+
+void KeysHandle::onNoncesPrepared(ReqId req_id, const QString &fingerprint) {
+    if (finish(req_id)) {
+        emit noncesPrepared(req_id, fingerprint);
     }
 }
 

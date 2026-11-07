@@ -1288,12 +1288,17 @@ impl MusigAccount {
     }
 
     pub fn active_attempt(&self) -> MusigAttemptSnapshot {
-        let mut snapshot = match self.active.lock() {
+        let snapshot = match self.active.lock() {
             Ok(active) => active
                 .clone()
                 .unwrap_or_else(|| attempt_error("No active attempt".into())),
             Err(error) => attempt_error(format!("Active attempt lock failed: {error}")),
         };
+        self.with_allocation(snapshot)
+    }
+
+    /// The snapshot with `nonces_allocated` read for it.
+    fn with_allocation(&self, mut snapshot: MusigAttemptSnapshot) -> MusigAttemptSnapshot {
         snapshot.nonces_allocated = snapshot.is_ok && self.nonces_allocated(&snapshot);
         snapshot
     }
@@ -1376,7 +1381,7 @@ impl MusigAccount {
             return attempt_error(merged.error);
         }
         if !active.tx_hex.is_empty() {
-            return active.clone();
+            return self.with_allocation(active.clone());
         }
         if !active.record_id.is_empty() {
             let saved = self.update_saved_psbt(&active.record_id, &merged.psbt_v2_hex);
@@ -1387,7 +1392,7 @@ impl MusigAccount {
         }
         active.psbt_v2_hex = merged.psbt_v2_hex;
         self.advance_attempt(active);
-        active.clone()
+        self.with_allocation(active.clone())
     }
 
     fn advance_attempt(&self, active: &mut MusigAttemptSnapshot) {

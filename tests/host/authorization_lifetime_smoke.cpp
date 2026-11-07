@@ -170,6 +170,22 @@ void cancelKeysDuringAuthorization(HostImpl *host, IModule *module, bool coordin
             "coordinate and allowedTarget never submit the cancelled request");
 }
 
+void forwardPreparedNonces(HostImpl *host, IModule *module) {
+    CountingKeys target;
+    host::KeysHandle handle(host, module, &target);
+    NoncesPreparedSpy spy;
+    QObject::connect(&handle, &IKeys::noncesPrepared, &spy, &NoncesPreparedSpy::onNoncesPrepared,
+                     qontrol::UNIQUE);
+    auto request = handle.newRequest();
+    auto fingerprint = QStringLiteral("aabbccdd");
+    handle.prepareNonces(request, plugin::Network::Regtest, {}, {}, fingerprint);
+    emit target.noncesPrepared(request, fingerprint);
+    require(spy.count() == 1 && spy.request() == request && spy.fingerprint() == fingerprint,
+            "the caller handle forwards the prepared nonces answer");
+    emit target.noncesPrepared(request, fingerprint);
+    require(spy.count() == 1, "a finished request is answered once");
+}
+
 enum class AccountDelivery { Forward, Pushed, Replay };
 
 void closeAccountDuringAuthorization(HostImpl *host, IModule *module, AccountDelivery delivery) {
@@ -302,6 +318,12 @@ void AuthorizationLifetimeDriver::onName([[maybe_unused]] ReqId request,
     ++m_replies;
 }
 
+void NoncesPreparedSpy::onNoncesPrepared(ReqId request, const QString &fingerprint) {
+    ++m_count;
+    m_request = request;
+    m_fingerprint = fingerprint;
+}
+
 void AuthorizationLifetimeDriver::onTransactionError(ReqId request, plugin::SpendError kind,
                                                      const QString &message) {
     require(request == m_request && kind == plugin::SpendError::InvalidRequest &&
@@ -324,5 +346,7 @@ void authorizationLifetimeSmoke(HostImpl *host, IModule *module) {
     std::fprintf(stdout, "Closed account during synchronous reply replay: OK\n");
     deleteFinishedJobDuringAuthorization(host, module);
     std::fprintf(stdout, "Deleted transaction job during reply authorization: OK\n");
+    forwardPreparedNonces(host, module);
+    std::fprintf(stdout, "Forwarded prepared nonces through the caller handle: OK\n");
 }
 } // namespace smoke

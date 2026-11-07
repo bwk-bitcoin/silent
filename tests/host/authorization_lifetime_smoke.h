@@ -54,5 +54,31 @@ private:
     int m_replies = 0;
 };
 
+// Records the noncesPrepared answers a caller handle forwards.
+class NoncesPreparedSpy final : public QObject {
+    Q_OBJECT
+
+public:
+    [[nodiscard]] auto count() const -> int {
+        return m_count;
+    }
+
+    [[nodiscard]] auto request() const -> ReqId {
+        return m_request;
+    }
+
+    [[nodiscard]] auto fingerprint() const -> QString {
+        return m_fingerprint;
+    }
+
+public slots:
+    void onNoncesPrepared(ReqId request, const QString &fingerprint);
+
+private:
+    int m_count = 0;
+    ReqId m_request = 0;
+    QString m_fingerprint;
+};
+
 void authorizationLifetimeSmoke(HostImpl *host, IModule *module);
 } // namespace smoke

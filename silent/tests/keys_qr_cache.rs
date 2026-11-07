@@ -6,8 +6,14 @@
 use std::str::FromStr;
 use std::sync::OnceLock;
 
-use bitcoin::bip32::{DerivationPath, Fingerprint};
-use bitcoin::hashes::Hash;
+use bitcoin::{
+    absolute::LockTime,
+    bip32::{DerivationPath, Fingerprint},
+    hashes::Hash,
+    transaction::Version,
+    Amount, OutPoint, Transaction, TxIn, TxOut, Txid,
+};
+use bwk::account::Account as BwkAccount;
 use bwk_qr_protocol::{decode, encode_response, request, response, Message, Response};
 use bwk_sp::bwk_sign::{
     bwk_descriptor::{
@@ -18,7 +24,9 @@ use bwk_sp::bwk_sign::{
     hot_signer::HotSigner,
     musig::{expression_slots, MusigSessionId},
 };
-use silent::{KeyRouteKind, Network as FfiNetwork};
+use silent::{
+    Config, KeyRouteKind, MusigAccount, Network as FfiNetwork, Output, TransactionTemplate,
+};
 
 // ===== Datadir =====
 
@@ -45,6 +53,10 @@ const MNEMONIC_B: &str =
 const MNEMONIC_C: &str =
     "letter advice cage absurd amount doctor acoustic avoid letter advice cage above";
 const MNEMONIC_D: &str = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
+// A third pair for the attempt case, whose cache must not mix with the exchanges'.
+const MNEMONIC_E: &str =
+    "cancel animal embark drastic bamboo mountain loyal category cancel animal embark dress";
+const MNEMONIC_F: &str = "captain baby mass dust captain baby mass dust captain baby mass dutch";
 
 fn signers() -> (HotSigner, HotSigner) {
     signers_on(MNEMONIC_A, MNEMONIC_B)
@@ -61,6 +73,19 @@ fn policy_text(a: &HotSigner, b: &HotSigner) -> String {
     let path = DerivationPath::from_str("m/87'/1'/0'").expect("account path");
     format!(
         "tr(musig([{}/87h/1h/0h]{}/<0;1>/*,[{}/87h/1h/0h]{}/<0;1>/*))",
+        a.fingerprint(),
+        a.xpub(&path).xkey,
+        b.fingerprint(),
+        b.xpub(&path).xkey
+    )
+}
+
+/// The descriptor an account is opened with: the exact policy string the cache
+/// sessions and the first signature request must share.
+fn account_policy(a: &HotSigner, b: &HotSigner) -> String {
+    let path = DerivationPath::from_str("m/87'/1'/0'").expect("account path");
+    format!(
+        "tr(musig([{}/87h/1h/0h]{},[{}/87h/1h/0h]{})/<0;1>/*)",
         a.fingerprint(),
         a.xpub(&path).xkey,
         b.fingerprint(),
@@ -278,4 +303,200 @@ fn an_answer_for_another_session_is_refused_before_the_cache() {
         1,
         "the cache holds exactly the prepared session"
     );
+}
+
+// ===== The attempt =====
+
+/// A funded two-key musig account with a prepared one-input transaction, so the
+/// active attempt is exactly what a first signature request allocates against.
+struct FundedAttempt {
+    config: Box<Config>,
+    account: Box<MusigAccount>,
+}
+
+impl FundedAttempt {
+    fn new(policy: &str) -> Self {
+        assert!(
+            silent::validate_musig_descriptor(policy.to_string()).is_ok,
+            "the account policy is accepted"
+        );
+        let name = format!("qr_cache_attempt_{}", std::process::id());
+        let config = silent::new_config(
+            name.clone(),
+            FfiNetwork::Regtest,
+            policy.to_string(),
+            String::new(),
+            String::new(),
+            0,
+            "musig".into(),
+        );
+        assert!(config.save().is_empty(), "save the account config");
+        let mut backend: BwkAccount =
+            BwkAccount::try_new(config.to_musig_config().expect("backend config"))
+                .expect("backend");
+        let address = backend.scanner_mut().new_recv_addr();
+        let funding = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::new(Txid::from_byte_array([7; 32]), 0),
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: address.script_pubkey(),
+            }],
+        };
+        backend.scanner().record_unconfirmed_spend(&funding);
+        drop(backend);
+        let mut account = silent::new_musig_account(name);
+        assert!(account.is_ok(), "open the account: {}", account.get_error());
+        let outpoint = OutPoint::new(funding.compute_txid(), 0).to_string();
+        let paths = account.spend_leaves(vec![outpoint.clone()]);
+        assert!(paths.is_ok, "spend paths: {}", paths.error);
+        assert_eq!(paths.leaves.len(), 1, "one selectable path");
+        let recipient = account.new_addr();
+        let prepared = account.prepare_transaction(
+            TransactionTemplate {
+                outputs: vec![Output {
+                    address: recipient,
+                    amount: 40_000,
+                    label: String::new(),
+                    max: false,
+                }],
+                fee: 1000,
+                fee_rate: 0.0,
+                input_outpoints: vec![outpoint],
+            },
+            paths.leaves[0].clone(),
+        );
+        assert!(
+            prepared.is_ok(),
+            "prepare the attempt: {}",
+            prepared.get_psbt_error()
+        );
+        Self { config, account }
+    }
+
+    fn finish(self) {
+        let name = self.config.account_name.clone();
+        drop(self.account);
+        silent::delete_config(name);
+    }
+}
+
+/// Runs the cached prepare exchange for one signer, in the order the GUI engine's
+/// worker and slots call the module functions.
+fn prepare_cached_session(module: &mut silent::KeysModule, signer: &HotSigner, policy: &str) {
+    let fingerprint = signer.fingerprint().to_string();
+    let material = silent::qr_musig_prepare_material(&fingerprint, policy);
+    let message = module.qr_request_prepare_musig(material);
+    assert!(
+        message.is_ok,
+        "the prepare request is issued: {}",
+        message.error
+    );
+    let request = match decode(&message.payload).expect("decode the wire request") {
+        Message::Request(request) => request,
+        Message::Response(_) => panic!("expected a request, decoded a response"),
+    };
+    let request::Body::PrepareMusig(preparation) = &request.body else {
+        panic!("expected a PrepareMusig request");
+    };
+    let parsed = wallet(policy);
+    let device = signer
+        .create_musig_session(
+            &parsed,
+            MusigSessionId(preparation.session_id),
+            preparation.max_inputs,
+        )
+        .expect("device session");
+    let answer = prepared_answer(
+        &device,
+        policy,
+        preparation.session_id,
+        preparation.max_inputs,
+        &preparation.derivations,
+        signer.fingerprint(),
+    );
+    let encoded = encode_response(&Response {
+        id: request.id,
+        body: response::Body::MusigPrepared(answer),
+    })
+    .expect("encode the peer's answer");
+    let decoded = module.qr_decode_response(&encoded);
+    assert!(
+        decoded.is_ok(),
+        "the peer's answer decodes: {}",
+        decoded.get_error()
+    );
+    let accepted = silent::qr_musig_accept(decoded, &fingerprint, policy, "");
+    assert!(accepted.is_ok, "the answer is accepted: {}", accepted.error);
+}
+
+#[test]
+fn accept_signed_progress_reports_the_allocation_right_after_it_succeeds() {
+    let dir = datadir();
+    assert!(dir.exists(), "the datadir fixture is set");
+    let (a, b) = signers_on(MNEMONIC_E, MNEMONIC_F);
+    let policy = account_policy(&a, &b);
+    let mut module = silent::new_keys_module(FfiNetwork::Regtest);
+    prepare_cached_session(&mut module, &a, &policy);
+    prepare_cached_session(&mut module, &b, &policy);
+
+    let fixture = FundedAttempt::new(&policy);
+    let active = fixture.account.active_attempt();
+    assert!(active.is_ok, "the active attempt is open: {}", active.error);
+
+    let routes = vec![
+        silent::QrMusigSignerRoute {
+            fingerprint: a.fingerprint().to_string(),
+            route: KeyRouteKind::Qr,
+        },
+        silent::QrMusigSignerRoute {
+            fingerprint: b.fingerprint().to_string(),
+            route: KeyRouteKind::Qr,
+        },
+    ];
+    let signing = silent::qr_musig_sign_material(
+        &a.fingerprint().to_string(),
+        &policy,
+        &active.psbt_v2_hex,
+        routes,
+    );
+    let message = module.qr_request_sign_musig(signing);
+    assert!(
+        message.is_ok,
+        "the first signature request allocates: {}",
+        message.error
+    );
+    let request = match decode(&message.payload).expect("decode the wire request") {
+        Message::Request(request) => request,
+        Message::Response(_) => panic!("expected a request, decoded a response"),
+    };
+    let request::Body::SignMusig(asked) = &request.body else {
+        panic!("expected a SignMusig request");
+    };
+    assert!(
+        !asked.psbt.is_empty(),
+        "the request carries the allocated transaction"
+    );
+
+    let progress = fixture
+        .account
+        .accept_signed_progress(&hex::encode(&asked.psbt));
+    assert!(
+        progress.is_ok,
+        "the allocation progress is accepted: {}",
+        progress.error
+    );
+    assert!(
+        progress.nonces_allocated,
+        "the accepted progress reports the allocation"
+    );
+    assert!(
+        fixture.account.active_attempt().nonces_allocated,
+        "the attempt reads the allocation back"
+    );
+    fixture.finish();
 }
