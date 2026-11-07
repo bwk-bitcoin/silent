@@ -1,4 +1,5 @@
 #include "MockPlugin.h"
+#include "ViewServices.h"
 
 #include "catalog/Button.h"
 #include "catalog/containers/ModalActions.h"
@@ -67,7 +68,8 @@ void musigResetSmoke() {
         QThread::msleep(1);
     }
     require(!controller.accountLoading(), "missing account opening finishes safely");
-    musig::SignModal signing(&controller);
+    ViewServices services;
+    musig::SignModal signing(&controller, &services.blockchain);
     signing.show();
     QApplication::processEvents();
     auto *reset = button(signing, TR("psbt-reset"));
@@ -75,8 +77,9 @@ void musigResetSmoke() {
     require(reset->role() == catalog::ButtonRole::Destructive, "Reset uses destructive role");
     require(reset->geometry().left() < actions->width() / 2,
             "Reset is left aligned before the footer spacer");
-    require(controller.psbtInFlight().isEmpty() && !controller.restartPending(),
-            "rendering leaves controller state unchanged");
+    require(controller.psbtInFlight().isEmpty() && !controller.restartPending() &&
+                services.blockchain.requests.isEmpty(),
+            "rendering leaves controller state unchanged and broadcasts nothing");
     signing.reject();
 }
 

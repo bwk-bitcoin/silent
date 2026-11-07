@@ -6,6 +6,7 @@
 #include "i18n/Tr.h"
 #include "modules/musig/MusigAccountController.h"
 #include "theme/Palette.h"
+#include "views/BackendErrors.h"
 #include "views/utils.h"
 
 #include <Qontrol>

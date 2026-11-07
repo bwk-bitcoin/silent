@@ -21,6 +21,7 @@
 #include "modules/keys/KeysView.h"
 #include "modules/sp/SpModule.h"
 #include "theme/Icon.h"
+#include "views/BackendErrors.h"
 #include "views/utils.h"
 
 #include <QRegularExpression>

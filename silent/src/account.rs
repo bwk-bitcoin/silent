@@ -886,48 +886,6 @@ impl Account {
         crate::tx_preview::simulation_preview(builder.simulate(), tx_template.fee_rate)
     }
 
-    /// Prepare a transaction for signing.
-    pub fn prepare_transaction(&self, tx_template: TransactionTemplate) -> Box<PsbtResult> {
-        let err_psbt = |e: String| Box::new(PsbtResult::failed(e));
-
-        let Some(inner) = &self.inner else {
-            return Box::new(PsbtResult::failed_kind(
-                BackendErrorKind::Other,
-                "Account not initialized".to_string(),
-            ));
-        };
-
-        let psbt = match Self::unsigned_v2(inner, &tx_template) {
-            Ok(psbt) => psbt,
-            Err(error) => {
-                log_failed_prepare(inner, &tx_template, &error);
-                return err_psbt(error);
-            }
-        };
-        let bytes_v2 = match psbt.serialize() {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                let error = format!("{e:?}");
-                log_failed_prepare(inner, &tx_template, &error);
-                return err_psbt(error);
-            }
-        };
-        match psbt.to_bitcoin_psbt_with_empty_sp_outputs() {
-            Ok(psbt_v0) => Box::new(PsbtResult::prepared(
-                psbt_v0.serialize(),
-                bytes_v2,
-                psbt.unsigned_tx()
-                    .map(|tx| tx.compute_txid().to_string())
-                    .unwrap_or_default(),
-            )),
-            Err(e) => {
-                let error = format!("{e:?}");
-                log_failed_prepare(inner, &tx_template, &error);
-                err_psbt(error)
-            }
-        }
-    }
-
     /// The unsigned PSBTv2 of `tx_template`. The SP change address is static: building
     /// changes no account state.
     fn unsigned_v2(
@@ -936,33 +894,6 @@ impl Account {
     ) -> Result<bwk_sp::bwk_tx::bwk_psbt::PsbtV2, String> {
         let mut builder = Self::build_tx_builder(inner, tx_template).map_err(|e| e.to_string())?;
         builder.generate_v2().map_err(|e| format!("{e:?}"))
-    }
-
-    /// Sign a prepared transaction.
-    pub fn sign_transaction(&self, psbt_result: &PsbtResult) -> TxResult {
-        if self.inner.is_none() {
-            return TxResult::failed(BackendErrorKind::Other, "Account not initialized".into());
-        };
-
-        if let Err(e) = &psbt_result.inner {
-            return TxResult::failed(
-                BackendErrorKind::InvalidInput,
-                format!("Cannot sign invalid transaction: {e}"),
-            );
-        };
-
-        TxResult::failed(BackendErrorKind::Signing, "External signer required".into())
-    }
-
-    /// Broadcast a signed transaction to the network via Electrum.
-    pub fn broadcast_transaction(&self, signed_tx_hex: String) -> TxResult {
-        match hex::decode(&signed_tx_hex) {
-            Ok(transaction) => self.broadcast_report(&transaction).tx_result(),
-            Err(e) => TxResult::failed(
-                BackendErrorKind::InvalidInput,
-                format!("Invalid transaction hex: {e}"),
-            ),
-        }
     }
 
     /// Finalize a signed PSBT and return transaction hex.
@@ -993,31 +924,24 @@ impl Account {
         }
     }
 
-    /// Sign and broadcast a transaction in one step.
-    pub fn sign_and_broadcast(&self, psbt_result: &PsbtResult) -> TxResult {
-        self.sign_transaction(psbt_result)
-    }
-    /// Validate a prepared transaction via Electrum before signing.
-    /// Checks for output address reuse and already-spent inputs.
-    pub fn validate_before_sign(&self, psbt_result: &PsbtResult) -> crate::ffi::PsbtValidation {
-        let err_validation = |error: String| crate::ffi::PsbtValidation {
-            is_ok: false,
-            error,
-            is_valid: false,
-            issues: String::new(),
-            reused_output_count: 0,
-            spent_input_count: 0,
-        };
-
-        let Some(inner) = &self.inner else {
-            return err_validation("Account not initialized".to_string());
-        };
-
-        psbt_validation(psbt_result, &inner.electrum_url, inner.verify_certificate)
+    /// Validate an unsigned PSBTv2, a finalize_transaction answer, via Electrum before
+    /// signing: output address reuse and already-spent inputs. Blocking.
+    pub fn validate_unsigned_psbt(&self, psbt: &[u8]) -> crate::ffi::PsbtValidation {
+        match &self.inner {
+            Some(inner) => v2_validation(psbt, &inner.electrum_url, inner.verify_certificate),
+            None => crate::ffi::PsbtValidation {
+                is_ok: false,
+                error: "Account not initialized".to_string(),
+                is_valid: false,
+                issues: String::new(),
+                reused_output_count: 0,
+                spent_input_count: 0,
+            },
+        }
     }
 
     /// Log all details of a failed broadcast for debugging/reproduction.
-    /// Called from C++ as a separate step after broadcast_transaction returns an error.
+    /// Called from C++ as a separate step after a broadcast is not accepted.
     pub fn log_failed_broadcast(&self, tx_template: TransactionTemplate, signed_tx_hex: String) {
         use bitcoin::consensus::encode::deserialize_hex;
         use bitcoin::Transaction;
@@ -1084,10 +1008,10 @@ pub(crate) fn rust_txs(payments: Vec<Payment>) -> Vec<RustTx> {
     txs
 }
 
-/// Validate a prepared transaction via Electrum before signing: output address reuse
-/// and already-spent inputs. Blocking.
-pub(crate) fn psbt_validation(
-    psbt_result: &PsbtResult,
+/// Validate the PSBTv2 `bytes_v2` via Electrum before signing: output address reuse and
+/// already-spent inputs. Blocking.
+pub(crate) fn v2_validation(
+    bytes_v2: &[u8],
     electrum_url: &str,
     verify_certificate: bool,
 ) -> crate::ffi::PsbtValidation {
@@ -1098,11 +1022,6 @@ pub(crate) fn psbt_validation(
         issues: String::new(),
         reused_output_count: 0,
         spent_input_count: 0,
-    };
-
-    let bytes_v2 = match psbt_result.v2_bytes() {
-        Ok(bytes) => bytes,
-        Err(e) => return err_validation(format!("Invalid PSBT: {e}")),
     };
 
     let psbt = match crate::keys::psbt::parse_v2(bytes_v2) {
@@ -1565,13 +1484,14 @@ impl Account {
         services::select(tx_template, |template| self.simulate_transaction(template))
     }
 
+    /// A failed build is logged with the template and the wallet coins.
     pub fn finalize_transaction(&self, tx_template: TransactionTemplate) -> UnsignedPsbt {
         services::finalizable(&tx_template)
             .and_then(|()| {
                 let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
-                Self::unsigned_v2(inner, &tx_template)?
-                    .serialize()
-                    .map_err(|e| format!("{e:?}"))
+                Self::unsigned_v2(inner, &tx_template)
+                    .and_then(|psbt| psbt.serialize().map_err(|e| format!("{e:?}")))
+                    .inspect_err(|error| log_failed_prepare(inner, &tx_template, error))
             })
             .into()
     }
@@ -2152,13 +2072,6 @@ impl PsbtResult {
     }
 
     /// The v2 serialization, or the error the PSBT failed to prepare with.
-    pub(crate) fn v2_bytes(&self) -> Result<&[u8], String> {
-        match &self.inner {
-            Ok(prepared) => Ok(&prepared.bytes_v2),
-            Err(e) => Err(e.clone()),
-        }
-    }
-
     /// Check if result is valid.
     pub fn is_ok(&self) -> bool {
         self.inner.is_ok()

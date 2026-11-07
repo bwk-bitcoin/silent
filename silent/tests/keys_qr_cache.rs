@@ -356,20 +356,20 @@ impl FundedAttempt {
         assert!(paths.is_ok, "spend paths: {}", paths.error);
         assert_eq!(paths.leaves.len(), 1, "one selectable path");
         let recipient = account.new_addr();
-        let prepared = account.prepare_transaction(
-            TransactionTemplate {
-                outputs: vec![Output {
-                    address: recipient,
-                    amount: 40_000,
-                    label: String::new(),
-                    max: false,
-                }],
-                fee: 1000,
-                fee_rate: 0.0,
-                input_outpoints: vec![outpoint],
-            },
-            paths.leaves[0].clone(),
-        );
+        let template = TransactionTemplate {
+            outputs: vec![Output {
+                address: recipient,
+                amount: 40_000,
+                label: String::new(),
+                max: false,
+            }],
+            fee: 1000,
+            fee_rate: 0.0,
+            input_outpoints: vec![outpoint],
+        };
+        let psbt = account.finalize_transaction(template.clone());
+        assert!(psbt.is_ok, "finalize the attempt: {}", psbt.error);
+        let prepared = account.adopt_transaction(template, paths.leaves[0].clone(), &psbt.psbt);
         assert!(
             prepared.is_ok(),
             "prepare the attempt: {}",

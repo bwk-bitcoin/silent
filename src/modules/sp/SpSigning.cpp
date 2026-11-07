@@ -1,5 +1,7 @@
 #include "SpSigning.h"
 #include "account/InterfaceEnums.h"
+#include "account/RequestId.h"
+#include "account/services/Conversions.h"
 
 #include "AccountController.h"
 #include "AppController.h"
@@ -11,10 +13,13 @@
 #include "catalog/display/Label.h"
 #include "catalog/feedback/MessageModal.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/blockchain.h"
+#include "interfaces/backend/transaction.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "modules/sp/SpModule.h"
 #include "theme/Palette.h"
+#include "views/BackendErrors.h"
 #include "views/utils.h"
 
 #include <QByteArray>
@@ -28,7 +33,9 @@
 
 using catalog::Label;
 
-SpSigning::SpSigning(AccountController *controller) : m_controller(controller) {
+SpSigning::SpSigning(AccountController *controller, const account::Services &services)
+    : m_controller(controller),
+      m_services(services) {
     init();
     doConnect();
     view();
@@ -43,7 +50,7 @@ auto SpSigning::coinsWidget() -> QWidget * {
     return nullptr;
 }
 
-void SpSigning::setTransaction(const std::optional<TransactionTemplate> &tx,
+void SpSigning::setTransaction(const std::optional<backend::TransactionTemplate> &tx,
                                [[maybe_unused]] const QStringList &outpoints) {
     if (m_tx_template.has_value()) {
         return;
@@ -75,7 +82,12 @@ void SpSigning::doConnect() {
     connect(this, &SpSigning::validationReady, this, &SpSigning::onValidationResult,
             qontrol::UNIQUE);
     connect(this, &SpSigning::signReady, this, &SpSigning::onSignResult, qontrol::UNIQUE);
-    connect(this, &SpSigning::broadcastReady, this, &SpSigning::onBroadcastResult, qontrol::UNIQUE);
+    connect(m_services.blockchain, &backend::IBlockchain::broadcastFinished, this,
+            &SpSigning::onBroadcastFinished, qontrol::UNIQUE);
+    connect(m_services.blockchain, &backend::IService::error, this, &SpSigning::onBroadcastError,
+            qontrol::UNIQUE);
+    connect(m_services.transaction, &backend::IService::error, this, &SpSigning::onTransactionError,
+            qontrol::UNIQUE);
 }
 
 void SpSigning::view() {
@@ -113,7 +125,7 @@ auto SpSigning::showReuseWarning(PsbtValidation result) -> bool {
 void SpSigning::showSignerStep() {
     auto &account = m_controller->getAccount();
     auto *keys = Host::get()->keys(SpModule::get());
-    if (!account.has_value() || !m_psbt_result.has_value() || keys == nullptr) {
+    if (!account.has_value() || m_psbt.isEmpty() || keys == nullptr) {
         dropTransaction();
         AppController::execModal(
             new catalog::MessageModal(TR("common-error"), TR("send-transaction-state-lost")));
@@ -124,8 +136,7 @@ void SpSigning::showSignerStep() {
     connect(keys, &IKeys::error, this, &SpSigning::onSignerError, qontrol::UNIQUE);
     connect(keys, &IKeys::cancelled, this, &SpSigning::onSignerCancelled, qontrol::UNIQUE);
 
-    auto psbtV2Hex =
-        QString::fromStdString(std::string(m_psbt_result.value()->bytes_v2_hex().c_str()));
+    auto psbtV2Hex = QString::fromLatin1(m_psbt.toHex());
     auto descriptor = QString::fromStdString(std::string(m_controller->getDescriptor().c_str()));
     auto walletName = QString::fromStdString(std::string(account.value()->name()));
     m_sign_req_id = keys->newRequest();
@@ -153,9 +164,10 @@ void SpSigning::updateButtons() {
 void SpSigning::dropTransaction() {
     disconnectSigner();
     m_signed_tx_hex.clear();
-    m_psbt_result = std::nullopt;
+    m_psbt.clear();
     m_tx_template = std::nullopt;
     m_sign_req_id = 0;
+    m_broadcast_req = 0;
     updateButtons();
     emit lockedChanged(false);
 }
@@ -173,6 +185,16 @@ void SpSigning::onSignClicked() {
         return;
     }
 
+    // Finalized on the main thread: pure computation over the crafted transaction. Its
+    // reason, on failure, comes as error() during the call.
+    m_finalize_error.clear();
+    auto psbt = m_services.transaction->finalize(m_tx.value());
+    if (!psbt.has_value()) {
+        AppController::execModal(
+            new catalog::MessageModal(TR("send-prepare-failed"), failureText(m_finalize_error)));
+        return;
+    }
+
     auto &account = m_controller->getAccount();
     if (!account.has_value()) {
         AppController::execModal(
@@ -180,26 +202,16 @@ void SpSigning::onSignClicked() {
         return;
     }
 
-    // Prepare transaction on main thread (pure computation)
-    auto psbt = account.value()->prepare_transaction(m_tx.value());
-    if (!psbt->is_ok()) {
-        auto error = QString::fromStdString(std::string(psbt->get_psbt_error().c_str()));
-        auto text = mapBackendErrorSummary(psbt->get_error_kind()) + "\n\n" +
-                    formatBackendErrorDetails(error);
-        AppController::execModal(new catalog::MessageModal(TR("send-prepare-failed"), text));
-        return;
-    }
-
-    // Store psbt and tx template for use in validation, signing and logging
-    m_psbt_result = std::make_optional(std::move(psbt));
+    // Kept for validation, signing and logging
+    m_psbt = *psbt;
     m_tx_template = m_tx;
     updateButtons();
     emit lockedChanged(true);
 
     // Run PSBT validation on background thread before showing confirm modal
     const Account *workerAccount = &*account.value();
-    auto *thread = QThread::create([this, workerAccount]() {
-        auto result = workerAccount->validate_before_sign(*m_psbt_result.value());
+    auto *thread = QThread::create([this, workerAccount, psbt = m_psbt]() {
+        auto result = workerAccount->validate_unsigned_psbt(account::services::toSlice(psbt));
         emit validationReady(result);
     });
     m_controller->startWorker(thread);
@@ -210,19 +222,10 @@ void SpSigning::onBroadcastClicked() {
     m_cancel_btn->setEnabled(false);
     m_status_label->setText(TR("confirm-send-broadcasting"));
     m_status_label->setVisible(true);
-    auto signedHex = m_signed_tx_hex.toStdString();
-    auto &account = m_controller->getAccount();
-    if (!account.has_value()) {
-        m_status_label->setVisible(false);
-        dropTransaction();
-        return;
-    }
-    const Account *workerAccount = &*account.value();
-    auto *thread = QThread::create([this, workerAccount, signedHex]() {
-        auto broadcastResult = workerAccount->broadcast_transaction(rust::String(signedHex));
-        emit broadcastReady(broadcastResult);
-    });
-    m_controller->startWorker(thread);
+    m_broadcast_req = account::nextRequestId();
+    // Registered before the request: the answer may come during the call.
+    m_services.blockchain->broadcast(m_broadcast_req,
+                                     QByteArray::fromHex(m_signed_tx_hex.toLatin1()));
 }
 
 void SpSigning::onCancelClicked() {
@@ -235,7 +238,7 @@ void SpSigning::onValidationResult(PsbtValidation result) {
     qDebug() << "SpSigning::onValidationResult() is_ok:" << result.is_ok
              << "is_valid:" << result.is_valid;
 
-    if (!m_psbt_result.has_value() || !m_tx_template.has_value()) {
+    if (m_psbt.isEmpty() || !m_tx_template.has_value()) {
         return;
     }
 
@@ -261,7 +264,7 @@ void SpSigning::onValidationResult(PsbtValidation result) {
         }
     }
 
-    if (!m_psbt_result.has_value() || !m_tx_template.has_value()) {
+    if (m_psbt.isEmpty() || !m_tx_template.has_value()) {
         return;
     }
 
@@ -323,34 +326,67 @@ void SpSigning::onSignResult(TxResult result) {
     }
 
     m_signed_tx_hex = QString::fromStdString(std::string(result.value.c_str()));
-    m_psbt_result = std::nullopt;
+    m_psbt.clear();
     m_sign_req_id = 0;
     m_broadcast_btn->setEnabled(true);
     m_cancel_btn->setEnabled(true);
     updateButtons();
 }
 
-void SpSigning::onBroadcastResult(TxResult result) {
-    qDebug() << "SpSigning::onBroadcastResult() ok:" << result.is_ok;
+void SpSigning::onBroadcastFinished(backend::RequestId request_id,
+                                    const backend::BroadcastResult &result) {
+    if (request_id == 0 || request_id != m_broadcast_req) {
+        return;
+    }
+    for (const auto &warning : result.warnings) {
+        qWarning() << "SpSigning: broadcast" << result.txid << warning;
+    }
+    // Only an accepted transaction is sent; a rejected or unknown fate is a failure.
+    finishBroadcast(result.outcome == backend::BroadcastOutcome::Accepted ? QString()
+                                                                          : result.error);
+}
+
+void SpSigning::onBroadcastError(backend::RequestId request_id, const QString &message) {
+    if (request_id == 0 || request_id != m_broadcast_req) {
+        return;
+    }
+    finishBroadcast(message);
+}
+
+void SpSigning::onTransactionError(backend::RequestId request_id, const QString &message) {
+    if (request_id == 0) {
+        m_finalize_error = message;
+    }
+}
+
+auto SpSigning::failureText(const QString &reason) -> QString {
+    auto summary = operationFailedSummary();
+    return reason.isEmpty() ? summary
+                            : summary + QStringLiteral("\n\n") + formatBackendErrorDetails(reason);
+}
+
+void SpSigning::finishBroadcast(const QString &error) {
+    qDebug() << "SpSigning::finishBroadcast() error:" << error;
+    m_broadcast_req = 0;
     m_status_label->setVisible(false);
     m_broadcast_btn->setEnabled(true);
     m_cancel_btn->setEnabled(true);
+    bool accepted = error.isEmpty();
 
-    if (!result.is_ok && m_tx_template.has_value() && !m_signed_tx_hex.isEmpty()) {
-        auto &account = m_controller->getAccount();
-        if (account.has_value()) {
-            account.value()->log_failed_broadcast(m_tx_template.value(),
-                                                  m_signed_tx_hex.toStdString());
+    if (!accepted && m_tx_template.has_value() && !m_signed_tx_hex.isEmpty()) {
+        auto &wallet = m_controller->getAccount();
+        if (wallet.has_value()) {
+            wallet.value()->log_failed_broadcast(account::services::toTemplate(*m_tx_template),
+                                                 m_signed_tx_hex.toStdString());
         }
     }
 
     dropTransaction();
 
-    if (result.is_ok) {
+    if (accepted) {
         AppController::execModal(new catalog::MessageModal(
             TR("send-sent-title"), TR("send-sent-message"), catalog::MessageModal::Tone::Success));
     } else {
-        auto error = QString::fromStdString(std::string(result.error.c_str()));
         AppController::execModal(
             new catalog::MessageModal(TR("common-error"), TR("confirm-send-failed").arg(error)));
     }
@@ -358,7 +394,7 @@ void SpSigning::onBroadcastResult(TxResult result) {
     // Refresh coin state
     m_controller->pollCoins();
 
-    if (result.is_ok) {
+    if (accepted) {
         emit sent();
     }
 }

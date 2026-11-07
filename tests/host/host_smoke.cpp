@@ -205,6 +205,7 @@ void pluginRemovalReadFailureSmoke(const QString &shots);
 void pluginAccessSettingsFailureSmoke(const QString &shots);
 void accountServicesSmoke();
 void backendServicesSmoke();
+void accountViewsSmoke();
 } // namespace smoke
 
 auto main(int argc, char *argv[]) -> int {
@@ -297,6 +298,13 @@ auto main(int argc, char *argv[]) -> int {
         Theme::get()->apply();
         smoke::txFlowHoverSmoke();
         std::fprintf(stdout, "TxFlow hover smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.contains(QStringLiteral("--account-views"))) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::accountViewsSmoke();
+        std::fprintf(stdout, "Account views smoke: OK\n");
         return gOk ? 0 : 1;
     }
     if (arguments.contains(QStringLiteral("--backend-services"))) {

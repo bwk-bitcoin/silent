@@ -2,6 +2,7 @@
 #include "KeysBoundaryProbe.h"
 #include "MockPlugin.h"
 #include "SpSigningProbe.h"
+#include "ViewServices.h"
 #include "catalog/Button.h"
 #include "catalog/SelectRow.h"
 #include "catalog/display/Label.h"
@@ -116,7 +117,8 @@ void malformedViews(MusigAccountController &controller) {
     registration.onRowClicked();
     registration.reject();
 
-    musig::SignModal signing(&controller);
+    ViewServices services;
+    musig::SignModal signing(&controller, &services.blockchain);
     signing.show();
     QApplication::processEvents();
     require(signing.m_rows->findChildren<catalog::SelectRow *>().empty() &&
@@ -126,6 +128,7 @@ void malformedViews(MusigAccountController &controller) {
             "signing actions stay disabled");
     signing.onCosignerClicked();
     signing.onBroadcastClicked();
+    require(services.blockchain.requests.isEmpty(), "a disabled Broadcast reaches no provider");
     signing.reject();
 }
 } // namespace

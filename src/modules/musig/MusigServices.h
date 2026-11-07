@@ -10,8 +10,8 @@
 namespace musig {
 
 // A Multikey account's service context. A broadcast marks the saved transaction it
-// belongs to, so it runs on the controller's storage queue, behind the saved progress
-// writes.
+// belongs to and ends the signing session it finalized, so the controller runs it
+// (MusigAccountController::startBroadcast()), refusing it as its own broadcast was.
 class MusigServices final : public account::AccountServices<MusigAccountController, MusigAccount> {
 public:
     MusigServices(const QString &account, MusigAccountController *controller);

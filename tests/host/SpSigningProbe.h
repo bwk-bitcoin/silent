@@ -7,7 +7,6 @@
 #include <QList>
 #include <QString>
 #include <QThread>
-#include <utility>
 
 namespace smoke {
 
@@ -41,12 +40,6 @@ public:
         workers.clear();
     }
 
-    auto simulateTx(TransactionTemplate tx) -> TransactionSimulation override {
-        ++simulations;
-        return AccountController::simulateTx(std::move(tx));
-    }
-
-    int simulations = 0;
     QList<QThread *> workers;
 };
 

@@ -30,6 +30,7 @@
 #include "modules/musig/creator/PathEditor.h"
 #include "theme/Icon.h"
 #include "theme/Palette.h"
+#include "views/BackendErrors.h"
 #include "views/utils.h"
 
 #include <QDialog>

@@ -1,14 +1,17 @@
 #pragma once
 
-#include "account/AccountBackend.h"
+#include "ViewServices.h"
 #include "account/SendSigning.h"
+#include "interfaces/backend/types.h"
 #include "interfaces/feed.h"
 #include "interfaces/host.h"
 #include "interfaces/instance.h"
 #include "interfaces/module.h"
 #include <QList>
 #include <QPointer>
+#include <QStringList>
 #include <QWidget>
+#include <optional>
 
 namespace smoke {
 
@@ -210,7 +213,7 @@ public:
         return nullptr;
     }
 
-    void setTransaction([[maybe_unused]] const std::optional<TransactionTemplate> &tx,
+    void setTransaction([[maybe_unused]] const std::optional<backend::TransactionTemplate> &tx,
                         [[maybe_unused]] const QStringList &outpoints) override {
         ++updates;
     }
@@ -220,122 +223,48 @@ public:
     }
 };
 
-class PriceBackend final : public AccountBackend {
+// The services of a probe Send. Crafting spends 10000000 sats for a 2000 sats fee: a MAX
+// payment takes what the fixed payments leave of 9998000 sats. Complete only once
+// `valid_craft` is set.
+class PriceBackend final {
 public:
-    int simulations = 0;
-    bool validSimulation = false;
-    PriceSigning *signing = nullptr;
-    Network selected_network = Network::Regtest;
+    static constexpr quint64 SPENDABLE = 9998000;
+    static constexpr quint64 FEE = 2000;
 
-    auto getCoins() -> rust::Vec<RustCoin> override {
-        return {};
+    PriceBackend() {
+        services.transaction.crafting = [this](const backend::TransactionTemplate &transaction) {
+            return craft(transaction);
+        };
     }
 
-    auto getPaymentHistory() -> rust::Vec<RustTx> override {
-        return {};
-    }
-
-    auto network() -> Network override {
-        return selected_network;
-    }
-
-    auto module() -> IModule * override {
-        return nullptr;
-    }
-
-    auto addressKinds() -> QList<AddressKind> override {
-        return {};
-    }
-
-    auto newAddress([[maybe_unused]] AddressKind kind) -> QString override {
-        return {};
-    }
-
-    auto addressVerifyInfo([[maybe_unused]] const QString &address) -> AddressVerifyInfo override {
-        return {};
-    }
-
-    auto endpoints() -> QList<Endpoint> override {
-        return {};
-    }
-
-    auto endpointUrl([[maybe_unused]] Endpoint endpoint) -> QString override {
-        return {};
-    }
-
-    [[nodiscard]] auto verifiesCertificate() const -> bool override {
-        return true;
-    }
-
-    [[nodiscard]] auto isEndpointRunning([[maybe_unused]] Endpoint endpoint) const
-        -> bool override {
-        return false;
-    }
-
-    auto settingsExtras() -> QWidget * override {
-        return nullptr;
-    }
-
-    auto simulateTx(TransactionTemplate tx) -> TransactionSimulation override {
-        ++simulations;
-        TransactionSimulation result{};
-        result.is_valid = validSimulation;
-        result.output_total = 9998000;
-        result.fee = 2000;
-        uint64_t fixedTotal = 0;
-        for (const auto &output : tx.outputs) {
-            if (!output.max) {
-                fixedTotal += output.amount;
-            }
-        }
-        for (const auto &output : tx.outputs) {
-            auto value = output.max && result.output_total > fixedTotal
-                             ? result.output_total - fixedTotal
-                             : output.amount;
-            result.recipient_amounts.push_back(value);
-            result.sending_total += value;
-        }
-        result.transaction_total = result.sending_total + result.fee;
-        result.input_total = result.transaction_total;
-        return result;
-    }
-
-    auto sendSigning() -> account::SendSigning * override {
+    // The signing step of the next Send, which takes it.
+    auto newSigning() -> PriceSigning * {
         signing = new PriceSigning;
         return signing;
     }
 
-    void startWorker([[maybe_unused]] QThread *worker) override {
-    }
+    ViewServices services;
+    PriceSigning *signing = nullptr;
+    bool valid_craft = false;
 
-    void requestTxDetails([[maybe_unused]] uint64_t req_id,
-                          [[maybe_unused]] const QString &txid) override {
-    }
-
-    void editTxLabel([[maybe_unused]] uint64_t req_id, [[maybe_unused]] const QString &txid,
-                     [[maybe_unused]] const QString &label) override {
-    }
-
-    void editOutpointLabel([[maybe_unused]] uint64_t req_id,
-                           [[maybe_unused]] const QString &outpoint,
-                           [[maybe_unused]] const QString &label) override {
-    }
-
-    void requestEndpointTip([[maybe_unused]] uint64_t req_id,
-                            [[maybe_unused]] Endpoint endpoint) override {
-    }
-
-    void testAndSaveEndpoint([[maybe_unused]] uint64_t req_id, [[maybe_unused]] Endpoint endpoint,
-                             [[maybe_unused]] const QString &url,
-                             [[maybe_unused]] bool verify_certificate) override {
-    }
-
-    void setEndpointConnected([[maybe_unused]] uint64_t req_id, [[maybe_unused]] Endpoint endpoint,
-                              [[maybe_unused]] bool connected) override {
-    }
-
-    void updateCoinLabel([[maybe_unused]] const QString &outpoint,
-                         [[maybe_unused]] const QString &label) override {
+protected:
+    [[nodiscard]] auto craft(const backend::TransactionTemplate &transaction) const
+        -> backend::CraftResult {
+        backend::CraftResult result{.transaction = transaction,
+                                    .completion = {.complete = valid_craft}};
+        result.transaction.fee = FEE;
+        quint64 fixedTotal = 0;
+        for (const auto &output : transaction.outputs) {
+            if (!output.maximum) {
+                fixedTotal += output.amount;
+            }
+        }
+        for (auto &output : result.transaction.outputs) {
+            if (output.maximum && SPENDABLE > fixedTotal) {
+                output.amount = SPENDABLE - fixedTotal;
+            }
+        }
+        return result;
     }
 };
 

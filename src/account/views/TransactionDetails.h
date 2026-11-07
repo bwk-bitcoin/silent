@@ -1,16 +1,23 @@
 #pragma once
 
-#include "account/AccountBackend.h"
+#include "account/Services.h"
 #include "catalog/containers/Modal.h"
 #include "catalog/panels/send/TxFlow.h"
+#include "interfaces/backend/types.h"
 
 #include <QHash>
+#include <QJsonValue>
 #include <QList>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <cstdint>
-#include <silent.h>
+#include <optional>
+
+namespace backend {
+class IBlockchain;
+class ILabels;
+} // namespace backend
 
 namespace catalog {
 class ConfirmDots;
@@ -23,17 +30,19 @@ namespace account {
 
 // Opens the details of `txid` over the window, until closed. The caller keeps the
 // widget that opened it while it runs.
-void showTransactionDetails(AccountBackend *backend, const QString &txid,
+void showTransactionDetails(const Services &services, const QString &txid,
                             const QStringList &notes = {});
 
 // One transaction of the account, the same for every account kind: direction, date,
 // status, size, its flow, its inputs and outputs with editable labels, fees and total.
-// Fetched from the account on open; shown loading until then.
+// Shown at once from what the account already knows of it, loading otherwise, then
+// fetched from the account again and whenever the account changes.
 class TransactionDetails : public catalog::Modal {
     Q_OBJECT
 
 public:
-    TransactionDetails(AccountBackend *backend, const QString &txid, const QStringList &notes = {});
+    TransactionDetails(const Services &services, const QString &txid,
+                       const QStringList &notes = {});
 
 signals:
     void interactionFinished();
@@ -41,13 +50,26 @@ signals:
 public slots:
     void onBackendUpdated();
     void onInteractionFinished();
-    void onTxDetailsReady(uint64_t req_id, const RustTxDetails &details);
-    void onEndpointTipReady(uint64_t req_id, Endpoint endpoint, const ElectrumTipResult &result);
-    void onLabelEdited(uint64_t req_id, bool accepted, const QString &error);
+    void onDetailsFetched(backend::RequestId request_id,
+                          const backend::TransactionDetails &details);
+    void onBlockchainError(backend::RequestId request_id, const QString &message);
+    void onExtrasResult(backend::RequestId request_id, const QJsonValue &payload);
+    void onTipRefreshed(backend::RequestId request_id);
+    void onLabelSaved(backend::RequestId request_id);
+    void onLabelError(backend::RequestId request_id, const QString &message);
     void onIoLabelEdited(const QString &label);
     void onAmountsChanged();
 
 protected:
+    // What the details leave out, from the provider's extension when it answers it.
+    struct Extras {
+        qint64 version = 0;
+        qint64 lockTime = 0;
+        std::optional<quint64> chainTip;
+        // The script of each output that pays no address, by output index.
+        QHash<quint32, QString> scripts;
+    };
+
     void init();
     void doConnect();
     void view();
@@ -65,15 +87,24 @@ protected:
     auto flowCard() -> QWidget *;
     [[nodiscard]] auto flowInputs() const -> QList<catalog::TxFlow::InputItem>;
     [[nodiscard]] auto flowOutputs() const -> QList<catalog::TxFlow::OutputItem>;
+    // The address an output pays, its script when it has none (OP_RETURN).
+    [[nodiscard]] auto outputId(const backend::TransactionIo &io) const -> QString;
     // Sets the flow's bands from the transaction: labels and fiat as they are now.
     void refreshFlow();
     [[nodiscard]] auto ioSections() const -> QWidget *;
-    [[nodiscard]] auto ioTable(const rust::Vec<RustTxIo> &ios, bool inputs) const -> QWidget *;
+    [[nodiscard]] auto ioTable(const QList<backend::TransactionIo> &ios, bool inputs) const
+        -> QWidget *;
     [[nodiscard]] auto summary() const -> QWidget *;
-    // Asks a connected endpoint for the tip the confirmations count from.
+    // Takes `details` as the transaction shown, laid out again when it changed.
+    void applyDetails(const backend::TransactionDetails &details);
+    // Asks the provider for what the details leave out.
+    void requestExtras();
+    // Asks a connected server for the tip the confirmations count from.
     void requestTip();
+    [[nodiscard]] auto tip() const -> uint32_t;
     void refreshDetails();
     void updateStatus();
+    void setIoLabel(const QString &outpoint, const QString &label);
 
 private:
     struct PendingLabel {
@@ -81,17 +112,20 @@ private:
         QString label;
     };
 
-    QPointer<AccountBackend> m_backend;
+    Services m_services;
+    QPointer<backend::IBlockchain> m_blockchain;
+    QPointer<backend::ILabels> m_labels;
     QString m_txid;
     QStringList m_notes;
-    uint64_t m_details_request = 0;
-    uint64_t m_tip_request = 0;
-    RustTxDetails m_details;
-    uint32_t m_tip = 0;
+    backend::RequestId m_details_request = 0;
+    backend::RequestId m_extras_request = 0;
+    backend::RequestId m_tip_request = 0;
+    backend::TransactionDetails m_details;
+    Extras m_extras;
     bool m_compact = false;
     bool m_refresh_pending = false;
     bool m_stale = false;
-    QHash<uint64_t, PendingLabel> m_label_requests;
+    QHash<backend::RequestId, PendingLabel> m_label_requests;
     QString m_label_error_text;
 
     catalog::ModalStatus *m_loading = nullptr;

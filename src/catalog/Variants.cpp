@@ -350,26 +350,8 @@ auto btnCancelSigned() -> Button * {
         {.role = ButtonRole::Destructive, .label = TR("common-cancel"), .width = BtnWidth::M});
 }
 
-auto btnConnectBlindbit() -> Button * {
-    return make(
-        {.role = ButtonRole::Default, .label = TR("btn-connect-blindbit"), .width = BtnWidth::L});
-}
-
-auto btnConnectElectrum() -> Button * {
-    return make(
-        {.role = ButtonRole::Default, .label = TR("btn-connect-electrum"), .width = BtnWidth::L});
-}
-
-auto btnDisconnectBlindbit() -> Button * {
-    return make({.role = ButtonRole::Default,
-                 .label = TR("btn-disconnect-blindbit"),
-                 .width = BtnWidth::L});
-}
-
-auto btnDisconnectElectrum() -> Button * {
-    return make({.role = ButtonRole::Default,
-                 .label = TR("btn-disconnect-electrum"),
-                 .width = BtnWidth::L});
+auto btnEndpoint(const QString &label) -> Button * {
+    return make({.role = ButtonRole::Default, .label = label, .width = BtnWidth::L});
 }
 
 auto btnGenerate() -> Button * {

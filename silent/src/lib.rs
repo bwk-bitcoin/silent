@@ -1776,16 +1776,10 @@ mod ffi {
         fn sp_endpoint_change(
             account: Box<Account>,
             server: BackendServer,
-            url: String,
-            verify: bool,
-            test: bool,
             connected: bool,
         ) -> Box<SpEndpointChange>;
         fn musig_endpoint_change(
             account: Box<MusigAccount>,
-            url: String,
-            verify: bool,
-            test: bool,
             connected: bool,
         ) -> Box<MusigEndpointChange>;
         fn endpoint_phase(self: &SpEndpointChange) -> EndpointPhase;
@@ -2301,39 +2295,20 @@ mod ffi {
             tx_template: TransactionTemplate,
         ) -> TransactionSimulation;
 
-        /// Prepare a transaction for signing.
-        /// Creates an unsigned transaction from the template and returns a PsbtResult.
-        /// The transaction will be finalized and ready to sign.
-        fn prepare_transaction(self: &Account, tx_template: TransactionTemplate)
-            -> Box<PsbtResult>;
-
-        /// Sign a prepared transaction.
-        /// Returns TxResult with signed tx hex in value.
-        fn sign_transaction(self: &Account, psbt_result: &PsbtResult) -> TxResult;
-
-        /// Broadcast a signed transaction (hex string) to the network.
-        /// Returns TxResult with txid in value.
-        fn broadcast_transaction(self: &Account, signed_tx_hex: String) -> TxResult;
-
         /// Finalize a signed PSBT and return transaction hex.
         fn finalize_psbt(self: &Account, signed_psbt_base64: String) -> TxResult;
 
-        /// Sign and broadcast a transaction in one step.
-        /// Returns TxResult with txid in value.
-        fn sign_and_broadcast(self: &Account, psbt_result: &PsbtResult) -> TxResult;
-
         /// Log all details of a failed broadcast for debugging/reproduction.
-        /// Called after broadcast_transaction returns an error.
+        /// Called after a broadcast is not accepted.
         fn log_failed_broadcast(
             self: &Account,
             tx_template: TransactionTemplate,
             signed_tx_hex: String,
         );
 
-        /// Validate a prepared transaction via Electrum before signing.
-        /// Checks for output address reuse and already-spent inputs.
-        /// Blocking call - must be called from a background thread.
-        fn validate_before_sign(self: &Account, psbt_result: &PsbtResult) -> PsbtValidation;
+        /// Validates an unsigned PSBTv2, a finalize_transaction answer, via Electrum before
+        /// signing: output address reuse and already-spent inputs. Blocking.
+        fn validate_unsigned_psbt(self: &Account, psbt: &[u8]) -> PsbtValidation;
 
         /// Coins, balance and history for the published account read model.
         fn funds_snapshot(self: &Account) -> FundsSnapshot;
@@ -2929,12 +2904,6 @@ mod ffi {
         ) -> TransactionSimulation;
         /// Every spend path for the coins `outpoints`, `spendable` at the current tip.
         fn spend_leaves(self: &MusigAccount, outpoints: Vec<String>) -> MusigSpendLeaves;
-        /// Prepares the PSBT, then restricts it to `spend` (Account::restrict_spend_path).
-        fn prepare_transaction(
-            self: &MusigAccount,
-            tx_template: TransactionTemplate,
-            spend: MusigSpendLeaf,
-        ) -> Box<PsbtResult>;
         /// Per cosigner nonce / partial sig counts of the PSBT.
         fn round_status(self: &MusigAccount, psbt_v2_hex: &str) -> MusigRoundStatus;
         /// Aggregates partial sigs and returns the finalized PSBT and transaction.
@@ -2957,10 +2926,6 @@ mod ffi {
         fn reset_active_attempt(self: &MusigAccount) -> MusigAttemptSnapshot;
         fn require_active_restart(self: &MusigAccount) -> MusigAttemptSnapshot;
         fn active_signing_plan(self: &MusigAccount, devices: Vec<LiveDevice>) -> SigningPlan;
-        /// TxResult value is the txid.
-        fn broadcast_transaction(self: &MusigAccount, signed_tx_hex: String) -> TxResult;
-        /// Blocking: call from a background thread.
-        fn validate_before_sign(self: &MusigAccount, psbt_result: &PsbtResult) -> PsbtValidation;
 
         fn funds_snapshot(self: &MusigAccount) -> FundsSnapshot;
         fn labels(self: &MusigAccount) -> LabelSnapshot;

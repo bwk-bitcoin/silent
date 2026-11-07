@@ -273,7 +273,8 @@ fn fund_and_prepare_at_rate(
     assert!(leaf.spendable, "the A and B leaf has no timelock");
 
     let to = bitcoind.new_address().expect("miner address");
-    let psbt = account.prepare_transaction(
+    let psbt = common::musig_prepared(
+        &account,
         TransactionTemplate {
             outputs: vec![Output {
                 address: to.to_string(),
@@ -404,11 +405,15 @@ fn finish(spend: &mut Spend, bitcoind: &mut bwk_test::corepc_node::Client, psbt:
         restored.entry.record.finalized_tx_hex, tx.tx_hex,
         "ready-to-broadcast transaction survives restart"
     );
-    let sent = spend
-        .account()
-        .broadcast_transaction(restored.entry.record.finalized_tx_hex);
-    assert!(sent.is_ok, "broadcast_transaction: {}", sent.error);
-    let txid = bitcoin::Txid::from_str(&sent.value).expect("txid");
+    let sent = spend.account().broadcast_report(
+        &hex::decode(restored.entry.record.finalized_tx_hex).expect("finalized transaction hex"),
+    );
+    assert!(
+        sent.outcome == silent::BroadcastOutcome::Accepted,
+        "broadcast_report: {}",
+        sent.error
+    );
+    let txid = bitcoin::Txid::from_str(&sent.txid).expect("txid");
     bwk_test::generate_blocks(bitcoind, 1);
     let confirmations = bitcoind
         .get_raw_transaction_verbose(txid)

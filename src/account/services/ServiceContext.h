@@ -4,6 +4,8 @@
 
 #include <QByteArray>
 #include <QHash>
+#include <QJsonObject>
+#include <QJsonValue>
 #include <QList>
 #include <QMutex>
 #include <QObject>
@@ -49,6 +51,8 @@ public:
     [[nodiscard]] auto history() const -> QList<backend::Transaction>;
     [[nodiscard]] auto transactionDetails(const QString &txid) const
         -> std::optional<backend::TransactionDetails>;
+    // What the details of `txid` leave out (extension::TRANSACTION_EXTRAS), once fetched.
+    [[nodiscard]] auto transactionExtras(const QString &txid) const -> std::optional<QJsonObject>;
     [[nodiscard]] auto labels() const -> QList<backend::Label>;
     [[nodiscard]] auto label(const backend::LabelKey &key) const -> QString;
     [[nodiscard]] auto addressKinds() const -> QList<backend::AddressKind>;
@@ -57,6 +61,10 @@ public:
         -> std::optional<backend::AddressVerification>;
     [[nodiscard]] auto state() const -> backend::BlockchainState;
     [[nodiscard]] auto settings() const -> backend::Settings;
+    // An endpoint operation runs (extension::ENDPOINTS_BUSY).
+    [[nodiscard]] auto endpointsBusy() const -> bool;
+    // The first funds read answered (fundsAnswered()).
+    [[nodiscard]] auto fundsKnown() const -> bool;
 
     // Local and pure: no selection, persistence or network.
     virtual auto craft(const backend::TransactionTemplate &transaction) -> backend::CraftResult = 0;
@@ -74,6 +82,9 @@ public:
     virtual void refreshTip(backend::RequestId token, QString connection) = 0;
     virtual void testEndpoint(backend::RequestId token, backend::Endpoint endpoint) = 0;
     virtual void saveSettings(backend::RequestId token, backend::Settings settings) = 0;
+    // What the server of `endpoint` reports it serves (extension::ENDPOINT_CAPABILITIES):
+    // answers valueAnswered().
+    virtual void endpointCapabilities(backend::RequestId token, QString endpoint) = 0;
     virtual void broadcast(backend::RequestId token, QByteArray transaction) = 0;
 
 signals:
@@ -85,6 +96,7 @@ signals:
     void addressesChanged();
     void stateChanged();
     void settingsChanged();
+    void endpointsBusyChanged(bool busy);
 
     void coinsSelected(backend::RequestId token, backend::CraftResult result);
     void addressCreated(backend::RequestId token, backend::Address address);
@@ -94,6 +106,11 @@ signals:
     void completed(backend::RequestId token);
     void endpointTested(backend::RequestId token);
     void broadcastFinished(backend::RequestId token, backend::BroadcastResult result);
+    void valueAnswered(backend::RequestId token, QJsonValue payload);
+    // finalize() built nothing, for `reason`.
+    void finalizeFailed(QString reason);
+    // The first funds read answered, failed or could not start: the views open on it.
+    void fundsAnswered();
     void failed(backend::RequestId token, QString message);
 
 public slots:
@@ -105,17 +122,27 @@ public slots:
     void onReconcileTimeout();
 
 protected:
+    // Starts reading the account's funds, off the GUI thread for an account: the read
+    // answers fundsRead() on the GUI thread, possibly before this returns. False when the
+    // account cannot be read now (closed, busy).
+    virtual auto startFundsRead() -> bool = 0;
     // The account's current state, nullopt while it cannot be read (closed, busy).
-    virtual auto readFunds() -> std::optional<Funds> = 0;
     virtual auto readLabels() -> std::optional<QList<backend::Label>> = 0;
     virtual auto readReceiving() -> std::optional<Receiving> = 0;
 
+    // The answer of startFundsRead(), nullopt when the read failed.
+    void fundsRead(const std::optional<Funds> &funds);
     void publishFunds(const Funds &funds);
     void publishNetwork(backend::Network network);
-    void publishDetails(const backend::TransactionDetails &details);
+    void publishDetails(const backend::TransactionDetails &details, const QJsonObject &extras);
     void publishState(const backend::BlockchainState &state);
     void publishSettings(const backend::Settings &settings);
+    void publishEndpointsBusy(bool busy);
+    // Reads the funds, or once more after the read in flight.
     void reconcileFunds();
+    // While the history lags the coins, the funds are read again a second later.
+    void scheduleReconcile();
+    void markFundsKnown();
 
 private:
     QString m_account;
@@ -123,13 +150,19 @@ private:
     backend::Network m_network = backend::Network::Bitcoin;
     Funds m_funds;
     QHash<QString, backend::TransactionDetails> m_details;
+    QHash<QString, QJsonObject> m_extras;
     QList<backend::Label> m_labels;
     Receiving m_receiving;
     backend::BlockchainState m_state;
     backend::Settings m_settings;
+    bool m_endpoints_busy = false;
     QTimer *m_reconcile = nullptr;
     int m_reconcile_attempts = 0;
     bool m_history_pending = false;
+    bool m_funds_reading = false;
+    bool m_funds_known = false;
+    // The funds changed while a read was in flight: they are read again once it answers.
+    bool m_funds_again = false;
 };
 
 } // namespace account

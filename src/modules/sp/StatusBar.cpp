@@ -4,6 +4,7 @@
 #include "catalog/StatusBarItem.h"
 #include "catalog/containers/Separator.h"
 #include "i18n/Tr.h"
+#include "views/BackendErrors.h"
 #include "views/utils.h"
 #include <common.h>
 

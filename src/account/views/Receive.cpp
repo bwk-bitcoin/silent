@@ -1,11 +1,13 @@
 #include "account/views/Receive.h"
 
 #include "AppController.h"
-#include "account/InterfaceEnums.h"
+#include "account/Extensions.h"
+#include "account/RequestId.h"
 #include "catalog/containers/FoldSection.h"
 #include "catalog/containers/Separator.h"
 #include "catalog/panels/receive/AddressRow.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/account.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "theme/Palette.h"
@@ -15,11 +17,12 @@
 #include <QDebug>
 #include <Qontrol>
 #include <common.h>
-#include <string>
 
 namespace account::view {
 
-Receive::Receive(AccountBackend *backend) : m_backend(backend) {
+Receive::Receive(const Services &services, IModule *module)
+    : m_services(services),
+      m_module(module) {
     init();
     doConnect();
     view();
@@ -27,24 +30,24 @@ Receive::Receive(AccountBackend *backend) : m_backend(backend) {
 
 void Receive::init() {
     bool verifiable = verifyUnavailableNote().isEmpty();
-    for (auto kind : m_backend->addressKinds()) {
+    for (const auto &kind : m_services.account->addressKinds()) {
         Section section;
         section.kind = kind;
         section.row = new catalog::AddressRow;
         section.row->setVerifyVisible(verifiable);
-        if (kind == AddressKind::SilentPayment) {
+        if (kind.reusable) {
             section.row->setGenerateVisible(false);
-            section.row->setTwoLineAddress(true); // long SP address wraps to two lines
-            section.row->setAddress(m_backend->newAddress(kind));
+            section.row->setTwoLineAddress(true); // a long static address wraps to two lines
         } else {
             section.row->setLabelVisible(true);
         }
         m_sections.append(section);
     }
+    showReusableAddresses();
     // A single kind of address (Multikey Wallet) shows its row without a heading.
     if (m_sections.size() > 1) {
         for (auto &section : m_sections) {
-            section.fold = new catalog::FoldSection(title(section.kind));
+            section.fold = new catalog::FoldSection(section.kind.name);
             // The first section opens, the others start folded.
             section.fold->setExpanded(&section == &m_sections.first());
             section.fold->setContent(section.row);
@@ -66,7 +69,16 @@ void Receive::doConnect() {
         connect(section.row, &catalog::AddressRow::verifyRequested, this,
                 &Receive::onVerifyRequested, qontrol::UNIQUE);
     }
-    auto *keys = Host::get()->keys(m_backend->module());
+    auto *account = m_services.account;
+    connect(account, &backend::IAccountBackend::addressesChanged, this,
+            &Receive::onAddressesChanged, qontrol::UNIQUE);
+    connect(account, &backend::IAccountBackend::addressCreated, this, &Receive::onAddressCreated,
+            qontrol::UNIQUE);
+    connect(account, &backend::IService::error, this, &Receive::onAddressError, qontrol::UNIQUE);
+    connect(account, &backend::IService::valueResult, this, &Receive::onAccountValue,
+            qontrol::UNIQUE);
+    requestTitles();
+    auto *keys = Host::get()->keys(m_module);
     if (keys != nullptr) {
         connect(keys, &IKeys::error, this, &Receive::onKeysError, qontrol::UNIQUE);
     }
@@ -102,12 +114,31 @@ void Receive::changeEvent(QEvent *event) {
 }
 
 void Receive::retranslateUi() {
+    showKindNames();
     for (const auto &section : m_sections) {
-        if (section.fold != nullptr) {
-            section.fold->setTitle(title(section.kind));
-        }
         section.row->setVerifyNote(verifyUnavailableNote());
     }
+    requestTitles();
+}
+
+// The kinds' names as the account says them now, in the language in use.
+void Receive::showKindNames() {
+    for (const auto &kind : m_services.account->addressKinds()) {
+        auto *section = this->section(kind.id);
+        if (section == nullptr) {
+            continue;
+        }
+        section->kind.name = kind.name;
+        if (section->fold != nullptr) {
+            section->fold->setTitle(kind.name);
+        }
+    }
+}
+
+void Receive::requestTitles() {
+    m_titles_req = nextRequestId();
+    // The built-in providers answer during the call; another may not answer it at all.
+    m_services.account->value(m_titles_req, extension::ADDRESS_KIND_TITLES, QJsonValue());
 }
 
 auto Receive::sectionOf(const QObject *widget) -> Section * {
@@ -119,25 +150,32 @@ auto Receive::sectionOf(const QObject *widget) -> Section * {
     return nullptr;
 }
 
-auto Receive::title(AddressKind kind) -> QString {
-    switch (kind) {
-    case AddressKind::SilentPayment:
-        return TR("receive-silent-payment-address");
-    case AddressKind::Segwit:
-        return TR("receive-segwit-address");
-    case AddressKind::Taproot:
-        return TR("receive-taproot-address");
+auto Receive::section(const QString &kind) -> Section * {
+    for (auto &section : m_sections) {
+        if (section.kind.id == kind) {
+            return &section;
+        }
     }
-    return {};
+    return nullptr;
 }
 
-auto Receive::awaitingTitle(AddressKind kind) -> QString {
-    return kind == AddressKind::Segwit ? TR("receive-awaiting-segwit")
-                                       : TR("receive-awaiting-taproot");
+// The provider's title for the kind, else its name.
+auto Receive::awaitingTitle(const backend::AddressKind &kind) const -> QString {
+    auto title = m_titles.value(kind.id).toString();
+    return title.isEmpty() ? kind.name : title;
+}
+
+void Receive::showReusableAddresses() {
+    for (const auto &address : m_services.account->addresses()) {
+        auto *section = this->section(address.kind);
+        if (section != nullptr && section->kind.reusable) {
+            section->row->setAddress(address.address);
+        }
+    }
 }
 
 auto Receive::verifyUnavailableNote() const -> QString {
-    if (Host::get()->keys(m_backend->module()) == nullptr) {
+    if (Host::get()->keys(m_module) == nullptr) {
         return TR("receive-verify-unavailable");
     }
     return QString();
@@ -145,15 +183,14 @@ auto Receive::verifyUnavailableNote() const -> QString {
 
 void Receive::showVerifyModal(const QString &address) {
     m_verify_error = verifyUnavailableNote();
-    auto *keys = Host::get()->keys(m_backend->module());
+    auto *keys = Host::get()->keys(m_module);
     if (keys == nullptr) {
         return;
     }
 
-    auto info = m_backend->addressVerifyInfo(address);
-    auto descriptor = QString::fromStdString(std::string(info.descriptor.c_str()));
-    auto path = QString::fromStdString(std::string(info.path.c_str()));
-    if (descriptor.isEmpty()) {
+    auto info = m_services.account->addressVerification(address);
+    auto network = publicNetwork(m_services.account->network());
+    if (!info.has_value() || info->descriptor.isEmpty() || !network.has_value()) {
         qWarning() << "Receive: no descriptor for address" << address;
         m_verify_error = TR("receive-verify-unavailable");
         return;
@@ -161,8 +198,8 @@ void Receive::showVerifyModal(const QString &address) {
 
     m_verify_req_id = keys->newRequest();
     // Returns once the flow has closed.
-    keys->verifyAddress(m_verify_req_id, account::toPublic<plugin::Network>(m_backend->network()),
-                        descriptor, path, address, QString());
+    keys->verifyAddress(m_verify_req_id, *network, info->descriptor, info->path, address,
+                        QString());
 }
 
 void Receive::showAddressHistory(Section *section) {
@@ -196,22 +233,49 @@ void Receive::showAddressHistory(Section *section) {
 
 // ===== Slots =====
 
-void Receive::onGenerateRequested() {
-    auto *section = sectionOf(sender());
-    if (section == nullptr) {
+void Receive::onAddressesChanged() {
+    showKindNames();
+    showReusableAddresses();
+}
+
+void Receive::onAccountValue(backend::RequestId request_id, const QJsonValue &payload) {
+    if (request_id != 0 && request_id == m_titles_req) {
+        m_titles_req = 0;
+        m_titles = payload.toObject();
+    }
+}
+
+void Receive::onAddressCreated(backend::RequestId request_id, const backend::Address &address) {
+    if (!m_address_requests.contains(request_id)) {
         return;
     }
-    auto address = m_backend->newAddress(section->kind);
-    if (address.isEmpty()) {
+    auto *section = this->section(m_address_requests.take(request_id));
+    if (section == nullptr || address.address.isEmpty()) {
         return;
     }
     auto current = section->row->address();
     if (!current.isEmpty()) {
         section->history.prepend(qMakePair(current, section->row->labelText()));
     }
-    section->row->setAddress(address);
+    section->row->setAddress(address.address);
     section->row->setLabelText(QString()); // the new address starts unlabeled
     section->row->setHistoryCount(static_cast<int>(section->history.size()));
+}
+
+// A failed request leaves the address shown as it is.
+void Receive::onAddressError(backend::RequestId request_id) {
+    m_address_requests.remove(request_id);
+}
+
+void Receive::onGenerateRequested() {
+    auto *section = sectionOf(sender());
+    if (section == nullptr) {
+        return;
+    }
+    auto requestId = nextRequestId();
+    // Before the request: the answer may come during the call.
+    m_address_requests.insert(requestId, section->kind.id);
+    m_services.account->newAddress(requestId, section->kind.id);
 }
 
 void Receive::onHistoryRequested() {

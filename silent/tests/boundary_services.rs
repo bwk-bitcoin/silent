@@ -548,37 +548,7 @@ fn endpoint_command_owns_test_save_close_drain_and_reopen_order() {
         account.get_error()
     );
     let receiver = account.take_receiver();
-    let mut failed = silent::sp_endpoint_change(
-        account,
-        silent::BackendServer::Electrum,
-        "unsupported://127.0.0.1:1".into(),
-        true,
-        true,
-        false,
-    );
-    failed.prepare_endpoint();
-    assert_eq!(
-        failed.endpoint_phase(),
-        silent::EndpointPhase::Complete,
-        "failed test stops before shutdown"
-    );
-    assert!(
-        !failed.endpoint_result().is_ok && !failed.endpoint_result().saved,
-        "failed test is neither saved nor connected"
-    );
-    let account = silent::take_sp_endpoint_account(failed);
-    assert!(
-        account.is_ok(),
-        "failed test preserved live account ownership"
-    );
-    let mut change = silent::sp_endpoint_change(
-        account,
-        silent::BackendServer::Electrum,
-        String::new(),
-        true,
-        false,
-        false,
-    );
+    let mut change = silent::sp_endpoint_change(account, silent::BackendServer::Electrum, false);
     change.prepare_endpoint();
     assert_eq!(
         change.endpoint_phase(),
@@ -610,14 +580,8 @@ fn endpoint_command_owns_test_save_close_drain_and_reopen_order() {
         account.is_ok(),
         "duplicate completion did not destroy account"
     );
-    let mut missing_config = silent::sp_endpoint_change(
-        account,
-        silent::BackendServer::Electrum,
-        String::new(),
-        true,
-        false,
-        false,
-    );
+    let mut missing_config =
+        silent::sp_endpoint_change(account, silent::BackendServer::Electrum, false);
     missing_config.prepare_endpoint();
     common::logical::rename(&config, "config.json", "endpoint-backup.json");
     missing_config.finish_endpoint_after_drain();
@@ -633,14 +597,7 @@ fn endpoint_command_owns_test_save_close_drain_and_reopen_order() {
     common::logical::rename(&config, "endpoint-backup.json", "config.json");
     let account = silent::take_sp_endpoint_account(missing_config);
     assert!(!account.is_ok(), "failed reopen leaves a closed account");
-    let mut retry = silent::sp_endpoint_change(
-        account,
-        silent::BackendServer::Electrum,
-        String::new(),
-        true,
-        false,
-        false,
-    );
+    let mut retry = silent::sp_endpoint_change(account, silent::BackendServer::Electrum, false);
     retry.prepare_endpoint();
     assert_eq!(
         retry.endpoint_phase(),

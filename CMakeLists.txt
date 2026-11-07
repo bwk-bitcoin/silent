@@ -273,6 +273,7 @@ set(SILENT_APP_SOURCES
     src/views/modals/ScanAddress.h
     src/views/modals/ScanAddress.cpp
     src/views/utils.h
+    src/views/BackendErrors.h
     src/views/utils.cpp
     src/views/DashboardLayout.h
     src/views/DashboardLayout.cpp
@@ -293,7 +294,12 @@ set(SILENT_APP_SOURCES
     src/account/AccountShell.cpp
     src/account/PanelCollection.h
     src/account/PanelCollection.cpp
-    src/account/Equality.h
+    src/account/Services.h
+    src/account/Services.cpp
+    src/account/Money.h
+    src/account/Money.cpp
+    src/account/Same.h
+    src/account/Same.cpp
     src/account/RequestId.h
     src/account/ElectrumReconnect.h
     src/account/ElectrumReconnect.cpp
@@ -708,6 +714,8 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/MockPlugin.h
         tests/host/PriceProbe.h
         tests/host/SpSigningProbe.h
+        tests/host/ViewServices.h
+        tests/host/ViewServices.cpp
         tests/host/ExternalSpendConsumer.h
         tests/host/ExternalSpendConsumer.cpp
         tests/host/StorageProbe.h
@@ -727,6 +735,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/account_navigation_smoke.cpp
         tests/host/account_navigation_smoke.h
         tests/host/backend_services_smoke.cpp
+        tests/host/account_views_smoke.cpp
         tests/host/keys_contract_smoke.cpp
         tests/host/qr_cache_smoke.cpp
         tests/host/storage_smoke.cpp

@@ -17,7 +17,7 @@ use crate::{
         BackendErrorKind, BackendServer, BroadcastOutcome, BroadcastReport, CoinState,
         CraftOutcome, EndpointResult, EndpointSetting, FundsSnapshot, LabelEditResult, LabelEntry,
         LabelKind, LabelSnapshot, Network, ReceiveAddress, ReceiveAddressResult, RustCoin, RustTx,
-        TransactionSimulation, TransactionTemplate, TxResult, UnsignedPsbt,
+        TransactionSimulation, TransactionTemplate, UnsignedPsbt,
     },
     musig::MUSIG_PLUGIN_ID,
 };
@@ -60,7 +60,8 @@ pub(crate) fn select(
     resolve(selection, &simulation)
 }
 
-/// Fills the MAX output with what the simulation sends past the fixed outputs.
+/// Fills the MAX output with what the simulation sends past the fixed outputs, and the
+/// absolute fee it pays: the crafted template states the whole transaction.
 fn resolve(mut template: TransactionTemplate, simulation: &TransactionSimulation) -> CraftOutcome {
     if !simulation.is_valid {
         return incomplete(template, simulation.error.clone());
@@ -73,6 +74,7 @@ fn resolve(mut template: TransactionTemplate, simulation: &TransactionSimulation
     if let Some(max) = template.outputs.iter_mut().find(|output| output.max) {
         max.amount = simulation.sending_total.saturating_sub(fixed);
     }
+    template.fee = simulation.fee;
     CraftOutcome {
         complete: true,
         error: String::new(),
@@ -373,18 +375,6 @@ impl BroadcastReport {
             kind: undelivered.failure.kind,
             error: undelivered.failure.message,
             warnings: Vec::new(),
-        }
-    }
-
-    /// The TxResult of the older broadcast call: the txid once accepted, the warnings
-    /// logged.
-    pub(crate) fn tx_result(self) -> TxResult {
-        for warning in &self.warnings {
-            log::warn!("broadcast {}: {warning}", self.txid);
-        }
-        match self.outcome {
-            BroadcastOutcome::Accepted => TxResult::succeeded(self.txid),
-            _ => TxResult::failed(self.kind, self.error),
         }
     }
 }

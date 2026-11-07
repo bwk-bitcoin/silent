@@ -1,5 +1,6 @@
 #include "Send.h"
-#include "account/AccountBackend.h"
+#include "account/Money.h"
+#include "account/RequestId.h"
 #include "account/SendSigning.h"
 #include "catalog/Button.h"
 #include "catalog/Table.h"
@@ -19,6 +20,8 @@
 #include "catalog/inputs/Toggle.h"
 #include "catalog/panels/send/TxFlow.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/blockchain.h"
+#include "interfaces/backend/transaction.h"
 #include "interfaces/host.h"
 #include "theme/Palette.h"
 #include "views/modals/ScanAddress.h"
@@ -103,35 +106,6 @@ static void setValidationIndicator(catalog::ValidatedInput *field, const QString
         return;
     }
     field->setValid(valid);
-}
-
-InputW::InputW(const RustCoin &coin) {
-    auto *typeLabel =
-        new Label(QString::fromUtf8(coin.account_type.data(), coin.account_type.size()));
-
-    auto *outpointLabel =
-        new Label(QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size()), LabelRole::Mono);
-
-    auto *valueLabel = new Label(toBitcoin(coin.value), LabelRole::Mono);
-    valueLabel->setAlignment(Qt::AlignRight);
-
-    auto *labelLabel = new Label(QString::fromUtf8(coin.label.data(), coin.label.size()));
-
-    auto *row = (new qontrol::Row)
-                    ->push(typeLabel)
-                    ->pushSpacer(resolve(Spacing::XS))
-                    ->push(outpointLabel)
-                    ->pushSpacer(resolve(Spacing::XS))
-                    ->push(valueLabel)
-                    ->pushSpacer(resolve(Spacing::XS))
-                    ->push(labelLabel)
-                    ->pushSpacer();
-
-    m_widget = row;
-}
-
-auto InputW::widget() -> QWidget * {
-    return m_widget;
 }
 
 OutputW::OutputW(Send *screen, int id) {
@@ -284,11 +258,13 @@ void OutputW::setFrozenAmount(std::optional<uint64_t> amount) {
     }
 }
 
-void Send::restoreSavedPsbt(const SavedPsbtEntry &entry) {
-    // Lock before setting fields: textChanged must never simulate a restored PSBT.
+void Send::restoreTransaction(const backend::TransactionTemplate &transaction,
+                              const QList<backend::Coin> &inputs, const QString &warning) {
+    // Lock before setting fields: textChanged must never craft a restored transaction.
     m_locked = true;
     m_restored = true;
     m_preview.reset();
+    m_selection_request = 0;
     m_fee_mode = FeeMode::Manual;
     m_fee_mode_picker->setCurrentIndex(static_cast<int>(m_fee_mode));
     for (auto *output : m_outputs) {
@@ -296,34 +272,28 @@ void Send::restoreSavedPsbt(const SavedPsbtEntry &entry) {
         delete output;
     }
     m_outputs.clear();
-    for (const auto &payment : entry.frozen_template.outputs) {
+    for (const auto &payment : transaction.outputs) {
         auto *output = new OutputW(this, m_output_id++);
-        output->setAddress(QString::fromStdString(std::string(payment.address)));
-        output->setLabel(QString::fromStdString(std::string(payment.label)));
+        output->setAddress(payment.address);
+        output->setLabel(payment.label);
         output->setFrozenAmount(payment.amount);
         output->syncFiatFromBtc();
         output->setDeletable(false);
         output->enableMax(false);
         m_outputs.insert(m_output_id - 1, output);
     }
-    m_selected_coins.clear();
-    for (const auto &input : entry.inputs) {
-        RustCoin coin{};
-        coin.outpoint = input.outpoint;
-        coin.value = input.value;
-        m_selected_coins.append(coin);
-    }
+    m_selected_coins = inputs;
     m_auto_selected_outpoints.clear();
     m_auto_coin_selection->setChecked(false);
-    m_estimated_fee = entry.frozen_template.fee;
+    m_estimated_fee = transaction.fee;
     m_fee_toggle->setChecked(false);
     onFeeToggled();
     m_fee_value_input->setText(QString::number(m_estimated_fee));
     onUpdateFeeValidation();
     m_fee_estimate_label->setText(toBitcoin(m_estimated_fee));
     m_fee_estimate_label->setVisible(true);
-    m_warning_label->setText(QString::fromStdString(std::string(entry.warning)));
-    m_warning_label->setVisible(!entry.warning.empty());
+    m_warning_label->setText(warning);
+    m_warning_label->setVisible(!warning.isEmpty());
     view();
 }
 
@@ -347,11 +317,10 @@ void Send::onFeeToggled() {
     onProcess();
 }
 
-Send::Send(AccountBackend *backend) : m_backend(backend) {
+Send::Send(const Services &services, SendSigning *signing)
+    : m_services(services),
+      m_signing(signing) {
     qDebug() << "Send::Send()";
-    if (m_backend == nullptr) {
-        return;
-    }
     this->init();
     this->doConnect();
     this->onAddOutput();
@@ -367,8 +336,8 @@ void Send::init() {
 
     m_add_output_btn = catalog::btnAddPayment();
     m_clear_outputs_btn = catalog::btnClear();
-    m_signing = m_backend->sendSigning();
     m_signing->setParent(this);
+    m_last_balance = m_services.blockchain->balance();
 
     m_fee_estimate_label = new Label();
     m_fee_estimate_label->setVisible(false);
@@ -483,7 +452,12 @@ void Send::doConnect() {
     connect(m_clear_inputs_btn, &QPushButton::clicked, this, &Send::onClearInputs, qontrol::UNIQUE);
     connect(m_auto_coin_selection, &Checkbox::clicked, this, &Send::onAutoSelectionToggled,
             qontrol::UNIQUE);
-    connect(m_backend, &AccountBackend::updateCoins, this, &Send::onCoinsUpdated, qontrol::UNIQUE);
+    connect(m_services.blockchain, &backend::IBlockchain::coinsChanged, this, &Send::onCoinsChanged,
+            qontrol::UNIQUE);
+    connect(m_services.transaction, &backend::ITransaction::coinsSelected, this,
+            &Send::onCoinsSelected, qontrol::UNIQUE);
+    connect(m_services.transaction, &backend::IService::error, this, &Send::onSelectionError,
+            qontrol::UNIQUE);
     connect(m_signing, &SendSigning::lockedChanged, this, &Send::onSigningLocked, qontrol::UNIQUE);
     connect(m_signing, &SendSigning::estimateChanged, this, &Send::onProcess, qontrol::UNIQUE);
     connect(m_signing, &SendSigning::sent, this, &Send::onSigningSent, qontrol::UNIQUE);
@@ -634,19 +608,15 @@ void Send::updateTransactionFlow() {
         return;
     }
 
-    QList<RustCoin> selectedCoins;
+    QList<backend::Coin> selectedCoins;
     if (m_preview.has_value()) {
-        for (std::size_t i = 0; i < m_preview->selected_outpoints.size(); ++i) {
-            RustCoin coin{};
-            coin.outpoint = m_preview->selected_outpoints.at(i);
-            coin.value = m_preview->selected_values.at(i);
-            selectedCoins.append(coin);
+        for (qsizetype i = 0; i < m_preview->transaction.inputs.size(); ++i) {
+            selectedCoins.append({.outpoint = m_preview->transaction.inputs.at(i),
+                                  .amount = m_preview->inputValues.at(i)});
         }
     } else if (m_auto_coin_selection->isChecked()) {
-        auto availableCoins = m_backend->getCoins();
-        for (const auto &coin : availableCoins) {
-            auto outpoint = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
-            if (m_auto_selected_outpoints.contains(outpoint)) {
+        for (const auto &coin : availableCoins()) {
+            if (m_auto_selected_outpoints.contains(coin.outpoint)) {
                 selectedCoins.append(coin);
             }
         }
@@ -654,25 +624,26 @@ void Send::updateTransactionFlow() {
         selectedCoins = m_selected_coins;
     }
 
-    auto amounts = editableAmounts();
-    auto selectedTotal = m_preview.has_value() ? m_preview->input_total : amounts.input_total;
+    auto amounts = m_preview.has_value() ? m_preview->amounts : editableAmounts();
+    auto selectedTotal = amounts.inputTotal;
     QList<catalog::TxFlow::InputItem> inputs;
     for (const auto &coin : selectedCoins) {
         catalog::TxFlow::InputItem item;
-        item.weight = static_cast<double>(coin.value) / SATS;
+        item.weight = static_cast<double>(coin.amount) / SATS;
         item.title = TR("txflow-input-n").arg(inputs.size() + 1);
-        item.fiat = fiatAmount(coin.value);
-        item.addr = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
+        item.fiat = fiatAmount(coin.amount);
+        item.addr = coin.outpoint;
         inputs.append(item);
     }
 
     QList<catalog::TxFlow::OutputItem> outputs;
-    auto sendingTotal = m_preview.has_value() ? m_preview->sending_total : amounts.sending_total;
-    std::size_t recipientIndex = 0;
+    auto sendingTotal = amounts.sendingTotal;
+    qsizetype recipientIndex = 0;
     for (auto *output : m_outputs) {
         auto amount = output->amount();
-        uint64_t value = m_preview.has_value() ? m_preview->recipient_amounts.at(recipientIndex)
-                                               : amount.value_or(0);
+        uint64_t value = m_preview.has_value()
+                             ? m_preview->transaction.outputs.at(recipientIndex).amount
+                             : amount.value_or(0);
         ++recipientIndex;
         if (value == 0) {
             continue;
@@ -688,8 +659,8 @@ void Send::updateTransactionFlow() {
         outputs.append(item);
     }
 
-    auto change = m_preview.has_value() ? m_preview->change : amounts.change;
-    auto total = m_preview.has_value() ? m_preview->transaction_total : amounts.transaction_total;
+    auto change = amounts.change;
+    auto total = amounts.transactionTotal;
 
     if (change > 0) {
         catalog::TxFlow::OutputItem item;
@@ -911,25 +882,25 @@ auto Send::inputsView() -> QWidget * {
 }
 
 void Send::updateCoinRows() {
-    rust::Vec<RustCoin> availableCoins;
-    if (m_restored) {
-        for (const auto &coin : m_selected_coins) {
-            availableCoins.push_back(coin);
-        }
-    } else {
-        availableCoins = m_backend->getCoins();
-    }
+    auto coins = m_restored ? m_selected_coins : availableCoins();
     constexpr int c_max_visible_coins = 6;
-    auto visibleRows = std::min(static_cast<int>(availableCoins.size()), c_max_visible_coins);
+    auto visibleRows = std::min(static_cast<int>(coins.size()), c_max_visible_coins);
     m_coin_table->setBodyHeight(visibleRows * metric::TABLE_ROW_HEIGHT);
     m_coin_table->clearRows();
-    for (const auto &coin : availableCoins) {
-        auto outpoint = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
-        auto typeStr = QString::fromUtf8(coin.account_type.data(), coin.account_type.size());
-        auto label = QString::fromUtf8(coin.label.data(), coin.label.size());
-        m_coin_table->addRow(outpoint,
-                             {typeStr, shortenOutpoint(outpoint), label, toBitcoin(coin.value)});
+    for (const auto &coin : coins) {
+        m_coin_table->addRow(coin.outpoint, {coin.origin, shortenOutpoint(coin.outpoint),
+                                             coin.label, toBitcoin(coin.amount)});
     }
+}
+
+auto Send::availableCoins() const -> QList<backend::Coin> {
+    QList<backend::Coin> coins;
+    for (const auto &coin : m_services.blockchain->coins()) {
+        if (!coin.spent) {
+            coins.append(coin);
+        }
+    }
+    return coins;
 }
 
 void Send::onAddOutput() {
@@ -1014,10 +985,9 @@ void Send::onClearInputs() {
 }
 
 void Send::onCoinSelectionChanged(const QString &row_id, bool selected) {
-    auto availableCoins = m_backend->getCoins();
     if (selected) {
-        for (const auto &coin : availableCoins) {
-            if (QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size()) == row_id) {
+        for (const auto &coin : availableCoins()) {
+            if (coin.outpoint == row_id) {
                 bool alreadySelected = false;
                 for (const auto &selectedCoin : m_selected_coins) {
                     if (selectedCoin.outpoint == coin.outpoint) {
@@ -1033,8 +1003,7 @@ void Send::onCoinSelectionChanged(const QString &row_id, bool selected) {
         }
     } else {
         for (int i = 0; i < m_selected_coins.size(); ++i) {
-            if (QString::fromUtf8(m_selected_coins[i].outpoint.data(),
-                                  m_selected_coins[i].outpoint.size()) == row_id) {
+            if (m_selected_coins[i].outpoint == row_id) {
                 m_selected_coins.removeAt(i);
                 break;
             }
@@ -1051,12 +1020,11 @@ void Send::onCoinToggled() {
     }
 
     QString outpoint = checkbox->property("outpoint").toString();
-    auto availableCoins = m_backend->getCoins();
 
     if (checkbox->isChecked()) {
         // Add to m_selected_coins if not already present
-        for (const auto &coin : availableCoins) {
-            if (QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size()) == outpoint) {
+        for (const auto &coin : availableCoins()) {
+            if (coin.outpoint == outpoint) {
                 bool alreadySelected = false;
                 for (const auto &selected : m_selected_coins) {
                     if (selected.outpoint == coin.outpoint) {
@@ -1073,8 +1041,7 @@ void Send::onCoinToggled() {
     } else {
         // Remove from m_selected_coins
         for (int i = 0; i < m_selected_coins.size(); ++i) {
-            if (QString::fromUtf8(m_selected_coins[i].outpoint.data(),
-                                  m_selected_coins[i].outpoint.size()) == outpoint) {
+            if (m_selected_coins[i].outpoint == outpoint) {
                 m_selected_coins.removeAt(i);
                 break;
             }
@@ -1096,21 +1063,23 @@ void Send::onAutoSelectionToggled() {
     onProcess();
 }
 
-void Send::onCoinsUpdated(CoinState state) {
+void Send::onCoinsChanged() {
     if (m_locked) {
         return;
     }
-    qDebug() << "Send::onCoinsUpdated() confirmed:" << state.confirmed_count
-             << "unconfirmed:" << state.unconfirmed_count;
+    // Published with the coins, so it counts them already.
+    auto balance = m_services.blockchain->balance();
+    qDebug() << "Send::onCoinsChanged() confirmed:" << balance.confirmedCount
+             << "unconfirmed:" << balance.unconfirmedCount;
     // Only rebuild if coins actually changed
-    bool changed = (state.confirmed_count != m_last_coin_state.confirmed_count ||
-                    state.unconfirmed_count != m_last_coin_state.unconfirmed_count);
+    bool changed = (balance.confirmedCount != m_last_balance.confirmedCount ||
+                    balance.unconfirmedCount != m_last_balance.unconfirmedCount);
 
     if (!changed) {
         return;
     }
 
-    m_last_coin_state = state;
+    m_last_balance = balance;
 
     // Rebuild the inputs view to show new/removed coins
     view();
@@ -1127,49 +1096,43 @@ void Send::onCoinsUpdated(CoinState state) {
 void Send::onUpdateSelectedCoinsFromSimulation() {
     qDebug() << "Send::onUpdateSelectedCoinsFromSimulation()";
     m_selected_coins.clear();
-    auto availableCoins = m_backend->getCoins();
-    for (const auto &coin : availableCoins) {
-        QString op = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
-        if (m_auto_selected_outpoints.contains(op)) {
+    for (const auto &coin : availableCoins()) {
+        if (m_auto_selected_outpoints.contains(coin.outpoint)) {
             m_selected_coins.append(coin);
         }
     }
 }
 
-auto Send::editableAmounts() -> SendAmounts {
-    rust::Vec<uint64_t> inputs;
+auto Send::editableAmounts() -> money::Amounts {
+    QList<quint64> inputs;
     if (m_auto_coin_selection->isChecked()) {
-        auto availableCoins = m_backend->getCoins();
-        for (const auto &coin : availableCoins) {
-            QString op = QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size());
-            if (m_auto_selected_outpoints.contains(op)) {
-                inputs.push_back(coin.value);
+        for (const auto &coin : availableCoins()) {
+            if (m_auto_selected_outpoints.contains(coin.outpoint)) {
+                inputs.append(coin.amount);
             }
         }
     } else {
         for (const auto &coin : m_selected_coins) {
-            inputs.push_back(coin.value);
+            inputs.append(coin.amount);
         }
     }
 
-    rust::Vec<uint64_t> recipients;
+    QList<quint64> recipients;
     for (auto *out : m_outputs) {
         if (!out->isMax()) {
             auto amt = out->amount();
             if (amt.has_value()) {
-                recipients.push_back(amt.value());
+                recipients.append(amt.value());
             }
         }
     }
 
-    return ::send_amounts(rust::Slice<const uint64_t>(inputs.data(), inputs.size()),
-                          rust::Slice<const uint64_t>(recipients.data(), recipients.size()),
-                          m_estimated_fee);
+    return money::amounts(inputs, recipients, m_estimated_fee);
 }
 
 void Send::onUpdateInputsTotal() {
     auto amounts = editableAmounts();
-    auto totalSelected = m_preview.has_value() ? m_preview->input_total : amounts.input_total;
+    auto totalSelected = m_preview.has_value() ? m_preview->amounts.inputTotal : amounts.inputTotal;
     auto remaining = m_preview.has_value() ? 0 : amounts.remaining;
     m_inputs_min_value->setText(QString::number(static_cast<double>(remaining) / SATS, 'f', 8) +
                                 " BTC");
@@ -1190,7 +1153,7 @@ void Send::updateCoinCheckboxes() {
             selectedIds = m_auto_selected_outpoints;
         } else {
             for (const auto &coin : m_selected_coins) {
-                selectedIds.append(QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size()));
+                selectedIds.append(coin.outpoint);
             }
         }
         m_coin_table->setSelectedIds(selectedIds);
@@ -1288,8 +1251,7 @@ void OutputW::updateAddressValidation() {
     if (addr.isEmpty()) {
         setValidationIndicator(m_address_field, addr, false);
     } else {
-        auto result = ::validate_address(rust::String(addr.toStdString()));
-        setValidationIndicator(m_address_field, addr, result.empty());
+        setValidationIndicator(m_address_field, addr, money::isAddress(addr));
     }
 }
 
@@ -1297,52 +1259,41 @@ void OutputW::updateAmountValidation() {
     QString text = m_amount_input->text();
     m_parsed_text = text;
     auto normalized = normalizedMoneyText(*m_amount_input);
-    auto parsed = normalized.has_value()
-                      ? ::parse_btc_amount(rust::String(normalized.value().toStdString()))
-                      : AmountParseResult{};
-    m_parsed_amount = parsed.is_ok ? std::optional<uint64_t>(parsed.sats) : std::nullopt;
-    setValidationIndicator(m_amount_field, text, parsed.is_ok);
+    m_parsed_amount = normalized.has_value() ? money::parseBtc(*normalized) : std::nullopt;
+    setValidationIndicator(m_amount_field, text, m_parsed_amount.has_value());
 }
 
-auto Send::txTemplate() -> std::optional<TransactionTemplate> {
+auto Send::txTemplate() -> std::optional<backend::TransactionTemplate> {
     qDebug() << "Send::txTemplate()";
-    auto txTemplate = TransactionTemplate();
-    if (!m_parsed_fee.is_ok) {
+    if (!m_parsed_fee.has_value()) {
         return std::nullopt;
     }
-    txTemplate.fee_rate = m_parsed_fee.fee_rate;
-    txTemplate.fee = m_parsed_fee.fee;
+    backend::TransactionTemplate transaction{.feeRate = m_parsed_fee->rate,
+                                             .fee = m_parsed_fee->absolute};
 
     // Outputs
     for (auto *out : m_outputs) {
-        auto output = Output();
-        output.address = rust::String(out->address().toStdString());
-
+        backend::Output output{.address = out->address(), .label = out->label()};
         if (out->isMax()) {
-            output.max = true;
-            output.amount = 0; // Amount is ignored when max is true
+            output.maximum = true; // Amount is ignored when maximum is set
         } else {
             auto amount = out->amount();
             if (!amount.has_value()) {
                 return std::nullopt;
             }
             output.amount = amount.value();
-            output.max = false;
         }
-
-        output.label = rust::String(out->label().toStdString());
-        txTemplate.outputs.push_back(output);
+        transaction.outputs.append(output);
     }
 
-    // Add selected coins as input outpoints only when manual selection is active
+    // The coins picked by hand; none leaves them to an explicit selection.
     if (!m_auto_coin_selection->isChecked()) {
         for (const auto &coin : m_selected_coins) {
-            txTemplate.input_outpoints.push_back(rust::String(std::string(coin.outpoint)));
+            transaction.inputs.append(coin.outpoint);
         }
     }
-    // When auto is checked, leave input_outpoints empty -> Rust auto-selects
 
-    return txTemplate;
+    return transaction;
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
@@ -1358,11 +1309,9 @@ void Send::onUpdateFeeValidation() {
     qDebug() << "Send::onUpdateFeeValidation()";
     QString text = m_fee_value_input->text();
     auto normalized = normalizedMoneyText(*m_fee_value_input);
-    m_parsed_fee = normalized.has_value()
-                       ? ::parse_fee_input(rust::String(normalized.value().toStdString()),
-                                           m_fee_toggle->isChecked())
-                       : FeeParseResult{};
-    setValidationIndicator(m_fee_field, text, m_parsed_fee.is_ok);
+    m_parsed_fee = normalized.has_value() ? money::parseFee(*normalized, m_fee_toggle->isChecked())
+                                          : std::nullopt;
+    setValidationIndicator(m_fee_field, text, m_parsed_fee.has_value());
 }
 
 void Send::onProcess() {
@@ -1372,6 +1321,7 @@ void Send::onProcess() {
         return;
     }
     m_preview.reset();
+    m_selection_request = 0;
     m_estimated_fee = 0;
     for (auto *out : m_outputs) {
         if (sender() != out->fiatInput()) {
@@ -1396,58 +1346,77 @@ void Send::onProcess() {
         return;
     }
 
-    auto simu = m_backend->simulateTx(txTemp.value());
-
-    if (simu.error.empty()) {
-        if (simu.is_valid) {
-            m_warning_label->setVisible(false);
-            m_preview = simu;
-
-            // Fill in estimated max amount for MAX outputs
-            std::size_t recipientIndex = 0;
-            for (auto *out : m_outputs) {
-                if (out->isMax()) {
-                    out->setMaxAmount(simu.recipient_amounts.at(recipientIndex));
-                }
-                ++recipientIndex;
-            }
-
-            // Store auto-selected outpoints for display when auto mode is active
-            if (m_auto_coin_selection->isChecked()) {
-                QStringList newSelection;
-                for (const auto &op : simu.selected_outpoints) {
-                    QString opStr = QString::fromUtf8(op.data(), op.size());
-                    newSelection.append(opStr);
-                }
-                m_auto_selected_outpoints = newSelection;
-                updateCoinCheckboxes();
-                onUpdateInputsTotal();
-            }
-            m_signing->setTransaction(txTemp, spentOutpoints());
-
-            // The estimated fee, once the signing step can tell it (a Multikey account
-            // needs its spend path).
-            bool estimates = m_signing->estimatesFee();
-            m_estimated_fee = simu.fee;
-            m_fee_estimate_label->setText(TR("send-fee-estimate").arg(toBitcoin(simu.fee)));
-            m_fee_estimate_label->setVisible(estimates);
-        } else {
-            m_signing->setTransaction(std::nullopt, {});
-            m_estimated_fee = 0;
-            m_fee_estimate_label->setVisible(false);
-            m_warning_label->setText(TR("send-transaction-invalid"));
-            m_warning_label->setVisible(true);
-        }
-    } else {
-        m_signing->setTransaction(std::nullopt, {});
-        m_estimated_fee = 0;
-        m_fee_estimate_label->setVisible(false);
-        m_warning_label->setText(mapBackendErrorSummary(simu.kind));
-        m_warning_label->setVisible(true);
+    if (!txTemp->inputs.isEmpty()) {
+        applyCraft(m_services.transaction->craft(*txTemp));
+        return;
     }
+    // Nothing to sign until the selection answers; the coins it spent stay, so the step
+    // keeps what it chose for them.
+    m_signing->setTransaction(std::nullopt, spentOutpoints());
+    // Registered before the request: the answer may come during the call.
+    m_selection_request = nextRequestId();
+    m_services.transaction->selectCoins(m_selection_request, *txTemp);
+}
+
+void Send::applyCraft(const backend::CraftResult &result) {
+    if (!result.completion.complete) {
+        clearTransaction(result.completion.error.isEmpty() ? TR("send-transaction-invalid")
+                                                           : operationFailedSummary());
+        return;
+    }
+    const auto &crafted = result.transaction;
+    m_warning_label->setVisible(false);
+    QHash<QString, quint64> values;
+    for (const auto &coin : availableCoins()) {
+        values.insert(coin.outpoint, coin.amount);
+    }
+    Preview preview{.transaction = crafted};
+    for (const auto &input : crafted.inputs) {
+        preview.inputValues.append(values.value(input));
+    }
+    QList<quint64> recipients;
+    for (const auto &output : crafted.outputs) {
+        recipients.append(output.amount);
+    }
+    preview.amounts = money::amounts(preview.inputValues, recipients, crafted.fee);
+    m_preview = preview;
+
+    // Fill in estimated max amount for MAX outputs
+    qsizetype recipientIndex = 0;
+    for (auto *out : m_outputs) {
+        if (out->isMax()) {
+            out->setMaxAmount(crafted.outputs.at(recipientIndex).amount);
+        }
+        ++recipientIndex;
+    }
+
+    // Store auto-selected outpoints for display when auto mode is active
+    if (m_auto_coin_selection->isChecked()) {
+        m_auto_selected_outpoints = crafted.inputs;
+        updateCoinCheckboxes();
+        onUpdateInputsTotal();
+    }
+    m_signing->setTransaction(crafted, spentOutpoints());
+
+    // The estimated fee, once the signing step can tell it (a Multikey account needs its
+    // spend path).
+    bool estimates = m_signing->estimatesFee();
+    m_estimated_fee = crafted.fee;
+    m_fee_estimate_label->setText(TR("send-fee-estimate").arg(toBitcoin(crafted.fee)));
+    m_fee_estimate_label->setVisible(estimates);
 
     onUpdateInputsTotal();
     // Reflect the updated inputs/outputs/fee in the graphical flow as the user types.
+    updateTransactionFlow();
+}
+
+void Send::clearTransaction(const QString &warning) {
+    m_signing->setTransaction(std::nullopt, {});
+    m_estimated_fee = 0;
+    m_fee_estimate_label->setVisible(false);
+    m_warning_label->setText(warning);
+    m_warning_label->setVisible(!warning.isEmpty());
+    onUpdateInputsTotal();
     updateTransactionFlow();
 }
 
@@ -1476,9 +1445,27 @@ auto Send::spentOutpoints() const -> QStringList {
     }
     QStringList outpoints;
     for (const auto &coin : m_selected_coins) {
-        outpoints.append(QString::fromUtf8(coin.outpoint.data(), coin.outpoint.size()));
+        outpoints.append(coin.outpoint);
     }
     return outpoints;
+}
+
+void Send::onCoinsSelected(backend::RequestId request_id, const backend::CraftResult &result) {
+    // A stale answer, or one that came after the signing step took the transaction.
+    if (request_id == 0 || request_id != m_selection_request || m_locked) {
+        return;
+    }
+    m_selection_request = 0;
+    applyCraft(result);
+}
+
+void Send::onSelectionError(backend::RequestId request_id, const QString &message) {
+    if (request_id == 0 || request_id != m_selection_request || m_locked) {
+        return;
+    }
+    m_selection_request = 0;
+    qWarning() << "Send: coin selection failed:" << message;
+    clearTransaction(operationFailedSummary());
 }
 
 void Send::onSigningLocked(bool locked) {
@@ -1537,9 +1524,9 @@ void Send::onSelectedFeesChanged() {
     m_fee_tier_picker->setVisible(m_fee_mode == FeeMode::Smart);
     auto text = QString::number(rate.value_or(1.0), 'g', 15);
     if (rate.has_value()) {
-        auto normalized = ::normalize_fee_rate(rate.value());
-        if (normalized.is_ok) {
-            text = QString::number(normalized.fee_rate, 'f', 3);
+        auto normalized = money::normalizeFeeRate(rate.value());
+        if (normalized.has_value()) {
+            text = QString::number(*normalized, 'f', 3);
         }
     }
     m_fee_value_input->setText(localizedMoneyText(*m_fee_value_input, text));

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "account/AccountBackend.h"
+#include "account/Services.h"
+#include "interfaces/backend/types.h"
 
 #include <QEvent>
 #include <QList>
@@ -10,7 +11,6 @@
 #include <QWidget>
 #include <Qontrol>
 #include <cstdint>
-#include <silent.h>
 
 class QResizeEvent;
 class QShowEvent;
@@ -22,23 +22,25 @@ class Notice;
 
 namespace account::view {
 
+// The account's transactions and its balance, read from IBlockchain whenever it reports
+// a change. Confirmations count from the tip of a connected server.
 class History : public qontrol::Screen {
     Q_OBJECT
 
 public:
-    explicit History(AccountBackend *backend);
+    explicit History(const Services &services);
 
 signals:
     void interactionFinished();
 
 public slots:
     void onInteractionFinished();
-    void onCoinsUpdated(const CoinState &state);
-    void onScanProgress(uint32_t height, uint32_t tip);
-    void onEndpointStateChanged(Endpoint endpoint);
-    void onEndpointTipReady(uint64_t req_id, Endpoint endpoint, const ElectrumTipResult &result);
-    void onLabelsChanged();
-    void onLabelEdited(uint64_t req_id, bool accepted, const QString &error);
+    void onFundsChanged();
+    void onStateChanged();
+    void onTipRefreshed(backend::RequestId request_id);
+    void onBlockchainError(backend::RequestId request_id);
+    void onLabelSaved(backend::RequestId request_id);
+    void onLabelError(backend::RequestId request_id, const QString &message);
     void onRowClicked(const QString &txid);
     void onTxLabelEdited(const QString &txid, const QString &label);
 
@@ -50,24 +52,29 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
     void showEvent(QShowEvent *event) override;
     // The history, unconfirmed transactions first.
-    [[nodiscard]] auto readHistory() const -> QList<RustTx>;
+    [[nodiscard]] auto readHistory() const -> QList<backend::Transaction>;
     // Lays the rows out again, or once the open details or the label being edited
     // are done: either still holds a widget of the rows.
     void refresh();
     [[nodiscard]] auto isBusy() const -> bool;
-    // Asks a connected endpoint for the tip the confirmations count from.
+    // Asks a connected server for the tip the confirmations count from.
     void requestTip();
+    void updateTip(uint32_t tip);
+    [[nodiscard]] static auto connectedIds(const backend::BlockchainState &state) -> QSet<QString>;
+    void showLabelResult(const QString &error);
 
 private:
-    AccountBackend *m_backend = nullptr;
-    CoinState m_state{};
-    QList<RustTx> m_history;
+    Services m_services;
+    backend::Balance m_balance;
+    QList<backend::Transaction> m_history;
     uint32_t m_tip = 0;
-    uint64_t m_tip_request = 0;
+    backend::RequestId m_tip_request = 0;
+    // The connections up, the last time the state was read.
+    QSet<QString> m_connected;
     bool m_compact = false;
     bool m_stale = false;
     bool m_details_open = false;
-    QSet<uint64_t> m_label_requests;
+    QSet<backend::RequestId> m_label_requests;
     QString m_label_error;
     QWidget *m_main_widget = nullptr;
     QPointer<catalog::HistoryTable> m_table;

@@ -338,12 +338,8 @@ fn test_zero_balance_send_attempt() {
     );
     assert!(!simulation.error.is_empty(), "Should have error message");
 
-    let psbt = account.prepare_transaction(tx_template);
-    assert!(
-        !psbt.is_ok(),
-        "Prepare should fail: {}",
-        psbt.get_psbt_error()
-    );
+    let psbt = common::sp_unsigned_psbt(&account, tx_template);
+    assert!(psbt.is_err(), "Prepare should fail: {psbt:?}");
 
     cleanup_test_account(&account_name);
 }

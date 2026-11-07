@@ -15,10 +15,6 @@ const int TYPE_W = 58; // the design's 4.4em at the body font
 const int OUTPOINT_W = 175;
 const int VALUE_W = 130;
 
-auto toQString(const rust::String &value) -> QString {
-    return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
-}
-
 auto shortenOutpoint(const QString &outpoint) -> QString {
     int colon = static_cast<int>(outpoint.lastIndexOf(':'));
     if (colon < 0) {
@@ -41,18 +37,18 @@ CoinsTable::CoinsTable(bool compact, QWidget *parent) : RowClickTable(parent), m
                .headerAlignment = Qt::AlignRight});
 }
 
-void CoinsTable::addCoin(const RustCoin &coin) {
-    QString outpoint = toQString(coin.outpoint);
+void CoinsTable::addCoin(const backend::Coin &coin, quint64 timestamp) {
+    const QString &outpoint = coin.outpoint;
 
     auto *outpointLabel = new Label(shortenOutpoint(outpoint), LabelRole::Mono);
     outpointLabel->setProperty("tblmono", "secondary");
     outpointLabel->setToolTip(outpoint);
 
-    auto *label = labelCell(outpoint, toQString(coin.label));
+    auto *label = labelCell(outpoint, coin.label);
     addClickableRow(outpoint,
-                    {new Label(toQString(coin.account_type), LabelRole::Body),
-                     dateStamp(coin.timestamp, coin.height == 0, m_compact), outpointLabel, label,
-                     label->takeEditButton(), amountLabel(coin.value)});
+                    {new Label(coin.origin, LabelRole::Body),
+                     dateStamp(timestamp, !coin.height.has_value(), m_compact), outpointLabel,
+                     label, label->takeEditButton(), amountLabel(coin.amount)});
 }
 
 } // namespace catalog

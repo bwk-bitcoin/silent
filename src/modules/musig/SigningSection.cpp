@@ -1,5 +1,6 @@
 #include "SigningSection.h"
 #include "account/InterfaceEnums.h"
+#include "account/services/Conversions.h"
 
 #include "AppController.h"
 #include "account/views/Send.h"
@@ -10,12 +11,16 @@
 #include "catalog/feedback/MessageModal.h"
 #include "catalog/inputs/ComboBox.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/blockchain.h"
+#include "interfaces/backend/transaction.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "modules/musig/MusigAccountController.h"
 #include "modules/musig/MusigModule.h"
 #include "modules/musig/SignModal.h"
 #include "theme/Palette.h"
+#include "views/BackendErrors.h"
+#include "views/utils.h"
 
 #include <QComboBox>
 #include <QEvent>
@@ -39,7 +44,10 @@ auto toQString(const rust::String &value) -> QString {
 
 } // namespace
 
-SigningSection::SigningSection(MusigAccountController *controller) : m_controller(controller) {
+SigningSection::SigningSection(MusigAccountController *controller,
+                               const account::Services &services)
+    : m_controller(controller),
+      m_services(services) {
     init();
     doConnect();
     view();
@@ -54,7 +62,7 @@ auto SigningSection::coinsWidget() -> QWidget * {
     return m_leaf_widget;
 }
 
-void SigningSection::setTransaction(const std::optional<TransactionTemplate> &tx,
+void SigningSection::setTransaction(const std::optional<backend::TransactionTemplate> &tx,
                                     const QStringList &outpoints) {
     m_tx = tx;
     // The spend paths follow the coins spent; a running session keeps its own.
@@ -116,10 +124,12 @@ void SigningSection::doConnect() {
             &SigningSection::onSessionLoading, qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::prepareFailed, this,
             &SigningSection::onPrepareFailed, qontrol::UNIQUE);
-    connect(m_controller, &MusigAccountController::broadcastDone, this,
-            &SigningSection::onBroadcastDone, qontrol::UNIQUE);
-    connect(m_controller, &MusigAccountController::updateCoins, this,
-            &SigningSection::onCoinsUpdated, qontrol::UNIQUE);
+    connect(m_services.blockchain, &backend::IBlockchain::coinsChanged, this,
+            &SigningSection::onCoinsChanged, qontrol::UNIQUE);
+    connect(m_services.transaction, &backend::IService::error, this,
+            &SigningSection::onTransactionError, qontrol::UNIQUE);
+    connect(m_controller, &AccountBackend::endpointStateChanged, this,
+            &SigningSection::onEndpointStateChanged, qontrol::UNIQUE);
 }
 
 void SigningSection::view() {
@@ -238,7 +248,7 @@ void SigningSection::updateSignState() {
     }
     const auto *leaf = chosenLeaf();
     QString reason;
-    if (m_controller->getCoins().empty()) {
+    if (unspentOutpoints().isEmpty()) {
         reason = TR("musig-send-no-coins");
     } else if (!m_tx.has_value()) {
         reason = TR("send-invalid-transaction-template");
@@ -256,8 +266,10 @@ void SigningSection::updateSignState() {
 
 void SigningSection::openSignModal() {
     m_sent = false;
-    // Returns once the modal has closed; onBroadcastDone() sets m_sent meanwhile.
-    AppController::execModal(new SignModal(m_controller));
+    // Returns once the modal has closed; onSent() sets m_sent meanwhile.
+    auto *modal = new SignModal(m_controller, m_services.blockchain);
+    connect(modal, &SignModal::sent, this, &SigningSection::onSent, qontrol::UNIQUE);
+    AppController::execModal(modal);
     if (!m_sent) {
         return;
     }
@@ -265,6 +277,16 @@ void SigningSection::openSignModal() {
         TR("send-sent-title"), TR("send-sent-message"), catalog::MessageModal::Tone::Success));
     closeSession();
     emit sent();
+}
+
+auto SigningSection::unspentOutpoints() const -> QStringList {
+    QStringList outpoints;
+    for (const auto &coin : m_services.blockchain->coins()) {
+        if (!coin.spent) {
+            outpoints.append(coin.outpoint);
+        }
+    }
+    return outpoints;
 }
 
 void SigningSection::closeSession() {
@@ -279,12 +301,7 @@ void SigningSection::closeSession() {
 
 void SigningSection::onCoinsSelected(const QStringList &outpoints) {
     m_outpoints = outpoints;
-    auto inputs = outpoints;
-    if (inputs.isEmpty()) {
-        for (const auto &coin : m_controller->getCoins()) {
-            inputs.append(toQString(coin.outpoint));
-        }
-    }
+    auto inputs = outpoints.isEmpty() ? unspentOutpoints() : outpoints;
     // Keep the path the user picked when the new list still has it, spendable.
     const auto *chosen = chosenLeaf();
     bool hadChoice = chosen != nullptr;
@@ -318,9 +335,21 @@ void SigningSection::onCoinsSelected(const QStringList &outpoints) {
     onSpendLeafChosen(index);
 }
 
-void SigningSection::onCoinsUpdated([[maybe_unused]] CoinState state) {
+void SigningSection::onCoinsChanged() {
     // The spend path of a running session never changes.
     if (!m_session) {
+        onCoinsSelected(m_outpoints);
+    }
+}
+
+void SigningSection::onTransactionError(backend::RequestId request_id, const QString &message) {
+    if (request_id == 0) {
+        m_finalize_error = message;
+    }
+}
+
+void SigningSection::onEndpointStateChanged() {
+    if (!m_session && !m_leaves.is_ok) {
         onCoinsSelected(m_outpoints);
     }
 }
@@ -348,8 +377,19 @@ void SigningSection::onSignClicked() {
     if (!m_tx.has_value() || leaf == nullptr) {
         return;
     }
+    // Its reason, on failure, comes as error() during the call.
+    m_finalize_error.clear();
+    auto psbt = m_services.transaction->finalize(m_tx.value());
+    if (!psbt.has_value()) {
+        auto summary = operationFailedSummary();
+        onPrepareFailed(m_finalize_error.isEmpty()
+                            ? summary
+                            : summary + QStringLiteral("\n\n") +
+                                  formatBackendErrorDetails(m_finalize_error));
+        return;
+    }
     // Starts the session: onPrepared() opens the Sign modal.
-    m_controller->prepareTransaction(m_tx.value(), *leaf);
+    m_controller->adoptTransaction(m_tx.value(), *leaf, *psbt);
 }
 
 void SigningSection::onPrepared([[maybe_unused]] const QString &psbt_v2_hex,
@@ -375,9 +415,9 @@ void SigningSection::onSessionLoading() {
     updateSignState();
 }
 
-void SigningSection::onBroadcastDone(const TxResult &result) {
-    // The Sign modal shows a failure itself.
-    m_sent = result.is_ok;
+// The Sign modal shows a failure itself.
+void SigningSection::onSent() {
+    m_sent = true;
 }
 
 void SigningSection::onCancelClicked() {
@@ -393,7 +433,7 @@ void SigningSection::onSessionCleared() {
 void SigningSection::onSavedPsbtRestored(const SavedPsbtEntry &entry) {
     m_session = true;
     m_loading = false;
-    m_tx = entry.frozen_template;
+    m_tx = account::services::fromTemplate(entry.frozen_template);
     m_leaves.is_ok = true;
     m_leaves.leaves.clear();
     m_leaves.leaves.push_back(entry.record.spend);
@@ -409,7 +449,11 @@ void SigningSection::onSavedPsbtRestored(const SavedPsbtEntry &entry) {
     auto *send =
         qobject_cast<account::view::Send *>(m_controller->screen("send").value_or(nullptr));
     if (send != nullptr) {
-        send->restoreSavedPsbt(entry);
+        QList<backend::Coin> inputs;
+        for (const auto &input : entry.inputs) {
+            inputs.append({.outpoint = toQString(input.outpoint), .amount = input.value});
+        }
+        send->restoreTransaction(*m_tx, inputs, toQString(entry.warning));
     }
     emit lockedChanged(true);
     updateSignState();

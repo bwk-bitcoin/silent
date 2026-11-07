@@ -210,6 +210,23 @@ fn multikey_crafting_selects_nothing_and_adoption_registers_change_once() {
     let tx = selected.transaction;
     assert!(account.craft_transaction(tx.clone()).complete, "craft");
 
+    let mut by_rate = tx.clone();
+    by_rate.fee = 0;
+    by_rate.fee_rate = 2.0;
+    let simulated = account.simulate_transaction(by_rate.clone());
+    let crafted = account.craft_transaction(by_rate);
+    assert!(
+        crafted.complete && simulated.is_valid,
+        "fee rate craft: {}",
+        crafted.error
+    );
+    assert!(
+        crafted.transaction.fee > 0 && crafted.transaction.fee == simulated.fee,
+        "craft states the fee its rate pays: {} for {}",
+        crafted.transaction.fee,
+        simulated.fee
+    );
+
     let mut max = tx.clone();
     max.outputs[0].max = true;
     max.outputs[0].amount = 0;
@@ -233,6 +250,60 @@ fn multikey_crafting_selects_nothing_and_adoption_registers_change_once() {
     let leaves = account.spend_leaves(vec![outpoint]);
     assert!(leaves.is_ok, "spend leaves: {}", leaves.error);
     let leaf = leaves.leaves[0].clone();
+    let mut other = tx.clone();
+    other.outputs[0].amount = SENT - 1;
+    let mismatched = finalized(&account, &other);
+    let refused = account.adopt_transaction(tx.clone(), leaf.clone(), &mismatched);
+    assert!(
+        !refused.is_ok() && refused.get_psbt_error().contains("does not list"),
+        "a PSBT paying other amounts than its template is refused: {}",
+        refused.get_psbt_error()
+    );
+    let mut more = tx.clone();
+    more.outputs.push(more.outputs[0].clone());
+    let refused = account.adopt_transaction(more, leaf.clone(), &first);
+    assert!(
+        !refused.is_ok() && refused.get_psbt_error().contains("every recipient"),
+        "a PSBT missing a recipient of its template is refused: {}",
+        refused.get_psbt_error()
+    );
+    let mut stripped = PsbtV2::deserialize(&first)
+        .expect("PSBTv2")
+        .into_bitcoin_psbt()
+        .expect("bitcoin PSBT");
+    let change_at = stripped
+        .unsigned_tx
+        .output
+        .iter()
+        .position(|txout| txout.value == Amount::from_sat(CHANGE))
+        .expect("change output");
+    assert!(
+        stripped.outputs[change_at].tap_internal_key.is_some()
+            && !stripped.outputs[change_at].tap_key_origins.is_empty(),
+        "finalize writes the change derivation"
+    );
+    stripped.outputs[change_at].tap_key_origins.clear();
+    let stripped = PsbtV2::from_bitcoin_psbt(stripped)
+        .and_then(|v2| v2.serialize())
+        .expect("PSBTv2 bytes");
+    let refused = account.adopt_transaction(tx.clone(), leaf.clone(), &stripped);
+    assert!(
+        !refused.is_ok()
+            && refused
+                .get_psbt_error()
+                .contains("derivation of change index"),
+        "change without its derivation fields is refused: {}",
+        refused.get_psbt_error()
+    );
+    assert!(
+        account.active_attempt().record_id.is_empty(),
+        "a refused adoption saves nothing"
+    );
+    assert_eq!(
+        change_script(&finalized(&account, &tx)),
+        change,
+        "a refused adoption registers no change"
+    );
     let adopted = account.adopt_transaction(tx.clone(), leaf.clone(), &first);
     assert!(adopted.is_ok(), "adopt: {}", adopted.get_psbt_error());
     let record = account.active_attempt().record_id;

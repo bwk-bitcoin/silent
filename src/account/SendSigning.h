@@ -1,9 +1,10 @@
 #pragma once
 
+#include "interfaces/backend/types.h"
+
 #include <QStringList>
 #include <QWidget>
 #include <optional>
-#include <silent.h>
 
 namespace account {
 
@@ -22,10 +23,10 @@ public:
     [[nodiscard]] virtual auto actions() -> QWidget * = 0;
     // What goes under Send's coins, part of picking what to spend; nullptr for none.
     [[nodiscard]] virtual auto coinsWidget() -> QWidget * = 0;
-    // The transaction the payments, fee and coins form now, nullopt while they form
-    // none. `outpoints` are the coins it spends: the ones picked by hand, or the ones
-    // the auto selection took.
-    virtual void setTransaction(const std::optional<TransactionTemplate> &tx,
+    // The transaction the payments, fee and coins form now, crafted (its inputs, MAX
+    // amount and fee resolved), nullopt while they form none. `outpoints` are the coins
+    // picked by hand, or the ones the auto selection took.
+    virtual void setTransaction(const std::optional<backend::TransactionTemplate> &tx,
                                 const QStringList &outpoints) = 0;
     // Whether Send can show a fee estimate yet.
     [[nodiscard]] virtual auto estimatesFee() const -> bool = 0;

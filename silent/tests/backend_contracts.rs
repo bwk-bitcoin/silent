@@ -3,8 +3,6 @@
 mod common;
 
 use std::{
-    io::{BufRead, BufReader, Write},
-    net::TcpListener,
     str::FromStr,
     thread,
     time::{Duration, Instant},
@@ -172,7 +170,7 @@ fn builder_previews_and_active_attempt_transitions_keep_unsaved_progress() {
 
     let leaves = account.spend_leaves(vec![outpoint]);
     assert!(leaves.is_ok, "spend leaves: {}", leaves.error);
-    let prepared = account.prepare_transaction(template.clone(), leaves.leaves[0].clone());
+    let prepared = common::musig_prepared(&account, template.clone(), leaves.leaves[0].clone());
     assert!(prepared.is_ok(), "prepare: {}", prepared.get_psbt_error());
     let snapshot = account.active_attempt();
     assert!(snapshot.is_ok, "active attempt initialized");
@@ -294,7 +292,7 @@ fn builder_previews_and_active_attempt_transitions_keep_unsaved_progress() {
 
     let mut reset_template = template.clone();
     reset_template.outputs[0].amount = 41_000;
-    let prepared = account.prepare_transaction(reset_template, leaves.leaves[0].clone());
+    let prepared = common::musig_prepared(&account, reset_template, leaves.leaves[0].clone());
     assert!(
         prepared.is_ok(),
         "prepare reset attempt: {}",
@@ -336,7 +334,7 @@ fn builder_previews_and_active_attempt_transitions_keep_unsaved_progress() {
     );
 
     // A single-key leaf uses actual Schnorr signatures, not modal-local history.
-    let prepared = account.prepare_transaction(template, leaves.leaves[1].clone());
+    let prepared = common::musig_prepared(&account, template, leaves.leaves[1].clone());
     assert!(
         prepared.is_ok(),
         "prepare ordinary leaf: {}",
@@ -408,7 +406,7 @@ fn builder_previews_and_active_attempt_transitions_keep_unsaved_progress() {
         "finalized restoration snapshot"
     );
     let receiver = account.take_receiver();
-    let mut change = silent::musig_endpoint_change(account, String::new(), true, false, false);
+    let mut change = silent::musig_endpoint_change(account, false);
     change.prepare_endpoint();
     assert_eq!(
         change.endpoint_phase(),
@@ -634,7 +632,8 @@ fn real_store_details_labels_selected_path_signatures_and_reopen() {
         "only the two primary signers"
     );
     let recipient = account.new_addr();
-    let prepared = account.prepare_transaction(
+    let prepared = common::musig_prepared(
+        &account,
         TransactionTemplate {
             outputs: vec![Output {
                 address: recipient,
@@ -825,7 +824,8 @@ fn real_store_details_labels_selected_path_signatures_and_reopen() {
     );
 
     let recovery_address = account.new_addr();
-    let recovery = account.prepare_transaction(
+    let recovery = common::musig_prepared(
+        &account,
         TransactionTemplate {
             outputs: vec![Output {
                 address: recovery_address,
@@ -889,115 +889,6 @@ fn real_store_details_labels_selected_path_signatures_and_reopen() {
             .update_tx_label(funding.compute_txid().to_string(), String::new())
             .is_ok,
         "empty label removes the history label"
-    );
-    drop(account);
-    common::cleanup_test_account(&name);
-}
-
-#[test]
-fn successful_test_saves_then_sp_reopens_offline_without_another_connection() {
-    let name = test_account_name();
-    let config = new_config(
-        name.clone(),
-        Network::Regtest,
-        descriptor_from_mnemonic(TEST_MNEMONIC, Network::Regtest),
-        "http://127.0.0.1:1".into(),
-        String::new(),
-        0,
-        "sp".into(),
-    );
-    assert!(config.save().is_empty(), "save isolated SP config");
-    let mut account = new_account(name.clone());
-    assert!(account.is_ok(), "real SP account: {}", account.get_error());
-    let listener = TcpListener::bind("127.0.0.1:0").expect("local Electrum test server");
-    let endpoint = listener.local_addr().expect("server address").to_string();
-    let server_listener = listener.try_clone().expect("listener clone");
-    let server = thread::spawn(move || {
-        let (mut stream, _) = server_listener.accept().expect("test client connects");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .expect("read timeout");
-        let mut request = String::new();
-        BufReader::new(stream.try_clone().expect("socket clone"))
-            .read_line(&mut request)
-            .expect("version handshake");
-        let request: serde_json::Value = serde_json::from_str(&request).expect("JSON handshake");
-        assert_eq!(
-            request["method"], "server.version",
-            "real test uses version handshake"
-        );
-        writeln!(stream, "{}", serde_json::json!({"jsonrpc":"2.0", "id":request["id"], "result":["test-electrum", "1.4"]})).expect("handshake response");
-    });
-    let receiver = account.take_receiver();
-    let mut change = silent::sp_endpoint_change(
-        account,
-        BackendServer::Electrum,
-        format!("tcp://{endpoint}"),
-        false,
-        true,
-        false,
-    );
-    change.prepare_endpoint();
-    let result = change.endpoint_result();
-    server.join().expect("test server completed");
-    assert!(
-        !result.is_ok && result.saved && change.endpoint_phase() == silent::EndpointPhase::Draining,
-        "passing test saves but waits for receiver drain before completion: {}",
-        result.error
-    );
-    let saved = config_from_file(name.clone());
-    assert_eq!(
-        saved.get_electrum_url(),
-        endpoint,
-        "resolved transport saved"
-    );
-    assert!(
-        !saved.get_verify_certificate(),
-        "complete certificate policy saved"
-    );
-    while receiver.recv().is_some() {}
-    change.finish_endpoint_after_drain();
-    let reopened = change.endpoint_result();
-    assert!(reopened.is_ok, "SP offline reopen: {}", reopened.error);
-    assert!(
-        reopened.saved && !reopened.connection_pending,
-        "save outcome survives offline reopen without claiming a pending connection"
-    );
-    let account = silent::take_sp_endpoint_account(change);
-    assert!(
-        !account.electrum_running(),
-        "offline SP reopen has no running Electrum connection"
-    );
-    listener
-        .set_nonblocking(true)
-        .expect("nonblocking pending connection check");
-    assert!(
-        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
-        "save/reopen must not connect again"
-    );
-    let refused = test_and_save_endpoint(
-        name.clone(),
-        BackendServer::Electrum,
-        "wss://invalid:1".into(),
-        true,
-    );
-    assert!(
-        !refused.is_ok && !refused.saved,
-        "failed test does not save"
-    );
-    assert_eq!(
-        config_from_file(name.clone()).get_electrum_url(),
-        endpoint,
-        "failed test preserves saved endpoint"
-    );
-    assert!(
-        account
-            .update_coin_label(
-                format!("{}:0", Txid::from_byte_array([4; 32])),
-                "External label".into()
-            )
-            .is_ok,
-        "arbitrary real outpoint labels are accepted"
     );
     drop(account);
     common::cleanup_test_account(&name);

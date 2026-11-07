@@ -1,10 +1,16 @@
 #include "MockPlugin.h"
 #include "PriceProbe.h"
+#include "ViewServices.h"
 #include "account_navigation_smoke.h"
 
 #include "AppController.h"
 #include "MainWindow.h"
+#include "account/AccountModule.h"
 #include "account/ElectrumReconnect.h"
+#include "account/Extensions.h"
+#include "account/Services.h"
+#include "account/services/Conversions.h"
+#include "account/services/ServiceAdapters.h"
 #include "catalog/Button.h"
 #include "catalog/SelectRow.h"
 #include "catalog/StatusBarItem.h"
@@ -17,12 +23,20 @@
 #include "host/PluginRegistry.h"
 #include "i18n/Tr.h"
 #include "interfaces/account.h"
+#include "interfaces/backend/account.h"
+#include "interfaces/backend/blockchain.h"
+#include "interfaces/backend/labels.h"
+#include "interfaces/backend/provider.h"
+#include "interfaces/backend/settings.h"
+#include "interfaces/backend/transaction.h"
+#include "interfaces/backend/types.h"
 #include "modules/keys/KeysModule.h"
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigPlugin.h"
 #include "modules/musig/MusigStatusBar.h"
 #include "modules/sp/AccountWidget.h"
 #include "modules/sp/SpPlugin.h"
+#include "views/BackendErrors.h"
 #include "views/MenuTab.h"
 #include "views/modals/ConfirmDelete.h"
 #include "views/utils.h"
@@ -629,7 +643,8 @@ void signerPlanPresentation(const SoftwareKey &key) {
     MusigAccountController controller(QStringLiteral("boundary-policy"), nullptr);
     waitFor([&controller] { return !controller.accountLoading(); }, "signer account load finishes");
     controller.m_spend_signers = {key.fingerprint};
-    musig::SignModal view(&controller);
+    ViewServices services;
+    musig::SignModal view(&controller, &services.blockchain);
     view.m_plan = std::make_shared<SigningPlan>();
     view.m_plan->is_ok = true;
     view.m_plan_ready = true;
@@ -831,138 +846,58 @@ void endpointWorkerPresentation() {
             "endpoint fixture shutdown drains its new receiver");
 }
 
-struct EndpointRequest {
-    uint64_t id = 0;
-    Endpoint endpoint = Endpoint::Electrum;
-    QString url;
-    bool verify = true;
-};
+const QString BLINDBIT = QStringLiteral("blindbit");
+const QString ELECTRUM = QStringLiteral("electrum");
+const QString SAVED_ELECTRUM = QStringLiteral("ssl://localhost:50002");
 
-class EndpointPresentationBackend final : public AccountBackend {
-public:
-    auto getCoins() -> rust::Vec<RustCoin> override {
-        return {};
-    }
+// The servers of an SP account as its provider publishes them: BlindBit unsaved, Electrum
+// saved on SSL, both connected, no endpoint operation running.
+// The rows the built-in providers present: BlindBit with its capabilities, Electrum with
+// its transport toggles.
+void builtinPresentation(ViewServices &services) {
+    services.settings.values.insert(account::extension::ENDPOINT_PRESENTATION,
+                                    account::services::endpointPresentation());
+}
 
-    auto getPaymentHistory() -> rust::Vec<RustTx> override {
-        return {};
-    }
+void presentEndpoints(ViewServices &services) {
+    builtinPresentation(services);
+    services.settings.model.settings.endpoints = {
+        {.id = BLINDBIT, .name = QStringLiteral("BlindBit")},
+        {.id = ELECTRUM, .name = QStringLiteral("Electrum"), .url = SAVED_ELECTRUM}};
+    services.blockchain.model.state.connections = {
+        {.id = BLINDBIT, .name = QStringLiteral("BlindBit"), .connected = true},
+        {.id = ELECTRUM, .name = QStringLiteral("Electrum"), .connected = true}};
+    services.settings.setEndpointsBusy(false);
+}
 
-    auto network() -> Network override {
-        return Network::Regtest;
-    }
+auto connected(const ViewServices &services, const QString &id) -> bool {
+    return std::ranges::any_of(services.blockchain.model.state.connections,
+                               [&id](const backend::Connection &connection) {
+                                   return connection.id == id && connection.connected;
+                               });
+}
 
-    auto module() -> IModule * override {
-        return nullptr;
-    }
-
-    auto addressKinds() -> QList<AddressKind> override {
-        return {};
-    }
-
-    auto newAddress([[maybe_unused]] AddressKind kind) -> QString override {
-        return {};
-    }
-
-    auto addressVerifyInfo([[maybe_unused]] const QString &address) -> AddressVerifyInfo override {
-        return {};
-    }
-
-    auto endpoints() -> QList<Endpoint> override {
-        return {Endpoint::Blindbit, Endpoint::Electrum};
-    }
-
-    auto endpointUrl(Endpoint endpoint) -> QString override {
-        return endpoint == Endpoint::Electrum ? QStringLiteral("ssl://localhost:50002") : QString();
-    }
-
-    [[nodiscard]] auto verifiesCertificate() const -> bool override {
-        return true;
-    }
-
-    [[nodiscard]] auto isEndpointRunning([[maybe_unused]] Endpoint endpoint) const
-        -> bool override {
-        return running;
-    }
-
-    auto settingsExtras() -> QWidget * override {
-        return nullptr;
-    }
-
-    auto simulateTx([[maybe_unused]] TransactionTemplate tx) -> TransactionSimulation override {
-        return {};
-    }
-
-    auto sendSigning() -> account::SendSigning * override {
-        return nullptr;
-    }
-
-    void startWorker(QThread *worker) override {
-        delete worker;
-    }
-
-    void requestTxDetails([[maybe_unused]] uint64_t req_id,
-                          [[maybe_unused]] const QString &txid) override {
-    }
-
-    void editTxLabel([[maybe_unused]] uint64_t req_id, [[maybe_unused]] const QString &txid,
-                     [[maybe_unused]] const QString &label) override {
-    }
-
-    void editOutpointLabel([[maybe_unused]] uint64_t req_id,
-                           [[maybe_unused]] const QString &outpoint,
-                           [[maybe_unused]] const QString &label) override {
-    }
-
-    void requestEndpointTip([[maybe_unused]] uint64_t req_id,
-                            [[maybe_unused]] Endpoint endpoint) override {
-    }
-
-    void testAndSaveEndpoint([[maybe_unused]] uint64_t req_id, [[maybe_unused]] Endpoint endpoint,
-                             [[maybe_unused]] const QString &url,
-                             [[maybe_unused]] bool verify_certificate) override {
-        qFatal("presentation fixture must not test or save an endpoint");
-    }
-
-    void setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) override {
-        requested = connected;
-        beginEndpointOperation(req_id, endpoint,
-                               connected ? EndpointOperation::Connecting
-                                         : EndpointOperation::Disconnecting);
-    }
-
-    void updateCoinLabel([[maybe_unused]] const QString &outpoint,
-                         [[maybe_unused]] const QString &label) override {
-    }
-
-    void complete(bool success) {
-        if (success) {
-            running = requested;
+// The Electrum server the provider holds saved.
+auto savedElectrum(const ViewServices &services) -> backend::Endpoint {
+    for (const auto &endpoint : services.settings.model.settings.endpoints) {
+        if (endpoint.id == ELECTRUM) {
+            return endpoint;
         }
-        EndpointResult result{};
-        result.is_ok = success;
-        result.kind = success ? BackendErrorKind::None : BackendErrorKind::Other;
-        result.error = success ? rust::String() : rust::String("disconnect failed");
-        finishEndpointOperation(result);
     }
-
-    void externalState(bool connected) {
-        running = connected;
-        emit endpointStateChanged(Endpoint::Electrum);
-    }
-
-    bool running = true;
-    bool requested = true;
-};
+    qFatal("Rust boundary smoke: no saved Electrum endpoint");
+}
 
 void connectedEndpointPolicy() {
-    EndpointPresentationBackend backend;
-    account::view::Settings settings(&backend, true);
-    auto *row = settings.row(Endpoint::Electrum);
+    ViewServices services;
+    presentEndpoints(services);
+    auto &disconnects = services.blockchain.script(QStringLiteral("setConnected"));
+    disconnects.answer = Answer::Later;
+    account::view::Settings settings(services.services(), nullptr, true);
+    auto *row = settings.row(ELECTRUM);
     auto *input = row->field->input();
     auto saved = input->text();
-    require(input->isEnabled() && input->isReadOnly() && !row->ssl->isEnabled() &&
-                row->verify->isEnabled() && row->verify->isChecked(),
+    require(saved == SAVED_ELECTRUM && input->isEnabled() && input->isReadOnly() &&
+                !row->ssl->isEnabled() && row->verify->isEnabled() && row->verify->isChecked(),
             "connected Multikey address is read-only, SSL is locked, certificate choice unchanged");
     QApplication::clipboard()->clear();
     input->selectAll();
@@ -976,96 +911,199 @@ void connectedEndpointPolicy() {
 
     row->disconnect->click();
     auto requestId = row->action_req;
-    require(requestId != 0 && !backend.requested && backend.running &&
-                backend.endpointOperationsBusy() && !input->isEnabled() && input->isReadOnly() &&
-                !row->ssl->isEnabled(),
+    auto asked = services.blockchain.requestsOf(QStringLiteral("setConnected"));
+    require(requestId != 0 &&
+                services.blockchain.pending() == QList<backend::RequestId>{requestId} &&
+                asked.size() == 1 && asked.last().operation == ELECTRUM &&
+                !asked.last().payload.toBool() && connected(services, ELECTRUM) &&
+                !input->isEnabled() && input->isReadOnly() && !row->ssl->isEnabled(),
             "a delayed disconnect request does not unlock the still-connected address");
-    emit backend.endpointStateChanged(Endpoint::Electrum);
+    emit services.blockchain.stateChanged();
     require(row->action_req == requestId && input->isReadOnly(),
             "an intermediate notification cannot complete the pending disconnect");
-    backend.complete(false);
+    disconnects.error = QStringLiteral("disconnect failed");
+    services.blockchain.answer(requestId);
     require(
-        row->action_req == 0 && !backend.endpointOperationsBusy() && backend.running &&
-            input->isEnabled() && input->isReadOnly() && !row->ssl->isEnabled() &&
-            !row->field->note()->isHidden() && input->text() == saved,
+        row->action_req == 0 && connected(services, ELECTRUM) && input->isEnabled() &&
+            input->isReadOnly() && !row->ssl->isEnabled() && !row->field->note()->isHidden() &&
+            hasText(*row->field->note(), QStringLiteral("disconnect failed")) &&
+            input->text() == saved,
         "failed disconnect restores availability but keeps the actual connected address locked");
+    disconnects.error.clear();
     row->disconnect->click();
-    require(row->action_req != 0 && input->isReadOnly(),
+    requestId = row->action_req;
+    require(requestId != 0 && input->isReadOnly(),
             "disconnect retry remains locked until completion");
-    backend.complete(true);
-    require(!backend.running && row->action_req == 0 && input->isEnabled() &&
+    services.blockchain.answer(requestId);
+    require(!connected(services, ELECTRUM) && row->action_req == 0 && input->isEnabled() &&
                 !input->isReadOnly() && row->ssl->isEnabled() && input->text() == saved,
             "confirmed disconnect unlocks the unchanged address and SSL control");
 
     auto draft = QStringLiteral("ssl://draft:50002");
     editEndpoint(input, draft);
     auto revision = row->draft_revision;
-    backend.externalState(true);
+    services.blockchain.setConnection(ELECTRUM, true);
     require(input->isReadOnly() && !row->ssl->isEnabled() && input->text() == draft &&
                 row->draft_revision == revision,
             "external connection locks without clearing or reloading the draft");
     {
-        account::view::Settings reopened(&backend, true);
-        require(reopened.row(Endpoint::Electrum)->field->input()->isReadOnly() &&
-                    !reopened.row(Endpoint::Electrum)->ssl->isEnabled(),
+        account::view::Settings reopened(services.services(), nullptr, true);
+        require(reopened.row(ELECTRUM)->field->input()->isReadOnly() &&
+                    !reopened.row(ELECTRUM)->ssl->isEnabled(),
                 "reopened Multikey Settings starts locked for a confirmed connection");
     }
-    backend.externalState(false);
+    services.blockchain.setConnection(ELECTRUM, false);
     require(!input->isReadOnly() && row->ssl->isEnabled() && input->text() == draft &&
                 row->draft_revision == revision,
             "external disconnect unlocks the preserved draft");
     {
-        account::view::Settings reopened(&backend, true);
-        require(!reopened.row(Endpoint::Electrum)->field->input()->isReadOnly() &&
-                    reopened.row(Endpoint::Electrum)->ssl->isEnabled(),
+        account::view::Settings reopened(services.services(), nullptr, true);
+        require(!reopened.row(ELECTRUM)->field->input()->isReadOnly() &&
+                    reopened.row(ELECTRUM)->ssl->isEnabled(),
                 "reopened disconnected Multikey Settings starts editable");
     }
     row->ssl->click();
     require(input->text() == QStringLiteral("tcp://draft:50002"),
             "SSL can rewrite the address after confirmed disconnect");
-    backend.setEndpointConnected(66001, Endpoint::Electrum, true);
-    require(!input->isEnabled() && !row->ssl->isEnabled() && !backend.running,
+    // Another initiator connects: the provider reports its endpoint operation.
+    services.settings.setEndpointsBusy(true);
+    require(!input->isEnabled() && !row->ssl->isEnabled() && !connected(services, ELECTRUM),
             "pending connect retains existing busy gating without claiming a connection");
-    backend.complete(true);
+    services.settings.setEndpointsBusy(false);
+    services.blockchain.setConnection(ELECTRUM, true);
     require(input->isEnabled() && input->isReadOnly() && !row->ssl->isEnabled(),
             "confirmed connect locks the address through the existing state signal");
+    require(services.blockchain.count(QStringLiteral("setConnected")) == 2 &&
+                services.settings.count(QStringLiteral("testEndpoint")) == 0 &&
+                services.settings.count(QStringLiteral("save")) == 0,
+            "the presentation never tests or saves an endpoint");
 }
 
 void endpointPolicyScope() {
-    EndpointPresentationBackend backend;
-    account::view::Settings sp(&backend);
-    for (auto endpoint : backend.endpoints()) {
-        auto *row = sp.row(endpoint);
+    ViewServices services;
+    presentEndpoints(services);
+    account::view::Settings sp(services.services(), nullptr);
+    for (const auto &id : {BLINDBIT, ELECTRUM}) {
+        auto *row = sp.row(id);
         require(row->field->input()->isEnabled() && !row->field->input()->isReadOnly(),
                 "default Settings policy leaves both SP endpoint addresses editable while running");
     }
-    auto *electrum = sp.row(Endpoint::Electrum);
+    auto *electrum = sp.row(ELECTRUM);
     require(electrum->ssl->isEnabled(), "default Settings policy leaves connected SP SSL editable");
     editEndpoint(electrum->field->input(), QStringLiteral("ssl://sp-draft:50002"));
     electrum->ssl->click();
     require(electrum->field->input()->text() == QStringLiteral("tcp://sp-draft:50002"),
             "connected SP keeps address and transport editing");
-    account::view::Settings locked(&backend, true);
-    require(!locked.row(Endpoint::Blindbit)->field->input()->isReadOnly(),
+    account::view::Settings locked(services.services(), nullptr, true);
+    require(!locked.row(BLINDBIT)->field->input()->isReadOnly(),
             "Electrum presentation policy never locks BlindBit");
+}
+
+// The services the account module hands the panels of `controller`, children of `owner`.
+auto controllerServices(AccountBackend &controller, QObject *owner) -> account::Services {
+    auto *context = controller.services();
+    require(context != nullptr, "the real controller serves its account");
+    auto adapter = [context, owner](backend::ServiceKind kind) {
+        return account::serviceAdapter(kind, context, owner);
+    };
+    return {.account =
+                qobject_cast<backend::IAccountBackend *>(adapter(backend::ServiceKind::Account)),
+            .blockchain =
+                qobject_cast<backend::IBlockchain *>(adapter(backend::ServiceKind::Blockchain)),
+            .transaction =
+                qobject_cast<backend::ITransaction *>(adapter(backend::ServiceKind::Transaction)),
+            .labels = qobject_cast<backend::ILabels *>(adapter(backend::ServiceKind::Labels)),
+            .settings =
+                qobject_cast<backend::IBackendSettings *>(adapter(backend::ServiceKind::Settings))};
+}
+
+// The account module supplies the panels' services of the accounts it watches only.
+void watch(AccountBackend &controller, const QString &name) {
+    auto *module = qobject_cast<account::AccountModule *>(controller.module());
+    require(module != nullptr, "the controller belongs to an account module");
+    module->watchAccount(name, &controller);
+}
+
+// Every answer of the settings and blockchain services.
+class ServiceAnswers final : public QObject {
+    Q_OBJECT
+
+public:
+    explicit ServiceAnswers(const account::Services &services) {
+        connect(services.settings, &backend::IBackendSettings::endpointTested, this,
+                &ServiceAnswers::onDone, qontrol::UNIQUE);
+        connect(services.settings, &backend::IBackendSettings::saved, this, &ServiceAnswers::onDone,
+                qontrol::UNIQUE);
+        connect(services.settings, &backend::IService::error, this, &ServiceAnswers::onError,
+                qontrol::UNIQUE);
+        connect(services.blockchain, &backend::IBlockchain::completed, this,
+                &ServiceAnswers::onDone, qontrol::UNIQUE);
+        connect(services.blockchain, &backend::IService::error, this, &ServiceAnswers::onError,
+                qontrol::UNIQUE);
+    }
+
+    [[nodiscard]] auto answered(backend::RequestId request_id) const -> bool {
+        return done.contains(request_id) || failed.contains(request_id);
+    }
+
+    QList<backend::RequestId> done;
+    QList<backend::RequestId> failed;
+    QStringList errors;
+
+public slots:
+
+    void onDone(backend::RequestId request_id) {
+        done.append(request_id);
+    }
+
+    void onError(backend::RequestId request_id, const QString &message) {
+        failed.append(request_id);
+        errors.append(message);
+    }
+};
+
+// Tests `endpoint` through the settings service, saves it alone (`request_id` + 1), then
+// leaves it disconnected (`request_id` + 2), as a Settings Test does. False when one of them
+// is refused.
+auto testAndSave(const account::Services &services, const ServiceAnswers &answers,
+                 backend::RequestId request_id, const backend::Endpoint &endpoint) -> bool {
+    services.settings->testEndpoint(request_id, endpoint);
+    waitFor([&answers, request_id] { return answers.answered(request_id); },
+            "the service Test answers");
+    if (!answers.done.contains(request_id)) {
+        return false;
+    }
+    auto settings = services.settings->settings();
+    settings.endpoints = {endpoint};
+    services.settings->save(request_id + 1, settings);
+    waitFor([&answers, request_id] { return answers.answered(request_id + 1); },
+            "the service save answers");
+    if (!answers.done.contains(request_id + 1)) {
+        return false;
+    }
+    services.blockchain->setConnected(request_id + 2, endpoint.id, false);
+    waitFor([&answers, request_id] { return answers.answered(request_id + 2); },
+            "the service disconnection answers");
+    return answers.done.contains(request_id + 2);
 }
 
 template <typename Controller>
 void controllerSettingsPolicy(const QString &name, bool lock_connected_electrum) {
     Controller controller(name, nullptr);
+    watch(controller, name);
     waitFor([&controller] { return !controller.accountLoading(); },
             "constructor policy fixture opens offline");
     controller.loadPanels();
     auto screen = controller.screen(QStringLiteral("settings"));
     require(screen.has_value(), "real controller constructs its Settings panel");
     auto *settings = qobject_cast<account::view::Settings *>(*screen);
-    require(settings != nullptr && settings->m_lock_connected_electrum == lock_connected_electrum,
+    require(settings != nullptr && settings->m_lock_connected == lock_connected_electrum,
             "only the Multikey controller opts into connected Electrum address locking");
     if constexpr (std::is_same_v<Controller, MusigAccountController>) {
         controller.m_electrum_state = MusigAccountController::ElectrumState::Connected;
         emit controller.endpointStateChanged(Endpoint::Electrum);
-        require(settings->row(Endpoint::Electrum)->field->input()->isReadOnly() &&
-                    !settings->row(Endpoint::Electrum)->ssl->isEnabled(),
+        require(settings->row(ELECTRUM)->field->input()->isReadOnly() &&
+                    !settings->row(ELECTRUM)->ssl->isEnabled(),
                 "real Multikey Settings locks when its controller confirms a connection");
         controller.setAccountDeletionPending(true);
         controller.m_endpoint_connect = false;
@@ -1084,8 +1122,8 @@ void controllerSettingsPolicy(const QString &name, bool lock_connected_electrum)
         controller.m_endpoint_connect = false;
         controller.setAccountDeletionPending(false);
         emit controller.endpointStateChanged(Endpoint::Electrum);
-        require(!settings->row(Endpoint::Electrum)->field->input()->isReadOnly() &&
-                    settings->row(Endpoint::Electrum)->ssl->isEnabled(),
+        require(!settings->row(ELECTRUM)->field->input()->isReadOnly() &&
+                    settings->row(ELECTRUM)->ssl->isEnabled(),
                 "real Multikey Settings unlocks when its controller confirms disconnection");
     }
     SignalSpy stopped;
@@ -1095,55 +1133,20 @@ void controllerSettingsPolicy(const QString &name, bool lock_connected_electrum)
     waitFor([&stopped] { return stopped.count() == 1; }, "constructor policy fixture drains");
 }
 
-// The real controller, with Test/save completed by the test instead of a live server.
-template <typename Controller> class ControlledEndpointTest final : public Controller {
-public:
-    explicit ControlledEndpointTest(const QString &account_name)
-        : Controller(account_name, nullptr),
-          name(account_name) {
+// Whether the Test `request_id` of `services` is pending for the Electrum `url`, `verify`.
+auto pendingTest(const ViewServices &services, backend::RequestId request_id, const QString &url,
+                 bool verify) -> bool {
+    auto tests = services.settings.requestsOf(QStringLiteral("testEndpoint"));
+    if (tests.isEmpty() || tests.last().id != request_id ||
+        services.settings.pending() != QList<backend::RequestId>{request_id}) {
+        return false;
     }
-
-    void testAndSaveEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
-                             bool verify_certificate) override {
-        this->beginEndpointOperation(req_id, endpoint, EndpointOperation::Testing);
-        request = EndpointRequest{
-            .id = req_id, .endpoint = endpoint, .url = url, .verify = verify_certificate};
-    }
-
-    [[nodiscard]] auto pending(uint64_t req_id, const QString &url, bool verify) const -> bool {
-        return request.has_value() && request->id == req_id &&
-               request->endpoint == Endpoint::Electrum && request->url == url &&
-               request->verify == verify && this->endpointOperationsBusy();
-    }
-
-    // Persists the requested tuple and finishes the operation as a passing Test.
-    void completeTest() {
-        require(request.has_value(), "a controlled Test is pending");
-        auto tested = *request;
-        request.reset();
-        auto config = ::config_from_file(rust::String(name.toStdString()));
-        config->set_electrum_url(rust::String(tested.url.toStdString()));
-        config->set_verify_certificate(tested.verify);
-        require(config->save().empty(), "controlled Test persists the tested endpoint");
-        rust::String url(tested.url.toStdString());
-        this->setSavedEndpoint(tested.endpoint, url, tested.verify);
-        EndpointResult result{};
-        result.kind = BackendErrorKind::None;
-        result.is_ok = true;
-        result.saved = true;
-        result.url = url;
-        result.verify_certificate = tested.verify;
-        this->finishEndpointOperation(result);
-    }
-
-    QString name;
-    std::optional<EndpointRequest> request;
-};
+    auto endpoint = tests.last().payload.value<backend::Endpoint>();
+    return endpoint.id == ELECTRUM && endpoint.url == url && endpoint.verifyCertificate == verify;
+}
 
 // `tester` saves `verify` for the SSL server `observer` holds as tested.
-template <typename Controller>
-void changeSavedVerify(ControlledEndpointTest<Controller> &controller,
-                       account::view::Settings::ServerRow *tester,
+void changeSavedVerify(ViewServices &services, account::view::Settings::ServerRow *tester,
                        account::view::Settings::ServerRow *observer, const QString &url,
                        bool verify) {
     require(observer->field->state() == catalog::EndpointRow::State::Ok &&
@@ -1157,22 +1160,25 @@ void changeSavedVerify(ControlledEndpointTest<Controller> &controller,
     auto revision = observer->draft_revision;
     tester->field->testButton()->click();
     auto requestId = tester->action_req;
-    require(requestId != 0 && controller.pending(requestId, url, verify) &&
+    require(requestId != 0 && pendingTest(services, requestId, url, verify) &&
                 tester->field->state() == catalog::EndpointRow::State::Testing &&
-                controller.verifiesCertificate() != verify,
+                savedElectrum(services).verifyCertificate != verify,
             "the Test requests the SSL URL with the new certificate choice");
     require(observer->field->state() == catalog::EndpointRow::State::Ok &&
                 observer->draft_revision == revision && observer->saved_verify != verify,
             "a pending Test leaves the observer's saved tuple and result alone");
-    controller.completeTest();
+    services.settings.answer(requestId);
     require(tester->action_req == 0 && tester->field->state() == catalog::EndpointRow::State::Ok &&
                 tester->saved_url == url && tester->saved_verify == verify,
             "the tester presents Ok for the saved tuple");
-    require(controller.endpointUrl(Endpoint::Electrum) == url &&
-                controller.verifiesCertificate() == verify &&
-                ::config_from_file(rust::String(controller.name.toStdString()))
-                        ->get_verify_certificate() == verify,
-            "the backend and the account config hold the new certificate choice");
+    auto saves = services.settings.requestsOf(QStringLiteral("save"));
+    auto saved = saves.last().payload.value<backend::Settings>();
+    require(saved.endpoints.size() == 1 && saved.endpoints.first().id == ELECTRUM &&
+                saved.endpoints.first().url == url &&
+                saved.endpoints.first().verifyCertificate == verify &&
+                savedElectrum(services).url == url &&
+                savedElectrum(services).verifyCertificate == verify,
+            "the tested server alone is saved, with the new certificate choice");
     require(observer->field->state() == catalog::EndpointRow::State::Untested &&
                 observer->draft_revision == revision + 1 && observer->saved_url == url &&
                 observer->saved_verify == verify && observer->field->input()->text() == url &&
@@ -1181,24 +1187,23 @@ void changeSavedVerify(ControlledEndpointTest<Controller> &controller,
             "the observer shows the saved certificate choice and its result is invalidated");
 }
 
-template <typename Controller> void savedEndpointObservers(const QString &name) {
-    ControlledEndpointTest<Controller> controller(name);
-    waitFor([&controller] { return !controller.accountLoading(); },
-            "controlled endpoint fixture opens offline");
-    AccountBackend *backend = &controller;
-    account::view::Settings first(backend);
-    account::view::Settings second(backend);
-    auto *row = first.row(Endpoint::Electrum);
-    auto *other = second.row(Endpoint::Electrum);
+// Two Settings views over one provider: what one saves, the other shows.
+void savedEndpointObservers() {
+    ViewServices services;
+    builtinPresentation(services);
+    services.settings.model.settings.endpoints = {
+        {.id = ELECTRUM, .name = QStringLiteral("Electrum")}};
+    services.blockchain.model.state.connections = {
+        {.id = ELECTRUM, .name = QStringLiteral("Electrum")}};
+    services.settings.setEndpointsBusy(false);
+    services.settings.script(QStringLiteral("testEndpoint")).answer = Answer::Later;
+    account::view::Settings first(services.services(), nullptr);
+    account::view::Settings second(services.services(), nullptr);
+    auto *row = first.row(ELECTRUM);
+    auto *other = second.row(ELECTRUM);
     require(row != nullptr && other != nullptr && !first.isVisible() && !second.isVisible() &&
-                backend->endpointUrl(Endpoint::Electrum).isEmpty(),
-            "two hidden Settings views observe one offline backend");
-    EndpointSpy replies;
-    SignalSpy stopped;
-    QObject::connect(backend, &AccountBackend::endpointRequestFinished, &replies,
-                     &EndpointSpy::onFinished, qontrol::UNIQUE);
-    QObject::connect(&controller, &Controller::stopped, &stopped, &SignalSpy::onSignal,
-                     qontrol::UNIQUE);
+                savedElectrum(services).url.isEmpty(),
+            "two hidden Settings views observe one offline provider");
 
     auto ssl = QStringLiteral("ssl://localhost:50002");
     editEndpoint(row->field->input(), ssl);
@@ -1206,24 +1211,28 @@ template <typename Controller> void savedEndpointObservers(const QString &name) 
             "an SSL draft checks the certificate by default");
     row->field->testButton()->click();
     auto firstId = row->action_req;
-    require(firstId != 0 && controller.pending(firstId, ssl, true) &&
-                backend->endpointUrl(Endpoint::Electrum).isEmpty(),
+    require(firstId != 0 && pendingTest(services, firstId, ssl, true) &&
+                savedElectrum(services).url.isEmpty(),
             "the first view's SSL Test is pending without saving");
-    controller.completeTest();
-    require(replies.ids.last() == firstId &&
-                row->field->state() == catalog::EndpointRow::State::Ok &&
+    services.settings.answer(firstId);
+    auto disconnects = services.blockchain.requestsOf(QStringLiteral("setConnected"));
+    require(row->field->state() == catalog::EndpointRow::State::Ok &&
                 other->field->state() == catalog::EndpointRow::State::Untested &&
                 other->field->input()->text() == ssl && other->verify->isChecked() &&
-                backend->verifiesCertificate(),
-            "the first view saves the SSL server with its certificate checked");
+                savedElectrum(services).verifyCertificate && disconnects.size() == 1 &&
+                disconnects.last().operation == ELECTRUM && !disconnects.last().payload.toBool(),
+            "the first view saves the SSL server with its certificate checked, then leaves it "
+            "disconnected");
 
-    changeSavedVerify(controller, other, row, ssl, false);
-    changeSavedVerify(controller, row, other, ssl, true);
+    changeSavedVerify(services, other, row, ssl, false);
+    changeSavedVerify(services, row, other, ssl, true);
 
     auto rowRevision = row->draft_revision;
     auto otherRevision = other->draft_revision;
-    emit backend->endpointStateChanged(Endpoint::Electrum);
-    emit backend->endpointStateChanged(Endpoint::Electrum);
+    emit services.settings.settingsChanged();
+    emit services.blockchain.stateChanged();
+    emit services.settings.settingsChanged();
+    emit services.blockchain.stateChanged();
     require(row->draft_revision == rowRevision && other->draft_revision == otherRevision &&
                 row->field->state() == catalog::EndpointRow::State::Ok &&
                 other->field->state() == catalog::EndpointRow::State::Untested &&
@@ -1237,9 +1246,9 @@ template <typename Controller> void savedEndpointObservers(const QString &name) 
             "a plaintext draft turns SSL off");
     other->field->testButton()->click();
     auto plainId = other->action_req;
-    require(plainId != 0 && controller.pending(plainId, plain, true),
+    require(plainId != 0 && pendingTest(services, plainId, plain, true),
             "a plaintext Test asks for the certificate check it cannot use");
-    controller.completeTest();
+    services.settings.answer(plainId);
     require(other->field->state() == catalog::EndpointRow::State::Ok &&
                 row->field->input()->text() == plain && !row->ssl->isChecked() &&
                 row->field->state() == catalog::EndpointRow::State::Untested &&
@@ -1247,30 +1256,21 @@ template <typename Controller> void savedEndpointObservers(const QString &name) 
             "a URL-only saved change invalidates the observer's earlier success");
     rowRevision = row->draft_revision;
     otherRevision = other->draft_revision;
-    uint64_t requestId = 65001;
     for (bool verify : {false, true}) {
-        backend->testAndSaveEndpoint(requestId, Endpoint::Electrum, plain, verify);
-        require(controller.pending(requestId, plain, verify),
-                "a backend Test of the raw choice is pending");
-        controller.completeTest();
-        require(replies.ids.last() == requestId && backend->verifiesCertificate() == verify &&
-                    backend->endpointUrl(Endpoint::Electrum) == plain,
-                "the backend saves the plaintext server with its raw certificate choice");
+        // Another initiator saves the raw certificate choice.
+        auto settings = services.settings.model.settings;
+        settings.endpoints.first().verifyCertificate = verify;
+        services.settings.setSettings(settings);
+        require(savedElectrum(services).verifyCertificate == verify &&
+                    savedElectrum(services).url == plain,
+                "the provider holds the plaintext server with its raw certificate choice");
         require(row->saved_verify && other->saved_verify && row->draft_revision == rowRevision &&
                     other->draft_revision == otherRevision &&
                     other->field->state() == catalog::EndpointRow::State::Ok &&
                     row->field->state() == catalog::EndpointRow::State::Untested &&
                     row->field->input()->text() == plain && other->field->input()->text() == plain,
                 "a raw certificate change on a plaintext server invalidates no view");
-        ++requestId;
     }
-
-    controller.stop();
-    waitFor([&stopped] { return stopped.count() == 1; }, "controlled endpoint fixture drains");
-    auto config = ::config_from_file(rust::String(name.toStdString()));
-    config->set_electrum_url(rust::String());
-    config->set_verify_certificate(true);
-    require(config->save().empty(), "controlled endpoint fixture is offline again");
 }
 
 #ifdef Q_OS_UNIX
@@ -1285,6 +1285,9 @@ void musigEndpointStatusPresentation() {
     require(controller.getAccount().has_value() && controller.getAccount().value()->is_ok(),
             "real MuSig status fixture opens");
     MusigStatusBar bar(&controller);
+    QObject adapters;
+    auto services = controllerServices(controller, &adapters);
+    ServiceAnswers answers(services);
     EndpointSpy replies;
     SignalSpy stopped;
     QObject::connect(&controller, &AccountBackend::endpointRequestFinished, &replies,
@@ -1293,11 +1296,13 @@ void musigEndpointStatusPresentation() {
                      qontrol::UNIQUE);
     {
         EndpointPeer peer;
-        controller.testAndSaveEndpoint(42001, Endpoint::Electrum, peer.url(), true);
-        waitFor([&replies] { return replies.ids.size() == 1; },
-                "real MuSig Test/save completes offline");
-        require(replies.results[0].is_ok && replies.results[0].saved &&
-                    !replies.results[0].connection_pending,
+        require(
+            testAndSave(services, answers, 42001,
+                        {.id = ELECTRUM, .name = QStringLiteral("Electrum"), .url = peer.url()}),
+            "real MuSig Test/save completes offline");
+        require(replies.ids.size() == 1 && replies.results[0].is_ok &&
+                    !replies.results[0].connection_pending &&
+                    controller.endpointUrl(Endpoint::Electrum) == peer.url().mid(6),
                 "Test/save is complete without a pending connection");
         require(controller.electrumState() == MusigAccountController::ElectrumState::Disconnected,
                 "backend reports intentional offline state after Test/save");
@@ -1316,7 +1321,7 @@ void musigEndpointStatusPresentation() {
             "pending start is not a confirmed live connection");
     waitFor([&replies] { return replies.ids.size() == 2; },
             "closed local peer reports the real start failure");
-    require(!replies.results[1].is_ok &&
+    require(replies.ids[1] == 42002 && !replies.results[1].is_ok &&
                 controller.electrumState() == MusigAccountController::ElectrumState::Disconnected,
             "failed start returns to offline backend state");
     require(hasText(bar, mapBackendErrorSummary(replies.results[1].kind)) &&
@@ -1325,6 +1330,40 @@ void musigEndpointStatusPresentation() {
                                       replies.results[1].error.size()) &&
                 !hasText(bar, TR("status-connecting")),
             "failed start displays its actual error rather than Connecting");
+    {
+        // A test or save the account could not reopen on is refused, and saves nothing.
+        auto saved = controller.endpointUrl(Endpoint::Electrum);
+        backend::Endpoint other{.id = ELECTRUM,
+                                .name = QStringLiteral("Electrum"),
+                                .url = QStringLiteral("tcp://127.0.0.1:2")};
+        auto settings = services.settings->settings();
+        settings.endpoints = {other};
+        controller.m_resetting = true;
+        services.settings->testEndpoint(42100, other);
+        services.settings->save(42101, settings);
+        controller.m_resetting = false;
+        require(answers.failed.contains(42100) && answers.failed.contains(42101) &&
+                    answers.errors.last().contains(QStringLiteral("signing is in progress")),
+                "a test and a save during signing are refused up front");
+        auto config = ::config_from_file("boundary-policy");
+        require(controller.endpointUrl(Endpoint::Electrum) == saved &&
+                    QString::fromUtf8(config->get_electrum_url().data(),
+                                      config->get_electrum_url().size()) == saved,
+                "the refusals saved nothing: the config and the account still agree");
+    }
+    {
+        // A settings test or save changes no connection; a reconnect it held back runs once it
+        // ends.
+        controller.setSettingsBusy(true);
+        require(controller.electrumState() == MusigAccountController::ElectrumState::Disconnected &&
+                    !hasText(bar, TR("status-connecting")),
+                "a settings operation is not presented as Connecting");
+        controller.m_reconnect_pending = true;
+        controller.setSettingsBusy(false);
+        require(controller.endpointOperation(Endpoint::Electrum) == EndpointOperation::Connecting,
+                "the reconnect held back by the settings operation runs after it");
+        waitFor([&replies] { return replies.ids.size() == 3; }, "the held reconnect answers");
+    }
     controller.stop();
     waitFor([&stopped] { return stopped.count() == 1; },
             "MuSig status fixture drains its receiver");
@@ -1335,11 +1374,14 @@ template <typename Controller, typename Bar> void endpointInteractions(const QSt
     waitFor([&controller] { return !controller.accountLoading(); },
             "offline opening precedes views");
     AccountBackend *backend = &controller;
-    account::view::Settings settings(backend);
-    account::view::Settings observer(backend);
+    QObject adapters;
+    auto services = controllerServices(controller, &adapters);
+    ServiceAnswers answers(services);
+    account::view::Settings settings(services, nullptr);
+    account::view::Settings observer(services, nullptr);
     Bar bar(&controller);
-    auto *row = settings.row(Endpoint::Electrum);
-    auto *other = observer.row(Endpoint::Electrum);
+    auto *row = settings.row(ELECTRUM);
+    auto *other = observer.row(ELECTRUM);
     auto *toggle = bar.template findChildren<catalog::StatusBarItem *>()
                        .last()
                        ->template findChild<catalog::Toggle *>();
@@ -1362,14 +1404,15 @@ template <typename Controller, typename Bar> void endpointInteractions(const QSt
     editEndpoint(row->field->input(), peer.url());
     row->field->testButton()->click();
     auto testId = row->action_req;
-    require(testId != 0 && backend->endpointOperationsBusy() && !toggle->isEnabled() &&
+    require(testId != 0 && row->field->state() == catalog::EndpointRow::State::Testing &&
+                backend->endpointOperationsBusy() && !toggle->isEnabled() &&
                 !other->connect->isEnabled(),
             "Settings Test publishes busy to every real initiator");
-    waitFor([&replies] { return replies.ids.size() == 1; }, "real Settings Test/save finishes");
-    require(replies.ids[0] == testId && replies.results[0].is_ok && replies.results[0].saved &&
+    waitFor([&row] { return row->action_req == 0; }, "real Settings Test/save finishes");
+    require(answers.done.contains(testId) && replies.ids.size() == 1 && replies.results[0].is_ok &&
                 !replies.results[0].connection_pending &&
                 !backend->isEndpointRunning(Endpoint::Electrum),
-            "Test/save completes offline, not as a connected dispatch");
+            "Test/save completes offline: its only endpoint operation is the disconnect");
     require(row->saved_url == peer.url().mid(6) &&
                 other->field->input()->text() == row->saved_url &&
                 backend->endpointUrl(Endpoint::Electrum) == row->saved_url && toggle->isEnabled(),
@@ -1392,9 +1435,12 @@ template <typename Controller, typename Bar> void endpointInteractions(const QSt
     editEndpoint(row->field->input(), row->saved_url);
 
     // A second successful Test leaves the same saved URL available to both initiators.
-    backend->testAndSaveEndpoint(64001, Endpoint::Electrum, peer.url(), true);
-    waitFor([&replies] { return replies.ids.size() == 2; }, "second public Test/save completes");
-    require(replies.results[1].is_ok, "second successful Test remains offline");
+    require(testAndSave(services, answers, 64001,
+                        {.id = ELECTRUM, .name = QStringLiteral("Electrum"), .url = peer.url()}),
+            "second service Test/save passes");
+    require(replies.ids.size() == 2 && replies.results[1].is_ok &&
+                !backend->isEndpointRunning(Endpoint::Electrum),
+            "second successful Test remains offline");
     auto testState = row->field->state();
     row->connect->click();
     auto connectId = row->action_req;
@@ -1414,7 +1460,10 @@ template <typename Controller, typename Bar> void endpointInteractions(const QSt
     peer.release();
     waitFor([backend] { return !backend->endpointError(Endpoint::Electrum).isEmpty(); },
             "live Electrum handshake error reaches backend state after dispatch");
-    require(row->action_req == 0 && replies.ids.last() == connectId &&
+    waitFor([&row] { return row->action_req == 0; }, "the Settings Connect answers");
+    // Both Tests' disconnects, the refused overlap, the late completion, then the Connect,
+    // whose handshake error comes after its answer (SP) or as it (Multikey).
+    require(replies.ids.size() >= 5 && replies.ids.at(3) == testId && answers.answered(connectId) &&
                 !backend->endpointOperationsBusy() &&
                 !backend->isEndpointRunning(Endpoint::Electrum),
             "actual post-dispatch failure releases busy and leaves backend offline");
@@ -1461,19 +1510,19 @@ template <typename Controller, typename Bar> void endpointInteractions(const QSt
     {
         EndpointPeer failedTest(1, true, true);
         auto saved = backend->endpointUrl(Endpoint::Electrum);
+        auto operations = replies.ids.size();
         editEndpoint(row->field->input(), failedTest.url());
         row->field->testButton()->click();
         auto failedId = row->action_req;
         waitFor([&failedTest] { return failedTest.waiting(); }, "failed Test reaches real peer");
-        require(backend->endpointUrl(Endpoint::Electrum) == saved && !toggle->isEnabled(),
+        require(backend->endpointUrl(Endpoint::Electrum) == saved,
                 "candidate Test does not overwrite saved endpoint while pending");
         require(row->field->state() == catalog::EndpointRow::State::Testing &&
                     row->field->testButton()->isHidden() && !row->field->input()->isEnabled(),
                 "pending Settings Test presents Testing with the draft locked");
         failedTest.release();
         waitFor([&row] { return row->action_req == 0; }, "failed Test completes");
-        require(replies.ids.last() == failedId && !replies.results.last().is_ok &&
-                    !replies.results.last().saved &&
+        require(answers.failed.last() == failedId && replies.ids.size() == operations &&
                     backend->endpointUrl(Endpoint::Electrum) == saved &&
                     row->field->input()->text() == failedTest.url() &&
                     !row->field->note()->isHidden() &&
@@ -1485,11 +1534,7 @@ template <typename Controller, typename Bar> void endpointInteractions(const QSt
                 "a connection error can be shown without replacing the failed test state");
         row->field->setError(QString());
         require(!row->field->note()->isHidden() &&
-                    hasText(*row->field->note(),
-                            mapBackendErrorSummary(replies.results.last().kind) +
-                                QStringLiteral(" ") +
-                                QString::fromUtf8(replies.results.last().error.data(),
-                                                  replies.results.last().error.size())),
+                    hasText(*row->field->note(), answers.errors.last()),
                 "clearing a connection error restores the failed test explanation");
         auto revision = row->draft_revision;
         row->ssl->click();
@@ -1521,13 +1566,12 @@ template <typename Controller, typename Bar> void endpointInteractions(const QSt
         auto newer = QStringLiteral("tcp://127.0.0.1:2");
         row->field->input()->setText(newer);
         emit row->field->input()->textEdited(newer);
-        require(backend->endpointOperationsBusy() && row->action_req == lateId &&
+        require(row->action_req == lateId &&
                     row->field->state() == catalog::EndpointRow::State::Untested,
-                "a newer draft supersedes the pending Test while the backend is busy");
+                "a newer draft supersedes the pending Test while it runs");
         late.release();
         waitFor([&row] { return row->action_req == 0; }, "superseded Test completes");
-        require(replies.ids.last() == lateId && replies.results.last().is_ok &&
-                    replies.results.last().saved &&
+        require(answers.done.contains(lateId) && replies.results.last().is_ok &&
                     backend->endpointUrl(Endpoint::Electrum) == late.url().mid(6) &&
                     row->field->input()->text() == newer &&
                     row->field->state() == catalog::EndpointRow::State::Untested &&
@@ -1546,7 +1590,10 @@ template <typename Controller, typename Bar> void endpointShutdown(const QString
     waitFor([&controller] { return !controller.accountLoading(); },
             "shutdown fixture opening finishes");
     AccountBackend *backend = &controller;
-    auto *settings = new account::view::Settings(backend);
+    QObject adapters;
+    auto services = controllerServices(controller, &adapters);
+    ServiceAnswers answers(services);
+    auto *settings = new account::view::Settings(services, nullptr);
     Bar bar(&controller);
     EndpointSpy replies;
     SignalSpy stopped;
@@ -1557,17 +1604,16 @@ template <typename Controller, typename Bar> void endpointShutdown(const QString
     auto gate = std::make_shared<std::binary_semaphore>(0);
     backend->startWorker(QThread::create([gate] { gate->acquire(); }));
     EndpointPeer peer(1, false, true);
-    auto *row = settings->row(Endpoint::Electrum);
+    auto *row = settings->row(ELECTRUM);
     editEndpoint(row->field->input(), peer.url());
     row->field->testButton()->click();
     auto requestId = row->action_req;
     auto oldGeneration = controller.m_notif_generation;
     delete settings;
     controller.stop();
-    require(backend->endpointsStopping() && backend->endpointOperationsBusy() &&
-                replies.ids == QList<uint64_t>{requestId} && !replies.results.last().is_ok &&
-                replies.results.last().error == "Account is stopping" && stopped.count() == 0,
-            "view close and shutdown cancel delivery but wait for the owned worker");
+    require(requestId != 0 && backend->endpointsStopping() && replies.ids.isEmpty() &&
+                !answers.answered(requestId) && stopped.count() == 0,
+            "view close and shutdown wait for the owned Test worker without answering it");
     backend->setEndpointConnected(64003, Endpoint::Electrum, true);
     require(replies.ids.last() == 64003 && !replies.results.last().is_ok,
             "all endpoint initiators refuse new work during shutdown");
@@ -1578,8 +1624,11 @@ template <typename Controller, typename Bar> void endpointShutdown(const QString
     peer.release();
     waitFor([&stopped] { return stopped.count() == 1; },
             "endpoint worker and receiver drain safely");
-    require(replies.ids == QList<uint64_t>{requestId, 64003},
-            "worker completion after shutdown cannot emit a second success for a cancelled ID");
+    require(replies.ids == QList<uint64_t>{64003},
+            "worker completion after shutdown starts no endpoint operation");
+    require(answers.done.count(requestId) == 1 && !answers.failed.contains(requestId) &&
+                backend->endpointUrl(Endpoint::Electrum).isEmpty(),
+            "the held Test answers once after shutdown, and nothing saves it for the closed view");
     Notification late{};
     late.flag = NotificationFlag::ElectrumConnected;
     emit controller.notificationReceived(oldGeneration, late);
@@ -1596,6 +1645,9 @@ void blindbitReadsAndShutdown() {
     waitFor([&controller] { return !controller.accountLoading(); },
             "BlindBit fixture opening finishes");
     AccountBackend *backend = &controller;
+    QObject adapters;
+    auto services = controllerServices(controller, &adapters);
+    ServiceAnswers answers(services);
     EndpointSpy replies;
     SignalSpy stopped;
     QObject::connect(backend, &AccountBackend::endpointRequestFinished, &replies,
@@ -1606,16 +1658,21 @@ void blindbitReadsAndShutdown() {
                      qontrol::UNIQUE);
     {
         EndpointPeer peer(1, false, false, EndpointPeer::Protocol::Blindbit);
-        backend->testAndSaveEndpoint(64010, Endpoint::Blindbit, peer.url(), true);
-        waitFor([&replies] { return replies.ids.size() == 1; }, "BlindBit Test/save finishes");
-        require(replies.results[0].is_ok && replies.results[0].saved &&
+        require(
+            testAndSave(services, answers, 64050,
+                        {.id = BLINDBIT, .name = QStringLiteral("BlindBit"), .url = peer.url()}),
+            "BlindBit Test/save finishes");
+        require(replies.ids.size() == 1 && replies.results[0].is_ok &&
+                    backend->endpointUrl(Endpoint::Blindbit) == peer.url() &&
                     !backend->isEndpointRunning(Endpoint::Blindbit),
                 "BlindBit Test/save retains its actual offline scanner semantics");
     }
     {
         EndpointPeer peer(3, false, true, EndpointPeer::Protocol::Blindbit);
-        backend->testAndSaveEndpoint(64011, Endpoint::Blindbit, peer.url(), true);
-        waitFor([&replies] { return replies.ids.size() == 2; }, "save live capability peer");
+        require(
+            testAndSave(services, answers, 64060,
+                        {.id = BLINDBIT, .name = QStringLiteral("BlindBit"), .url = peer.url()}),
+            "save live capability peer");
         backend->requestEndpointInfo(64012, Endpoint::Blindbit);
         waitFor([&replies] { return replies.info_ids.size() == 1; },
                 "backend-owned info read finishes");
@@ -1625,7 +1682,7 @@ void blindbitReadsAndShutdown() {
                     replies.infos[0].tweaks_full_with_dust_filter &&
                     !replies.infos[0].tweaks_cut_through_with_dust_filter,
                 "BlindBit capabilities and height come from the real backend read");
-        auto *settings = new account::view::Settings(backend);
+        auto *settings = new account::view::Settings(services, nullptr);
         waitFor([&peer] { return peer.waiting(); },
                 "Settings capability request reaches backend worker");
         StatusBar bar(&controller);
@@ -1663,15 +1720,20 @@ void caughtUpBlindbitConnection() {
     QObject::connect(&controller, &AccountController::stopped, &stopped, &SignalSpy::onSignal,
                      qontrol::UNIQUE);
     EndpointPeer peer(0, false, true, EndpointPeer::Protocol::CaughtUpBlindbit);
-    account::view::Settings settings(&controller);
+    QObject adapters;
+    account::view::Settings settings(controllerServices(controller, &adapters), nullptr);
     StatusBar bar(&controller);
     settings.show();
-    auto *row = settings.row(Endpoint::Blindbit);
+    auto *row = settings.row(BLINDBIT);
     editEndpoint(row->field->input(), peer.url());
     row->field->testButton()->click();
     waitFor([&row] { return row->action_req == 0; }, "caught-up BlindBit Test/save completes");
-    require(replies.results.last().is_ok && replies.results.last().saved,
+    require(row->field->state() == catalog::EndpointRow::State::Ok &&
+                replies.results.last().is_ok &&
+                controller.endpointUrl(Endpoint::Blindbit) == peer.url() &&
+                !controller.isEndpointRunning(Endpoint::Blindbit),
             "caught-up server is tested and saved offline");
+    auto completions = replies.ids.size();
     row->connect->click();
     auto requestId = row->action_req;
     waitFor(
@@ -1679,14 +1741,14 @@ void caughtUpBlindbitConnection() {
             return peer.waiting() && replies.notifications.contains(NotificationFlag::StartingScan);
         },
         "real scanner reaches its first blocked height request");
-    require(controller.endpointOperationsBusy() &&
+    require(requestId != 0 && row->action_req == requestId && controller.endpointOperationsBusy() &&
                 !controller.isEndpointRunning(Endpoint::Blindbit) &&
-                !replies.ids.contains(requestId) && !row->disconnect->isEnabled(),
+                replies.ids.size() == completions && !row->disconnect->isEnabled(),
             "StartingScan before the backend height reply is not successful connection completion");
     peer.release();
     waitFor([&row] { return row->action_req == 0; },
             "WaitingForBlocks completes caught-up Connect");
-    require(replies.ids.last() == requestId && replies.results.last().is_ok &&
+    require(replies.ids.size() == completions + 1 && replies.results.last().is_ok &&
                 !replies.results.last().connection_pending &&
                 controller.isEndpointRunning(Endpoint::Blindbit) &&
                 !controller.endpointOperationsBusy() &&
@@ -1758,6 +1820,7 @@ void asynchronousAccountStartup(const QString &source, const QString &name, cons
     require(config->save().empty(), "save real Signet startup fixture with slow saved endpoint");
     auto *widget = new Widget(name);
     Controller *controller = widget->controller();
+    watch(*controller, name);
     EndpointSpy replies;
     SignalSpy stopped;
     QObject::connect(controller, &AccountBackend::endpointRequestFinished, &replies,
@@ -1798,7 +1861,7 @@ void asynchronousAccountStartup(const QString &source, const QString &name, cons
     require(settings != nullptr && settings->isVisible() &&
                 hasText(*settings, TR("network-signet")),
             "early Settings navigation is retained and constructed with actual metadata");
-    auto *row = settings->row(Endpoint::Electrum);
+    auto *row = settings->row(ELECTRUM);
     require(
         row != nullptr && row->saved_url == blocked.url() && !controller->verifiesCertificate() &&
             !row->field->input()->isEnabled() && replies.ids.size() == 1,
@@ -1825,8 +1888,10 @@ void asynchronousAccountStartup(const QString &source, const QString &name, cons
         auto repairId = row->action_req;
         waitFor([&row] { return row->action_req == 0; },
                 "Settings repairs initial endpoint failure");
-        require(repairId != 0 && replies.ids.last() == repairId && replies.results.last().is_ok &&
-                    replies.results.last().saved && !replies.results.last().connection_pending &&
+        require(repairId != 0 && row->field->state() == catalog::EndpointRow::State::Ok &&
+                    replies.ids.size() == 3 && replies.results.last().is_ok &&
+                    !replies.results.last().connection_pending &&
+                    controller->endpointUrl(Endpoint::Electrum) == repaired.url().mid(6) &&
                     controller->endpointError(Endpoint::Electrum).isEmpty() &&
                     row->field->note()->isHidden() && row->connect->isEnabled() &&
                     controller->network() == Network::Signet,
@@ -1914,8 +1979,7 @@ void endpointSmoke() {
     prepareEndpointAccounts();
     controllerSettingsPolicy<AccountController>(QStringLiteral("boundary-sp"), false);
     controllerSettingsPolicy<MusigAccountController>(QStringLiteral("boundary-policy"), true);
-    savedEndpointObservers<AccountController>(QStringLiteral("boundary-sp"));
-    savedEndpointObservers<MusigAccountController>(QStringLiteral("boundary-policy"));
+    savedEndpointObservers();
 #ifdef Q_OS_UNIX
     endpointInteractions<AccountController, StatusBar>(QStringLiteral("boundary-sp"));
     endpointInteractions<MusigAccountController, MusigStatusBar>(QStringLiteral("boundary-policy"));

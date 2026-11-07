@@ -167,7 +167,9 @@ void ConfirmPsbtDelete::onFinished(int result) {
     }
 }
 
-SavedPsbts::SavedPsbts(MusigAccountController *controller) : m_controller(controller) {
+SavedPsbts::SavedPsbts(MusigAccountController *controller, const account::Services &services)
+    : m_controller(controller),
+      m_services(services) {
     init();
     doConnect();
     view();
@@ -360,7 +362,7 @@ void SavedPsbts::onRowClicked(const QString &id) {
     // The rows stay while the details run over them.
     m_modal_open = true;
     QPointer<SavedPsbts> self(this);
-    account::showTransactionDetails(m_controller, txid, m_open_notes.value(id));
+    account::showTransactionDetails(m_services, txid, m_open_notes.value(id));
     if (self != nullptr) {
         m_modal_open = false;
     }

@@ -27,7 +27,9 @@ use bwk_sp::{
 use bwk_utils::test as bwk_test;
 use bwk_utils::test::corepc_node;
 
-use silent::{Account, Config, Network};
+use silent::{
+    Account, Config, MusigAccount, MusigSpendLeaf, Network, PsbtResult, TransactionTemplate,
+};
 
 // ===== Constants =====
 
@@ -514,4 +516,49 @@ pub fn fund_sp_wallet_at_index(
     wait_for_sync_and_index(bbd_url, sp_height);
 
     sp_height
+}
+
+// ===== Transaction preparation =====
+
+/// `tx_template` with its coins: the explicit selection when it names none.
+fn select_with(
+    tx_template: TransactionTemplate,
+    select: impl FnOnce(TransactionTemplate) -> silent::CraftOutcome,
+) -> Result<TransactionTemplate, String> {
+    if !tx_template.input_outpoints.is_empty() {
+        return Ok(tx_template);
+    }
+    let selected = select(tx_template);
+    if !selected.complete {
+        return Err(selected.error);
+    }
+    Ok(selected.transaction)
+}
+
+/// The unsigned PSBTv2 of an SP template, as Send builds it: selection when no coin is
+/// named, then finalize_transaction.
+pub fn sp_unsigned_psbt(
+    account: &Account,
+    tx_template: TransactionTemplate,
+) -> Result<Vec<u8>, String> {
+    let tx_template = select_with(tx_template, |t| account.select_transaction_coins(t))?;
+    let psbt = account.finalize_transaction(tx_template);
+    if !psbt.is_ok {
+        return Err(psbt.error);
+    }
+    Ok(psbt.psbt)
+}
+
+/// A Multikey template prepared as Send prepares it: selection when no coin is named,
+/// finalize_transaction, then adopt_transaction restricted to `spend`.
+pub fn musig_prepared(
+    account: &MusigAccount,
+    tx_template: TransactionTemplate,
+    spend: MusigSpendLeaf,
+) -> Box<PsbtResult> {
+    let tx_template = select_with(tx_template, |t| account.select_transaction_coins(t))
+        .expect("coin selection for the template");
+    let psbt = account.finalize_transaction(tx_template.clone());
+    assert!(psbt.is_ok, "finalize the template: {}", psbt.error);
+    account.adopt_transaction(tx_template, spend, &psbt.psbt)
 }

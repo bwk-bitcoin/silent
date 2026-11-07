@@ -1,5 +1,6 @@
 #include "PriceProbe.h"
 
+#include "AppController.h"
 #include "MainWindow.h"
 #include "account/views/Send.h"
 #include "catalog/containers/Tabs.h"
@@ -13,6 +14,8 @@
 #include "i18n/Tr.h"
 #include "modules/musig/MusigAccountController.h"
 #include "modules/musig/MusigAccountWidget.h"
+#include "modules/musig/MusigModule.h"
+#include "modules/musig/MusigPlugin.h"
 #include "theme/Theme.h"
 #include "views/modals/AppSettings.h"
 #include <QAbstractItemView>
@@ -38,6 +41,7 @@
 #include <chrono>
 #include <common.h>
 #include <limits>
+#include <memory>
 #include <string>
 #include <thread>
 #include <utility>
@@ -56,13 +60,15 @@ namespace {
 
 class PriceSend final : public account::view::Send {
 public:
-    using Send::Send;
+    explicit PriceSend(PriceBackend &backend)
+        : Send(backend.services.services(), backend.newSigning()) {
+    }
 
-    auto parsedTransaction() -> std::optional<TransactionTemplate> {
+    auto parsedTransaction() -> std::optional<backend::TransactionTemplate> {
         return txTemplate();
     }
 
-    auto transaction() -> std::optional<TransactionTemplate> {
+    auto transaction() -> std::optional<backend::TransactionTemplate> {
         auto tx = txTemplate();
         if (!tx.has_value()) {
             qFatal("price probe expected a valid transaction template");
@@ -103,7 +109,7 @@ auto feeToggle(account::view::Send &send) -> QCheckBox * {
 
 void monetaryBoundaryPresentation() {
     PriceBackend backend;
-    PriceSend send(&backend);
+    PriceSend send(backend);
     auto *btc = input(send, TR("send-placeholder-amount"));
     auto marks = btc->parentWidget()->findChildren<catalog::ValidationMark *>();
     require(marks.size() == 1, "amount has one validation mark");
@@ -133,7 +139,7 @@ void monetaryBoundaryPresentation() {
     auto *fee = send.findChild<QLineEdit *>(QStringLiteral("fee-value"));
     require(fee != nullptr, "fee field exists");
     fee->setText(QStringLiteral("0.001"));
-    require(send.transaction()->fee_rate == 0.001, "Qt submits one millisat per vbyte");
+    require(send.transaction()->feeRate == 0.001, "Qt submits one millisat per vbyte");
     fee->setText(QStringLiteral("0.0001"));
     require(!send.parsedTransaction().has_value(), "sub-millisat fee cannot submit");
     feeToggle(send)->setChecked(false);
@@ -239,6 +245,8 @@ void accountWidgetLifetime(HostImpl *host, PriceModule *module) {
                                      "uuDZLYityND66FG88sS3q28Yi5Ysumvx5DfMgdm6nc6zntvpHM"
                                      ")/<0;1>/*)");
     auto preferences = host->selectedFees().preferences;
+    // The panels' services come from the Multikey module, for the accounts it watches.
+    AppController::get()->registerBuiltinPlugin(std::make_unique<MusigPlugin>());
     for (auto visit : {false, true}) {
         PriceFeed feed;
         feed.offered.clear();
@@ -256,9 +264,13 @@ void accountWidgetLifetime(HostImpl *host, PriceModule *module) {
         require(config->save().empty(), "save isolated Testnet lifetime account");
         auto *widget = new MusigAccountWidget(name);
         QPointer<MusigAccountController> controller = widget->controller();
+        MusigModule::get()->watchAccount(name, controller);
         QElapsedTimer opening;
         opening.start();
-        while (controller->accountLoading() && opening.elapsed() < 30000) {
+        // The funds panels follow the first funds read.
+        while ((controller->accountLoading() ||
+                !controller->screen(QStringLiteral("history")).has_value()) &&
+               opening.elapsed() < 30000) {
             QApplication::processEvents();
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
@@ -401,19 +413,19 @@ void singleFeeProviderSettings(HostImpl *host, PriceModule *module, bool has_def
                               has_smart ? "0.25 sat/vB" : "-", has_smart ? "0.5 sat/vB" : "-",
                               has_smart ? "0.75 sat/vB" : "-");
     PriceBackend backend;
-    PriceSend send(&backend);
+    PriceSend send(backend);
     input(send, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
     auto *sendTier = send.findChild<QComboBox *>(QStringLiteral("fee-tier"));
     auto *sendMode = send.findChild<QComboBox *>(QStringLiteral("fee-mode"));
     require(sendTier->currentIndex() == static_cast<int>(FeeTier::Medium) &&
-                send.transaction()->fee_rate == (has_smart ? 0.5 : 1) &&
+                send.transaction()->feeRate == (has_smart ? 0.5 : 1) &&
                 sendMode->currentIndex() ==
                     static_cast<int>(has_smart ? FeeMode::Smart : FeeMode::Manual),
             "new Smart Send starts Medium or falls back to Manual 1 for default-only providers");
     if (has_smart) {
         sendTier->setCurrentIndex(static_cast<int>(FeeTier::Fast));
         emit sendTier->activated(static_cast<int>(FeeTier::Fast));
-        require(send.transaction()->fee_rate == 0.75, "Send can choose local Fast");
+        require(send.transaction()->feeRate == 0.75, "Send can choose local Fast");
     }
 
     index = mode->findData(static_cast<int>(FeeMode::Default));
@@ -424,18 +436,18 @@ void singleFeeProviderSettings(HostImpl *host, PriceModule *module, bool has_def
         require(host->selectedFees().preferences ==
                     FeePreferences{.mode = FeeMode::Default, .source = sourceId},
                 "settings mode changes preserve the selected provider");
-        require(send.transaction()->fee_rate == (has_smart ? 0.75 : 1),
+        require(send.transaction()->feeRate == (has_smart ? 0.75 : 1),
                 "global mode changes preserve local Fast or sticky Manual fallback");
         PriceBackend defaultBackend;
-        PriceSend defaultSend(&defaultBackend);
+        PriceSend defaultSend(defaultBackend);
         input(defaultSend, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
-        require(defaultSend.transaction()->fee_rate == 0.625,
+        require(defaultSend.transaction()->feeRate == 0.625,
                 "new Default Send uses Default, not the same provider's Medium");
     } else {
         require(index < 0, "smart-only provider does not add an unsupported Default mode");
         sendMode->setCurrentIndex(static_cast<int>(FeeMode::Default));
         emit sendMode->activated(static_cast<int>(FeeMode::Default));
-        require(send.transaction()->fee_rate == 1 &&
+        require(send.transaction()->feeRate == 1 &&
                     sendMode->currentIndex() == static_cast<int>(FeeMode::Manual),
                 "local Default never substitutes the smart-only provider's Medium");
     }
@@ -581,15 +593,16 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     require(reopened.selectedFees().preferences == fees.preferences &&
                 !reopened.selectedFees().medium.has_value(),
             "mode and one source persist without inventing quotes");
-    for (auto network : {Network::Bitcoin, Network::Testnet, Network::Signet, Network::Regtest}) {
+    for (auto network : {backend::Network::Bitcoin, backend::Network::Testnet,
+                         backend::Network::Signet, backend::Network::Regtest}) {
         PriceBackend networkBackend;
-        networkBackend.selected_network = network;
-        PriceSend networkSend(&networkBackend);
+        networkBackend.services.account.model.network = network;
+        PriceSend networkSend(networkBackend);
         input(networkSend, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
         auto *networkMode = networkSend.findChild<QComboBox *>(QStringLiteral("fee-mode"));
         auto *networkTier = networkSend.findChild<QComboBox *>(QStringLiteral("fee-tier"));
         auto *networkValue = networkSend.findChild<QLineEdit *>(QStringLiteral("fee-value"));
-        require(networkSend.transaction()->fee_rate == 0.5 &&
+        require(networkSend.transaction()->feeRate == 0.5 &&
                     networkMode->currentIndex() == static_cast<int>(FeeMode::Smart) &&
                     networkTier->currentIndex() == static_cast<int>(FeeTier::Medium),
                 "all networks start Smart at local Medium");
@@ -598,7 +611,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
             auto index = static_cast<int>(feeMode);
             networkMode->setCurrentIndex(index);
             emit networkMode->activated(index);
-            require(networkSend.transaction()->fee_rate ==
+            require(networkSend.transaction()->feeRate ==
                             (feeMode == FeeMode::Default ? 0.625 : 0.5) &&
                         networkMode->currentIndex() == index,
                     "Default and Smart apply on every network");
@@ -608,7 +621,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
             emit second.smartFeeRates(4, 5, 6, 7);
             networkTier->setCurrentIndex(static_cast<int>(FeeTier::Fast));
             emit networkTier->activated(static_cast<int>(FeeTier::Fast));
-            require(networkSend.transaction()->fee_rate == 7 &&
+            require(networkSend.transaction()->feeRate == 7 &&
                         networkMode->currentIndex() == static_cast<int>(FeeMode::Smart),
                     "every network follows selected-feed pushes and tier changes");
             feeToggle(networkSend)->click();
@@ -617,7 +630,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
                 auto index = static_cast<int>(feeMode);
                 networkMode->setCurrentIndex(index);
                 emit networkMode->activated(index);
-                require(networkSend.transaction()->fee_rate ==
+                require(networkSend.transaction()->feeRate ==
                                 (feeMode == FeeMode::Default ? 4 : 7) &&
                             networkMode->currentIndex() == index,
                         "every network can replace a manual absolute fee with a recommendation");
@@ -633,12 +646,12 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
         preferences.mode = FeeMode::Default;
         host->selectFees(preferences);
         PriceBackend testnetBackend;
-        testnetBackend.selected_network = Network::Testnet;
-        PriceSend testnetSend(&testnetBackend);
+        testnetBackend.services.account.model.network = backend::Network::Testnet;
+        PriceSend testnetSend(testnetBackend);
         input(testnetSend, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
         auto *mode = testnetSend.findChild<QComboBox *>(QStringLiteral("fee-mode"));
         require(mode->currentIndex() == static_cast<int>(FeeMode::Default) &&
-                    testnetSend.transaction()->fee_rate == 0.625,
+                    testnetSend.transaction()->feeRate == 0.625,
                 "fresh Testnet Send uses configured Default and its actual selected-feed rate");
         host->selectFees(fees.preferences);
     }
@@ -656,22 +669,23 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
         require(sourcePickers == 1, "settings has exactly one fee provider picker");
     }
     PriceBackend backend;
-    backend.selected_network = Network::Bitcoin;
-    PriceSend send(&backend);
+    backend.services.account.model.network = backend::Network::Bitcoin;
+    PriceSend send(backend);
     input(send, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
     auto *mode = send.findChild<QComboBox *>(QStringLiteral("fee-mode"));
     auto *tier = send.findChild<QComboBox *>(QStringLiteral("fee-tier"));
     auto *value = send.findChild<QLineEdit *>(QStringLiteral("fee-value"));
-    require(send.transaction()->fee_rate == 0.5, "new Send starts at configured smart medium");
-    auto initialSimulations = backend.simulations;
+    require(send.transaction()->feeRate == 0.5, "new Send starts at configured smart medium");
+    auto initialSimulations = backend.services.transaction.crafts();
     emit first.defaultFeeRate(3, 0.6);
-    require(send.transaction()->fee_rate == 0.5 && backend.simulations == initialSimulations,
+    require(send.transaction()->feeRate == 0.5 &&
+                backend.services.transaction.crafts() == initialSimulations,
             "unrelated default quote does not rebuild a Smart transaction");
     for (double invalid : {0.0, -1.0, std::numeric_limits<double>::infinity(),
                            std::numeric_limits<double>::quiet_NaN()}) {
         emit second.defaultFeeRate(3, invalid);
         require(!host->selectedFees().default_rate.has_value() &&
-                    send.transaction()->fee_rate == 0.5,
+                    send.transaction()->feeRate == 0.5,
                 "invalid Default recommendation cannot change the selected Smart rate");
         requireFeeRecommendations(settings, "-", "0.25 sat/vB", "0.5 sat/vB", "0.75 sat/vB");
     }
@@ -679,19 +693,19 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     for (auto pair : {std::pair{0, 0.25}, std::pair{1, 0.5}, std::pair{2, 0.75}}) {
         tier->setCurrentIndex(pair.first);
         emit tier->activated(pair.first);
-        require(send.transaction()->fee_rate == pair.second,
+        require(send.transaction()->feeRate == pair.second,
                 "per-send smart tier selects exact rate");
     }
     emit second.smartFeeRates(8, 0.1, 0.2, 0.3);
     requireFeeRecommendations(settings, "0.625 sat/vB", "0.1 sat/vB", "0.2 sat/vB", "0.3 sat/vB");
-    require(send.transaction()->fee_rate == 0.3 &&
+    require(send.transaction()->feeRate == 0.3 &&
                 host->selectedFees().preferences == fees.preferences,
             "editable send follows its local tier without changing global preferences");
-    auto unchangedSimulations = backend.simulations;
+    auto unchangedSimulations = backend.services.transaction.crafts();
     emit second.smartFeeRates(8, 0, 0.2, 0.3);
     require(!host->selectedFees().low.has_value() && host->selectedFees().medium == 0.2 &&
-                host->selectedFees().fast == 0.3 && send.transaction()->fee_rate == 0.3 &&
-                backend.simulations == unchangedSimulations,
+                host->selectedFees().fast == 0.3 && send.transaction()->feeRate == 0.3 &&
+                backend.services.transaction.crafts() == unchangedSimulations,
             "partial unavailability does not substitute another tier or rebuild an unchanged Fast");
     requireFeeRecommendations(settings, "0.625 sat/vB", "-", "0.2 sat/vB", "0.3 sat/vB");
     {
@@ -700,7 +714,7 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
         auto index = settingsMode->findData(static_cast<int>(FeeMode::Default));
         settingsMode->setCurrentIndex(index);
         emit settingsMode->activated(index);
-        require(send.transaction()->fee_rate == 0.3 &&
+        require(send.transaction()->feeRate == 0.3 &&
                     mode->currentIndex() == static_cast<int>(FeeMode::Smart) &&
                     tier->currentIndex() == static_cast<int>(FeeTier::Fast),
                 "changing global mode in Settings does not reset an existing Send's mode or tier");
@@ -708,50 +722,51 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
         settingsMode->setCurrentIndex(index);
         emit settingsMode->activated(index);
         PriceBackend mediumBackend;
-        PriceSend mediumSend(&mediumBackend);
+        PriceSend mediumSend(mediumBackend);
         input(mediumSend, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
-        require(mediumSend.transaction()->fee_rate == 0.2 &&
+        require(mediumSend.transaction()->feeRate == 0.2 &&
                     mediumSend.findChild<QComboBox *>(QStringLiteral("fee-tier"))->currentIndex() ==
                         static_cast<int>(FeeTier::Medium) &&
-                    send.transaction()->fee_rate == 0.3,
+                    send.transaction()->feeRate == 0.3,
                 "new Smart Send starts Medium while an existing Send keeps Fast");
         auto *mediumTier = mediumSend.findChild<QComboBox *>(QStringLiteral("fee-tier"));
         mediumTier->setCurrentIndex(static_cast<int>(FeeTier::Low));
         emit mediumTier->activated(static_cast<int>(FeeTier::Low));
-        require(mediumSend.transaction()->fee_rate == 1 &&
+        require(mediumSend.transaction()->feeRate == 1 &&
                     mediumSend.findChild<QComboBox *>(QStringLiteral("fee-mode"))->currentIndex() ==
                         static_cast<int>(FeeMode::Manual),
                 "missing local Low falls back to Manual 1, not selected Default, Medium or Fast");
         emit second.smartFeeRates(8, 0.1, 0.2, 0.3);
-        require(mediumSend.transaction()->fee_rate == 1,
+        require(mediumSend.transaction()->feeRate == 1,
                 "tier recovery does not resume a fallback transaction");
         emit mediumBackend.signing->sent();
         input(mediumSend, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
-        require(mediumSend.transaction()->fee_rate == 0.2 &&
+        require(mediumSend.transaction()->feeRate == 0.2 &&
                     mediumTier->currentIndex() == static_cast<int>(FeeTier::Medium),
                 "starting the next transaction resets the previous local Low to Medium");
     }
-    auto simulations = backend.simulations;
+    auto simulations = backend.services.transaction.crafts();
     emit backend.signing->lockedChanged(true);
     host->selectFees({.mode = FeeMode::Default, .source = firstId});
     emit second.smartFeeRates(8, 1, 2, 3);
-    require(send.transaction()->fee_rate == 0.3 && backend.simulations == simulations,
+    require(send.transaction()->feeRate == 0.3 &&
+                backend.services.transaction.crafts() == simulations,
             "prepared/signing-locked transaction never follows provider changes or pushes");
     host->selectFees(fees.preferences);
     emit backend.signing->lockedChanged(false);
-    require(send.transaction()->fee_rate == 3, "unlocked editable Send catches up to cached rate");
+    require(send.transaction()->feeRate == 3, "unlocked editable Send catches up to cached rate");
     edit(value, QStringLiteral("0.125"));
     host->selectFees({.mode = FeeMode::Default, .source = firstId});
     emit second.smartFeeRates(8, 4, 5, 6);
-    require(send.transaction()->fee_rate == 0.125 && mode->currentIndex() == 0,
+    require(send.transaction()->feeRate == 0.125 && mode->currentIndex() == 0,
             "explicit rate edit switches only this Send to sticky Manual");
     host->selectFees(fees.preferences);
     mode->setCurrentIndex(1);
     emit mode->activated(1);
-    require(send.transaction()->fee_rate == 0.625,
+    require(send.transaction()->feeRate == 0.625,
             "per-send Default uses the same selected provider");
     emit second.defaultFeeRate(3, 0.1234567);
-    require(send.transaction()->fee_rate == 0.123 && host->selectedFees().default_rate == 0.1234567,
+    require(send.transaction()->feeRate == 0.123 && host->selectedFees().default_rate == 0.1234567,
             "Send normalizes provider precision through Rust without changing the cached quote");
     emit second.defaultFeeRate(3, 0.625);
     auto *absolute = feeToggle(send);
@@ -764,28 +779,26 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     emit mode->activated(2);
     emit second.smartFeeRates(8, 0, -1, std::numeric_limits<double>::quiet_NaN());
     requireFeeRecommendations(settings, "9 sat/vB", "-", "-", "-");
-    require(send.transaction()->fee_rate == 1 && send.transaction()->fee == 0 &&
+    require(send.transaction()->feeRate == 1 && send.transaction()->fee == 0 &&
                 mode->currentIndex() == 0,
             "invalid selected recommendation falls back to Manual 1 sat/vB");
     emit second.smartFeeRates(8, 0.25, 0.5, 0.75);
-    require(send.transaction()->fee_rate == 1, "recovery never resumes this manual transaction");
+    require(send.transaction()->feeRate == 1, "recovery never resumes this manual transaction");
     PriceBackend freshBackend;
-    freshBackend.selected_network = Network::Bitcoin;
-    PriceSend fresh(&freshBackend);
+    freshBackend.services.account.model.network = backend::Network::Bitcoin;
+    PriceSend fresh(freshBackend);
     input(fresh, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
-    require(fresh.transaction()->fee_rate == 0.5,
+    require(fresh.transaction()->feeRate == 0.5,
             "new transaction uses recovered global preference");
-    SavedPsbtEntry saved{};
-    Output payment{};
-    payment.address = rust::String("saved-recipient");
-    payment.amount = 3000000;
-    saved.frozen_template.outputs.push_back(payment);
-    saved.frozen_template.fee = 2000;
-    fresh.restoreSavedPsbt(saved);
-    simulations = freshBackend.simulations;
+    fresh.restoreTransaction(
+        {.outputs = {{.address = QStringLiteral("saved-recipient"), .amount = 3000000}},
+         .fee = 2000},
+        {}, QString());
+    simulations = freshBackend.services.transaction.crafts();
     host->selectFees({.mode = FeeMode::Default, .source = firstId});
     emit second.smartFeeRates(8, 7, 8, 9);
-    require(fresh.transaction()->fee == 2000 && freshBackend.simulations == simulations,
+    require(fresh.transaction()->fee == 2000 &&
+                freshBackend.services.transaction.crafts() == simulations,
             "restored PSBT retains actual absolute fee across provider changes without simulation");
     host->selectFees(fees.preferences);
     std::thread stale([&second]() {
@@ -800,14 +813,14 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
             "source loss withdraws cache without selecting another provider");
     requireFeeRecommendations(settings, "-", "-", "-", "-");
     PriceBackend missingBackend;
-    missingBackend.selected_network = Network::Bitcoin;
-    PriceSend missing(&missingBackend);
+    missingBackend.services.account.model.network = backend::Network::Bitcoin;
+    PriceSend missing(missingBackend);
     input(missing, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
-    require(missing.transaction()->fee_rate == 1, "missing selected source starts Manual at 1");
+    require(missing.transaction()->feeRate == 1, "missing selected source starts Manual at 1");
     second.deferred = false;
     host->registerInstance(two.id(), &two, module);
     QApplication::processEvents();
-    require(host->selectedFees().medium == 0.5 && missing.transaction()->fee_rate == 1,
+    require(host->selectedFees().medium == 0.5 && missing.transaction()->feeRate == 1,
             "same QObject re-registration ignores queued old capability/rate delivery");
     requireFeeRecommendations(settings, "0.625 sat/vB", "0.25 sat/vB", "0.5 sat/vB", "0.75 sat/vB");
     first.has_smart = true;
@@ -826,14 +839,14 @@ void feeRecommendations(HostImpl *host, PriceModule *module) {
     host->selectFees({.mode = FeeMode::Default, .source = firstId});
     require(host->selectedFees().default_rate == 0.5, "selected Default source recovers");
     PriceBackend defaultBackend;
-    defaultBackend.selected_network = Network::Bitcoin;
-    PriceSend defaultSend(&defaultBackend);
+    defaultBackend.services.account.model.network = backend::Network::Bitcoin;
+    PriceSend defaultSend(defaultBackend);
     input(defaultSend, TR("send-placeholder-amount"))->setText(QStringLiteral("0.01"));
-    require(defaultSend.transaction()->fee_rate == 0.5, "new Default Send reads cached source");
+    require(defaultSend.transaction()->feeRate == 0.5, "new Default Send reads cached source");
     delete destroyedFeed;
     one.provider = nullptr;
     require(host->feeSources().empty() && !host->selectedFees().default_rate.has_value() &&
-                defaultSend.transaction()->fee_rate == 1,
+                defaultSend.transaction()->feeRate == 1,
             "unexpected feed destruction withdraws quote and falls back safely");
     host->removeInstance(one.id(), module);
     host->selectFees({});
@@ -1059,7 +1072,7 @@ auto priceFeedSmoke() -> bool {
         require(sourcePicker != nullptr && sourcePicker->isVisibleTo(&settings),
                 "global price section is present");
         PriceBackend backend;
-        PriceSend send(&backend);
+        PriceSend send(backend);
         auto *btc = input(send, TR("send-placeholder-amount"));
         auto *fiat = input(send, QStringLiteral("0.00"));
         btc->setText(QStringLiteral("0.01000000"));
@@ -1067,16 +1080,17 @@ auto priceFeedSmoke() -> bool {
                 "BTC input creates a payment of exactly one million sats");
         require(fiat->text() == QStringLiteral("500.00"), "recipient displays selected fiat");
         require(hasLabel(send, QStringLiteral("~ 500.00 EUR")), "summary uses currency code");
-        auto simulations = backend.simulations;
+        auto simulations = backend.services.transaction.crafts();
         auto signingUpdates = backend.signing->updates;
         first.publish(QStringLiteral("EUR"), 100000);
         require(btc->text() == QStringLiteral("0.01000000") &&
                     fiat->text() == QStringLiteral("1000.00"),
                 "price changes fiat, not BTC");
-        require(backend.simulations == simulations && backend.signing->updates == signingUpdates,
+        require(backend.services.transaction.crafts() == simulations &&
+                    backend.signing->updates == signingUpdates,
                 "price notifications never simulate or replace the transaction");
         require(send.transaction()->outputs[0].amount == 1000000 &&
-                    send.transaction()->fee_rate == 1,
+                    send.transaction()->feeRate == 1,
                 "price notification leaves the actual payment and fee template unchanged");
         edit(fiat, QStringLiteral("2000"));
         require(btc->text() == QStringLiteral("0.02000000"), "explicit fiat edit changes BTC");
@@ -1138,33 +1152,28 @@ auto priceFeedSmoke() -> bool {
             }
         }
         require(max != nullptr, "payment has MAX control");
-        backend.validSimulation = true;
+        backend.valid_craft = true;
         max->setChecked(true);
         auto maxBtc = btc->text();
         require(maxBtc == QStringLiteral("0.09998000"), "MAX uses the simulation's output amount");
-        simulations = backend.simulations;
+        simulations = backend.services.transaction.crafts();
         first.publish(QStringLiteral("EUR"), 50000);
-        require(btc->text() == maxBtc && !fiat->isEnabled() && backend.simulations == simulations,
+        require(btc->text() == maxBtc && !fiat->isEnabled() &&
+                    backend.services.transaction.crafts() == simulations,
                 "price update preserves MAX and does not enable fiat editing");
-        require(send.transaction()->outputs[0].max && send.transaction()->outputs[0].amount == 0,
+        require(send.transaction()->outputs[0].maximum &&
+                    send.transaction()->outputs[0].amount == 0,
                 "MAX stays a builder instruction, not a price-derived amount");
-        backend.validSimulation = false;
+        backend.valid_craft = false;
         max->setChecked(false);
 
-        SavedPsbtEntry saved{};
-        Output payment{};
-        payment.amount = 3000000;
-        payment.address = rust::String("saved-recipient");
-        saved.frozen_template.outputs.push_back(payment);
-        saved.frozen_template.fee = 2000;
-        SavedPsbtInput savedInput{};
-        savedInput.value = 10000000;
-        savedInput.outpoint = rust::String("saved-input:0");
-        saved.inputs.push_back(savedInput);
-        send.restoreSavedPsbt(saved);
+        send.restoreTransaction(
+            {.outputs = {{.address = QStringLiteral("saved-recipient"), .amount = 3000000}},
+             .fee = 2000},
+            {{.outpoint = QStringLiteral("saved-input:0"), .amount = 10000000}}, QString());
         btc = input(send, TR("send-placeholder-amount"));
         fiat = input(send, QStringLiteral("0.00"));
-        simulations = backend.simulations;
+        simulations = backend.services.transaction.crafts();
         first.publish(QStringLiteral("EUR"), 50000);
         require(btc->text() == QStringLiteral("0.03000000") &&
                     fiat->text() == QStringLiteral("1500.00") && !fiat->isEnabled(),
@@ -1174,7 +1183,8 @@ auto priceFeedSmoke() -> bool {
         require(hasLabel(send, QStringLiteral("~ 1501.00 EUR")), "total includes frozen fee");
         require(hasLabel(send, QStringLiteral("~ 3499.00 EUR")),
                 "change uses frozen inputs and outputs");
-        require(backend.simulations == simulations, "restored PSBT never resimulates on price");
+        require(backend.services.transaction.crafts() == simulations,
+                "restored PSBT never resimulates on price");
         require(send.transaction()->outputs[0].amount == 3000000 && send.transaction()->fee == 2000,
                 "restored template retains its exact frozen payment and absolute fee");
         hover(send, true, 0, TR("txflow-input-n").arg(1), QStringLiteral("~ 5000.00 EUR"));

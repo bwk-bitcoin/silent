@@ -1,10 +1,12 @@
 #pragma once
 
 #include "catalog/containers/Modal.h"
+#include "interfaces/backend/types.h"
 #include "interfaces/types.h"
 
 #include <QHash>
 #include <QList>
+#include <QPointer>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -28,6 +30,10 @@ class WizardSteps;
 namespace qontrol {
 class Column;
 } // namespace qontrol
+
+namespace backend {
+class IBlockchain;
+} // namespace backend
 
 namespace musig {
 
@@ -67,12 +73,16 @@ private:
 // route runs its own window over this modal, which stays under it. A round cannot go back (a
 // nonce is spent), so there is no Back; closing keeps the session, Sign on the Send
 // panel opens it again. Finalized, it lists the spend path's keys with the signatures
-// known to be in, and Broadcast.
+// known to be in, and Broadcast, which sends it through `blockchain`.
 class SignModal final : public catalog::Modal {
     Q_OBJECT
 
 public:
-    explicit SignModal(MusigAccountController *controller);
+    SignModal(MusigAccountController *controller, backend::IBlockchain *blockchain);
+
+signals:
+    // The network accepted the broadcast transaction; the modal closes.
+    void sent();
 
 public slots:
     void onCosignerClicked();
@@ -82,7 +92,8 @@ public slots:
     void onTransactionReady(const QString &tx_hex);
     void onSigningFailed(const QString &message, plugin::SignError kind);
     void onFinalizeFailed(const QString &message);
-    void onBroadcastDone(const TxResult &result);
+    void onBroadcastFinished(backend::RequestId request_id, const backend::BroadcastResult &result);
+    void onBroadcastError(backend::RequestId request_id, const QString &message);
     void onPlanReady(uint64_t req_id, const SigningPlan &plan);
     void onDevicesChanged();
     void onRetryClicked();
@@ -124,6 +135,8 @@ protected:
 
 private:
     MusigAccountController *m_controller = nullptr;
+    QPointer<backend::IBlockchain> m_blockchain;
+    backend::RequestId m_broadcast_req = 0;
     catalog::WizardSteps *m_steps = nullptr;
     catalog::Notice *m_notice = nullptr;
     catalog::Label *m_save_warning_label = nullptr;

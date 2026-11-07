@@ -3489,34 +3489,16 @@ struct Account final : public ::rust::Opaque {
   // Returns simulation result with fee, weight, and validity info.
   ::TransactionSimulation simulate_transaction(::TransactionTemplate tx_template) const noexcept;
 
-  // Prepare a transaction for signing.
-  // Creates an unsigned transaction from the template and returns a PsbtResult.
-  // The transaction will be finalized and ready to sign.
-  ::rust::Box<::PsbtResult> prepare_transaction(::TransactionTemplate tx_template) const noexcept;
-
-  // Sign a prepared transaction.
-  // Returns TxResult with signed tx hex in value.
-  ::TxResult sign_transaction(::PsbtResult const &psbt_result) const noexcept;
-
-  // Broadcast a signed transaction (hex string) to the network.
-  // Returns TxResult with txid in value.
-  ::TxResult broadcast_transaction(::rust::String signed_tx_hex) const noexcept;
-
   // Finalize a signed PSBT and return transaction hex.
   ::TxResult finalize_psbt(::rust::String signed_psbt_base64) const noexcept;
 
-  // Sign and broadcast a transaction in one step.
-  // Returns TxResult with txid in value.
-  ::TxResult sign_and_broadcast(::PsbtResult const &psbt_result) const noexcept;
-
   // Log all details of a failed broadcast for debugging/reproduction.
-  // Called after broadcast_transaction returns an error.
+  // Called after a broadcast is not accepted.
   void log_failed_broadcast(::TransactionTemplate tx_template, ::rust::String signed_tx_hex) const noexcept;
 
-  // Validate a prepared transaction via Electrum before signing.
-  // Checks for output address reuse and already-spent inputs.
-  // Blocking call - must be called from a background thread.
-  ::PsbtValidation validate_before_sign(::PsbtResult const &psbt_result) const noexcept;
+  // Validates an unsigned PSBTv2, a finalize_transaction answer, via Electrum before
+  // signing: output address reuse and already-spent inputs. Blocking.
+  ::PsbtValidation validate_unsigned_psbt(::rust::Slice<::std::uint8_t const> psbt) const noexcept;
 
   // Coins, balance and history for the published account read model.
   ::FundsSnapshot funds_snapshot() const noexcept;
@@ -4215,9 +4197,6 @@ struct MusigAccount final : public ::rust::Opaque {
   // Every spend path for the coins `outpoints`, `spendable` at the current tip.
   ::MusigSpendLeaves spend_leaves(::rust::Vec<::rust::String> outpoints) const noexcept;
 
-  // Prepares the PSBT, then restricts it to `spend` (Account::restrict_spend_path).
-  ::rust::Box<::PsbtResult> prepare_transaction(::TransactionTemplate tx_template, ::MusigSpendLeaf spend) const noexcept;
-
   // Per cosigner nonce / partial sig counts of the PSBT.
   ::MusigRoundStatus round_status(::rust::Str psbt_v2_hex) const noexcept;
 
@@ -4242,13 +4221,6 @@ struct MusigAccount final : public ::rust::Opaque {
   ::MusigAttemptSnapshot reset_active_attempt() const noexcept;
   ::MusigAttemptSnapshot require_active_restart() const noexcept;
   ::SigningPlan active_signing_plan(::rust::Vec<::LiveDevice> devices) const noexcept;
-
-  // TxResult value is the txid.
-  ::TxResult broadcast_transaction(::rust::String signed_tx_hex) const noexcept;
-
-  // Blocking: call from a background thread.
-  ::PsbtValidation validate_before_sign(::PsbtResult const &psbt_result) const noexcept;
-
   ::FundsSnapshot funds_snapshot() const noexcept;
   ::LabelSnapshot labels() const noexcept;
   ::LabelEditResult set_label(::LabelKind kind, ::rust::String id, ::rust::String text) const noexcept;
@@ -4347,9 +4319,9 @@ private:
 
 ::rust::Box<::SpEndpointChange> sp_startup_endpoint_change(::rust::Box<::Account> account) noexcept;
 
-::rust::Box<::SpEndpointChange> sp_endpoint_change(::rust::Box<::Account> account, ::BackendServer server, ::rust::String url, bool verify, bool test, bool connected) noexcept;
+::rust::Box<::SpEndpointChange> sp_endpoint_change(::rust::Box<::Account> account, ::BackendServer server, bool connected) noexcept;
 
-::rust::Box<::MusigEndpointChange> musig_endpoint_change(::rust::Box<::MusigAccount> account, ::rust::String url, bool verify, bool test, bool connected) noexcept;
+::rust::Box<::MusigEndpointChange> musig_endpoint_change(::rust::Box<::MusigAccount> account, bool connected) noexcept;
 
 ::rust::Box<::Account> take_sp_endpoint_account(::rust::Box<::SpEndpointChange> change) noexcept;
 

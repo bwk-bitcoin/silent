@@ -4,7 +4,6 @@ use crate::{
     account::Account,
     ffi::{BackendErrorKind, BackendServer, EndpointPhase, EndpointResult, RetryDecision},
     musig::MusigAccount,
-    tx_details::test_and_save_endpoint,
 };
 
 const LOSS_WINDOW_MS: i64 = 60_000;
@@ -72,9 +71,6 @@ impl EndpointRetry {
 
 struct Change {
     server: BackendServer,
-    url: String,
-    verify: bool,
-    test: bool,
     connect: bool,
     resume: bool,
     phase: EndpointPhase,
@@ -82,19 +78,9 @@ struct Change {
 }
 
 impl Change {
-    fn new(
-        server: BackendServer,
-        url: String,
-        verify: bool,
-        test: bool,
-        connect: bool,
-        resume: bool,
-    ) -> Self {
+    fn new(server: BackendServer, connect: bool, resume: bool) -> Self {
         Self {
             server,
-            url,
-            verify,
-            test,
             connect,
             resume,
             phase: EndpointPhase::Ready,
@@ -114,25 +100,13 @@ impl Change {
         }
         true
     }
-    fn test_settings(&mut self, name: String) -> bool {
-        if self.test {
-            self.result = test_and_save_endpoint(name, self.server, self.url.clone(), self.verify);
-            if !self.result.is_ok {
-                self.phase = EndpointPhase::Complete;
-                return false;
-            }
-        }
+    fn drain(&mut self) {
         self.phase = EndpointPhase::Draining;
         self.result.is_ok = false;
         self.result.kind = BackendErrorKind::Other;
         self.result.error = "Notification receiver drain required before reopening".into();
-        true
     }
-    fn reopened(&mut self, mut result: EndpointResult) {
-        result.saved = self.result.saved;
-        if result.saved {
-            result.url = self.result.url.clone();
-        }
+    fn reopened(&mut self, result: EndpointResult) {
         self.result = result;
         self.phase = EndpointPhase::Complete;
     }
@@ -170,16 +144,13 @@ pub fn sp_startup_endpoint_change(account: Box<Account>) -> Box<SpEndpointChange
     };
     Box::new(SpEndpointChange {
         account,
-        change: Change::new(server, String::new(), true, false, connect, true),
+        change: Change::new(server, connect, true),
     })
 }
 
 pub fn sp_endpoint_change(
     account: Box<Account>,
     server: BackendServer,
-    url: String,
-    verify: bool,
-    test: bool,
     connected: bool,
 ) -> Box<SpEndpointChange> {
     let connect = if server == BackendServer::Electrum {
@@ -194,20 +165,17 @@ pub fn sp_endpoint_change(
     };
     Box::new(SpEndpointChange {
         account,
-        change: Change::new(server, url, verify, test, connect, resume),
+        change: Change::new(server, connect, resume),
     })
 }
 
 pub fn musig_endpoint_change(
     account: Box<MusigAccount>,
-    url: String,
-    verify: bool,
-    test: bool,
     connected: bool,
 ) -> Box<MusigEndpointChange> {
     Box::new(MusigEndpointChange {
         account,
-        change: Change::new(BackendServer::Electrum, url, verify, test, connected, false),
+        change: Change::new(BackendServer::Electrum, connected, false),
     })
 }
 
@@ -225,13 +193,12 @@ impl SpEndpointChange {
         if !self.change.ready() {
             return;
         }
-        let Some(name) = self.account.endpoint_account_name() else {
+        if self.account.endpoint_account_name().is_none() {
             self.change.unavailable(self.account.get_error());
             return;
-        };
-        if self.change.test_settings(name.to_owned()) {
-            self.account.close_backend();
         }
+        self.change.drain();
+        self.account.close_backend();
     }
     pub fn finish_endpoint_after_drain(&mut self) {
         if self.change.phase != EndpointPhase::Draining {
@@ -269,13 +236,12 @@ impl MusigEndpointChange {
         if !self.change.ready() {
             return;
         }
-        let Some(name) = self.account.endpoint_account_name() else {
+        if self.account.endpoint_account_name().is_none() {
             self.change.unavailable(self.account.get_error());
             return;
-        };
-        if self.change.test_settings(name.to_owned()) {
-            self.account.close_backend();
         }
+        self.change.drain();
+        self.account.close_backend();
     }
     pub fn finish_endpoint_after_drain(&mut self) {
         if self.change.phase != EndpointPhase::Draining {

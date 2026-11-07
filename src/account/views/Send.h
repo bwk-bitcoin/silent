@@ -1,5 +1,8 @@
 #pragma once
 
+#include "account/Money.h"
+#include "account/Services.h"
+#include "interfaces/backend/types.h"
 #include "interfaces/host.h"
 #include "theme/Palette.h"
 #include <Qontrol>
@@ -58,9 +61,6 @@ class QCheckBox;
 #include <qstringlist.h>
 #include <qtmetamacros.h>
 #include <qwidget.h>
-#include <silent.h>
-
-class AccountBackend;
 
 namespace account {
 class SendSigning;
@@ -68,19 +68,6 @@ class SendSigning;
 
 namespace account::view {
 class Send;
-
-class InputW {
-public:
-    InputW(const RustCoin &coin);
-    auto widget() -> QWidget *;
-    static const int TYPE_WIDTH = resolve(Size::XXS);
-    static const int OUTPOINT_WIDTH = resolve(Size::M);
-    static const int LABEL_WIDTH = resolve(Size::XL);
-    static const int VALUE_WIDTH = resolve(Size::S);
-
-private:
-    QWidget *m_widget = nullptr;
-};
 
 class OutputW {
 public:
@@ -124,12 +111,16 @@ private:
 };
 
 // Payments, coins and fee, the transaction they form, then the account's signing
-// step (account::SendSigning) where the kinds of account differ.
+// step (account::SendSigning, which Send takes) where the kinds of account differ. The
+// transaction is crafted from a template: by ITransaction::craft() over coins picked by
+// hand, by an explicit ITransaction::selectCoins() otherwise.
 class Send : public qontrol::Screen {
     Q_OBJECT
 public:
-    explicit Send(AccountBackend *backend);
-    void restoreSavedPsbt(const SavedPsbtEntry &entry);
+    Send(const Services &services, SendSigning *signing);
+    // Shows `transaction`, spending `inputs`, frozen: the signing step holds it again.
+    void restoreTransaction(const backend::TransactionTemplate &transaction,
+                            const QList<backend::Coin> &inputs, const QString &warning);
 
 public slots:
     void onOutputSetMax(int id);
@@ -156,7 +147,9 @@ public slots:
     void onFeeEdited();
     void onFeeModeActivated(int index);
     void onFeeTierActivated(int index);
-    void onCoinsUpdated(CoinState state);
+    void onCoinsChanged();
+    void onCoinsSelected(backend::RequestId request_id, const backend::CraftResult &result);
+    void onSelectionError(backend::RequestId request_id, const QString &message);
     // The signing step took or let go of a transaction.
     void onSigningLocked(bool locked);
     // The signing step broadcast the transaction.
@@ -175,8 +168,14 @@ protected:
     // widgets in place, so the transaction view tracks edits live without
     // rebuilding/re-parenting anything (no input focus loss).
     void updateTransactionFlow();
-    [[nodiscard]] auto editableAmounts() -> SendAmounts;
-    auto txTemplate() -> std::optional<TransactionTemplate>;
+    [[nodiscard]] auto editableAmounts() -> money::Amounts;
+    auto txTemplate() -> std::optional<backend::TransactionTemplate>;
+    // The unspent coins.
+    [[nodiscard]] auto availableCoins() const -> QList<backend::Coin>;
+    // Shows the crafted `result` of the template the payments, fee and coins form.
+    void applyCraft(const backend::CraftResult &result);
+    // The payments, fee and coins form no transaction now: `warning` tells why, when set.
+    void clearTransaction(const QString &warning);
     // The coins the transaction spends: the ones picked by hand, or the auto selection.
     [[nodiscard]] auto spentOutpoints() const -> QStringList;
     // Payments, fee and coins are frozen while the signing step holds a transaction.
@@ -189,8 +188,16 @@ protected:
     void initializeFees();
 
 private:
+    // A complete crafted transaction and what it spends.
+    struct Preview {
+        backend::TransactionTemplate transaction;
+        // The value of each input, in order.
+        QList<quint64> inputValues;
+        money::Amounts amounts;
+    };
+
     static constexpr int SPLIT_WIDTH = 1569;
-    AccountBackend *m_backend = nullptr;
+    Services m_services;
     account::SendSigning *m_signing = nullptr;
     bool m_locked = false;
     bool m_restored = false;
@@ -218,7 +225,7 @@ private:
     catalog::Label *m_change_fiat = nullptr;
 
     catalog::Toggle *m_fee_toggle = nullptr;
-    FeeParseResult m_parsed_fee;
+    std::optional<money::Fee> m_parsed_fee;
     catalog::ComboBox *m_fee_mode_picker = nullptr;
     catalog::ComboBox *m_fee_tier_picker = nullptr;
     FeeMode m_fee_mode = FeeMode::Manual;
@@ -250,11 +257,13 @@ private:
 
     catalog::Label *m_fee_estimate_label = nullptr;
     uint64_t m_estimated_fee = 0;
-    std::optional<TransactionSimulation> m_preview;
+    std::optional<Preview> m_preview;
+    // The coin selection in flight, 0 when none: an older answer is stale.
+    backend::RequestId m_selection_request = 0;
 
-    QList<RustCoin> m_selected_coins{};
+    QList<backend::Coin> m_selected_coins{};
     QStringList m_auto_selected_outpoints;
-    CoinState m_last_coin_state{};
+    backend::Balance m_last_balance{};
 };
 
 } // namespace account::view

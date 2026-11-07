@@ -25,12 +25,24 @@ auto AccountBackend::services() const -> account::ServiceContext * {
 }
 
 auto AccountBackend::endpointOperationsBusy() const -> bool {
-    return m_deletion_pending || m_account_loading || m_endpoints_stopping || m_settings_saving ||
+    return m_deletion_pending || m_account_loading || m_endpoints_stopping || m_settings_busy ||
            m_operation != EndpointOperation::Idle;
 }
 
-void AccountBackend::setSettingsSaving(bool saving) {
-    m_settings_saving = saving;
+void AccountBackend::setSettingsBusy(bool busy) {
+    m_settings_busy = busy;
+    publishEndpointState();
+    if (!busy) {
+        emit settingsIdle();
+    }
+}
+
+auto AccountBackend::settingsBusy() const -> bool {
+    return m_settings_busy;
+}
+
+auto AccountBackend::endpointChangeRefusal() const -> QString {
+    return {};
 }
 
 void AccountBackend::setAccountDeletionPending(bool pending) {

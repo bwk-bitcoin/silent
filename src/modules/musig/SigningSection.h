@@ -1,6 +1,8 @@
 #pragma once
 
 #include "account/SendSigning.h"
+#include "account/Services.h"
+#include "interfaces/backend/types.h"
 #include "interfaces/types.h"
 
 #include <QHash>
@@ -24,18 +26,19 @@ class Label;
 namespace musig {
 
 // The signing step of a Multikey account's Send: the spend path under the coins, then
-// Sign, which prepares the transaction and runs its MuSig2 rounds in the Sign modal,
-// ending on Broadcast. While a session runs, Cancel drops it and Sign opens the modal
-// again at its round.
+// Sign, which finalizes the crafted transaction into a PSBT (ITransaction::finalize()),
+// has the controller adopt it and runs its MuSig2 rounds in the Sign modal, ending on
+// Broadcast. While a session runs, Cancel drops it and Sign opens the modal again at its
+// round.
 class SigningSection final : public account::SendSigning {
     Q_OBJECT
 
 public:
-    explicit SigningSection(MusigAccountController *controller);
+    SigningSection(MusigAccountController *controller, const account::Services &services);
 
     [[nodiscard]] auto actions() -> QWidget * override;
     [[nodiscard]] auto coinsWidget() -> QWidget * override;
-    void setTransaction(const std::optional<TransactionTemplate> &tx,
+    void setTransaction(const std::optional<backend::TransactionTemplate> &tx,
                         const QStringList &outpoints) override;
     // Once a spend path is chosen: the fee depends on it.
     [[nodiscard]] auto estimatesFee() const -> bool override;
@@ -44,13 +47,18 @@ public slots:
     // Refreshes the spend path picker from controller->spendLeaves() for `outpoints`,
     // every coin when none.
     void onCoinsSelected(const QStringList &outpoints);
-    void onCoinsUpdated(CoinState state);
+    void onCoinsChanged();
+    // The account is back from an endpoint change: spend paths it could not list are
+    // listed again.
+    void onEndpointStateChanged();
+    // A finalize() failure gives its reason as error() of request 0.
+    void onTransactionError(backend::RequestId request_id, const QString &message);
     void onSpendLeafChosen(int index);
     void onSignClicked();
     void onPrepared(const QString &psbt_v2_hex, const QString &txid);
     void onSessionLoading();
     void onPrepareFailed(const QString &message);
-    void onBroadcastDone(const TxResult &result);
+    void onSent();
     void onCancelClicked();
     void onSavedPsbtRestored(const SavedPsbtEntry &entry);
     void onSessionCleared();
@@ -74,10 +82,13 @@ protected:
     void openSignModal();
     // The prepared transaction left the step, broadcast or cancelled.
     void closeSession();
+    // The unspent coins' outpoints.
+    [[nodiscard]] auto unspentOutpoints() const -> QStringList;
 
 private:
     MusigAccountController *m_controller = nullptr;
-    std::optional<TransactionTemplate> m_tx = std::nullopt;
+    account::Services m_services;
+    std::optional<backend::TransactionTemplate> m_tx = std::nullopt;
     QStringList m_outpoints;
     bool m_estimates = false;
     // A prepared transaction is held: its MuSig2 session runs.
@@ -100,6 +111,7 @@ private:
     catalog::Button *m_cancel_btn = nullptr;
     catalog::Button *m_sign_btn = nullptr;
     QString m_keys_error;
+    QString m_finalize_error;
 };
 
 } // namespace musig

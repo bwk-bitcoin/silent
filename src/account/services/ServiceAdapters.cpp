@@ -1,6 +1,8 @@
 #include "account/services/ServiceAdapters.h"
 
+#include "account/Extensions.h"
 #include "account/RequestId.h"
+#include "account/services/Conversions.h"
 #include "account/services/ServiceContext.h"
 #include "interfaces/backend/account.h"
 #include "interfaces/backend/blockchain.h"
@@ -142,6 +144,15 @@ public:
             return;
         }
         context()->newAddress(track(request_id), kind);
+    }
+
+    // extension::ADDRESS_KIND_TITLES, answered at once.
+    void value(backend::RequestId request_id, QString operation, QJsonValue payload) override {
+        if (operation != extension::ADDRESS_KIND_TITLES) {
+            Adapter::value(request_id, operation, payload);
+            return;
+        }
+        emit valueResult(request_id, services::addressKindTitles());
     }
 
     // Account backups arrive with the backup and restore flows.
@@ -291,6 +302,21 @@ public:
         context()->broadcast(track(request_id), transaction);
     }
 
+    // extension::TRANSACTION_EXTRAS, answered at once from the fetched details.
+    void value(backend::RequestId request_id, QString operation, QJsonValue payload) override {
+        if (operation != extension::TRANSACTION_EXTRAS) {
+            Adapter::value(request_id, operation, payload);
+            return;
+        }
+        auto extras =
+            context() == nullptr ? std::nullopt : context()->transactionExtras(payload.toString());
+        if (!extras.has_value()) {
+            emit error(request_id, QStringLiteral("The transaction is not fetched yet"));
+            return;
+        }
+        emit valueResult(request_id, *extras);
+    }
+
 public slots:
 
     void onCompleted(backend::RequestId token) {
@@ -329,6 +355,8 @@ public:
     TransactionService(ServiceContext *context, QObject *parent) : Adapter(context, parent) {
         connect(context, &ServiceContext::coinsSelected, this, &TransactionService::onCoinsSelected,
                 qontrol::UNIQUE);
+        connect(context, &ServiceContext::finalizeFailed, this,
+                &TransactionService::onFinalizeFailed, qontrol::UNIQUE);
         connect(context, &ServiceContext::failed, this, &TransactionService::onFailed,
                 qontrol::UNIQUE);
         connect(context, &QObject::destroyed, this, &TransactionService::onContextDestroyed,
@@ -366,6 +394,11 @@ public slots:
         if (auto request = take(token); request.has_value()) {
             emit coinsSelected(*request, result);
         }
+    }
+
+    // finalize() has no request: its reason comes as error() of request 0, during the call.
+    void onFinalizeFailed(const QString &reason) {
+        emit error(0, reason);
     }
 
     void onFailed(backend::RequestId token, const QString &message) {
@@ -437,6 +470,10 @@ public:
                 qontrol::UNIQUE);
         connect(context, &ServiceContext::endpointTested, this, &SettingsService::onEndpointTested,
                 qontrol::UNIQUE);
+        connect(context, &ServiceContext::valueAnswered, this, &SettingsService::onValueAnswered,
+                qontrol::UNIQUE);
+        connect(context, &ServiceContext::endpointsBusyChanged, this,
+                &SettingsService::onEndpointsBusyChanged, qontrol::UNIQUE);
         connect(context, &ServiceContext::completed, this, &SettingsService::onCompleted,
                 qontrol::UNIQUE);
         connect(context, &ServiceContext::failed, this, &SettingsService::onFailed,
@@ -468,7 +505,32 @@ public:
         context()->saveSettings(track(request_id), settings);
     }
 
+    // extension::ENDPOINT_CAPABILITIES and extension::ENDPOINTS_BUSY.
+    void value(backend::RequestId request_id, QString operation, QJsonValue payload) override {
+        if (context() == nullptr) {
+            emit error(request_id, closed());
+        } else if (operation == extension::ENDPOINT_PRESENTATION) {
+            emit valueResult(request_id, services::endpointPresentation());
+        } else if (operation == extension::ENDPOINTS_BUSY) {
+            emit valueResult(request_id, context()->endpointsBusy());
+        } else if (operation == extension::ENDPOINT_CAPABILITIES) {
+            context()->endpointCapabilities(track(request_id), payload.toString());
+        } else {
+            Adapter::value(request_id, operation, payload);
+        }
+    }
+
 public slots:
+
+    void onValueAnswered(backend::RequestId token, const QJsonValue &payload) {
+        if (auto request = take(token); request.has_value()) {
+            emit valueResult(*request, payload);
+        }
+    }
+
+    void onEndpointsBusyChanged(bool busy) {
+        emit valueEvent(extension::ENDPOINTS_BUSY, busy);
+    }
 
     void onEndpointTested(backend::RequestId token) {
         if (auto request = take(token); request.has_value()) {

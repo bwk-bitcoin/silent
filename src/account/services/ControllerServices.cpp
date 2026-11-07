@@ -3,6 +3,8 @@
 #include "account/RequestId.h"
 #include "account/services/Conversions.h"
 #include "metatypes.h"
+#include "views/BackendErrors.h"
+#include "views/utils.h"
 
 #include <QThread>
 #include <Qontrol>
@@ -28,6 +30,11 @@ auto unavailable() -> QString {
     return QStringLiteral("Account is not available");
 }
 
+// An endpoint failure as Settings shows it: what kind of failure, then the server's words.
+auto endpointError(BackendErrorKind kind, const QString &error) -> QString {
+    return mapBackendErrorSummary(kind) + QStringLiteral(" ") + error;
+}
+
 } // namespace
 
 ControllerServices::ControllerServices(const QString &account, AccountBackend *controller)
@@ -36,8 +43,6 @@ ControllerServices::ControllerServices(const QString &account, AccountBackend *c
     connect(controller, &AccountBackend::accountLoadFinished, this,
             &ControllerServices::onAccountLoaded, qontrol::UNIQUE);
     connect(controller, &AccountBackend::updateCoins, this, &ControllerServices::onCoinsUpdated,
-            qontrol::UNIQUE);
-    connect(controller, &AccountBackend::labelsChanged, this, &ServiceContext::onLabelsChanged,
             qontrol::UNIQUE);
     connect(controller, &AccountBackend::endpointStateChanged, this,
             &ControllerServices::onEndpointStateChanged, qontrol::UNIQUE);
@@ -49,6 +54,8 @@ ControllerServices::ControllerServices(const QString &account, AccountBackend *c
             &ControllerServices::onEndpointTipReady, qontrol::UNIQUE);
     connect(controller, &AccountBackend::endpointRequestFinished, this,
             &ControllerServices::onEndpointRequestFinished, qontrol::UNIQUE);
+    connect(controller, &AccountBackend::endpointInfoReady, this,
+            &ControllerServices::onEndpointInfoReady, qontrol::UNIQUE);
     connect(this, &ControllerServices::endpointTestFinished, this,
             &ControllerServices::onEndpointTestFinished, qontrol::UNIQUE);
     connect(this, &ControllerServices::settingsSaveFinished, this,
@@ -81,6 +88,12 @@ auto ControllerServices::endpointsIdle(backend::RequestId token) -> bool {
         emit failed(token, QStringLiteral("An endpoint operation is in progress"));
         return false;
     }
+    // A save the account could not reopen on would leave the config and the live account
+    // apart: nothing is tested or saved meanwhile.
+    if (auto refusal = m_controller->endpointChangeRefusal(); !refusal.isEmpty()) {
+        emit failed(token, refusal);
+        return false;
+    }
     return true;
 }
 
@@ -92,6 +105,28 @@ auto ControllerServices::startWork(backend::RequestId token, QThread *worker) ->
     }
     m_controller->startWorker(worker);
     return true;
+}
+
+auto ControllerServices::startFundsWorker(std::function<std::optional<Funds>()> read) -> bool {
+    if (!available()) {
+        return false;
+    }
+    m_funds_result = std::make_shared<std::optional<Funds>>();
+    auto *worker =
+        QThread::create([result = m_funds_result, read = std::move(read)] { *result = read(); });
+    connect(worker, &QThread::finished, this, &ControllerServices::onFundsWorkerFinished,
+            qontrol::UNIQUE);
+    m_controller->startWorker(worker);
+    return true;
+}
+
+// A server just tested is saved on the transport its test found.
+auto ControllerServices::testedUrl(const backend::Endpoint &endpoint) const -> QString {
+    auto tested = m_tested.constFind(endpoint.id);
+    if (tested != m_tested.cend() && tested->first == endpoint.url) {
+        return tested->second;
+    }
+    return endpoint.url;
 }
 
 auto ControllerServices::endpointOf(const QString &connection) const -> std::optional<Endpoint> {
@@ -110,16 +145,20 @@ void ControllerServices::publishEndpoints() {
     if (m_controller == nullptr || !m_controller->hasAccountMetadata()) {
         return;
     }
+    publishEndpointsBusy(m_controller->endpointOperationsBusy());
     backend::BlockchainState state{.error = m_controller->accountLoadError()};
     backend::Settings settings{.network = services::toNetwork(m_controller->network())};
     for (auto endpoint : m_controller->endpoints()) {
         auto tip = m_tips.constFind(endpoint);
+        auto error = m_controller->endpointError(endpoint);
         state.connections.append(
             {.id = connectionId(endpoint),
              .name = connectionName(endpoint),
              .connected = m_controller->isEndpointRunning(endpoint),
              .tip = tip == m_tips.cend() ? std::nullopt : std::optional<quint64>(tip.value()),
-             .error = m_controller->endpointError(endpoint)});
+             .error = error.isEmpty()
+                          ? error
+                          : endpointError(m_controller->endpointErrorKind(endpoint), error)});
         settings.endpoints.append({.id = connectionId(endpoint),
                                    .name = connectionName(endpoint),
                                    .url = m_controller->endpointUrl(endpoint),
@@ -216,12 +255,18 @@ void ControllerServices::testEndpoint(backend::RequestId token, backend::Endpoin
         return;
     }
     auto network = m_controller->network();
-    startWork(token,
-              QThread::create([this, token, kind = server(*known), url = endpoint.url.toStdString(),
-                               verify = endpoint.verifyCertificate, network] {
-                  auto result = ::test_endpoint(kind, rust::String(url), verify, network);
-                  emit endpointTestFinished(token, result.is_ok, services::toQString(result.error));
-              }));
+    m_testing.insert(token, endpoint);
+    // A running test is an endpoint operation: nothing connects meanwhile.
+    m_controller->setSettingsBusy(true);
+    if (!startWork(token, QThread::create([this, token, kind = server(*known),
+                                           url = endpoint.url.toStdString(),
+                                           verify = endpoint.verifyCertificate, network] {
+                       emit endpointTestFinished(
+                           token, ::test_endpoint(kind, rust::String(url), verify, network));
+                   }))) {
+        m_testing.remove(token);
+        m_controller->setSettingsBusy(false);
+    }
 }
 
 void ControllerServices::saveSettings(backend::RequestId token, backend::Settings settings) {
@@ -240,20 +285,34 @@ void ControllerServices::saveSettings(backend::RequestId token, backend::Setting
             return;
         }
         endpoints.push_back({.server = server(*known),
-                             .url = rust::String(endpoint.url.toStdString()),
+                             .url = rust::String(testedUrl(endpoint).toStdString()),
                              .verify_certificate = endpoint.verifyCertificate});
     }
     m_saving.insert(token, settings);
-    m_controller->setSettingsSaving(true);
+    m_controller->setSettingsBusy(true);
     if (!startWork(token, QThread::create([this, token, account = this->account().toStdString(),
                                            endpoints = std::move(endpoints)]() mutable {
-                       auto result = ::save_endpoints(rust::String(account), std::move(endpoints));
-                       emit settingsSaveFinished(token, result.is_ok,
-                                                 services::toQString(result.error));
+                       emit settingsSaveFinished(
+                           token, ::save_endpoints(rust::String(account), std::move(endpoints)));
                    }))) {
         m_saving.remove(token);
-        m_controller->setSettingsSaving(false);
+        m_controller->setSettingsBusy(false);
     }
+}
+
+void ControllerServices::endpointCapabilities(backend::RequestId token, QString endpoint) {
+    auto known = endpointOf(endpoint);
+    if (!known.has_value() || *known != Endpoint::Blindbit) {
+        emit failed(token, QStringLiteral("Endpoint '%1' reports no capabilities").arg(endpoint));
+        return;
+    }
+    if (!available()) {
+        emit failed(token, unavailable());
+        return;
+    }
+    auto req = nextRequestId();
+    m_info_reqs.insert(req, token);
+    m_controller->requestEndpointInfo(req, *known);
 }
 
 // ===== Slots =====
@@ -293,7 +352,7 @@ void ControllerServices::onTxDetailsReady(uint64_t req_id, const RustTxDetails &
         return;
     }
     auto converted = services::toDetails(details);
-    publishDetails(converted);
+    publishDetails(converted, services::toExtras(details));
     emit transactionDetailsFetched(token, converted);
 }
 
@@ -325,41 +384,62 @@ void ControllerServices::onEndpointRequestFinished(uint64_t req_id,
     auto connecting = found.value();
     m_connect_reqs.erase(found);
     if (!result.is_ok) {
-        emit failed(connecting.token, services::toQString(result.error));
+        emit failed(connecting.token,
+                    endpointError(result.kind, services::toQString(result.error)));
         return;
     }
     connectNext(connecting.token, connecting.steps);
 }
 
-void ControllerServices::onEndpointTestFinished(backend::RequestId token, bool ok,
-                                                const QString &error) {
-    if (ok) {
+void ControllerServices::onEndpointInfoReady(uint64_t req_id, [[maybe_unused]] Endpoint endpoint,
+                                             const BackendInfo &info) {
+    auto found = m_info_reqs.find(req_id);
+    if (found == m_info_reqs.end()) {
+        return;
+    }
+    auto token = found.value();
+    m_info_reqs.erase(found);
+    if (!info.is_ok) {
+        emit failed(token, services::toQString(info.error));
+        return;
+    }
+    emit valueAnswered(token, services::toCapabilities(info));
+}
+
+void ControllerServices::onEndpointTestFinished(backend::RequestId token,
+                                                const EndpointResult &result) {
+    auto endpoint = m_testing.take(token);
+    if (m_controller != nullptr) {
+        m_controller->setSettingsBusy(false);
+    }
+    if (result.is_ok) {
+        m_tested.insert(endpoint.id, {endpoint.url, services::toQString(result.url)});
         emit endpointTested(token);
     } else {
-        emit failed(token, error);
+        emit failed(token, endpointError(result.kind, services::toQString(result.error)));
     }
 }
 
-void ControllerServices::onSettingsSaveFinished(backend::RequestId token, bool ok,
-                                                const QString &error) {
+void ControllerServices::onSettingsSaveFinished(backend::RequestId token,
+                                                const EndpointResult &result) {
     auto settings = m_saving.take(token);
-    if (m_controller != nullptr) {
-        m_controller->setSettingsSaving(false);
-    }
-    if (!ok) {
-        emit failed(token, error);
-        return;
-    }
-    if (m_controller != nullptr) {
+    if (result.is_ok && m_controller != nullptr) {
         for (const auto &endpoint : settings.endpoints) {
             if (auto known = endpointOf(endpoint.id); known.has_value()) {
-                m_controller->setSavedEndpoint(*known,
-                                               rust::String(endpoint.url.trimmed().toStdString()),
-                                               endpoint.verifyCertificate);
+                m_controller->setSavedEndpoint(
+                    *known, rust::String(testedUrl(endpoint).trimmed().toStdString()),
+                    endpoint.verifyCertificate);
             }
         }
     }
-    publishEndpoints();
+    // Publishes the saved endpoints with the idle state, the status bars included.
+    if (m_controller != nullptr) {
+        m_controller->setSettingsBusy(false);
+    }
+    if (!result.is_ok) {
+        emit failed(token, endpointError(result.kind, services::toQString(result.error)));
+        return;
+    }
     emit completed(token);
 }
 
@@ -385,6 +465,11 @@ void ControllerServices::onAddressFinished(backend::RequestId token, bool ok,
     }
     onReceivingChanged();
     emit addressCreated(token, address);
+}
+
+void ControllerServices::onFundsWorkerFinished() {
+    auto result = std::exchange(m_funds_result, nullptr);
+    fundsRead(result == nullptr ? std::nullopt : *result);
 }
 
 void ControllerServices::onBroadcastDone(backend::RequestId token,

@@ -1318,8 +1318,10 @@ account's `account::ServiceContext`, which the account controller owns:
 
 - The context publishes the coins, balance, history, labels, receive addresses, connection
   state and endpoint settings as the controller changes them, whether or not anyone listens.
-  Getters copy them under a short lock and never reach the Rust account. Every getter and
-  request of a built-in service is GUI thread only.
+  Getters copy them under a short lock and never reach the Rust account. The funds are read
+  and converted on a worker the controller waits for before it drops the account, one read
+  at a time (a change during a read is read again after it), and published on the GUI
+  thread. Every getter and request of a built-in service is GUI thread only.
 - A coin is spendable when a spend path can spend it now: a Multikey coin whose only paths
   are timelocked is not, until the validated tip meets the lock.
 - A coin may be published before the transaction funding it is written (the pinned bwk SP
@@ -1327,27 +1329,88 @@ account's `account::ServiceContext`, which the account controller owns:
   funds again every second, for up to two minutes or until the history covers every coin,
   and publishes the history before `historyChanged()`.
 - `craft()` and `finalize()` run on RAM state. Without inputs a template stays incomplete and
-  `finalize()` builds nothing: only `selectCoins()` picks coins. A Multikey PSBT pays change
-  to the change index after the registered tip and leaves it unregistered; the signing owner
-  (`MusigAccount::adopt_transaction`, also behind the existing prepare path) registers it
-  durably when it takes that exact PSBT, and refuses it with a craft-again error when another
-  adoption took the index first.
+  `finalize()` builds nothing: only `selectCoins()` picks coins. A complete crafted template
+  states the whole transaction: its inputs, the MAX amount resolved and the absolute fee it
+  pays (`fee`, which overrides `feeRate`). A Multikey PSBT pays change to the change index
+  after the registered tip and leaves it unregistered; the signing owner
+  (`MusigAccount::adopt_transaction`, which the Multikey Send step calls with the bytes of
+  `finalize()`) registers it durably when it takes that exact PSBT, and refuses it with a
+  craft-again error when another adoption took the index first, or when the PSBT does not pay
+  its template: every recipient its amount (a MAX one what is left) and nothing else but the
+  account's change, which must carry the derivation fields of its index (internal key, key
+  origins, tap tree, MuSig participants) so signers can verify it.
 - `setLabel()` with an empty text removes the label. A save failing after the RAM edit
   publishes the edit (`labelsChanged()`) and answers `error()`, not `saved()`.
 - `broadcast()` takes consensus-encoded transaction bytes. It answers `Rejected` when the
   transaction never reached a server or the server refused it, `Unknown` when it was sent with
   no usable answer, and `Accepted` with warnings when recording it locally then failed. A
   server answering that it already holds the transaction accepts it. A transaction never sent
-  says so in its error, with the `InvalidInput` or `Network` kind, never `Broadcast`.
+  says so in its error, with the `InvalidInput` or `Network` kind, never `Broadcast`. A
+  Multikey broadcast runs through the account's signing owner, behind its saved progress
+  writes: it is refused while a reset, a restart, an endpoint change or another broadcast
+  runs, and the finalized transaction in flight, once accepted, ends its signing session.
 - `testEndpoint()` saves nothing and leaves the live connection alone; `save()` writes the
-  endpoints to the account config untested. Both answer `error()` while an endpoint
-  operation runs; `IBlockchain::setConnected()`, `start()` and
-  `stop()` drive the live connections.
-- `rescan()`, account backups and every `raw()`/`value()` operation answer `error()` for now.
+  endpoints to the account config untested, an endpoint just tested on the transport its
+  test found. Both count as an endpoint operation while they run, and both answer `error()`
+  while another runs or while the account would refuse an endpoint change.
+  `IBlockchain::setConnected()`, `start()` and `stop()` drive the live connections.
+- `rescan()`, account backups and every `raw()` operation answer `error()` for now. The
+  `value()` operations below are the only ones the built-in services answer; each is listed
+  in `src/account/Extensions.h`:
+
+| Service            | Operation                        | Payload        | Answer                                                         |
+|--------------------|----------------------------------|----------------|----------------------------------------------------------------|
+| `IBlockchain`      | `silent.transactionExtras`       | txid           | `{version, lockTime, chainTip?, scripts}` of a fetched transaction, `scripts` by output index for outputs paying no address |
+| `IBackendSettings` | `silent.endpointCapabilities`    | endpoint id    | the BlindBit server's `{tweaksOnly, tweaksFullBasic, tweaksFullWithDustFilter, tweaksCutThroughWithDustFilter}` |
+| `IBackendSettings` | `silent.endpointsBusy`           | none           | whether an endpoint operation runs; also sent as a `valueEvent()` of that name when it changes |
+| `IBackendSettings` | `silent.endpointPresentation`    | none           | per endpoint id: `{label, placeholder, connect, disconnect}` texts in the current language, `transport` (SSL and certificate toggles), `capabilities` (`silent.endpointCapabilities` under its row) |
+| `IAccountBackend`  | `silent.addressKindTitles`       | none           | per address kind id: the title of its list of addresses awaiting payment, in the current language |
+
+`finalize()` returns no reason: a built-in provider whose `finalize()` builds nothing logs why
+and reports it as `error()` with request id 0, during the call. The kinds' names are
+published again when the language changes.
 
 `host_smoke --backend-services` assembles both providers over Regtest fixture accounts and
 checks a history published after its coin through the same getters for a polling and a
 notified consumer.
+
+### The shared account views
+
+The account panels (`src/account/views/`: History, Coins, transaction details, Receive, Send
+and Settings) take an `account::Services`, one pointer per interface, and use nothing else of
+the account: no Rust account, controller or worker. The SP and Multikey controllers assemble
+their account's services from their own module once the account has loaded, then build the
+panels with them: Settings at once, the panels reading the funds once the first funds read
+has answered, so none opens on an empty read. When a supplier retires the assembly, the
+controller deletes the panels, then the assembly. The views name no backend: what differs
+between providers comes from the provider (address kinds and their titles, endpoints and
+their presentation), and the amount and fee rules from `account/Money.h`.
+
+- History, Coins and the transaction details read `IBlockchain` and refresh on its change
+  signals. The details show at once what the account already fetched of the transaction,
+  loading otherwise, then fetch it again; the version and lock time come from
+  `silent.transactionExtras` when the provider answers it.
+- Receive lists `addressKinds()`, titled by their names: a reusable kind shows its address
+  from `addresses()`, the others are generated with `newAddress()`.
+- Settings lists the endpoints of `IBackendSettings::settings()`, shown as the provider
+  presents them. Test runs `testEndpoint()`, saves the tested endpoint alone with `save()`,
+  then disconnects it with `IBlockchain::setConnected()`, so the account reopens on it. A
+  built-in account refuses the test and the save up front while it would refuse that
+  disconnect (a Multikey signing step running), so nothing is saved it cannot reopen on.
+  Connect and Disconnect and the heights use `IBlockchain`, the capabilities and the busy
+  state the extensions above. Heights and capabilities are asked again when a connection or a
+  saved endpoint changes, not on scan or tip updates.
+- Send crafts the template its payments, fee and coins form: `craft()` over coins picked by
+  hand, `selectCoins()` otherwise (an older answer is dropped). The account's signing step
+  (`account::SendSigning`, the module's own) takes the crafted template, finalizes it with
+  `finalize()` and signs through the keys module: an SP account at once, a Multikey account
+  through its signing owner, which adopts the PSBT and keeps the saved PSBTs, Reset and the
+  nonce allocation. The signed transaction goes out with `IBlockchain::broadcast()`; only
+  `Accepted` is shown sent.
+
+`account::AccountBackend` remains the built-in controllers' own base: the account lifecycle
+the module watches, the endpoint connections the status bars drive and read, and the
+requests behind `account::ControllerServices`. The panels no longer use it.
 
 ## Inter-Account Operation: Send To / Spend From Siblings
 

@@ -3,6 +3,7 @@
 #include "account/AccountBackend.h"
 #include "account/ElectrumReconnect.h"
 #include "account/PanelCollection.h"
+#include "host/ServiceAssembly.h"
 
 #include <QList>
 #include <QString>
@@ -23,41 +24,25 @@ public:
     auto init(const QString &account) -> void;
     auto screen(const QString &screen) -> std::optional<qontrol::Screen *>;
     virtual auto loadPanels() -> void;
-    auto getCoins() -> rust::Vec<RustCoin> override;
-    auto getPaymentHistory() -> rust::Vec<RustTx> override;
     virtual auto getSpAddress() -> rust::String;
-    virtual auto newSegwitAddr() -> rust::String;
-    virtual auto newTaprootAddr() -> rust::String;
     auto network() -> Network override;
     virtual auto hasSegwit() -> bool;
     virtual auto hasTaproot() -> bool;
-    // The silent payment address, then the segwit and taproot sub-accounts it has.
-    auto addressKinds() -> QList<AddressKind> override;
-    auto newAddress(AddressKind kind) -> QString override;
     virtual auto getDescriptor() -> rust::String;
-    auto addressVerifyInfo(const QString &address) -> AddressVerifyInfo override;
     // BlindBit, then Electrum.
     auto endpoints() -> QList<Endpoint> override;
     auto endpointUrl(Endpoint endpoint) -> QString override;
     [[nodiscard]] auto verifiesCertificate() const -> bool override;
     [[nodiscard]] auto isEndpointRunning(Endpoint endpoint) const -> bool override;
-    auto settingsExtras() -> QWidget * override;
     [[nodiscard]] auto services() const -> account::ServiceContext * override;
     auto module() -> IModule * override;
-    auto simulateTx(TransactionTemplate tx) -> TransactionSimulation override;
-    // Sign, then Broadcast.
-    auto sendSigning() -> account::SendSigning * override;
     auto coins() -> qontrol::Screen *;
     auto getAccount() -> std::optional<rust::Box<Account>> &;
     // stop() waits for the worker before it drops the account and before stopped()
     // lets the owner delete them.
     void startWorker(QThread *worker) override;
     void requestTxDetails(uint64_t req_id, const QString &txid) override;
-    void editTxLabel(uint64_t req_id, const QString &txid, const QString &label) override;
-    void editOutpointLabel(uint64_t req_id, const QString &outpoint, const QString &label) override;
     void requestEndpointTip(uint64_t req_id, Endpoint endpoint) override;
-    void testAndSaveEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
-                             bool verify_certificate) override;
     void setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) override;
 
 signals:
@@ -74,7 +59,6 @@ public slots:
     auto pollCoins() -> void;
     auto handleNotification(Notification notif) -> void;
     void onNotificationReceived(uint64_t generation, Notification notif);
-    void updateCoinLabel(const QString &outpoint, const QString &label) override;
     auto stop() -> void;
     void onWorkerFinished();
     void onEndpointFinished();
@@ -83,6 +67,12 @@ public slots:
     void onElectrumReconnect();
     // The reconnect gave up: the user is told, the connection stays down.
     void onElectrumGaveUp(int losses);
+    // A reconnect held back by a settings test or save runs.
+    void onSettingsIdle();
+    // A provider of the account's services stops: the panels using them go first.
+    void onServicesRetired();
+    // The first funds read answered: the panels reading them are built.
+    void onFundsAnswered();
 
     // Screen button actions
     auto historyClicked() -> void;
@@ -97,11 +87,16 @@ protected:
     // Construct without FFI init, for a mock subclass (dummy data, no account).
     explicit AccountController(AccountWidget *widget);
     void listenNotifications();
-    void changeEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
-                        bool verify_certificate, bool test, bool connected, bool retry = false,
+    void changeEndpoint(uint64_t req_id, Endpoint endpoint, bool connected, bool retry = false,
                         bool startup = false);
+    // The account's services, assembled once from this module. False when the host
+    // refuses them, or once they retired.
+    auto assembleServices() -> bool;
 
 private:
+    // Declared before the panels, which use it: they go first.
+    std::unique_ptr<host::ServiceAssembly> m_assembly;
+    bool m_services_retired = false;
     account::PanelCollection m_panels{this};
     AccountWidget *m_widget;
     account::ServiceContext *m_services = nullptr;

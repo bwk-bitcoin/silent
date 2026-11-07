@@ -18,6 +18,7 @@
 #define protected public
 #include "AppController.h"
 #include "MainWindow.h"
+#include "account/services/ServiceContext.h"
 #include "account/views/Receive.h"
 #include "account/views/Send.h"
 #include "account/views/Settings.h"
@@ -37,6 +38,8 @@
 #include "host/Host.h"
 #include "i18n/I18nManager.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/blockchain.h"
+#include "interfaces/backend/types.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "interfaces/module.h"
@@ -587,8 +590,9 @@ auto currentRound() -> QString {
 }
 
 auto confirmedCoin() -> bool {
-    return std::ranges::any_of(widget()->controller()->getCoins(),
-                               [](const auto &coin) { return coin.height > 0 && !coin.spent; });
+    return std::ranges::any_of(
+        widget()->controller()->services()->coins(),
+        [](const backend::Coin &coin) { return coin.height.value_or(0) > 0 && !coin.spent; });
 }
 
 // The leaf of Send whose signers are exactly `fps`, -1 when none.
@@ -708,13 +712,20 @@ public slots:
     }
 
     // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-    void onBroadcastDone(const TxResult &result) {
+    void onBroadcastFinished([[maybe_unused]] backend::RequestId request_id,
+                             const backend::BroadcastResult &result) {
         gBroadcastAnswered = true;
-        if (result.is_ok) {
-            gTxids.append(QString::fromStdString(std::string(result.value)));
+        if (result.outcome == backend::BroadcastOutcome::Accepted) {
+            gTxids.append(result.txid);
         } else {
-            gLastError = QString::fromStdString(std::string(result.error));
+            gLastError = result.error;
         }
+    }
+
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    void onBroadcastError([[maybe_unused]] backend::RequestId request_id, const QString &message) {
+        gBroadcastAnswered = true;
+        gLastError = message;
     }
 
 private:
@@ -984,8 +995,12 @@ void broadcastSteps(const QString &ready_shot, const QString &success_shot,
                 shot(ready_shot);
             }
             gBroadcastAnswered = false;
-            QObject::connect(widget()->controller(), &MusigAccountController::broadcastDone,
-                             gDriver, &Driver::onBroadcastDone, qontrol::UNIQUE);
+            // The modal's only blockchain request from here is its broadcast.
+            auto *blockchain = signModal()->m_blockchain.data();
+            QObject::connect(blockchain, &backend::IBlockchain::broadcastFinished, gDriver,
+                             &Driver::onBroadcastFinished, qontrol::UNIQUE);
+            QObject::connect(blockchain, &backend::IService::error, gDriver,
+                             &Driver::onBroadcastError, qontrol::UNIQUE);
             later([] { signModal()->m_broadcast_btn->click(); });
         });
     step(
@@ -1779,12 +1794,15 @@ void addSteps() {
             auto *settings = widget()->findChild<account::view::Settings *>();
             bool ok = false;
             return settings != nullptr && settings->isVisible() &&
-                   (settings->row(Endpoint::Electrum)->height->text().section(' ', -1).toUInt(&ok),
+                   (settings->row(QStringLiteral("electrum"))
+                        ->height->text()
+                        .section(' ', -1)
+                        .toUInt(&ok),
                     ok);
         },
         [] {
             auto *settings = widget()->findChild<account::view::Settings *>();
-            auto shown = settings->row(Endpoint::Electrum)->height->text();
+            auto shown = settings->row(QStringLiteral("electrum"))->height->text();
             auto tip = chain("mine 0");
             check(shown == TR("settings-height").arg(tip),
                   "Settings show the Electrum block height " + shown + " (chain " + tip + ")");

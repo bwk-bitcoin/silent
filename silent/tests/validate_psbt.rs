@@ -10,7 +10,7 @@ use common::{
 use silent::{Output, TransactionTemplate};
 
 #[test]
-fn test_validate_before_sign_success() {
+fn test_validate_unsigned_psbt_success() {
     let account_name = test_account_name();
     let (bbd, mut bitcoind_node, electrum_url) = setup_blindbitd_with_electrum();
     let bitcoind = &mut bitcoind_node.client;
@@ -42,14 +42,10 @@ fn test_validate_before_sign_success() {
         input_outpoints: vec![],
     };
 
-    let psbt = account.prepare_transaction(tx_template);
-    assert!(
-        psbt.is_ok(),
-        "Prepare should succeed: {}",
-        psbt.get_psbt_error()
-    );
+    let psbt = common::sp_unsigned_psbt(&account, tx_template)
+        .unwrap_or_else(|e| panic!("Prepare should succeed: {e}"));
 
-    let validation = account.validate_before_sign(&psbt);
+    let validation = account.validate_unsigned_psbt(&psbt);
     assert!(
         validation.is_ok,
         "Validation should succeed: {}",
@@ -69,7 +65,7 @@ fn test_validate_before_sign_success() {
 }
 
 #[test]
-fn test_validate_before_sign_detects_reused_output() {
+fn test_validate_unsigned_psbt_detects_reused_output() {
     let account_name = test_account_name();
     let (bbd, mut bitcoind_node, electrum_url) = setup_blindbitd_with_electrum();
     let bitcoind = &mut bitcoind_node.client;
@@ -109,14 +105,10 @@ fn test_validate_before_sign_detects_reused_output() {
         input_outpoints: vec![],
     };
 
-    let psbt = account.prepare_transaction(tx_template);
-    assert!(
-        psbt.is_ok(),
-        "Prepare should succeed: {}",
-        psbt.get_psbt_error()
-    );
+    let psbt = common::sp_unsigned_psbt(&account, tx_template)
+        .unwrap_or_else(|e| panic!("Prepare should succeed: {e}"));
 
-    let validation = account.validate_before_sign(&psbt);
+    let validation = account.validate_unsigned_psbt(&psbt);
     assert!(
         validation.is_ok,
         "Validation should succeed: {}",

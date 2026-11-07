@@ -1,5 +1,6 @@
 #include "account/views/Settings.h"
 
+#include "account/Extensions.h"
 #include "account/RequestId.h"
 #include "catalog/Button.h"
 #include "catalog/Variants.h"
@@ -12,15 +13,18 @@
 #include "catalog/inputs/Input.h"
 #include "catalog/inputs/Toggle.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/blockchain.h"
+#include "interfaces/backend/settings.h"
 #include "theme/Palette.h"
 #include "views/utils.h"
 
+#include <QJsonObject>
 #include <QSizePolicy>
 #include <QTimer>
 #include <Qontrol>
 #include <algorithm>
 #include <common.h>
-#include <string>
+#include <utility>
 
 namespace {
 
@@ -31,17 +35,16 @@ const QString K_SSL_SCHEME = QStringLiteral("ssl://");
 const QString K_TCP_SCHEME = QStringLiteral("tcp://");
 const QString K_SCHEME_SEPARATOR = QStringLiteral("://");
 
-auto toQString(const rust::String &value) -> QString {
-    return QString::fromStdString(std::string(value));
-}
-
 } // namespace
 
 namespace account::view {
 
-Settings::Settings(AccountBackend *backend, bool lock_connected_electrum)
-    : m_backend(backend),
-      m_lock_connected_electrum(lock_connected_electrum) {
+Settings::Settings(const Services &services, QWidget *extras, bool lock_connected)
+    : m_services(services),
+      m_lock_connected(lock_connected),
+      m_extras(extras) {
+    // First: the providers answer the requests init() sends during the call.
+    connectServices();
     init();
     doConnect();
     view();
@@ -55,36 +58,40 @@ Settings::~Settings() {
 }
 
 void Settings::init() {
-    for (auto endpoint : m_backend->endpoints()) {
+    // The built-in providers answer during the call: their rows take shape from it.
+    m_presentation_req = nextRequestId();
+    m_services.settings->value(m_presentation_req, extension::ENDPOINT_PRESENTATION, QJsonValue());
+    for (const auto &endpoint : m_services.settings->settings().endpoints) {
         ServerRow serverRow;
         serverRow.endpoint = endpoint;
+        serverRow.presentation = presentationOf(endpoint);
         serverRow.label = new catalog::Label(catalog::LabelRole::Eyebrow);
         serverRow.label->setTone(catalog::LabelTone::Muted);
         serverRow.height = new catalog::Label(catalog::LabelRole::Mono);
         serverRow.height->setTone(catalog::LabelTone::Secondary);
         // A fixed slot, so stacked rows' inputs share one width.
         serverRow.height->setFixedWidth(resolve(Size::XS));
-        bool blindbit = endpoint == Endpoint::Blindbit;
-        serverRow.connect =
-            blindbit ? catalog::btnConnectBlindbit() : catalog::btnConnectElectrum();
-        serverRow.disconnect =
-            blindbit ? catalog::btnDisconnectBlindbit() : catalog::btnDisconnectElectrum();
+        serverRow.connect = catalog::btnEndpoint(serverRow.presentation.connect);
+        serverRow.disconnect = catalog::btnEndpoint(serverRow.presentation.disconnect);
         auto *controls = (new qontrol::Row)
                              ->spacing(resolve(Spacing::S))
                              ->push(serverRow.height)
                              ->push(serverRow.connect)
                              ->push(serverRow.disconnect);
         serverRow.field = new catalog::EndpointRow(controls);
-        if (!blindbit) {
+        if (serverRow.presentation.transport) {
             serverRow.ssl = new catalog::Toggle;
             serverRow.verify = new catalog::Toggle;
         }
-        loadSaved(serverRow);
+        loadSaved(serverRow, endpoint);
         showSaved(serverRow);
-        auto error = m_backend->endpointError(endpoint);
-        if (!error.isEmpty()) {
-            showError(serverRow, mapBackendErrorSummary(m_backend->endpointErrorKind(endpoint)) +
-                                     QStringLiteral(" ") + error);
+        auto connection = this->connection(endpoint.id);
+        if (connection.has_value()) {
+            serverRow.seen_connected = connection->connected;
+            serverRow.seen_error = connection->error;
+        }
+        if (!serverRow.seen_error.isEmpty()) {
+            showError(serverRow, serverRow.seen_error);
         }
         m_rows.append(serverRow);
     }
@@ -93,9 +100,8 @@ void Settings::init() {
     m_capabilities->setAlignment(Qt::AlignTop);
     m_height_timer = new QTimer(this);
     m_height_timer->setInterval(HEIGHT_REFRESH_MS);
-    m_extras = m_backend->settingsExtras();
 
-    retranslateUi();
+    showPresentation();
     refreshRows();
 }
 
@@ -116,24 +122,41 @@ void Settings::doConnect() {
                     qontrol::UNIQUE);
         }
     }
-    connect(m_backend, &AccountBackend::endpointStateChanged, this,
-            &Settings::onEndpointStateChanged, qontrol::UNIQUE);
-    connect(m_backend, &AccountBackend::endpointRequestFinished, this,
-            &Settings::onEndpointRequestFinished, qontrol::UNIQUE);
-    connect(m_backend, &AccountBackend::endpointTipReady, this, &Settings::onEndpointTipReady,
-            qontrol::UNIQUE);
-    connect(m_backend, &AccountBackend::endpointInfoReady, this, &Settings::onBackendInfoReady,
-            qontrol::UNIQUE);
     connect(m_height_timer, &QTimer::timeout, this, &Settings::onHeightTimeout, qontrol::UNIQUE);
+    // A provider without the extension answers error(): its operations are never busy here.
+    m_busy_req = nextRequestId();
+    m_services.settings->value(m_busy_req, extension::ENDPOINTS_BUSY, QJsonValue());
+}
+
+void Settings::connectServices() const {
+    auto *settings = m_services.settings;
+    auto *blockchain = m_services.blockchain;
+    connect(settings, &backend::IBackendSettings::settingsChanged, this,
+            &Settings::onEndpointsChanged, qontrol::UNIQUE);
+    connect(blockchain, &backend::IBlockchain::stateChanged, this, &Settings::onEndpointsChanged,
+            qontrol::UNIQUE);
+    connect(settings, &backend::IBackendSettings::endpointTested, this, &Settings::onEndpointTested,
+            qontrol::UNIQUE);
+    connect(settings, &backend::IBackendSettings::saved, this, &Settings::onSettingsSaved,
+            qontrol::UNIQUE);
+    connect(settings, &backend::IService::valueResult, this, &Settings::onSettingsValue,
+            qontrol::UNIQUE);
+    connect(settings, &backend::IService::valueEvent, this, &Settings::onSettingsEvent,
+            qontrol::UNIQUE);
+    connect(settings, &backend::IService::error, this, &Settings::onServiceError, qontrol::UNIQUE);
+    connect(blockchain, &backend::IBlockchain::completed, this, &Settings::onBlockchainCompleted,
+            qontrol::UNIQUE);
+    connect(blockchain, &backend::IService::error, this, &Settings::onServiceError,
+            qontrol::UNIQUE);
 }
 
 void Settings::view() {
-    auto *network = catalog::pillNetwork(networkName(m_backend->network()));
+    auto *network = catalog::pillNetwork(networkName(m_services.settings->settings().network));
     auto *col = (new qontrol::Column)->spacing(resolve(Spacing::L));
     for (const auto &serverRow : m_rows) {
         auto *server = viewRow(serverRow);
-        if (serverRow.endpoint == Endpoint::Blindbit) {
-            // What the BlindBit server reports it serves.
+        if (serverRow.presentation.capabilities) {
+            // What the server reports it serves.
             auto *capabilities = new catalog::Field(TR("settings-capabilities"), m_capabilities);
             capabilities->setTopAligned(true);
             server = (new qontrol::Column)
@@ -170,12 +193,24 @@ void Settings::hideEvent(QHideEvent *event) {
     qontrol::Screen::hideEvent(event);
 }
 
+// The provider says the texts in the language now in use.
 void Settings::retranslateUi() {
-    for (const auto &serverRow : m_rows) {
-        serverRow.label->setText(label(serverRow.endpoint));
-        serverRow.field->input()->setPlaceholderText(serverRow.endpoint == Endpoint::Blindbit
-                                                         ? TR("settings-placeholder-blindbit")
-                                                         : TR("settings-placeholder-electrum"));
+    m_presentation_req = nextRequestId();
+    m_services.settings->value(m_presentation_req, extension::ENDPOINT_PRESENTATION, QJsonValue());
+    showPresentation();
+}
+
+void Settings::showPresentation() {
+    for (auto &serverRow : m_rows) {
+        auto presentation = presentationOf(serverRow.endpoint);
+        serverRow.presentation.label = presentation.label;
+        serverRow.presentation.placeholder = presentation.placeholder;
+        serverRow.presentation.connect = presentation.connect;
+        serverRow.presentation.disconnect = presentation.disconnect;
+        serverRow.label->setText(presentation.label);
+        serverRow.field->input()->setPlaceholderText(presentation.placeholder);
+        serverRow.connect->setText(presentation.connect);
+        serverRow.disconnect->setText(presentation.disconnect);
     }
 }
 
@@ -216,32 +251,67 @@ auto Settings::rowOf(const QObject *widget) -> ServerRow * {
     return nullptr;
 }
 
-auto Settings::row(Endpoint endpoint) -> ServerRow * {
+auto Settings::row(const QString &id) -> ServerRow * {
     for (auto &serverRow : m_rows) {
-        if (serverRow.endpoint == endpoint) {
+        if (serverRow.endpoint.id == id) {
             return &serverRow;
         }
     }
     return nullptr;
 }
 
-auto Settings::label(Endpoint endpoint) -> QString {
-    return endpoint == Endpoint::Blindbit ? TR("settings-blindbit-address")
-                                          : TR("settings-electrum-address");
+auto Settings::rowOfRequest(backend::RequestId request_id) -> ServerRow * {
+    for (auto &serverRow : m_rows) {
+        if (request_id != 0 &&
+            (serverRow.action_req == request_id || serverRow.tip_req == request_id)) {
+            return &serverRow;
+        }
+    }
+    return nullptr;
 }
 
-auto Settings::networkName(Network network) -> QString {
+// What the provider says of `endpoint`, its name alone when it says nothing.
+auto Settings::presentationOf(const backend::Endpoint &endpoint) const -> Presentation {
+    auto known = m_presentation.value(endpoint.id).toObject();
+    auto text = [&known, &endpoint](const char *key) {
+        auto value = known.value(QLatin1String(key)).toString();
+        return value.isEmpty() ? endpoint.name : value;
+    };
+    return {.label = text("label"),
+            .placeholder = known.value(QStringLiteral("placeholder")).toString(),
+            .connect = text("connect"),
+            .disconnect = text("disconnect"),
+            .transport = known.value(QStringLiteral("transport")).toBool(),
+            .capabilities = known.value(QStringLiteral("capabilities")).toBool()};
+}
+
+auto Settings::networkName(backend::Network network) -> QString {
     switch (network) {
-    case Network::Regtest:
+    case backend::Network::Regtest:
         return TR("network-regtest");
-    case Network::Signet:
+    case backend::Network::Signet:
         return TR("network-signet");
-    case Network::Testnet:
+    case backend::Network::Testnet:
+    case backend::Network::Testnet4:
         return TR("network-testnet");
-    case Network::Bitcoin:
+    case backend::Network::Bitcoin:
         return TR("network-bitcoin");
     }
     return {};
+}
+
+auto Settings::connection(const QString &id) const -> std::optional<backend::Connection> {
+    for (const auto &connection : m_services.blockchain->state().connections) {
+        if (connection.id == id) {
+            return connection;
+        }
+    }
+    return std::nullopt;
+}
+
+auto Settings::isRunning(const ServerRow &row) const -> bool {
+    auto connection = this->connection(row.endpoint.id);
+    return connection.has_value() && connection->connected;
 }
 
 auto Settings::candidateUrl(const ServerRow &row) -> QString {
@@ -275,15 +345,16 @@ auto Settings::isDirty(const ServerRow &row) -> bool {
 }
 
 auto Settings::isBusy() const -> bool {
-    return m_backend->endpointOperationsBusy() ||
-           std::ranges::any_of(
-               m_rows, [](const ServerRow &server_row) { return server_row.action_req != 0; });
+    return m_endpoints_busy || std::ranges::any_of(m_rows, [](const ServerRow &server_row) {
+               return server_row.action_req != 0;
+           });
 }
 
-void Settings::loadSaved(ServerRow &row) {
-    row.saved_url = m_backend->endpointUrl(row.endpoint);
-    row.saved_verify = row.ssl == nullptr || !row.saved_url.startsWith(K_SSL_SCHEME) ||
-                       m_backend->verifiesCertificate();
+void Settings::loadSaved(ServerRow &row, const backend::Endpoint &saved) {
+    row.endpoint = saved;
+    row.saved_url = saved.url;
+    row.saved_verify =
+        row.ssl == nullptr || !row.saved_url.startsWith(K_SSL_SCHEME) || saved.verifyCertificate;
 }
 
 void Settings::showSaved(ServerRow &row) {
@@ -307,8 +378,10 @@ void Settings::refreshRows() {
 void Settings::refreshRow(const ServerRow &row) {
     bool busy = isBusy();
     bool dirty = isDirty(row);
-    bool running = m_backend->isEndpointRunning(row.endpoint);
-    bool addressLocked = m_lock_connected_electrum && row.endpoint == Endpoint::Electrum && running;
+    bool running = isRunning(row);
+    // The lock holds a connected server reached over a transport (Electrum), the one a
+    // Multikey account syncs from.
+    bool addressLocked = m_lock_connected && row.presentation.transport && running;
 
     row.field->setAvailable(!busy, dirty);
     row.field->input()->setReadOnly(addressLocked);
@@ -328,41 +401,75 @@ void Settings::refreshRow(const ServerRow &row) {
 }
 
 void Settings::requestHeight(ServerRow &row) {
-    if (m_backend->endpointOperationsBusy() || !m_backend->isEndpointRunning(row.endpoint)) {
+    if (m_endpoints_busy || !isRunning(row)) {
         row.tip_req = 0;
         row.height->clear();
         return;
     }
     row.tip_req = nextRequestId();
-    m_backend->requestEndpointTip(row.tip_req, row.endpoint);
+    m_services.blockchain->refreshTip(row.tip_req, row.endpoint.id);
 }
 
 void Settings::requestCapabilities() {
-    if (m_info_req != 0 || m_backend->endpointOperationsBusy()) {
+    if (m_info_req != 0 || m_endpoints_busy) {
         return;
     }
-    auto *blindbit = row(Endpoint::Blindbit);
-    if (blindbit == nullptr) {
+    auto found = std::ranges::find_if(
+        m_rows, [](const ServerRow &server_row) { return server_row.presentation.capabilities; });
+    if (found == m_rows.end()) {
         return;
     }
     m_capabilities->setText("--");
-    if (blindbit->saved_url.isEmpty()) {
-        m_info_req = 0;
+    if (found->saved_url.isEmpty()) {
         return;
     }
     m_info_req = nextRequestId();
-    m_backend->requestEndpointInfo(m_info_req, Endpoint::Blindbit);
+    m_services.settings->value(m_info_req, extension::ENDPOINT_CAPABILITIES, found->endpoint.id);
 }
 
-void Settings::startAction(ServerRow &row, bool test) {
+void Settings::startAction(ServerRow &row, Step step) {
     row.action_req = nextRequestId();
-    row.testing_req = test;
+    row.step = step;
     row.action_revision = row.draft_revision;
-    if (test) {
+    row.saved = false;
+    if (step == Step::Testing) {
+        row.tested = row.endpoint;
+        row.tested.url = candidateUrl(row);
+        row.tested.verifyCertificate = candidateVerify(row);
         row.field->setState(catalog::EndpointRow::State::Testing);
     }
     showError(row, QString());
     refreshRows();
+}
+
+void Settings::finishTest(ServerRow &row, const QString &error) {
+    bool current = row.action_revision == row.draft_revision;
+    bool saved = std::exchange(row.saved, false);
+    row.action_req = 0;
+    row.step = Step::None;
+    showError(row, QString());
+    for (const auto &endpoint : m_services.settings->settings().endpoints) {
+        if (endpoint.id == row.endpoint.id) {
+            loadSaved(row, endpoint);
+        }
+    }
+    if (saved) {
+        if (current) {
+            showSaved(row);
+        }
+        if (row.presentation.capabilities) {
+            requestCapabilities();
+        }
+    }
+    if (current) {
+        row.field->setState(error.isEmpty() && saved ? catalog::EndpointRow::State::Ok
+                                                     : catalog::EndpointRow::State::Failed,
+                            error);
+    }
+    refreshRows();
+    if (isVisible()) {
+        requestHeight(row);
+    }
 }
 
 // ===== Slots =====
@@ -372,9 +479,8 @@ void Settings::onTestClicked() {
     if (serverRow == nullptr || isBusy() || !isDirty(*serverRow)) {
         return;
     }
-    startAction(*serverRow, true);
-    m_backend->testAndSaveEndpoint(serverRow->action_req, serverRow->endpoint,
-                                   candidateUrl(*serverRow), candidateVerify(*serverRow));
+    startAction(*serverRow, Step::Testing);
+    m_services.settings->testEndpoint(serverRow->action_req, serverRow->tested);
 }
 
 void Settings::onConnectClicked() {
@@ -382,8 +488,8 @@ void Settings::onConnectClicked() {
     if (serverRow == nullptr || isBusy()) {
         return;
     }
-    startAction(*serverRow, false);
-    m_backend->setEndpointConnected(serverRow->action_req, serverRow->endpoint, true);
+    startAction(*serverRow, Step::Connecting);
+    m_services.blockchain->setConnected(serverRow->action_req, serverRow->endpoint.id, true);
 }
 
 void Settings::onDisconnectClicked() {
@@ -391,8 +497,8 @@ void Settings::onDisconnectClicked() {
     if (serverRow == nullptr || isBusy()) {
         return;
     }
-    startAction(*serverRow, false);
-    m_backend->setEndpointConnected(serverRow->action_req, serverRow->endpoint, false);
+    startAction(*serverRow, Step::Disconnecting);
+    m_services.blockchain->setConnected(serverRow->action_req, serverRow->endpoint.id, false);
 }
 
 void Settings::onUrlEdited() {
@@ -445,111 +551,192 @@ void Settings::onVerifyToggled(bool checked) {
     refreshRow(*serverRow);
 }
 
-void Settings::onEndpointStateChanged(Endpoint endpoint) {
-    auto *serverRow = row(endpoint);
-    if (serverRow != nullptr) {
-        bool dirty = isDirty(*serverRow);
-        auto savedUrl = serverRow->saved_url;
-        bool savedVerify = serverRow->saved_verify;
-        loadSaved(*serverRow);
-        if (!dirty && serverRow->action_req == 0) {
-            if (savedUrl != serverRow->saved_url || savedVerify != serverRow->saved_verify) {
-                ++serverRow->draft_revision;
-                serverRow->field->setState(catalog::EndpointRow::State::Untested);
+// The saved servers or their connections changed.
+void Settings::onEndpointsChanged() {
+    refreshEndpoints(false);
+}
+
+// Heights and capabilities are asked again only when a server's saved address, its
+// connection or the busy state changed: not on every scan or tip update.
+void Settings::refreshEndpoints(bool busy_changed) {
+    auto endpoints = m_services.settings->settings().endpoints;
+    bool capabilitiesChanged = busy_changed;
+    for (auto &serverRow : m_rows) {
+        auto savedUrl = serverRow.saved_url;
+        bool savedVerify = serverRow.saved_verify;
+        auto saved = std::ranges::find_if(endpoints, [&serverRow](const backend::Endpoint &e) {
+            return e.id == serverRow.endpoint.id;
+        });
+        if (saved != endpoints.end()) {
+            bool dirty = isDirty(serverRow);
+            loadSaved(serverRow, *saved);
+            if (!dirty && serverRow.action_req == 0) {
+                if (savedUrl != serverRow.saved_url || savedVerify != serverRow.saved_verify) {
+                    ++serverRow.draft_revision;
+                    serverRow.field->setState(catalog::EndpointRow::State::Untested);
+                }
+                showSaved(serverRow);
             }
-            showSaved(*serverRow);
         }
-        auto error = m_backend->endpointError(endpoint);
-        if (!error.isEmpty() && !serverRow->testing_req) {
-            showError(*serverRow, mapBackendErrorSummary(m_backend->endpointErrorKind(endpoint)) +
-                                      QStringLiteral(" ") + error);
-        } else {
-            showError(*serverRow, QString());
+        auto connection = this->connection(serverRow.endpoint.id);
+        bool connected = connection.has_value() && connection->connected;
+        auto error = connection.has_value() ? connection->error : QString();
+        bool changed = busy_changed || connected != serverRow.seen_connected ||
+                       error != serverRow.seen_error || savedUrl != serverRow.saved_url ||
+                       savedVerify != serverRow.saved_verify;
+        serverRow.seen_connected = connected;
+        serverRow.seen_error = error;
+        if (!error.isEmpty() && serverRow.step != Step::Testing) {
+            showError(serverRow, error);
+        } else if (serverRow.step == Step::None) {
+            showError(serverRow, QString());
         }
-        if (m_backend->endpointOperationsBusy()) {
-            serverRow->tip_req = 0;
-            serverRow->height->clear();
-            m_info_req = 0;
-        } else if (isVisible()) {
-            requestHeight(*serverRow);
+        if (!changed) {
+            continue;
         }
-        if (endpoint == Endpoint::Blindbit) {
-            requestCapabilities();
+        capabilitiesChanged = capabilitiesChanged || serverRow.presentation.capabilities;
+        if (m_endpoints_busy) {
+            serverRow.tip_req = 0;
+            serverRow.height->clear();
+        } else if (isVisible() && serverRow.tip_req == 0) {
+            requestHeight(serverRow);
         }
+    }
+    if (capabilitiesChanged) {
+        requestCapabilities();
     }
     refreshRows();
 }
 
-void Settings::onEndpointRequestFinished(uint64_t req_id, Endpoint endpoint,
-                                         const EndpointResult &result) {
-    auto *serverRow = row(endpoint);
-    if (serverRow == nullptr || req_id == 0 || serverRow->action_req != req_id) {
+void Settings::onEndpointTested(backend::RequestId request_id) {
+    auto *serverRow = rowOfRequest(request_id);
+    if (serverRow == nullptr || serverRow->step != Step::Testing) {
         return;
     }
-    bool tested = serverRow->testing_req;
-    bool current = serverRow->action_revision == serverRow->draft_revision;
+    // Passed: saved untested, as the tested server is what Test saves.
+    serverRow->action_req = nextRequestId();
+    serverRow->step = Step::Saving;
+    auto settings = m_services.settings->settings();
+    settings.endpoints = {serverRow->tested};
+    m_services.settings->save(serverRow->action_req, settings);
+}
+
+void Settings::onSettingsSaved(backend::RequestId request_id) {
+    auto *serverRow = rowOfRequest(request_id);
+    if (serverRow == nullptr || serverRow->step != Step::Saving) {
+        return;
+    }
+    // Saved: the tested server is left disconnected, so the account reopens on it.
+    serverRow->saved = true;
+    serverRow->action_req = nextRequestId();
+    serverRow->step = Step::Disconnecting;
+    m_services.blockchain->setConnected(serverRow->action_req, serverRow->endpoint.id, false);
+}
+
+void Settings::onBlockchainCompleted(backend::RequestId request_id) {
+    auto *serverRow = rowOfRequest(request_id);
+    if (serverRow == nullptr) {
+        return;
+    }
+    if (request_id == serverRow->tip_req) {
+        serverRow->tip_req = 0;
+        auto connection = this->connection(serverRow->endpoint.id);
+        if (connection.has_value() && connection->tip.has_value()) {
+            serverRow->height->setText(TR("settings-height").arg(*connection->tip));
+        } else {
+            serverRow->height->clear();
+        }
+        return;
+    }
+    if (serverRow->saved) {
+        finishTest(*serverRow, QString());
+        return;
+    }
     serverRow->action_req = 0;
-    serverRow->testing_req = false;
-    loadSaved(*serverRow);
-    if (tested) {
-        showError(*serverRow, QString());
-    }
-    if (result.saved) {
-        if (current) {
-            showSaved(*serverRow);
-        }
-        if (endpoint == Endpoint::Blindbit) {
-            requestCapabilities();
-        }
-    }
-    if (tested && current) {
-        serverRow->field->setState(
-            result.is_ok && result.saved ? catalog::EndpointRow::State::Ok
-                                         : catalog::EndpointRow::State::Failed,
-            result.is_ok ? QString()
-                         : mapBackendErrorSummary(result.kind) + QStringLiteral(" ") +
-                               toQString(result.error));
-    } else if (!tested && !result.is_ok) {
-        showError(*serverRow, mapBackendErrorSummary(result.kind) + QStringLiteral(" ") +
-                                  toQString(result.error));
-    }
+    serverRow->step = Step::None;
     refreshRows();
     if (isVisible()) {
         requestHeight(*serverRow);
     }
 }
 
-void Settings::onEndpointTipReady(uint64_t req_id, Endpoint endpoint,
-                                  const ElectrumTipResult &result) {
-    auto *serverRow = row(endpoint);
-    if (serverRow == nullptr || req_id == 0 || serverRow->tip_req != req_id) {
+void Settings::onServiceError(backend::RequestId request_id, const QString &message) {
+    if (request_id == 0) {
         return;
     }
-    serverRow->tip_req = 0;
-    if (!result.is_ok) {
-        serverRow->height->clear();
+    if (request_id == m_busy_req) {
+        m_busy_req = 0;
         return;
     }
-    serverRow->height->setText(TR("settings-height").arg(result.height));
-}
-
-void Settings::onBackendInfoReady(uint64_t req_id, Endpoint endpoint, const BackendInfo &info) {
-    if (endpoint != Endpoint::Blindbit || req_id == 0 || req_id != m_info_req) {
+    if (request_id == m_presentation_req) {
+        m_presentation_req = 0;
         return;
     }
-    m_info_req = 0;
-    if (!info.is_ok) {
+    if (request_id == m_info_req) {
+        m_info_req = 0;
         m_capabilities->setText("--");
         return;
     }
+    auto *serverRow = rowOfRequest(request_id);
+    if (serverRow == nullptr) {
+        return;
+    }
+    if (request_id == serverRow->tip_req) {
+        serverRow->tip_req = 0;
+        serverRow->height->clear();
+        return;
+    }
+    if (serverRow->step == Step::Testing || serverRow->step == Step::Saving || serverRow->saved) {
+        finishTest(*serverRow, message);
+        return;
+    }
+    serverRow->action_req = 0;
+    serverRow->step = Step::None;
+    showError(*serverRow, message);
+    refreshRows();
+    if (isVisible()) {
+        requestHeight(*serverRow);
+    }
+}
+
+void Settings::onSettingsValue(backend::RequestId request_id, const QJsonValue &payload) {
+    if (request_id != 0 && request_id == m_presentation_req) {
+        m_presentation_req = 0;
+        m_presentation = payload.toObject();
+        showPresentation();
+        return;
+    }
+    if (request_id != 0 && request_id == m_busy_req) {
+        m_busy_req = 0;
+        onSettingsEvent(extension::ENDPOINTS_BUSY, payload);
+        return;
+    }
+    if (request_id == 0 || request_id != m_info_req) {
+        return;
+    }
+    m_info_req = 0;
+    auto info = payload.toObject();
     auto yesText = TR("common-yes");
     auto noText = TR("common-no");
-    auto yn = [&yesText, &noText](bool value) -> QString { return value ? yesText : noText; };
+    auto yn = [&yesText, &noText, &info](const char *key) -> QString {
+        return info.value(QLatin1String(key)).toBool() ? yesText : noText;
+    };
     m_capabilities->setText(TR("settings-capabilities-template")
-                                .arg(yn(info.tweaks_only))
-                                .arg(yn(info.tweaks_full_basic))
-                                .arg(yn(info.tweaks_full_with_dust_filter))
-                                .arg(yn(info.tweaks_cut_through_with_dust_filter)));
+                                .arg(yn("tweaksOnly"))
+                                .arg(yn("tweaksFullBasic"))
+                                .arg(yn("tweaksFullWithDustFilter"))
+                                .arg(yn("tweaksCutThroughWithDustFilter")));
+}
+
+void Settings::onSettingsEvent(const QString &operation, const QJsonValue &payload) {
+    if (operation != extension::ENDPOINTS_BUSY || payload.toBool() == m_endpoints_busy) {
+        return;
+    }
+    m_endpoints_busy = payload.toBool();
+    if (m_endpoints_busy) {
+        m_info_req = 0;
+    }
+    refreshEndpoints(true);
 }
 
 void Settings::onHeightTimeout() {

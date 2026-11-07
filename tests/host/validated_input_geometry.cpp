@@ -185,7 +185,7 @@ auto wrapper(catalog::Input *input) -> catalog::ValidatedInput * {
 
 void sendFields() {
     PriceBackend backend;
-    account::view::Send send(&backend);
+    account::view::Send send(backend.services.services(), backend.newSigning());
     QPointer<catalog::Input> address = input(send, TR("send-placeholder-address"));
     QPointer<catalog::Input> btc = input(send, TR("send-placeholder-amount"));
     QPointer<catalog::Input> fee = send.findChild<catalog::Input *>(QStringLiteral("fee-value"));

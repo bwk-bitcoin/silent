@@ -1,6 +1,7 @@
 #include "account/services/ServiceContext.h"
 
-#include "account/services/Conversions.h"
+#include "account/Same.h"
+#include "i18n/I18nManager.h"
 
 #include <QMutexLocker>
 #include <QTimer>
@@ -24,6 +25,9 @@ ServiceContext::ServiceContext(QString account, QObject *parent)
     m_reconcile->setInterval(RECONCILE_INTERVAL_MS);
     connect(m_reconcile, &QTimer::timeout, this, &ServiceContext::onReconcileTimeout,
             qontrol::UNIQUE);
+    // The receive kinds are named in the language in use.
+    connect(i18n::I18nManager::get(), &i18n::I18nManager::languageChanged, this,
+            &ServiceContext::onReceivingChanged, qontrol::UNIQUE);
 }
 
 auto ServiceContext::account() const -> QString {
@@ -55,6 +59,15 @@ auto ServiceContext::transactionDetails(const QString &txid) const
     QMutexLocker lock(&m_mutex);
     auto found = m_details.constFind(txid);
     if (found == m_details.cend()) {
+        return std::nullopt;
+    }
+    return found.value();
+}
+
+auto ServiceContext::transactionExtras(const QString &txid) const -> std::optional<QJsonObject> {
+    QMutexLocker lock(&m_mutex);
+    auto found = m_extras.constFind(txid);
+    if (found == m_extras.cend()) {
         return std::nullopt;
     }
     return found.value();
@@ -105,15 +118,20 @@ auto ServiceContext::settings() const -> backend::Settings {
     return m_settings;
 }
 
+auto ServiceContext::endpointsBusy() const -> bool {
+    QMutexLocker lock(&m_mutex);
+    return m_endpoints_busy;
+}
+
 void ServiceContext::publishFunds(const Funds &funds) {
     bool coins = false;
     bool balance = false;
     bool history = false;
     {
         QMutexLocker lock(&m_mutex);
-        coins = !services::same(m_funds.coins, funds.coins);
-        balance = !services::same(m_funds.balance, funds.balance);
-        history = !services::same(m_funds.history, funds.history);
+        coins = !same(m_funds.coins, funds.coins);
+        balance = !same(m_funds.balance, funds.balance);
+        history = !same(m_funds.history, funds.history);
         m_funds = funds;
     }
     m_history_pending = !funds.historyComplete;
@@ -134,10 +152,12 @@ void ServiceContext::publishNetwork(backend::Network network) {
     m_network = network;
 }
 
-void ServiceContext::publishDetails(const backend::TransactionDetails &details) {
+void ServiceContext::publishDetails(const backend::TransactionDetails &details,
+                                    const QJsonObject &extras) {
     {
         QMutexLocker lock(&m_mutex);
         m_details.insert(details.transaction.txid, details);
+        m_extras.insert(details.transaction.txid, extras);
     }
     emit transactionDetailsChanged(details.transaction.txid);
 }
@@ -145,7 +165,7 @@ void ServiceContext::publishDetails(const backend::TransactionDetails &details) 
 void ServiceContext::publishState(const backend::BlockchainState &state) {
     {
         QMutexLocker lock(&m_mutex);
-        if (services::same(m_state, state)) {
+        if (same(m_state, state)) {
             return;
         }
         m_state = state;
@@ -156,7 +176,7 @@ void ServiceContext::publishState(const backend::BlockchainState &state) {
 void ServiceContext::publishSettings(const backend::Settings &settings) {
     {
         QMutexLocker lock(&m_mutex);
-        if (services::same(m_settings, settings)) {
+        if (same(m_settings, settings)) {
             return;
         }
         m_settings = settings;
@@ -164,12 +184,56 @@ void ServiceContext::publishSettings(const backend::Settings &settings) {
     emit settingsChanged();
 }
 
-// An early coin is not a commit point: its history is read again until it follows.
+void ServiceContext::publishEndpointsBusy(bool busy) {
+    {
+        QMutexLocker lock(&m_mutex);
+        if (m_endpoints_busy == busy) {
+            return;
+        }
+        m_endpoints_busy = busy;
+    }
+    emit endpointsBusyChanged(busy);
+}
+
+// One read at a time: a change during a read is read again once it answers.
 void ServiceContext::reconcileFunds() {
-    auto funds = readFunds();
+    if (m_funds_reading) {
+        m_funds_again = true;
+        return;
+    }
+    m_funds_reading = true;
+    if (!startFundsRead()) {
+        m_funds_reading = false;
+        markFundsKnown();
+        scheduleReconcile();
+    }
+}
+
+auto ServiceContext::fundsKnown() const -> bool {
+    return m_funds_known;
+}
+
+void ServiceContext::markFundsKnown() {
+    if (!std::exchange(m_funds_known, true)) {
+        emit fundsAnswered();
+    }
+}
+
+void ServiceContext::fundsRead(const std::optional<Funds> &funds) {
+    m_funds_reading = false;
     if (funds.has_value()) {
         publishFunds(*funds);
     }
+    markFundsKnown();
+    if (std::exchange(m_funds_again, false)) {
+        reconcileFunds();
+        return;
+    }
+    scheduleReconcile();
+}
+
+// An early coin is not a commit point: its history is read again until it follows.
+void ServiceContext::scheduleReconcile() {
     if (m_history_pending && m_reconcile_attempts < RECONCILE_ATTEMPTS) {
         m_reconcile->start();
     } else {
@@ -191,7 +255,7 @@ void ServiceContext::onLabelsChanged() {
     }
     {
         QMutexLocker lock(&m_mutex);
-        if (services::same(m_labels, *labels)) {
+        if (same(m_labels, *labels)) {
             return;
         }
         m_labels = *labels;
@@ -206,8 +270,8 @@ void ServiceContext::onReceivingChanged() {
     }
     {
         QMutexLocker lock(&m_mutex);
-        if (services::same(m_receiving.kinds, receiving->kinds) &&
-            services::same(m_receiving.addresses, receiving->addresses)) {
+        if (same(m_receiving.kinds, receiving->kinds) &&
+            same(m_receiving.addresses, receiving->addresses)) {
             return;
         }
         m_receiving = *receiving;

@@ -1,6 +1,7 @@
 #include "utils.h"
 #include "catalog/containers/Card.h"
 #include "catalog/display/Label.h"
+#include "views/BackendErrors.h"
 #include "views/DashboardLayout.h"
 #include <QCoreApplication>
 #include <QHBoxLayout>
@@ -75,6 +76,10 @@ auto mapBackendErrorSummary(BackendErrorKind kind) -> QString {
     default:
         return QCoreApplication::translate("view::utils", "Operation failed.");
     }
+}
+
+auto operationFailedSummary() -> QString {
+    return mapBackendErrorSummary(BackendErrorKind::Other);
 }
 
 auto formatBackendErrorDetails(const QString &raw_error) -> QString {

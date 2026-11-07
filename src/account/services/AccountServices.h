@@ -4,6 +4,7 @@
 #include "account/services/Conversions.h"
 
 #include <QByteArray>
+#include <QDebug>
 #include <QSet>
 #include <QString>
 #include <QThread>
@@ -42,6 +43,9 @@ public:
         }
         auto psbt = wallet->finalize_transaction(services::toTemplate(transaction));
         if (!psbt.is_ok) {
+            auto reason = services::toQString(psbt.error);
+            qWarning() << "finalize_transaction failed:" << reason;
+            emit finalizeFailed(reason);
             return std::nullopt;
         }
         return services::toBytes(psbt.psbt);
@@ -121,12 +125,18 @@ protected:
         return QStringLiteral("Account is busy or closed");
     }
 
-    auto readFunds() -> std::optional<Funds> override {
+    // The snapshot is taken and converted on a worker the controller waits for before it
+    // drops the account.
+    auto startFundsRead() -> bool override {
         auto *wallet = rustAccount();
         if (wallet == nullptr) {
-            return std::nullopt;
+            return false;
         }
-        auto snapshot = wallet->funds_snapshot();
+        return startFundsWorker([wallet] { return readFunds(*wallet); });
+    }
+
+    static auto readFunds(const Rust &wallet) -> std::optional<Funds> {
+        auto snapshot = wallet.funds_snapshot();
         if (!snapshot.is_ok) {
             return std::nullopt;
         }

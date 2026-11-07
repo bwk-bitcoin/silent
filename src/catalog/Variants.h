@@ -64,10 +64,8 @@ auto btnAddPayment() -> Button *;
 auto btnAddPath() -> Button *;
 auto btnClear() -> Button *;
 auto btnCancelSigned() -> Button *;
-auto btnConnectBlindbit() -> Button *;
-auto btnConnectElectrum() -> Button *;
-auto btnDisconnectBlindbit() -> Button *;
-auto btnDisconnectElectrum() -> Button *;
+// A server row's Connect or Disconnect, saying `label`.
+auto btnEndpoint(const QString &label) -> Button *;
 auto btnGenerate() -> Button *;
 auto btnGenerateNew() -> Button *;
 // Create Account's fetch row: the sp() descriptor, the taproot and the segwit xpub.

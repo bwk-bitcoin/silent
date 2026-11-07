@@ -1,8 +1,9 @@
 #pragma once
 
 #include "catalog/panels/home/RowClickTable.h"
+#include "interfaces/backend/types.h"
 
-#include <silent.h>
+#include <QtGlobal>
 
 namespace catalog {
 
@@ -14,7 +15,8 @@ class CoinsTable : public RowClickTable {
 public:
     // `compact` dates drop the time.
     explicit CoinsTable(bool compact, QWidget *parent = nullptr);
-    void addCoin(const RustCoin &coin);
+    // `timestamp` dates the coin, 0 when not known.
+    void addCoin(const backend::Coin &coin, quint64 timestamp);
 
 private:
     bool m_compact = false;

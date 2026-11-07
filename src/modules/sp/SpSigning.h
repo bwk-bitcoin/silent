@@ -1,8 +1,11 @@
 #pragma once
 
 #include "account/SendSigning.h"
+#include "account/Services.h"
+#include "interfaces/backend/types.h"
 #include "interfaces/types.h"
 
+#include <QByteArray>
 #include <QString>
 #include <QStringList>
 #include <optional>
@@ -15,17 +18,18 @@ class Button;
 class Label;
 } // namespace catalog
 
-// The signing step of an sp account's Send: Sign has the keys module sign the whole
-// PSBT at once, then Broadcast sends it, or Cancel lets it go.
+// The signing step of an sp account's Send: Sign finalizes the crafted transaction into
+// a PSBT (ITransaction::finalize()) and has the keys module sign it at once, then
+// Broadcast sends it (IBlockchain::broadcast()), or Cancel lets it go.
 class SpSigning final : public account::SendSigning {
     Q_OBJECT
 
 public:
-    explicit SpSigning(AccountController *controller);
+    SpSigning(AccountController *controller, const account::Services &services);
 
     [[nodiscard]] auto actions() -> QWidget * override;
     [[nodiscard]] auto coinsWidget() -> QWidget * override;
-    void setTransaction(const std::optional<TransactionTemplate> &tx,
+    void setTransaction(const std::optional<backend::TransactionTemplate> &tx,
                         const QStringList &outpoints) override;
     [[nodiscard]] auto estimatesFee() const -> bool override;
 
@@ -33,7 +37,6 @@ signals:
     // Emitted from the worker threads; queued to the GUI thread receivers.
     void validationReady(PsbtValidation result);
     void signReady(TxResult result);
-    void broadcastReady(TxResult result);
 
 public slots:
     void onSignClicked();
@@ -44,7 +47,10 @@ public slots:
     void onSignerError(std::optional<ReqId> req_id, const QString &message);
     void onSignerCancelled(ReqId req_id);
     void onSignResult(TxResult result);
-    void onBroadcastResult(TxResult result);
+    void onBroadcastFinished(backend::RequestId request_id, const backend::BroadcastResult &result);
+    void onBroadcastError(backend::RequestId request_id, const QString &message);
+    // A finalize() failure gives its reason as error() of request 0.
+    void onTransactionError(backend::RequestId request_id, const QString &message);
 
 protected:
     void init();
@@ -61,9 +67,14 @@ protected:
     void updateButtons();
     // Lets go of the prepared or signed transaction, and Send of its payments.
     void dropTransaction();
+    // A prepare failure as the user reads it: what failed, then why when known.
+    [[nodiscard]] static auto failureText(const QString &reason) -> QString;
+    // The broadcast answered: `error` is empty once the network accepted it.
+    void finishBroadcast(const QString &error);
 
 private:
     AccountController *m_controller = nullptr;
+    account::Services m_services;
     QWidget *m_actions = nullptr;
     QWidget *m_signed_pill = nullptr;
     catalog::Button *m_cancel_btn = nullptr;
@@ -71,10 +82,13 @@ private:
     catalog::Button *m_broadcast_btn = nullptr;
     catalog::Label *m_status_label = nullptr;
     // The transaction Send forms now.
-    std::optional<TransactionTemplate> m_tx = std::nullopt;
-    // The transaction being signed or held signed, and its PSBT until it is signed.
-    std::optional<TransactionTemplate> m_tx_template = std::nullopt;
-    std::optional<rust::Box<PsbtResult>> m_psbt_result = std::nullopt;
+    std::optional<backend::TransactionTemplate> m_tx = std::nullopt;
+    // The transaction being signed or held signed, and its unsigned PSBTv2 until it is
+    // signed.
+    std::optional<backend::TransactionTemplate> m_tx_template = std::nullopt;
+    QByteArray m_psbt;
     QString m_signed_tx_hex;
     ReqId m_sign_req_id = 0;
+    backend::RequestId m_broadcast_req = 0;
+    QString m_finalize_error;
 };

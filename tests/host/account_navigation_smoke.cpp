@@ -3,6 +3,7 @@
 #include "AppController.h"
 #include "MainWindow.h"
 #include "PluginStopProbe.h"
+#include "account/AccountModule.h"
 #include "account/AccountShell.h"
 #include "account/PanelCollection.h"
 #include "host/PluginRegistry.h"
@@ -94,6 +95,8 @@ template <typename Widget, typename Status>
 void navigation(MainWindow &window, const QString &name, const QList<Entry> &entries) {
     auto *widget = new Widget(name);
     auto *controller = widget->controller();
+    // The panels' services come from the account module, for the accounts it watches.
+    qobject_cast<account::AccountModule *>(controller->module())->watchAccount(name, controller);
     controller->loadPanel(QStringLiteral("settings"));
     window.addTab(widget, name);
     waitFor([controller] {

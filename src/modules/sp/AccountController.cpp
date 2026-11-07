@@ -3,7 +3,9 @@
 #include "AppController.h"
 #include "SpModule.h"
 #include "SpSigning.h"
+#include "account/Services.h"
 #include "account/services/AccountServices.h"
+#include "account/services/ServiceContext.h"
 #include "account/views/Coins.h"
 #include "account/views/History.h"
 #include "account/views/Receive.h"
@@ -40,6 +42,8 @@ auto AccountController::init(const QString &account) -> void {
             &AccountController::onElectrumReconnect, qontrol::UNIQUE);
     connect(m_reconnect, &account::ElectrumReconnect::gaveUp, this,
             &AccountController::onElectrumGaveUp, qontrol::UNIQUE);
+    connect(this, &AccountBackend::settingsIdle, this, &AccountController::onSettingsIdle,
+            qontrol::UNIQUE);
 
     // Take the notification receiver and spawn a blocking listener thread
     connect(this, &AccountController::notificationReceived, this,
@@ -68,24 +72,57 @@ void AccountController::onAccountLoaded() {
         setAccountDescriptor(m_account.value()->descriptor());
         listenNotifications();
     }
+    // Loaded first: the account supplies its services from here on.
+    finishAccountLoad(error);
     if ((m_widget != nullptr || m_panels_requested) && hasAccountMetadata()) {
         loadPanels();
         loadPanel(m_requested_panel);
         pollCoins();
     }
-    finishAccountLoad(error);
     if (!error.isEmpty()) {
         for (auto endpoint : endpoints()) {
             reportEndpointFailure(endpoint, rust::String(error.toStdString()),
                                   BackendErrorKind::Other);
         }
     } else if (m_widget != nullptr && !endpointOperationsBusy()) {
-        changeEndpoint(0, Endpoint::Electrum, {}, true, false, true, false, true);
+        changeEndpoint(0, Endpoint::Electrum, true, false, true);
     }
 }
 
 AccountController::~AccountController() {
     m_panels.clear();
+}
+
+auto AccountController::assembleServices() -> bool {
+    if (m_assembly != nullptr) {
+        return true;
+    }
+    // The account supplies its services once loaded.
+    if (m_services_retired || m_services == nullptr || accountLoading()) {
+        return false;
+    }
+    auto result = account::assembleServices(module(), m_services->account(),
+                                            account::services::toNetwork(network()));
+    if (result.assembly == nullptr) {
+        qWarning() << "AccountController: account services refused:" << result.error;
+        return false;
+    }
+    m_assembly = std::move(result.assembly);
+    connect(m_assembly.get(), &host::ServiceAssembly::retired, this,
+            &AccountController::onServicesRetired, qontrol::UNIQUE);
+    return true;
+}
+
+void AccountController::onFundsAnswered() {
+    loadPanels();
+    loadPanel(m_requested_panel);
+}
+
+void AccountController::onServicesRetired() {
+    m_services_retired = true;
+    m_panels.clear();
+    // The assembly is the sender: it goes once its signal returned.
+    m_assembly.release()->deleteLater();
 }
 
 void AccountController::listenNotifications() {
@@ -254,18 +291,29 @@ auto AccountController::loadPanels() -> void {
     if (m_init && !hasAccountMetadata()) {
         return;
     }
+    if (!assembleServices()) {
+        return;
+    }
+    auto services = account::servicesOf(*m_assembly);
     if (!m_panels.contains("settings")) {
-        auto *settingsScreen = new account::view::Settings(this);
+        auto *settingsScreen = new account::view::Settings(services, nullptr);
         this->insertPanel(new qontrol::Panel(settingsScreen, "settings"));
     }
     if (m_panels.contains("history") ||
         (m_init && (!m_account.has_value() || !m_account.value()->is_ok()))) {
         return;
     }
-    insertPanel(new qontrol::Panel(new account::view::History(this), "history"));
-    insertPanel(new qontrol::Panel(new account::view::Coins(this), "coins"));
-    insertPanel(new qontrol::Panel(new account::view::Receive(this), "receive"));
-    insertPanel(new qontrol::Panel(new account::view::Send(this), "send"));
+    // The views open on the account's funds, not on an empty read.
+    if (!m_services->fundsKnown()) {
+        connect(m_services, &account::ServiceContext::fundsAnswered, this,
+                &AccountController::onFundsAnswered, qontrol::UNIQUE);
+        return;
+    }
+    insertPanel(new qontrol::Panel(new account::view::History(services), "history"));
+    insertPanel(new qontrol::Panel(new account::view::Coins(services), "coins"));
+    insertPanel(new qontrol::Panel(new account::view::Receive(services, module()), "receive"));
+    insertPanel(new qontrol::Panel(new account::view::Send(services, new SpSigning(this, services)),
+                                   "send"));
 }
 
 auto AccountController::historyClicked() -> void {
@@ -286,19 +334,6 @@ auto AccountController::receiveClicked() -> void {
 
 auto AccountController::settingsClicked() -> void {
     this->loadPanel("settings");
-}
-
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-auto AccountController::simulateTx(TransactionTemplate tx) -> TransactionSimulation {
-    if (m_account.has_value() && !accountDeletionPending() && !endpointsStopping()) {
-        return m_account.value()->simulate_transaction(std::move(tx));
-    }
-    qDebug() << "AccountController::simulateTx() m_account is None!";
-    // Return empty/invalid simulation
-    TransactionSimulation sim{};
-    sim.is_valid = false;
-    sim.error = rust::String("Account not initialized");
-    return sim;
 }
 
 auto AccountController::stop() -> void {
@@ -360,46 +395,9 @@ void AccountController::onWorkerFinished() {
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-auto AccountController::getCoins() -> rust::Vec<RustCoin> {
-    if (m_account.has_value()) {
-        auto all = m_account.value()->coins();
-        rust::Vec<RustCoin> spendable;
-        for (auto &coin : all) {
-            if (!coin.spent) {
-                spendable.push_back(std::move(coin));
-            }
-        }
-        return spendable;
-    }
-    return rust::Vec<RustCoin>();
-}
-
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-auto AccountController::getPaymentHistory() -> rust::Vec<RustTx> {
-    if (m_account.has_value()) {
-        return m_account.value()->payment_history();
-    }
-    return rust::Vec<RustTx>();
-}
-
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 auto AccountController::getSpAddress() -> rust::String {
     if (m_account.has_value()) {
         return m_account.value()->sp_address();
-    }
-    return rust::String("");
-}
-
-auto AccountController::newSegwitAddr() -> rust::String {
-    if (m_account.has_value()) {
-        return m_account.value()->new_segwit_addr();
-    }
-    return rust::String("");
-}
-
-auto AccountController::newTaprootAddr() -> rust::String {
-    if (m_account.has_value()) {
-        return m_account.value()->new_taproot_addr();
     }
     return rust::String("");
 }
@@ -419,45 +417,8 @@ auto AccountController::hasTaproot() -> bool {
     return hasAccountMetadata() && !accountConfig().get_taproot_descriptor().empty();
 }
 
-auto AccountController::addressKinds() -> QList<AddressKind> {
-    QList<AddressKind> kinds{AddressKind::SilentPayment};
-    if (hasSegwit()) {
-        kinds.append(AddressKind::Segwit);
-    }
-    if (hasTaproot()) {
-        kinds.append(AddressKind::Taproot);
-    }
-    return kinds;
-}
-
-auto AccountController::newAddress(AddressKind kind) -> QString {
-    if (accountDeletionPending() || endpointsStopping()) {
-        return {};
-    }
-    rust::String address;
-    switch (kind) {
-    case AddressKind::SilentPayment:
-        address = getSpAddress();
-        break;
-    case AddressKind::Segwit:
-        address = newSegwitAddr();
-        break;
-    case AddressKind::Taproot:
-        address = newTaprootAddr();
-        break;
-    }
-    return QString::fromStdString(std::string(address.c_str()));
-}
-
 auto AccountController::getDescriptor() -> rust::String {
     return accountDescriptor();
-}
-
-auto AccountController::addressVerifyInfo(const QString &address) -> AddressVerifyInfo {
-    if (m_account.has_value()) {
-        return m_account.value()->address_verify_info(rust::String(address.toStdString()));
-    }
-    return AddressVerifyInfo{.descriptor = rust::String(""), .path = rust::String("")};
 }
 
 auto AccountController::endpoints() -> QList<Endpoint> {
@@ -485,7 +446,13 @@ void AccountController::onElectrumReconnect() {
         m_reconnect_pending = true;
     } else if (m_account.has_value()) {
         m_reconnect_pending = false;
-        changeEndpoint(0, Endpoint::Electrum, {}, true, false, true, true);
+        changeEndpoint(0, Endpoint::Electrum, true, true);
+    }
+}
+
+void AccountController::onSettingsIdle() {
+    if (m_reconnect_pending && !endpointOperationsBusy()) {
+        onElectrumReconnect();
     }
 }
 
@@ -502,16 +469,8 @@ auto AccountController::module() -> IModule * {
     return SpModule::get();
 }
 
-auto AccountController::settingsExtras() -> QWidget * {
-    return nullptr;
-}
-
 auto AccountController::services() const -> account::ServiceContext * {
     return m_services;
-}
-
-auto AccountController::sendSigning() -> account::SendSigning * {
-    return new SpSigning(this);
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
@@ -523,10 +482,6 @@ auto AccountController::coins() -> qontrol::Screen * {
     return nullptr;
 }
 
-void AccountController::updateCoinLabel(const QString &outpoint, const QString &label) {
-    editOutpointLabel(0, outpoint, label);
-}
-
 auto AccountController::getAccount() -> std::optional<rust::Box<Account>> & {
     return m_account;
 }
@@ -534,17 +489,6 @@ auto AccountController::getAccount() -> std::optional<rust::Box<Account>> & {
 void AccountController::requestTxDetails(uint64_t req_id, const QString &txid) {
     requestAccountTxDetails(req_id, txid, m_account.has_value() ? &*m_account.value() : nullptr,
                             isEndpointRunning(Endpoint::Electrum) && !m_endpoint_busy);
-}
-
-void AccountController::editTxLabel(uint64_t req_id, const QString &txid, const QString &label) {
-    editAccountLabel(req_id, txid, label, m_account.has_value() ? &*m_account.value() : nullptr,
-                     true);
-}
-
-void AccountController::editOutpointLabel(uint64_t req_id, const QString &outpoint,
-                                          const QString &label) {
-    editAccountLabel(req_id, outpoint, label, m_account.has_value() ? &*m_account.value() : nullptr,
-                     false);
 }
 
 void AccountController::requestEndpointTip(uint64_t req_id, Endpoint endpoint) {
@@ -558,17 +502,11 @@ void AccountController::requestEndpointTip(uint64_t req_id, Endpoint endpoint) {
     requestAccountEndpointTip(req_id, endpoint);
 }
 
-void AccountController::testAndSaveEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
-                                            bool verify_certificate) {
-    changeEndpoint(req_id, endpoint, url, verify_certificate, true, false);
-}
-
 void AccountController::setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) {
-    changeEndpoint(req_id, endpoint, {}, true, false, connected);
+    changeEndpoint(req_id, endpoint, connected);
 }
 
-void AccountController::changeEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
-                                       bool verify_certificate, bool test, bool connected,
+void AccountController::changeEndpoint(uint64_t req_id, Endpoint endpoint, bool connected,
                                        bool retry, bool startup) {
     if (endpointOperationsBusy() || m_stopping || !m_account.has_value() ||
         !endpoints().contains(endpoint)) {
@@ -590,7 +528,7 @@ void AccountController::changeEndpoint(uint64_t req_id, Endpoint endpoint, const
     m_endpoint_server = std::make_shared<BackendServer>(BackendServer::Electrum);
     m_endpoint_notifications.clear();
     m_endpoint = endpoint;
-    if (!test && !connected) {
+    if (!connected) {
         m_reconnect->stopped();
         m_reconnect_pending = false;
     }
@@ -600,22 +538,19 @@ void AccountController::changeEndpoint(uint64_t req_id, Endpoint endpoint, const
     m_endpoint_replaced = std::make_shared<bool>(false);
     auto workers = std::move(m_workers);
     m_workers.clear();
-    auto operation = connected ? EndpointOperation::Connecting : EndpointOperation::Disconnecting;
-    if (test) {
-        operation = EndpointOperation::Testing;
-    }
-    beginEndpointOperation(req_id, endpoint, operation);
+    beginEndpointOperation(req_id, endpoint,
+                           connected ? EndpointOperation::Connecting
+                                     : EndpointOperation::Disconnecting);
     auto *thread = endpointChangeWorker(
         m_endpoint_account, m_endpoint_result, m_endpoint_replaced, workers, m_notif_thread,
-        [endpoint, url = url.toStdString(), verify_certificate, test, connected,
-         startup](rust::Box<Account> account) {
+        [endpoint, connected, startup](rust::Box<Account> account) {
             if (startup) {
                 return ::sp_startup_endpoint_change(std::move(account));
             }
             return ::sp_endpoint_change(std::move(account),
                                         endpoint == Endpoint::Electrum ? BackendServer::Electrum
                                                                        : BackendServer::Blindbit,
-                                        rust::String(url), verify_certificate, test, connected);
+                                        connected);
         },
         ::take_sp_endpoint_account, m_endpoint_server);
     connect(thread, &QThread::finished, this, &AccountController::onEndpointFinished,
@@ -636,8 +571,6 @@ void AccountController::onEndpointFinished() {
         setSavedEndpoint(Endpoint::Blindbit, m_account.value()->blindbit_url(), true);
         setSavedEndpoint(Endpoint::Electrum, m_account.value()->electrum_url(),
                          m_account.value()->verify_certificate());
-    } else if (m_endpoint_result->saved) {
-        setSavedEndpoint(m_endpoint, m_endpoint_result->url, m_endpoint_result->verify_certificate);
     }
     if (*m_endpoint_replaced) {
         if (!m_endpoint_retry) {

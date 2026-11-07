@@ -3,8 +3,11 @@
 #include "account/AccountBackend.h"
 #include "account/ElectrumReconnect.h"
 #include "account/PanelCollection.h"
+#include "host/ServiceAssembly.h"
+#include "interfaces/backend/types.h"
 #include "interfaces/types.h"
 
+#include <QByteArray>
 #include <QHash>
 #include <QList>
 #include <QPointer>
@@ -42,35 +45,26 @@ public:
     void loadPanels();
     auto screen(const QString &screen) -> std::optional<qontrol::Screen *>;
     auto getAccount() -> std::optional<rust::Box<MusigAccount>> &;
-    auto getCoins() -> rust::Vec<RustCoin> override;
-    auto getPaymentHistory() -> rust::Vec<RustTx> override;
     auto network() -> Network override;
-    // A taproot address only.
-    auto addressKinds() -> QList<AddressKind> override;
-    auto newAddress(AddressKind kind) -> QString override;
+    // A new taproot address, the only kind it receives on. Empty on failure.
+    auto newAddress(AddressKind kind) -> QString;
     auto getDescriptor() -> rust::String;
     auto cosignerFingerprints() -> QStringList;
-    auto addressVerifyInfo(const QString &address) -> AddressVerifyInfo override;
     // Electrum only.
     auto endpoints() -> QList<Endpoint> override;
     auto endpointUrl(Endpoint endpoint) -> QString override;
     [[nodiscard]] auto verifiesCertificate() const -> bool override;
     [[nodiscard]] auto isEndpointRunning(Endpoint endpoint) const -> bool override;
-    // The descriptor, the cosigners and Delete.
-    auto settingsExtras() -> QWidget * override;
+    // A signing request, a finalization, a reset or a broadcast runs.
+    [[nodiscard]] auto endpointChangeRefusal() const -> QString override;
+    // What Settings shows below the endpoints: the descriptor, the cosigners and Delete.
+    auto settingsExtras() -> QWidget *;
     [[nodiscard]] auto services() const -> account::ServiceContext * override;
     auto module() -> IModule * override;
-    auto simulateTx(TransactionTemplate tx) -> TransactionSimulation override;
-    // The spend path, Prepare and the MuSig2 rounds.
-    auto sendSigning() -> account::SendSigning * override;
     // stop() waits for the worker before it drops the account.
     void startWorker(QThread *worker) override;
     void requestTxDetails(uint64_t req_id, const QString &txid) override;
-    void editTxLabel(uint64_t req_id, const QString &txid, const QString &label) override;
-    void editOutpointLabel(uint64_t req_id, const QString &outpoint, const QString &label) override;
     void requestEndpointTip(uint64_t req_id, Endpoint endpoint) override;
-    void testAndSaveEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
-                             bool verify_certificate) override;
     void setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) override;
     auto electrumUrl() -> QString;
     [[nodiscard]] auto electrumState() const -> ElectrumState;
@@ -122,7 +116,6 @@ signals:
     void transactionReady(QString tx_hex);
     // finalize_psbt failed at Ready.
     void finalizeFailed(QString message);
-    void broadcastDone(TxResult result);
     void savedPsbtsListed(SavedPsbtList result);
     void savedPsbtRestored(SavedPsbtEntry entry);
     void savedPsbtsChanged();
@@ -137,14 +130,18 @@ public slots:
     void pollCoins();
     void handleNotification(Notification notif);
     void onNotificationReceived(uint64_t generation, Notification notif);
-    void updateCoinLabel(const QString &outpoint, const QString &label) override;
     // A lost Electrum connection starts again.
     void onElectrumReconnect();
     // The reconnect gave up: the user is told, the connection stays down.
     void onElectrumGaveUp(int losses);
+    // A reconnect held back by a settings test or save runs.
+    void onSettingsIdle();
     void stop();
-    // Prepares, then restricts the PSBT to `spend` before round 1.
-    void prepareTransaction(TransactionTemplate tx, MusigSpendLeaf spend);
+    // Takes `psbt`, ITransaction::finalize() of the crafted `tx`, as the transaction in
+    // flight: registers its change, restricts it to `spend` and saves it before round 1.
+    // A change index another adoption took refuses it: `tx` is to be crafted again.
+    void adoptTransaction(const backend::TransactionTemplate &tx, const MusigSpendLeaf &spend,
+                          const QByteArray &psbt);
     // keys()->sign() with the key `fingerprint` alone, for the current round of the PSBT
     // in flight.
     void signRound(const QString &fingerprint);
@@ -155,12 +152,10 @@ public slots:
     void prepareNonces(const QString &fingerprint);
     void cancelSigning();
     void restartRounds();
-    void broadcast();
     void onKeysSigned(ReqId req_id, const QString &psbt_v2_hex);
     void onKeysError(std::optional<ReqId> req_id, const QString &message, plugin::SignError kind);
     void onKeysCancelled(ReqId req_id);
     void onNoncesPrepared(ReqId req_id, const QString &fingerprint);
-    void onBroadcastResult(const TxResult &result);
     void onWorkerFinished();
     void onEndpointFinished();
     void onAccountLoaded();
@@ -168,6 +163,10 @@ public slots:
     void onStorageFinished();
     void onSavedPsbtDeleteConfirmed(const QString &id);
     void onSavedPsbtDeleteCancelled(const QString &id);
+    // A provider of the account's services stops: the panels using them go first.
+    void onServicesRetired();
+    // The first funds read answered: the panels reading them are built.
+    void onFundsAnswered();
     void psbtClicked();
     void historyClicked();
     void coinsClicked();
@@ -176,9 +175,14 @@ public slots:
     void settingsClicked();
 
 protected:
-    // Broadcasts through the storage queue, behind the saved progress writes.
     friend class musig::MusigServices;
 
+    // Broadcasts `transaction` through the storage queue, behind the saved progress writes,
+    // then answers `done`. The finalized transaction in flight, once accepted, ends its
+    // signing session. Refused (false, `done` never called) while a reset, a restart, an
+    // endpoint change or another broadcast runs.
+    auto startBroadcast(const QByteArray &transaction,
+                        std::function<void(const backend::BroadcastResult &)> done) -> bool;
     void startAcceptedWorker(QThread *worker);
     // Listens to the keys module and allocates the request of a round's signature, null
     // when no round can be signed now.
@@ -197,11 +201,16 @@ protected:
     void refreshActiveWarning();
     void completeSavedPsbtDeletion(const QString &id, const SavedPsbtMutation &result);
     void listenNotifications();
-    void changeEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
-                        bool verify_certificate, bool test, bool connected, bool retry = false);
+    void changeEndpoint(uint64_t req_id, Endpoint endpoint, bool connected, bool retry = false);
     void startEndpointChange();
+    // The account's services, assembled once from this module. False when the host
+    // refuses them, or once they retired.
+    auto assembleServices() -> bool;
 
 private:
+    // Declared before the panels, which use it: they go first.
+    std::unique_ptr<host::ServiceAssembly> m_assembly;
+    bool m_services_retired = false;
     account::PanelCollection m_panels{this};
     MusigAccountWidget *m_widget = nullptr;
     account::ServiceContext *m_services = nullptr;
@@ -259,8 +268,5 @@ private:
     bool m_endpoint_retry = false;
     bool m_reconnect_pending = false;
     QList<Notification> m_endpoint_notifications;
-    QString m_endpoint_url;
-    bool m_endpoint_verify = true;
-    bool m_endpoint_test = false;
     bool m_endpoint_connect = false;
 };

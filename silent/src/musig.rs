@@ -34,7 +34,7 @@ use bwk_sp::receiver::RecipientAddress;
 
 use crate::{
     account::{
-        broadcast_via_electrum, convert_notification, parse_outpoint, psbt_validation, rust_txs,
+        broadcast_via_electrum, convert_notification, parse_outpoint, rust_txs,
         NotificationReceiver, Poll, PsbtResult, TemplateError,
     },
     account_storage::{AccountStorage, Factory},
@@ -43,10 +43,10 @@ use crate::{
         AddressVerifyInfo, BroadcastReport, CoinState, CraftOutcome, FundsSnapshot,
         LabelEditResult, LabelKind, LabelSnapshot, MusigAttemptSnapshot, MusigCosignerStatus,
         MusigDescriptorResult, MusigElectrumUrlResult, MusigFinalizeResult, MusigReceiveAddress,
-        MusigRound, MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, PsbtValidation,
-        ReceiveAddress, ReceiveAddressResult, ReceiveKind, RustCoin, RustTx, RustTxDetails,
-        SavedPsbtEntry, SavedPsbtList, SavedPsbtMutation, SavedPsbtReset, SavedPsbtRestore,
-        TransactionSimulation, TransactionTemplate, TxResult, UnsignedPsbt,
+        MusigRound, MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, ReceiveAddress,
+        ReceiveAddressResult, ReceiveKind, RustCoin, RustTx, RustTxDetails, SavedPsbtEntry,
+        SavedPsbtList, SavedPsbtMutation, SavedPsbtReset, SavedPsbtRestore, TransactionSimulation,
+        TransactionTemplate, UnsignedPsbt,
     },
     keys::{
         bridge::{merge_signed_psbt, musig_session_restart},
@@ -857,28 +857,6 @@ impl MusigAccount {
         }
     }
 
-    /// Prepare the PSBT, then restrict it to `spend` before round 1. Inputs left empty
-    /// are picked by coin selection, as before.
-    pub fn prepare_transaction(
-        &self,
-        tx_template: TransactionTemplate,
-        spend: MusigSpendLeaf,
-    ) -> Box<PsbtResult> {
-        let Some(inner) = &self.inner else {
-            return Box::new(PsbtResult::failed_kind(
-                crate::ffi::BackendErrorKind::Other,
-                NOT_INITIALIZED.to_string(),
-            ));
-        };
-        match Self::unsigned_psbt(inner, &tx_template) {
-            Ok(psbt) => self.adopt(tx_template, spend, psbt),
-            Err(error) => {
-                log::error!("prepare_transaction: {error}");
-                Box::new(PsbtResult::failed(error))
-            }
-        }
-    }
-
     /// The unsigned PSBT of `tx_template`. Its change goes to the change index after the
     /// registered tip, left unregistered: building changes no account state.
     fn unsigned_psbt(
@@ -959,8 +937,11 @@ impl MusigAccount {
             },
             Err(error) => return failed(format!("Cannot resolve selected spend path: {error}")),
         };
-        // A recipient on one of the account's change addresses is no change.
         let network = inner.config.network.into();
+        if let Err(error) = pays_template(inner.account.scanner(), &psbt, &tx_template, network) {
+            return failed(error);
+        }
+        // A recipient on one of the account's change addresses is no change.
         let recipients: BTreeSet<_> = tx_template
             .outputs
             .iter()
@@ -1085,36 +1066,6 @@ impl MusigAccount {
             value: tx_hex.clone(),
             tx_hex,
             save_error,
-        }
-    }
-
-    /// Broadcast a signed transaction via Electrum; the value is the txid.
-    pub fn broadcast_transaction(&self, signed_tx_hex: String) -> TxResult {
-        match hex::decode(&signed_tx_hex) {
-            Ok(transaction) => self.broadcast_report(&transaction).tx_result(),
-            Err(e) => TxResult::failed(
-                crate::ffi::BackendErrorKind::InvalidInput,
-                format!("Invalid transaction hex: {e}"),
-            ),
-        }
-    }
-
-    /// Validate a prepared transaction via Electrum before signing. Blocking.
-    pub fn validate_before_sign(&self, psbt_result: &PsbtResult) -> PsbtValidation {
-        match &self.inner {
-            Some(inner) => psbt_validation(
-                psbt_result,
-                &inner.config.electrum_url,
-                inner.config.verify_certificate,
-            ),
-            None => PsbtValidation {
-                is_ok: false,
-                error: NOT_INITIALIZED.to_string(),
-                is_valid: false,
-                issues: String::new(),
-                reused_output_count: 0,
-                spent_input_count: 0,
-            },
         }
     }
 
@@ -1689,7 +1640,8 @@ impl MusigAccount {
         services::finalizable(&tx_template)
             .and_then(|()| {
                 let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
-                let psbt = Self::unsigned_psbt(inner, &tx_template)?;
+                let psbt = Self::unsigned_psbt(inner, &tx_template)
+                    .inspect_err(|error| log::error!("finalize_transaction: {error}"))?;
                 PsbtV2::from_bitcoin_psbt(psbt)
                     .and_then(|v2| v2.serialize())
                     .map_err(|e| format!("{e:?}"))
@@ -1791,6 +1743,120 @@ fn change_index(
     Ok(found)
 }
 
+/// Refuses a PSBT that does not pay `tx_template`: each output pays one of its recipients
+/// that recipient's amount (a MAX recipient whatever is left), or the account's change,
+/// and every recipient is paid.
+fn pays_template(
+    scanner: &ElectrumScanner,
+    psbt: &bitcoin::Psbt,
+    tx_template: &TransactionTemplate,
+    network: bitcoin::Network,
+) -> Result<(), String> {
+    let mut unpaid = tx_template
+        .outputs
+        .iter()
+        .map(|output| {
+            parse_recipient(&output.address, network)
+                .map(|address| {
+                    (
+                        address.script_pubkey(),
+                        (!output.max).then_some(output.amount),
+                    )
+                })
+                .map_err(|e| e.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let change: BTreeSet<_> = scanner
+        .address_entries()
+        .into_iter()
+        .filter(|entry| matches!(entry.account, KeyChain::Change))
+        .map(|entry| entry.script())
+        .collect();
+    for output in &psbt.unsigned_tx.output {
+        let value = output.value.to_sat();
+        // An exact amount first, so a MAX recipient on the same script takes the rest.
+        let paid = unpaid
+            .iter()
+            .position(|(script, amount)| *script == output.script_pubkey && *amount == Some(value))
+            .or_else(|| {
+                unpaid.iter().position(|(script, amount)| {
+                    *script == output.script_pubkey && amount.is_none()
+                })
+            });
+        match paid {
+            Some(index) => {
+                unpaid.swap_remove(index);
+            }
+            None if change.contains(&output.script_pubkey) => {}
+            None => {
+                return Err(format!(
+                    "The transaction pays {value} sat to an output its template does not list: \
+                     craft this transaction again"
+                ))
+            }
+        }
+    }
+    if !unpaid.is_empty() {
+        return Err(
+            "The transaction does not pay every recipient of its template: craft this \
+             transaction again"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Refuses change that does not carry the derivation fields of its `index` (internal key,
+/// key origins, tap tree, MuSig participants): a signer verifies the change from them.
+fn carries_change_derivation(
+    scanner: &ElectrumScanner,
+    psbt: &bitcoin::Psbt,
+    recipients: &BTreeSet<ScriptBuf>,
+    index: u32,
+) -> Result<(), String> {
+    let derived = scanner
+        .descriptor()
+        .single_paths()
+        .map_err(|e| e.to_string())?
+        .get(1)
+        .ok_or("The account has no change descriptor")?
+        .derive_at(index)
+        .map_err(|e| e.to_string())?;
+    let (position, txout) = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, output)| {
+            !recipients.contains(&output.script_pubkey)
+                && derived.script_pubkey() == output.script_pubkey
+        })
+        .ok_or("The change output is not the change address it derives from")?;
+    let mut expected = bitcoin::Psbt {
+        unsigned_tx: bitcoin::Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: Vec::new(),
+            output: vec![txout.clone()],
+        },
+        version: 0,
+        xpub: Default::default(),
+        proprietary: Default::default(),
+        unknown: Default::default(),
+        inputs: Vec::new(),
+        outputs: vec![bitcoin::psbt::Output::default()],
+    };
+    bwk::bwk_descriptor::updater::update_output(&mut expected, 0, &derived)
+        .map_err(|e| format!("The change derivation cannot be described: {e}"))?;
+    if psbt.outputs.get(position) != expected.outputs.first() {
+        return Err(format!(
+            "The change output does not carry the derivation of change index {index}: craft \
+             this transaction again"
+        ));
+    }
+    Ok(())
+}
+
 /// Registers the change index of `psbt` durably. An index at or below the registered
 /// tip is another adopted transaction's: this one must be crafted again.
 fn register_change(
@@ -1801,6 +1867,7 @@ fn register_change(
     let Some(index) = change_index(scanner, psbt, recipients)? else {
         return Ok(());
     };
+    carries_change_derivation(scanner, psbt, recipients, index)?;
     let mut coins = scanner.coin_store().lock().map_err(|e| e.to_string())?;
     let persisted = {
         let addresses = coins.address_store();
@@ -1971,20 +2038,20 @@ mod tests {
         let leaves = account.spend_leaves(vec![outpoint.clone()]);
         assert!(leaves.is_ok, "spend paths: {}", leaves.error);
         let recipient = account.new_addr();
-        let prepared = account.prepare_transaction(
-            TransactionTemplate {
-                outputs: vec![Output {
-                    address: recipient,
-                    amount: 40_000,
-                    max: false,
-                    label: String::new(),
-                }],
-                fee: 1000,
-                fee_rate: 0.0,
-                input_outpoints: vec![outpoint],
-            },
-            leaves.leaves[0].clone(),
-        );
+        let template = TransactionTemplate {
+            outputs: vec![Output {
+                address: recipient,
+                amount: 40_000,
+                max: false,
+                label: String::new(),
+            }],
+            fee: 1000,
+            fee_rate: 0.0,
+            input_outpoints: vec![outpoint],
+        };
+        let psbt = account.finalize_transaction(template.clone());
+        assert!(psbt.is_ok, "finalize: {}", psbt.error);
+        let prepared = account.adopt_transaction(template, leaves.leaves[0].clone(), &psbt.psbt);
         assert!(
             prepared.is_ok(),
             "prepared bytes: {}",

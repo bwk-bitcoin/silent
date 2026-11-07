@@ -80,14 +80,7 @@ fn sp_offline_opening_never_contacts_saved_endpoint_and_failed_opening_can_recov
     assert!(!failed.is_ok(), "invalid initial offline opening fails");
     config.set_descriptor(descriptor);
     assert!(config.save().is_empty(), "restore valid SP config");
-    let mut change = silent::sp_endpoint_change(
-        failed,
-        BackendServer::Electrum,
-        String::new(),
-        true,
-        false,
-        false,
-    );
+    let mut change = silent::sp_endpoint_change(failed, BackendServer::Electrum, false);
     change.prepare_endpoint();
     assert_eq!(
         change.endpoint_phase(),
@@ -161,7 +154,7 @@ fn musig_offline_opening_never_contacts_saved_endpoint_and_failed_opening_can_re
     assert!(!failed.is_ok(), "invalid initial offline opening fails");
     config.set_descriptor(descriptor);
     assert!(config.save().is_empty(), "restore valid MuSig config");
-    let mut change = silent::musig_endpoint_change(failed, String::new(), true, false, false);
+    let mut change = silent::musig_endpoint_change(failed, false);
     change.prepare_endpoint();
     assert_eq!(
         change.endpoint_phase(),

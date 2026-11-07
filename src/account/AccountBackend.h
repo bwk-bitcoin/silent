@@ -13,26 +13,25 @@
 #include <utility>
 
 class IModule;
-class QWidget;
 
 namespace account {
-class SendSigning;
 class ServiceContext;
 } // namespace account
 
-// A kind of address an account receives on. The silent payment address is static;
-// the others are generated one at a time.
+// A kind of address a built-in account receives on. The silent payment address is
+// static; the others are generated one at a time.
 enum class AddressKind : std::uint8_t { SilentPayment, Segwit, Taproot };
 
 // A server an account syncs from.
 enum class Endpoint : std::uint8_t { Blindbit, Electrum };
 Q_DECLARE_METATYPE(Endpoint)
 
-enum class EndpointOperation : std::uint8_t { Idle, Testing, Connecting, Disconnecting };
+enum class EndpointOperation : std::uint8_t { Idle, Connecting, Disconnecting };
 
-// What the account panels ask of their account, whatever its kind: the sp account
-// and the musig account controllers both implement it, so one set of panels serves
-// both.
+// What the built-in sp and musig account controllers share: the account's lifecycle,
+// its endpoint connections and the requests behind its UI services
+// (account::ControllerServices), and what the status bars read. The account panels use
+// the services, not this class.
 class AccountBackend : public QObject {
     Q_OBJECT
 
@@ -40,19 +39,10 @@ public:
     explicit AccountBackend(QObject *parent = nullptr);
     ~AccountBackend() override = default;
 
-    // Unspent coins only.
-    virtual auto getCoins() -> rust::Vec<RustCoin> = 0;
-    virtual auto getPaymentHistory() -> rust::Vec<RustTx> = 0;
     // The account's network, the one the keys it signs with are registered on.
     virtual auto network() -> Network = 0;
     // The module the account belongs to: the caller its panels name to the host.
     virtual auto module() -> IModule * = 0;
-    // The kinds of address the account receives on, in the order Receive lists them.
-    virtual auto addressKinds() -> QList<AddressKind> = 0;
-    // A new address of `kind`, the static one for SilentPayment. Empty on failure.
-    virtual auto newAddress(AddressKind kind) -> QString = 0;
-    // The descriptor and derivation path a device needs to show `address`.
-    virtual auto addressVerifyInfo(const QString &address) -> AddressVerifyInfo = 0;
 
     // The servers the account syncs from, in the order Settings lists them.
     virtual auto endpoints() -> QList<Endpoint> = 0;
@@ -63,8 +53,14 @@ public:
     [[nodiscard]] virtual auto verifiesCertificate() const -> bool = 0;
     [[nodiscard]] virtual auto isEndpointRunning(Endpoint endpoint) const -> bool = 0;
     [[nodiscard]] auto endpointOperationsBusy() const -> bool;
-    // A settings service save writing the same config: endpoint operations wait for it.
-    void setSettingsSaving(bool saving);
+    // A settings service test or save runs: endpoint operations wait for it. Publishes the
+    // endpoint state; settingsIdle() follows its end.
+    void setSettingsBusy(bool busy);
+    [[nodiscard]] auto settingsBusy() const -> bool;
+    // Why the account would refuse an endpoint change now, besides a running endpoint
+    // operation, empty when it would not. A settings test or save is refused for it too,
+    // so the saved endpoint never differs from the live account's.
+    [[nodiscard]] virtual auto endpointChangeRefusal() const -> QString;
     [[nodiscard]] auto endpointsStopping() const -> bool;
     [[nodiscard]] auto endpointOperation(Endpoint endpoint) const -> EndpointOperation;
     [[nodiscard]] auto endpointError(Endpoint endpoint) const -> QString;
@@ -74,34 +70,23 @@ public:
     void setAccountDeletionPending(bool pending);
     [[nodiscard]] auto accountDeletionPending() const -> bool;
     [[nodiscard]] auto hasAccountMetadata() const -> bool;
-    // What Settings shows below the endpoints, nullptr when nothing. Owned by the caller.
-    virtual auto settingsExtras() -> QWidget * = 0;
     // The state and requests behind the account's UI services, a child of this backend.
     // Null for a backend serving none, such as a mock account.
     [[nodiscard]] virtual auto services() const -> account::ServiceContext *;
     // Records `url` as the saved endpoint, as the account's config now holds it.
     void setSavedEndpoint(Endpoint endpoint, const rust::String &url, bool verify_certificate);
 
-    // Fee, inputs and validity of `tx`, without building it.
-    virtual auto simulateTx(TransactionTemplate tx) -> TransactionSimulation = 0;
-    // Send's signing step for this account. Owned by the caller.
-    virtual auto sendSigning() -> account::SendSigning * = 0;
-
     // Starts a worker thread that uses the account or a view: the account outlives it.
     virtual void startWorker(QThread *worker) = 0;
     virtual void requestTxDetails(uint64_t req_id, const QString &txid) = 0;
-    virtual void editTxLabel(uint64_t req_id, const QString &txid, const QString &label) = 0;
-    virtual void editOutpointLabel(uint64_t req_id, const QString &outpoint,
-                                   const QString &label) = 0;
     virtual void requestEndpointTip(uint64_t req_id, Endpoint endpoint) = 0;
     void requestEndpointInfo(uint64_t req_id, Endpoint endpoint);
-    // A passing test persists the endpoint, then leaves that endpoint disconnected.
-    virtual void testAndSaveEndpoint(uint64_t req_id, Endpoint endpoint, const QString &url,
-                                     bool verify_certificate) = 0;
     virtual void setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) = 0;
 
 signals:
     void stopped();
+    // A settings test or save ended: a change it held back can run.
+    void settingsIdle();
     void shutdownFinished(QString error);
     void shutdownDrained(QString error);
     void accountLoadFinished();
@@ -111,9 +96,6 @@ signals:
     // `endpoint` started or stopped.
     void endpointStateChanged(Endpoint endpoint);
     void txDetailsReady(uint64_t req_id, RustTxDetails details);
-    // True only once the label is saved; a failed flush retains the RAM edit.
-    void labelEdited(uint64_t req_id, bool accepted, QString error);
-    void labelsChanged();
     void endpointTipReady(uint64_t req_id, Endpoint endpoint, ElectrumTipResult result);
     // Connecting completes on backend confirmation. Later connection losses update endpoint state.
     void endpointRequestFinished(uint64_t req_id, Endpoint endpoint, EndpointResult result);
@@ -125,7 +107,6 @@ signals:
 
 public slots:
     void onShutdownDrained(const QString &error);
-    virtual void updateCoinLabel(const QString &outpoint, const QString &label) = 0;
     void onEndpointTipFetched(uint64_t req_id, uint64_t generation, Endpoint endpoint,
                               const ElectrumTipResult &result);
     void onEndpointInfoFetched(uint64_t req_id, uint64_t generation, Endpoint endpoint,
@@ -237,26 +218,6 @@ protected:
         }));
     }
 
-    template <typename T>
-    void editAccountLabel(uint64_t req_id, const QString &id, const QString &label, T *account,
-                          bool transaction) {
-        if (account == nullptr || endpointsStopping() || accountDeletionPending()) {
-            emit labelEdited(req_id, false, QStringLiteral("Account is not available"));
-            return;
-        }
-        startWorker(QThread::create([this, account, req_id, key = id.toStdString(),
-                                     value = label.toStdString(), transaction] {
-            auto result = transaction
-                              ? account->update_tx_label(rust::String(key), rust::String(value))
-                              : account->update_coin_label(rust::String(key), rust::String(value));
-            emit labelEdited(req_id, result.is_ok,
-                             QString::fromUtf8(result.error.data(), result.error.size()));
-            // A failed flush keeps the label in RAM; refresh without reporting it saved.
-            emit labelsChanged();
-            emit updateCoins(account->spendable_coins());
-        }));
-    }
-
 private:
     struct EndpointFailure {
         QString error;
@@ -277,6 +238,6 @@ private:
     std::shared_ptr<std::optional<rust::Box<Config>>> m_loading_config;
     bool m_account_loading = false;
     bool m_deletion_pending = false;
-    bool m_settings_saving = false;
+    bool m_settings_busy = false;
     QString m_account_load_error;
 };

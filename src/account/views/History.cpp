@@ -1,13 +1,15 @@
 #include "account/views/History.h"
 
-#include "account/Equality.h"
 #include "account/RequestId.h"
+#include "account/Same.h"
 #include "account/views/TransactionDetails.h"
 #include "catalog/BalanceHeader.h"
 #include "catalog/display/TxIndicators.h"
 #include "catalog/feedback/Notice.h"
 #include "catalog/panels/home/HistoryTable.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/blockchain.h"
+#include "interfaces/backend/labels.h"
 #include "views/utils.h"
 
 #include <Qontrol>
@@ -16,38 +18,45 @@
 
 namespace account::view {
 
-History::History(AccountBackend *backend) : m_backend(backend) {
+History::History(const Services &services) : m_services(services) {
     init();
     doConnect();
     view();
 }
 
 void History::init() {
+    m_balance = m_services.blockchain->balance();
     m_history = readHistory();
+    auto state = m_services.blockchain->state();
+    m_tip = stateTip(state);
+    m_connected = connectedIds(state);
 }
 
 void History::doConnect() {
     // The row/input must return from its event before its widgets can be replaced.
     connect(this, &History::interactionFinished, this, &History::onInteractionFinished,
             Qt::ConnectionType(Qt::QueuedConnection | Qt::UniqueConnection));
-    connect(m_backend, &AccountBackend::updateCoins, this, &History::onCoinsUpdated,
+    auto *blockchain = m_services.blockchain;
+    connect(blockchain, &backend::IBlockchain::historyChanged, this, &History::onFundsChanged,
             qontrol::UNIQUE);
-    connect(m_backend, &AccountBackend::scanProgress, this, &History::onScanProgress,
+    connect(blockchain, &backend::IBlockchain::balanceChanged, this, &History::onFundsChanged,
             qontrol::UNIQUE);
-    connect(m_backend, &AccountBackend::endpointStateChanged, this,
-            &History::onEndpointStateChanged, qontrol::UNIQUE);
-    connect(m_backend, &AccountBackend::endpointTipReady, this, &History::onEndpointTipReady,
+    connect(blockchain, &backend::IBlockchain::stateChanged, this, &History::onStateChanged,
             qontrol::UNIQUE);
-    connect(m_backend, &AccountBackend::labelsChanged, this, &History::onLabelsChanged,
+    connect(blockchain, &backend::IBlockchain::completed, this, &History::onTipRefreshed,
             qontrol::UNIQUE);
-    connect(m_backend, &AccountBackend::labelEdited, this, &History::onLabelEdited,
+    connect(blockchain, &backend::IService::error, this, &History::onBlockchainError,
+            qontrol::UNIQUE);
+    connect(m_services.labels, &backend::ILabels::saved, this, &History::onLabelSaved,
+            qontrol::UNIQUE);
+    connect(m_services.labels, &backend::IService::error, this, &History::onLabelError,
             qontrol::UNIQUE);
 }
 
 void History::view() {
     auto *balance = new catalog::BalanceHeader;
-    balance->setConfirmed(m_state.confirmed_balance, m_state.confirmed_count);
-    balance->setUnconfirmed(m_state.unconfirmed_balance, m_state.unconfirmed_count);
+    balance->setConfirmed(m_balance.confirmed, m_balance.confirmedCount);
+    balance->setUnconfirmed(m_balance.unconfirmed, m_balance.unconfirmedCount);
 
     m_notice = new catalog::Notice(catalog::Notice::Tone::Error);
     m_notice->setTitle(TR("history-label-failed"));
@@ -91,12 +100,10 @@ void History::showEvent(QShowEvent *event) {
     requestTip();
 }
 
-auto History::readHistory() const -> QList<RustTx> {
-    QList<RustTx> history;
-    for (const auto &tx : m_backend->getPaymentHistory()) {
-        history.append(tx);
-    }
-    std::ranges::stable_partition(history, [](const RustTx &tx) { return tx.height == 0; });
+auto History::readHistory() const -> QList<backend::Transaction> {
+    auto history = m_services.blockchain->history();
+    std::ranges::stable_partition(
+        history, [](const backend::Transaction &tx) { return !tx.height.has_value(); });
     return history;
 }
 
@@ -117,12 +124,41 @@ void History::requestTip() {
     if (!isVisible() || m_tip_request != 0) {
         return;
     }
-    for (auto endpoint : m_backend->endpoints()) {
-        if (m_backend->isEndpointRunning(endpoint)) {
+    for (const auto &connection : m_services.blockchain->state().connections) {
+        if (connection.connected) {
             m_tip_request = nextRequestId();
-            m_backend->requestEndpointTip(m_tip_request, endpoint);
+            m_services.blockchain->refreshTip(m_tip_request, connection.id);
             return;
         }
+    }
+}
+
+// A new tip counts the confirmations again. Without a tip the confirmation dots stay
+// hidden.
+void History::updateTip(uint32_t tip) {
+    if (tip == 0 || tip == m_tip) {
+        return;
+    }
+    m_tip = tip;
+    refresh();
+}
+
+auto History::connectedIds(const backend::BlockchainState &state) -> QSet<QString> {
+    QSet<QString> ids;
+    for (const auto &connection : state.connections) {
+        if (connection.connected) {
+            ids.insert(connection.id);
+        }
+    }
+    return ids;
+}
+
+void History::showLabelResult(const QString &error) {
+    // In place: an account that is not available answers from the edit's own call.
+    m_label_error = error;
+    if (m_notice != nullptr) {
+        m_notice->setText(m_label_error);
+        m_notice->setVisible(!m_label_error.isEmpty());
     }
 }
 
@@ -134,61 +170,52 @@ void History::onInteractionFinished() {
     }
 }
 
-void History::onCoinsUpdated(const CoinState &state) {
+void History::onFundsChanged() {
     requestTip();
+    auto balance = m_services.blockchain->balance();
     auto history = readHistory();
-    bool txsChanged = history != m_history;
-    if (!txsChanged && state == m_state && !m_stale) {
+    if (same(history, m_history) && same(balance, m_balance) && !m_stale) {
         return;
     }
-    m_state = state;
+    m_balance = balance;
     m_history = history;
     refresh();
 }
 
-void History::onScanProgress([[maybe_unused]] uint32_t height, uint32_t tip) {
-    if (tip == 0 || tip == m_tip) {
-        return;
-    }
-    m_tip = tip;
-    refresh();
-}
-
-void History::onEndpointStateChanged(Endpoint endpoint) {
-    if (m_backend->isEndpointRunning(endpoint)) {
+// A connection that comes up is asked its tip.
+void History::onStateChanged() {
+    auto state = m_services.blockchain->state();
+    auto connected = connectedIds(state);
+    bool connecting = !(connected - m_connected).isEmpty();
+    m_connected = connected;
+    if (connecting) {
         requestTip();
     }
+    updateTip(stateTip(state));
 }
 
-void History::onEndpointTipReady(uint64_t req_id, [[maybe_unused]] Endpoint endpoint,
-                                 const ElectrumTipResult &result) {
-    if (req_id != m_tip_request) {
-        return;
+void History::onTipRefreshed(backend::RequestId request_id) {
+    if (request_id == m_tip_request) {
+        m_tip_request = 0;
+        updateTip(stateTip(m_services.blockchain->state()));
     }
-    m_tip_request = 0;
-    // Without a tip the confirmation dots stay hidden.
-    if (!result.is_ok || result.height == m_tip) {
-        return;
-    }
-    m_tip = result.height;
-    refresh();
 }
 
-void History::onLabelsChanged() {
-    m_history = readHistory();
-    refresh();
+void History::onBlockchainError(backend::RequestId request_id) {
+    if (request_id == m_tip_request) {
+        m_tip_request = 0;
+    }
 }
 
-void History::onLabelEdited(uint64_t req_id, bool accepted, const QString &error) {
-    if (!m_label_requests.contains(req_id)) {
-        return;
+void History::onLabelSaved(backend::RequestId request_id) {
+    if (m_label_requests.remove(request_id)) {
+        showLabelResult({});
     }
-    m_label_requests.remove(req_id);
-    // In place: an account that is not available answers from the edit's own call.
-    m_label_error = accepted ? QString() : error;
-    if (m_notice != nullptr) {
-        m_notice->setText(m_label_error);
-        m_notice->setVisible(!accepted);
+}
+
+void History::onLabelError(backend::RequestId request_id, const QString &message) {
+    if (m_label_requests.remove(request_id)) {
+        showLabelResult(message);
     }
 }
 
@@ -196,7 +223,7 @@ void History::onRowClicked(const QString &txid) {
     // The clicked row stays while the details are open: refresh() waits on it.
     m_details_open = true;
     QPointer<History> self(this);
-    showTransactionDetails(m_backend, txid);
+    showTransactionDetails(m_services, txid);
     if (self != nullptr) {
         m_details_open = false;
         emit interactionFinished();
@@ -204,9 +231,11 @@ void History::onRowClicked(const QString &txid) {
 }
 
 void History::onTxLabelEdited(const QString &txid, const QString &label) {
-    auto reqId = nextRequestId();
-    m_label_requests.insert(reqId);
-    m_backend->editTxLabel(reqId, txid, label);
+    auto requestId = nextRequestId();
+    // Before the request: the answer may come during the call.
+    m_label_requests.insert(requestId);
+    m_services.labels->setLabel(requestId, {.kind = backend::LabelKind::Transaction, .id = txid},
+                                label);
 }
 
 } // namespace account::view

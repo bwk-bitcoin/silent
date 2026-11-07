@@ -1,12 +1,6 @@
 mod common;
 
-use std::{
-    io::{BufRead, BufReader, Write},
-    net::TcpListener,
-    str::FromStr,
-    thread,
-    time::Duration,
-};
+use std::str::FromStr;
 
 use bitcoin::{
     absolute::LockTime,
@@ -43,39 +37,6 @@ struct Funded {
     fingerprints: Vec<String>,
     prepared: String,
     id: String,
-}
-
-struct VersionPeer {
-    url: String,
-    worker: thread::JoinHandle<()>,
-}
-
-fn version_peer() -> VersionPeer {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("isolated Electrum version peer");
-    let url = format!("tcp://{}", listener.local_addr().expect("peer address"));
-    let worker = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("recovery test connects");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .expect("read timeout");
-        let mut request = String::new();
-        BufReader::new(stream.try_clone().expect("socket clone"))
-            .read_line(&mut request)
-            .expect("version request");
-        let request: serde_json::Value =
-            serde_json::from_str(&request).expect("JSON version request");
-        assert_eq!(
-            request["method"], "server.version",
-            "actual endpoint test handshake"
-        );
-        writeln!(
-            stream,
-            "{}",
-            serde_json::json!({"jsonrpc":"2.0", "id":request["id"], "result":["review58", "1.4"]})
-        )
-        .expect("version response");
-    });
-    VersionPeer { url, worker }
 }
 
 impl Funded {
@@ -175,7 +136,8 @@ impl Funded {
         assert!(paths.is_ok, "paths for {policy:?}: {}", paths.error);
         assert_eq!(paths.leaves.len(), 1, "one selectable path for {policy:?}");
         let recipient = account.new_addr();
-        let prepared = account.prepare_transaction(
+        let prepared = common::musig_prepared(
+            &account,
             TransactionTemplate {
                 outputs: vec![Output {
                     address: recipient,
@@ -456,8 +418,7 @@ fn fresh_endpoint_command_recovers_closed_musig_account_and_active_attempt() {
     let mut fixture = Funded::new(Policy::Musig);
     let before = fixture.account.active_attempt();
     let receiver = fixture.account.take_receiver();
-    let mut failed =
-        silent::musig_endpoint_change(fixture.account, String::new(), true, false, false);
+    let mut failed = silent::musig_endpoint_change(fixture.account, false);
     failed.prepare_endpoint();
     assert_eq!(
         failed.endpoint_phase(),
@@ -492,24 +453,18 @@ fn fresh_endpoint_command_recovers_closed_musig_account_and_active_attempt() {
         "review58-config-backup.json",
         "config.json",
     );
-    let peer = version_peer();
-    let mut retry = silent::musig_endpoint_change(closed, peer.url, true, true, false);
+    let mut retry = silent::musig_endpoint_change(closed, false);
     retry.prepare_endpoint();
     assert_eq!(
         retry.endpoint_phase(),
         silent::EndpointPhase::Draining,
         "fresh command uses the saved name rather than rejecting is_ok=false"
     );
-    peer.worker.join().expect("recovery handshake completed");
     retry.finish_endpoint_after_drain();
     assert!(
         retry.endpoint_result().is_ok,
         "public MuSig command recovers: {}",
         retry.endpoint_result().error
-    );
-    assert!(
-        retry.endpoint_result().saved,
-        "test/save recovery uses the retained human account name"
     );
     fixture.account = silent::take_musig_endpoint_account(retry);
     assert!(
@@ -538,14 +493,7 @@ fn endpoint_commands_still_refuse_accounts_that_never_initialized() {
     let name = common::test_account_name();
     let sp = silent::new_account(name.clone());
     assert!(!sp.is_ok(), "missing SP account did not initialize");
-    let mut sp = silent::sp_endpoint_change(
-        sp,
-        silent::BackendServer::Electrum,
-        String::new(),
-        true,
-        false,
-        false,
-    );
+    let mut sp = silent::sp_endpoint_change(sp, silent::BackendServer::Electrum, false);
     sp.prepare_endpoint();
     assert_eq!(
         sp.endpoint_phase(),
@@ -558,7 +506,7 @@ fn endpoint_commands_still_refuse_accounts_that_never_initialized() {
     );
     let musig = silent::new_musig_account(name);
     assert!(!musig.is_ok(), "missing MuSig account did not initialize");
-    let mut musig = silent::musig_endpoint_change(musig, String::new(), true, false, false);
+    let mut musig = silent::musig_endpoint_change(musig, false);
     musig.prepare_endpoint();
     assert_eq!(
         musig.endpoint_phase(),

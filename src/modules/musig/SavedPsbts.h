@@ -1,5 +1,6 @@
 #pragma once
 
+#include "account/Services.h"
 #include "catalog/containers/Modal.h"
 
 #include <QHash>
@@ -56,7 +57,7 @@ class SavedPsbts final : public qontrol::Screen {
     Q_OBJECT
 
 public:
-    explicit SavedPsbts(MusigAccountController *controller);
+    SavedPsbts(MusigAccountController *controller, const account::Services &services);
 
 public slots:
     void onRefresh();
@@ -85,6 +86,7 @@ protected:
 
 private:
     MusigAccountController *m_controller = nullptr;
+    account::Services m_services;
     QWidget *m_main_widget = nullptr;
     catalog::RowClickTable *m_table = nullptr;
     catalog::Checkbox *m_confirmed = nullptr;

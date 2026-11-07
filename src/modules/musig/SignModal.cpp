@@ -1,5 +1,6 @@
 #include "SignModal.h"
 #include "account/InterfaceEnums.h"
+#include "account/RequestId.h"
 
 #include "AppController.h"
 #include "catalog/Button.h"
@@ -13,6 +14,7 @@
 #include "catalog/display/WizardSteps.h"
 #include "catalog/feedback/Notice.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/blockchain.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "interfaces/signer.h"
@@ -22,6 +24,8 @@
 #include "modules/musig/MusigModule.h"
 #include "theme/Palette.h"
 
+#include <QByteArray>
+#include <QDebug>
 #include <QDialog>
 #include <QEvent>
 #include <QHash>
@@ -113,7 +117,9 @@ void ConfirmSigningReset::onConfirmClicked() {
     accept();
 }
 
-SignModal::SignModal(MusigAccountController *controller) : m_controller(controller) {
+SignModal::SignModal(MusigAccountController *controller, backend::IBlockchain *blockchain)
+    : m_controller(controller),
+      m_blockchain(blockchain) {
     // Reopened past its nonces, the session goes on with the partial signatures.
     auto round = m_controller->roundStatus().round;
     m_partial = round == MusigRound::PartialSigs || round == MusigRound::Ready;
@@ -170,8 +176,12 @@ void SignModal::doConnect() {
             qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::finalizeFailed, this,
             &SignModal::onFinalizeFailed, qontrol::UNIQUE);
-    connect(m_controller, &MusigAccountController::broadcastDone, this, &SignModal::onBroadcastDone,
+    connect(m_blockchain.data(), &backend::IBlockchain::broadcastFinished, this,
+            &SignModal::onBroadcastFinished, qontrol::UNIQUE);
+    connect(m_blockchain.data(), &backend::IService::error, this, &SignModal::onBroadcastError,
             qontrol::UNIQUE);
+    // The account closing takes its services with it.
+    connect(m_blockchain.data(), &QObject::destroyed, this, &QDialog::reject, qontrol::UNIQUE);
 }
 
 void SignModal::view() {
@@ -647,8 +657,14 @@ void SignModal::onBroadcastClicked() {
     if (!refreshKeys()) {
         return;
     }
+    auto transaction = QByteArray::fromHex(m_controller->finalizedTx().toLatin1());
+    if (transaction.isEmpty() || m_blockchain == nullptr) {
+        return;
+    }
     m_broadcast_btn->setEnabled(false);
-    m_controller->broadcast();
+    m_broadcast_req = account::nextRequestId();
+    // Registered before the request: the answer may come during the call.
+    m_blockchain->broadcast(m_broadcast_req, transaction);
 }
 
 void SignModal::onRoundChanged(const MusigRoundStatus &status) {
@@ -678,12 +694,31 @@ void SignModal::onFinalizeFailed(const QString &message) {
     refresh();
 }
 
-void SignModal::onBroadcastDone(const TxResult &result) {
-    if (result.is_ok) {
+void SignModal::onBroadcastFinished(backend::RequestId request_id,
+                                    const backend::BroadcastResult &result) {
+    if (request_id == 0 || request_id != m_broadcast_req) {
+        return;
+    }
+    m_broadcast_req = 0;
+    for (const auto &warning : result.warnings) {
+        qWarning() << "SignModal: broadcast" << result.txid << warning;
+    }
+    // Only an accepted transaction is sent; a rejected or unknown fate is a failure.
+    if (result.outcome == backend::BroadcastOutcome::Accepted) {
+        emit sent();
         accept();
         return;
     }
-    showFailure(Failure::Sign, TR("confirm-send-failed").arg(toQString(result.error)));
+    showFailure(Failure::Sign, TR("confirm-send-failed").arg(result.error));
+    refresh();
+}
+
+void SignModal::onBroadcastError(backend::RequestId request_id, const QString &message) {
+    if (request_id == 0 || request_id != m_broadcast_req) {
+        return;
+    }
+    m_broadcast_req = 0;
+    showFailure(Failure::Sign, TR("confirm-send-failed").arg(message));
     refresh();
 }
 

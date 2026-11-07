@@ -15,14 +15,20 @@
 #include "interfaces/backend/labels.h"
 #include "interfaces/backend/settings.h"
 #include "interfaces/backend/transaction.h"
+#include "modules/musig/MusigAccountController.h"
+#include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigPlugin.h"
+#include "modules/sp/AccountController.h"
+#include "modules/sp/AccountWidget.h"
 #include "modules/sp/SpPlugin.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QPointer>
 #include <QThread>
 #include <common.h>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <silent.h>
@@ -135,14 +141,21 @@ public:
         emit failed(token, QString());
     }
 
+    void endpointCapabilities(backend::RequestId token,
+                              [[maybe_unused]] QString endpoint) override {
+        emit failed(token, QString());
+    }
+
     void broadcast(backend::RequestId token, [[maybe_unused]] QByteArray transaction) override {
         emit failed(token, QString());
     }
 
 protected:
-    auto readFunds() -> std::optional<Funds> override {
+    // Answers during the call.
+    auto startFundsRead() -> bool override {
         ++reads;
-        return funds;
+        fundsRead(funds);
+        return true;
     }
 
     auto readLabels() -> std::optional<QList<backend::Label>> override {
@@ -151,6 +164,29 @@ protected:
 
     auto readReceiving() -> std::optional<Receiving> override {
         return Receiving{};
+    }
+};
+
+// Whether the funds panels of an account exist before its first funds read answered, as
+// seen once its load finished, before the read's answer comes back.
+class PanelOrder final : public QObject {
+    Q_OBJECT
+
+public:
+    QPointer<AccountBackend> controller;
+    std::function<bool()> panels;
+    bool checked = false;
+    bool early = false;
+
+public slots:
+
+    void onLoaded() {
+        auto *context = controller == nullptr ? nullptr : controller->services();
+        if (context == nullptr) {
+            return;
+        }
+        checked = true;
+        early = early || (panels() && !context->fundsKnown());
     }
 };
 
@@ -486,8 +522,30 @@ void backendServicesSmoke() {
             "a closed account supplies no service");
     spModule->startInstance(SP_ACCOUNT);
     multikeyModule->startInstance(MULTIKEY_ACCOUNT);
+    auto *spWidget = window.findChild<AccountWidget *>();
+    auto *multikeyWidget = window.findChild<MusigAccountWidget *>();
+    require(spWidget != nullptr && multikeyWidget != nullptr, "both accounts open in tabs");
+    PanelOrder spOrder;
+    spOrder.controller = spWidget->controller();
+    spOrder.panels = [controller = spWidget->controller()] {
+        return controller->screen(QStringLiteral("history")).has_value();
+    };
+    PanelOrder multikeyOrder;
+    multikeyOrder.controller = multikeyWidget->controller();
+    multikeyOrder.panels = [controller = multikeyWidget->controller()] {
+        return controller->screen(QStringLiteral("history")).has_value();
+    };
+    // Queued: checked right after the load, before the first funds read can answer.
+    for (auto *order : {&spOrder, &multikeyOrder}) {
+        QObject::connect(order->controller, &AccountBackend::accountLoadFinished, order,
+                         &PanelOrder::onLoaded,
+                         Qt::ConnectionType(Qt::QueuedConnection | Qt::UniqueConnection));
+    }
     spServices(host, spModule);
     multikeyServices(host, multikeyModule);
+    require(spOrder.checked && multikeyOrder.checked && !spOrder.early && !multikeyOrder.early,
+            "the funds panels are built once the first funds read answered, not empty before");
+    require(spOrder.panels() && multikeyOrder.panels(), "the funds panels are built after it");
     closeAccount(spModule, SP_ACCOUNT);
     closeAccount(multikeyModule, MULTIKEY_ACCOUNT);
     require(assemble(host, multikeyModule, MULTIKEY_ACCOUNT, backend::Network::Regtest).assembly ==
