@@ -206,7 +206,8 @@ void pluginAccessSettingsFailureSmoke(const QString &shots);
 void accountServicesSmoke();
 void backendServicesSmoke();
 void offlineSelectionSmoke(const QString &account, const QString &outpoint);
-void psbtTransferSmoke(const QString &account, const QString &psbt_file, const QString &txid);
+void psbtTransferSmoke(const QString &account, const QString &psbt_file, const QString &txid,
+                       const QString &outpoint);
 void accountViewsSmoke();
 void accountShellSmoke();
 } // namespace smoke
@@ -324,10 +325,11 @@ auto main(int argc, char *argv[]) -> int {
         std::fprintf(stdout, "Offline selection smoke: OK\n");
         return gOk ? 0 : 1;
     }
-    if (arguments.size() == 5 && arguments.at(1) == QStringLiteral("--psbt-transfer")) {
+    if (arguments.size() == 6 && arguments.at(1) == QStringLiteral("--psbt-transfer")) {
         Theme::init();
         Theme::get()->apply();
-        smoke::psbtTransferSmoke(arguments.at(2), arguments.at(3), arguments.at(4));
+        smoke::psbtTransferSmoke(arguments.at(2), arguments.at(3), arguments.at(4),
+                                 arguments.at(5));
         std::fprintf(stdout, "PSBT transfer smoke: OK\n");
         return gOk ? 0 : 1;
     }

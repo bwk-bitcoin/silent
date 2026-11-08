@@ -15,6 +15,7 @@
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigPlugin.h"
 #include "modules/musig/SavedPsbts.h"
+#include "modules/musig/SigningSection.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -22,6 +23,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QLabel>
+#include <QPushButton>
 #include <QThread>
 #include <QTimer>
 #include <common.h>
@@ -124,7 +126,8 @@ void importOnTab(musig::SavedPsbts &tab, const QString &clipboard, const QString
 
 } // namespace
 
-void psbtTransferSmoke(const QString &account, const QString &psbt_file, const QString &txid) {
+void psbtTransferSmoke(const QString &account, const QString &psbt_file, const QString &txid,
+                       const QString &outpoint) {
     exportModal();
 
     QFile file(psbt_file);
@@ -166,6 +169,36 @@ void psbtTransferSmoke(const QString &account, const QString &psbt_file, const Q
     };
     list();
     require(listed.entries.empty(), "nothing is saved before the import");
+
+    // Send: a built transaction exports before any signing session starts (#83).
+    auto *signing = window.findChild<musig::SigningSection *>();
+    require(signing != nullptr, "the Send panel has its signing step");
+    signing->setTransaction(
+        backend::TransactionTemplate{
+            .outputs = {{.address = QStringLiteral("bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"),
+                         .amount = 50000}},
+            .inputs = {outpoint},
+            .feeRate = 1},
+        {outpoint});
+    QPushButton *sendExport = nullptr;
+    // The step's buttons sit in the Send view, which holds them.
+    for (auto *candidate : window.findChildren<QPushButton *>()) {
+        if (candidate->text() == TR("btn-export-psbt")) {
+            sendExport = candidate;
+        }
+    }
+    require(sendExport != nullptr && !sendExport->isHidden() && sendExport->isEnabled(),
+            "Send shows Export as soon as a transaction is built");
+    bool sendRan = false;
+    QApplication::clipboard()->clear();
+    onModal<account::ExportPsbt>(
+        [](account::ExportPsbt &modal) { button(modal, TR("btn-copy-to-clipboard"))->click(); },
+        &sendRan);
+    sendExport->click();
+    require(sendRan, "the export modal ran from Send");
+    require(QApplication::clipboard()->text().startsWith(QStringLiteral("cHNidP8")),
+            "Send exports the built transaction as a base64 PSBT");
+    require(controller->psbtInFlight().isEmpty(), "exporting starts no signing session");
 
     importOnTab(*tab, base64, TR("psbt-import-saved"));
     list();

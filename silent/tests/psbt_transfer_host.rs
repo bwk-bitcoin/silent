@@ -113,7 +113,7 @@ fn multikey_imports_and_exports_a_cosigner_psbt_on_its_psbt_tab() {
         "open the cosigner: {}",
         account.get_error()
     );
-    let (base64, txid) = cosigner_psbt(&account, outpoint);
+    let (base64, txid) = cosigner_psbt(&account, outpoint.clone());
     drop(account);
     let file = home.path().join("cosigner.psbt");
     fs::write(&file, &base64).expect("write the cosigner's PSBT");
@@ -123,6 +123,7 @@ fn multikey_imports_and_exports_a_cosigner_psbt_on_its_psbt_tab() {
         .arg(&name)
         .arg(&file)
         .arg(&txid)
+        .arg(&outpoint)
         .env("HOME", home.path())
         .env("QT_QPA_PLATFORM", "offscreen")
         .output()

@@ -243,18 +243,20 @@ auto SigningSection::chosenLeaf() const -> const MusigSpendLeaf * {
 }
 
 void SigningSection::updateSignState() {
+    // Export hands the PSBT out as soon as a transaction is built, whether or not this
+    // wallet can sign it: the session's PSBT while one runs, else the built one.
+    m_export_btn->setVisible(m_session || m_tx.has_value());
+    m_export_btn->setEnabled(m_session ? !m_loading && !m_controller->psbtInFlight().isEmpty()
+                                       : m_tx.has_value());
     if (!m_keys_error.isEmpty()) {
         m_reason_label->setText(m_keys_error);
         m_sign_btn->setEnabled(false);
         return;
     }
-    // While a session runs, Sign opens its modal again, Cancel drops it and Export hands
-    // its PSBT out.
+    // While a session runs, Sign opens its modal again and Cancel drops it.
     m_cancel_btn->setVisible(m_session);
-    m_export_btn->setVisible(m_session);
     if (m_session) {
         m_sign_btn->setEnabled(!m_loading);
-        m_export_btn->setEnabled(!m_loading && !m_controller->psbtInFlight().isEmpty());
         m_reason_label->setVisible(false);
         return;
     }
@@ -437,7 +439,23 @@ void SigningSection::onCancelClicked() {
 }
 
 void SigningSection::onExportClicked() {
-    auto psbt = QByteArray::fromHex(m_controller->psbtInFlight().toLatin1());
+    QByteArray psbt;
+    if (m_session) {
+        psbt = QByteArray::fromHex(m_controller->psbtInFlight().toLatin1());
+    } else if (m_tx.has_value()) {
+        // The built transaction, finalized locally: no signing session starts.
+        m_finalize_error.clear();
+        auto finalized = m_services.transaction->finalize(m_tx.value());
+        if (!finalized.has_value()) {
+            AppController::execModal(new catalog::MessageModal(
+                TR("common-error"),
+                m_finalize_error.isEmpty() ? operationFailedSummary() : m_finalize_error));
+            return;
+        }
+        psbt = *finalized;
+    } else {
+        return;
+    }
     auto exported = ::export_psbt(account::services::toSlice(psbt));
     if (!exported.is_ok) {
         AppController::execModal(
