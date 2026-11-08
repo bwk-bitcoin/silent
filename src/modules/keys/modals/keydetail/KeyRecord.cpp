@@ -7,7 +7,6 @@
 #include "modules/keys/KeysView.h"
 #include "theme/Palette.h"
 
-#include <QHash>
 #include <Qontrol>
 
 #include <algorithm>
@@ -30,23 +29,12 @@ auto keyInfo(KeysModule *module, const QString &fingerprint) -> std::optional<Ke
 }
 
 auto keyAccounts(KeysModule *module, const QString &fingerprint) -> QList<KeyAccount> {
-    // Accounts are told apart by the descriptor they were created with.
-    QHash<QString, KeyAccount> configs;
-    for (const auto &name : ::list_configs()) {
-        auto config = ::config_from_file(name);
-        if (config->is_ok()) {
-            QString descriptor = KeysModule::toQt(config->get_descriptor());
-            configs.insert(descriptor, {.name = KeysModule::toQt(name),
-                                        .descriptor = descriptor,
-                                        .plugin_id = KeysModule::toQt(config->get_plugin_id())});
-        }
-    }
     QList<KeyAccount> list;
-    for (const auto &descriptor :
-         module->rust()->key_descriptors(rust::String(fingerprint.toStdString()))) {
-        QString value = KeysModule::toQt(descriptor.descriptor);
-        list.append(configs.value(
-            value, {.name = KeysModule::toQt(descriptor.alias), .descriptor = value}));
+    for (const auto &account :
+         module->rust()->key_accounts(rust::String(fingerprint.toStdString()))) {
+        list.append({.name = KeysModule::toQt(account.name),
+                     .descriptor = KeysModule::toQt(account.descriptor),
+                     .plugin_id = KeysModule::toQt(account.plugin_id)});
     }
     return list;
 }

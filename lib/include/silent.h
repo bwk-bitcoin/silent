@@ -1073,6 +1073,7 @@ struct LiveDevice;
 struct KeyXpub;
 struct AddressVerifyInfo;
 struct KeyDescriptor;
+struct KeyAccount;
 struct KeyOpResult;
 struct QrMessageResult;
 struct KeyInfoResult;
@@ -2737,6 +2738,20 @@ struct KeyDescriptor final {
 };
 #endif // CXXBRIDGE1_STRUCT_KeyDescriptor
 
+#ifndef CXXBRIDGE1_STRUCT_KeyAccount
+#define CXXBRIDGE1_STRUCT_KeyAccount
+// An account a key's descriptor belongs to.
+struct KeyAccount final {
+  // The account name, or the descriptor's alias when no account holds it.
+  ::rust::String name;
+  ::rust::String descriptor;
+  // The plugin of the account's config, empty when no account holds the descriptor.
+  ::rust::String plugin_id;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_KeyAccount
+
 #ifndef CXXBRIDGE1_STRUCT_KeyOpResult
 #define CXXBRIDGE1_STRUCT_KeyOpResult
 // Result of a keys module operation carrying no response data.
@@ -3974,6 +3989,10 @@ struct KeysModule final : public ::rust::Opaque {
 
   ::KeyOpResult unregister_descriptor(::rust::Str fingerprint, ::rust::Str descriptor) noexcept;
   ::rust::Vec<::KeyDescriptor> key_descriptors(::rust::Str fingerprint) const noexcept;
+
+  // One entry per descriptor of the key, matched against the accounts in one
+  // discovery pass.
+  ::rust::Vec<::KeyAccount> key_accounts(::rust::Str fingerprint) const noexcept;
 
   // Every registered key whose descriptor list contains this descriptor.
   ::rust::Vec<::KeyInfo> keys_for_descriptor(::rust::Str descriptor) const noexcept;

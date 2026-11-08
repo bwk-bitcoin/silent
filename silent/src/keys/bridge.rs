@@ -7,7 +7,7 @@
 //! descriptor's own cryptographic identity).
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
     str::FromStr,
 };
@@ -631,6 +631,13 @@ impl KeysModule {
                 hmac: entry.hmac.clone().unwrap_or_default(),
             })
             .collect()
+    }
+
+    pub fn key_accounts(&self, fingerprint: &str) -> Vec<ffi::KeyAccount> {
+        key_accounts(
+            self.key_descriptors(fingerprint),
+            crate::config::account_summaries(),
+        )
     }
 
     pub fn keys_for_descriptor(&self, descriptor: &str) -> Vec<ffi::KeyInfo> {
@@ -1932,6 +1939,34 @@ pub fn ledger_nonce_restart(
 /// The key origin's fingerprint, if any. Mirrors the per-variant match in
 /// `Descriptor::fingerprint()`, but is applied per-key via `for_any_key` instead
 /// of stopping at the first key that has an origin.
+/// Each of a key's descriptors with the account created on it, told apart by
+/// descriptor: an account summary is (name, descriptor, plugin id). A descriptor no
+/// account holds keeps its alias as name and no plugin.
+fn key_accounts(
+    descriptors: Vec<ffi::KeyDescriptor>,
+    accounts: Vec<(String, String, String)>,
+) -> Vec<ffi::KeyAccount> {
+    let accounts: HashMap<String, (String, String)> = accounts
+        .into_iter()
+        .map(|(name, descriptor, plugin_id)| (descriptor, (name, plugin_id)))
+        .collect();
+    descriptors
+        .into_iter()
+        .map(|entry| match accounts.get(&entry.descriptor) {
+            Some((name, plugin_id)) => ffi::KeyAccount {
+                name: name.clone(),
+                descriptor: entry.descriptor,
+                plugin_id: plugin_id.clone(),
+            },
+            None => ffi::KeyAccount {
+                name: entry.alias,
+                descriptor: entry.descriptor,
+                plugin_id: String::new(),
+            },
+        })
+        .collect()
+}
+
 fn to_key_info(record: &KeyRecord, manager: &KeyManager) -> ffi::KeyInfo {
     ffi::KeyInfo {
         fingerprint: record.fingerprint.to_string(),
@@ -2191,5 +2226,42 @@ impl From<&Error> for ffi::QrErrorKind {
             Error::MusigSession => ffi::QrErrorKind::MusigSession,
             _ => ffi::QrErrorKind::Other,
         }
+    }
+}
+
+#[cfg(test)]
+mod key_accounts_tests {
+    use super::{ffi, key_accounts};
+
+    fn descriptor(descriptor: &str, alias: &str) -> ffi::KeyDescriptor {
+        ffi::KeyDescriptor {
+            fingerprint: "00000000".into(),
+            descriptor: descriptor.into(),
+            alias: alias.into(),
+            registered: true,
+            hmac: String::new(),
+        }
+    }
+
+    #[test]
+    fn each_descriptor_takes_its_account_or_keeps_its_alias() {
+        let accounts = key_accounts(
+            vec![
+                descriptor("tr(a)", "alias-a"),
+                descriptor("tr(b)", "alias-b"),
+            ],
+            vec![
+                ("other".into(), "tr(c)".into(), "sp".into()),
+                ("shared".into(), "tr(a)".into(), "musig".into()),
+            ],
+        );
+        let entries: Vec<_> = accounts
+            .iter()
+            .map(|a| (a.name.as_str(), a.descriptor.as_str(), a.plugin_id.as_str()))
+            .collect();
+        assert_eq!(
+            entries,
+            [("shared", "tr(a)", "musig"), ("alias-b", "tr(b)", "")]
+        );
     }
 }

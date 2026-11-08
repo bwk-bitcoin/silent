@@ -1221,6 +1221,16 @@ mod ffi {
         pub hmac: String,
     }
 
+    /// An account a key's descriptor belongs to.
+    #[derive(Debug, Clone)]
+    pub struct KeyAccount {
+        /// The account name, or the descriptor's alias when no account holds it.
+        pub name: String,
+        pub descriptor: String,
+        /// The plugin of the account's config, empty when no account holds the descriptor.
+        pub plugin_id: String,
+    }
+
     /// Result of a keys module operation carrying no response data.
     #[derive(Debug, Clone)]
     pub struct KeyOpResult {
@@ -2675,6 +2685,9 @@ mod ffi {
             descriptor: &str,
         ) -> KeyOpResult;
         fn key_descriptors(self: &KeysModule, fingerprint: &str) -> Vec<KeyDescriptor>;
+        /// One entry per descriptor of the key, matched against the accounts in one
+        /// discovery pass.
+        fn key_accounts(self: &KeysModule, fingerprint: &str) -> Vec<KeyAccount>;
         /// Every registered key whose descriptor list contains this descriptor.
         fn keys_for_descriptor(self: &KeysModule, descriptor: &str) -> Vec<KeyInfo>;
 

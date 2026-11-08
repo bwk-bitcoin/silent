@@ -852,13 +852,28 @@ pub fn list_module_configs(plugin_id: &str) -> Vec<String> {
 }
 
 fn discover_configs(plugin_id: Option<&str>) -> Vec<String> {
+    discovered(plugin_id)
+        .into_iter()
+        .map(|config| config.account_name)
+        .collect()
+}
+
+/// Every account's (name, descriptor, plugin id), read in one discovery pass.
+pub(crate) fn account_summaries() -> Vec<(String, String, String)> {
+    discovered(None)
+        .into_iter()
+        .map(|config| (config.account_name, config.descriptor, config.plugin_id))
+        .collect()
+}
+
+fn discovered(plugin_id: Option<&str>) -> Vec<Config> {
     let mut out = vec![];
     for plugin in ["sp", "musig"]
         .into_iter()
         .filter(|plugin| plugin_id.is_none_or(|id| id == *plugin))
     {
         match AccountStorage::configs(datadir(), plugin) {
-            Ok(configs) => out.extend(configs.into_iter().map(|config| config.account_name)),
+            Ok(configs) => out.extend(configs),
             Err(error) => log::error!("account discovery {plugin}: {error}"),
         }
     }
