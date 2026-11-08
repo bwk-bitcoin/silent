@@ -70,13 +70,13 @@
 //
 // Limits: a file holds at most MAX_FILE_SIZE bytes before base64 (too_large); a message
 // is at most MAX_MESSAGE_SIZE bytes of JSON (too_large, with an empty id). A storage
-// holds at most 4096 entries in the initial backend. Its whole-tree JSON document,
-// with files in base64, is at most 16 MiB before encryption: a change past either
-// answers too_large. At most
+// holds at most 4096 entries. Its whole tree, counted as one JSON document with files
+// in base64, is at most 16 MiB before encryption: a change past either answers
+// too_large. At most
 // MAX_OUTSTANDING requests are outstanding at once, a cancelled one counted until it
 // has stopped running: one more answers busy.
 // Contention with another process using the same tree also answers busy without waiting.
-// These are logical operations, independent of the initial encrypted whole-tree backend.
+// These are logical operations, independent of the encrypted backend and its layout.
 // An embedded filesystem backend is deferred; no physical paths or handles are exposed.
 //
 // The modules of one plugin share its storage, each through its own IStorage, whose

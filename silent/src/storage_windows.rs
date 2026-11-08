@@ -2,8 +2,9 @@
 //!
 //! The configured data directory is the host's own choice: it is opened once by path,
 //! links followed. Everything below it, the plugin root, the legacy state directory,
-//! the document and its temp, is opened with `NtCreateFile` relative to the handle of
-//! its directory, by a single name, on the reparse point itself and never through it.
+//! the document, its temp and the blobs, is opened with `NtCreateFile` relative to the
+//! handle of its directory, by a single name, on the reparse point itself and never
+//! through it. The root is listed from its handle too.
 //! A handle that turns out to be a reparse point is refused. No path is resolved again
 //! after the data directory, so renaming a directory or planting a junction or a link
 //! while an operation runs never redirects it.
@@ -79,6 +80,16 @@ const DIRECTORY_WRITE: u32 = DIRECTORY_READ | FILE_ADD_FILE | FILE_ADD_SUBDIRECT
 /// The longest name a rename here takes, in UTF-16 units.
 const RENAME_NAME_CAPACITY: usize = 64;
 
+/// `FILE_INFO_BY_HANDLE_CLASS`: the next page of a listing, and its first.
+const FILE_FULL_DIRECTORY_INFO: u32 = 14;
+const FILE_FULL_DIRECTORY_RESTART_INFO: u32 = 15;
+const ERROR_NO_MORE_FILES: i32 = 18;
+/// Offsets in `FILE_FULL_DIR_INFO`: `FileNameLength`, in bytes, and `FileName`.
+const FULL_DIRECTORY_NAME_LENGTH_OFFSET: usize = 60;
+const FULL_DIRECTORY_NAME_OFFSET: usize = 68;
+/// A listing page of 64 KiB, in `u64` words.
+const DIRECTORY_PAGE_WORDS: usize = 8192;
+
 /// `UNICODE_STRING`: `length` and `maximum_length` count bytes, not units, and the
 /// buffer needs no terminating NUL. Same layout as C on 32 and 64 bit: two `u16` then
 /// a pointer at its natural alignment.
@@ -127,6 +138,16 @@ struct RenameInformation {
 #[repr(C)]
 struct DispositionInformation {
     delete_file: u8,
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetFileInformationByHandleEx(
+        file: RawHandle,
+        information_class: u32,
+        information: *mut c_void,
+        size: u32,
+    ) -> i32;
 }
 
 #[link(name = "ntdll")]
@@ -271,6 +292,37 @@ impl LockedRoot {
         self.root.rename_into(&temp, DOCUMENT)?;
         drop(guard);
         sync(&temp, &self.root.path.join(DOCUMENT))?;
+        self.root.sync()
+    }
+
+    pub(crate) fn read_blob(&self, name: &str, limit: u64) -> Result<Option<Vec<u8>>, ErrorCode> {
+        let bytes = self.root.read_file(name, limit)?;
+        if bytes
+            .as_ref()
+            .is_some_and(|bytes| bytes.len() as u64 > limit)
+        {
+            return Err(ErrorCode::TooLarge);
+        }
+        Ok(bytes)
+    }
+
+    /// Creates the file `name`, never replacing one, written through and flushed, then
+    /// flushes the root.
+    pub(crate) fn create_blob(&self, name: &str, sealed: &[u8]) -> Result<(), ErrorCode> {
+        drop(self.root.create_file(name, sealed)?);
+        self.root.sync()
+    }
+
+    pub(crate) fn names(&self) -> Result<Vec<String>, ErrorCode> {
+        self.root.names()
+    }
+
+    /// Deletes the entries `names`, also when one is already absent, and flushes the
+    /// root once.
+    pub(crate) fn remove_all(&self, names: &[String]) -> Result<(), ErrorCode> {
+        for name in names {
+            self.root.remove(name)?;
+        }
         self.root.sync()
     }
 }
@@ -436,6 +488,51 @@ impl Directory {
         sync(&self.handle, &self.path)
     }
 
+    /// The names of this directory's entries, read from its handle, `.` and `..` left
+    /// out.
+    fn names(&self) -> Result<Vec<String>, ErrorCode> {
+        let mut names = Vec::new();
+        // `u64` words: the entries are 8-byte aligned.
+        let mut buffer = vec![0u64; DIRECTORY_PAGE_WORDS];
+        let mut class = FILE_FULL_DIRECTORY_RESTART_INFO;
+        loop {
+            // SAFETY: `self.handle` is an open directory handle borrowed for the call,
+            // opened for synchronous I/O with list access, and `buffer` a live, writable
+            // buffer of the size passed.
+            let listed = unsafe {
+                GetFileInformationByHandleEx(
+                    self.handle.as_raw_handle(),
+                    class,
+                    buffer.as_mut_ptr().cast(),
+                    (buffer.len() * size_of::<u64>()) as u32,
+                )
+            };
+            if listed == 0 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() == Some(ERROR_NO_MORE_FILES) {
+                    return Ok(names);
+                }
+                return Err(failed(&self.path, &error));
+            }
+            class = FILE_FULL_DIRECTORY_INFO;
+            let page: Vec<u8> = buffer.iter().flat_map(|word| word.to_ne_bytes()).collect();
+            let mut offset = 0;
+            loop {
+                let entry = full_directory_entry(&page, offset)
+                    .ok_or_else(|| failed(&self.path, &io::Error::other("bad directory entry")))?;
+                if let Ok(name) = String::from_utf16(&entry.name) {
+                    if name != "." && name != ".." {
+                        names.push(name);
+                    }
+                }
+                if entry.next == 0 {
+                    break;
+                }
+                offset += entry.next;
+            }
+        }
+    }
+
     /// Opens the single name `name` relative to this directory, on a reparse point
     /// itself, for synchronous I/O.
     fn open(
@@ -573,6 +670,30 @@ fn set_information<T>(file: &File, information: &T, class: u32) -> Result<(), Nt
         )
     };
     NtStatus::check(status)
+}
+
+/// One `FILE_FULL_DIR_INFO` of a listing page: its name, and the offset of the next one
+/// from it, 0 for the last.
+struct FullDirectoryEntry {
+    next: usize,
+    name: Vec<u16>,
+}
+
+/// The entry at `offset` in `page`, `None` when it does not fit.
+fn full_directory_entry(page: &[u8], offset: usize) -> Option<FullDirectoryEntry> {
+    let field = |at: usize| -> Option<usize> {
+        let bytes = page.get(offset + at..offset + at + 4)?;
+        Some(u32::from_le_bytes(bytes.try_into().ok()?) as usize)
+    };
+    let next = field(0)?;
+    let name_bytes = field(FULL_DIRECTORY_NAME_LENGTH_OFFSET)?;
+    let start = offset + FULL_DIRECTORY_NAME_OFFSET;
+    let name = page
+        .get(start..start + name_bytes)?
+        .chunks_exact(2)
+        .map(|unit| u16::from_le_bytes([unit[0], unit[1]]))
+        .collect();
+    Some(FullDirectoryEntry { next, name })
 }
 
 fn refuse_reparse_point(file: &File, path: &Path) -> Result<(), ErrorCode> {

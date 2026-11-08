@@ -361,12 +361,13 @@ logical recursive-remove operation as other storage clients, not a host account-
 or deletion-specific filesystem API.
 Native lock/lease sentinels are storage-engine metadata, not account payload files.
 
-This is a bounded whole-file adapter, not a database filesystem or completed external
-SP/MuSig plugin deployment. A store file is limited to 1 MiB and a plugin tree to 4096
-entries and 16 MiB of encoded content. Larger wallet/header state returns an explicit
-storage failure; it is not truncated or redirected to a native database. The native
-built-in lifetime coordinator and its host-local leases are not an external IPC lease
-protocol. No OS sandbox or secure-erasure guarantee is claimed.
+This is a whole-file adapter, not a database filesystem or completed external
+SP/MuSig plugin deployment. The built-in workers' fixed caller contexts are not held
+to the `IStorage` bounds on file and tree size: a wallet or header store grows with the
+wallet, each file sealed in its own blob, so a flush rewrites that store's blob and the
+tree index only. A module tree is still limited to 4096 entries. The native built-in lifetime
+coordinator and its host-local leases are not an external IPC lease protocol. No OS
+sandbox or secure-erasure guarantee is claimed.
 
 Deleting an account removes only its logical subtree. It preserves other accounts,
 shared signer keys, nonce/session history and the application unlock key. Normal tab
@@ -590,14 +591,19 @@ the op does not take, an unknown op or a malformed message answers `invalid_requ
   leaves the previous or the new complete file, never a part of one. No offsets, no
   random access, no chunks.
 - **Backend.** The logical request/result contract does not depend on the physical
-  filesystem or its layout. The initial backend rewrites one encrypted document for
-  the whole tree. An embedded filesystem backend is deferred, not implemented here;
-  changing the backend must not expose its paths or handles to plugins.
+  filesystem or its layout. The backend keeps one encrypted index of the tree and one
+  encrypted blob per file: a change rewrites the index and the blobs of the files it
+  writes, never the other files. An embedded filesystem backend is deferred, not
+  implemented here; changing the backend must not expose its paths or handles to
+  plugins.
 - **Limits.** A file holds at most 1 MiB before base64, a message at most 2 MiB of JSON
   and an id at most 256 bytes. A list page holds at most 128 entries. A storage holds at
-  most 4096 entries, and the JSON document of its whole tree, files in base64, is at
-  most 16 MiB before encryption. At most 8 requests are outstanding per `IStorage`, a
-  cancelled one counted until it stopped running: one more answers `busy`.
+  most 4096 entries, and its whole tree, counted as one JSON document with every file
+  in base64, is at most 16 MiB before encryption. At most 8 requests are outstanding
+  per `IStorage`, a cancelled one counted until it stopped running: one more answers
+  `busy`. Every `IStorage` keeps these bounds, a built-in module's included; only the
+  SP and MuSig wallet stores, written by the host's own workers outside `IStorage`,
+  keep the entry bound only.
 - **Scope.** The modules of one plugin share its storage, each through its own
   `IStorage`; a handle opened by one does not work on another (`invalid_handle`).
   Active caller identity is stamped from the installed registry record and loaded
@@ -606,9 +612,11 @@ the op does not take, an unknown op or a malformed message answers `invalid_requ
   metadata later cannot change its identity, grants or storage root. The same
   caller identity is used for Account and Keys access.
 - **On disk.** The storage lives under `.silent/<plugin_id>/` in the configured data
-  directory, as one document sealed with BIP138 to the app state's unlock key like the
-  rest of `~/.silent/` (ws-plaude/silent#37). The plugin id is visible; file names,
-  directories and contents are not. A plugin whose id names a directory the host keeps
+  directory, sealed with BIP138 to the app state's unlock key like the rest of
+  `~/.silent/` (ws-plaude/silent#37): the index `tree.bip138` (paths, kinds, file sizes
+  and blob ids) and one `<random id>.blob` per file holding its data. The plugin id is
+  visible; file names, directories and contents are not, and a blob name tells nothing
+  of the file it holds. A plugin whose id names a directory the host keeps
   there (`keys`, `plugins`, `plugin-state`, `musig-sessions`, `locked`), a reserved
   application file extension or an opaque account directory gets no storage
   (`storage()` answers null). Each document is bound to its exact plugin ID, so
@@ -616,11 +624,16 @@ the op does not take, an unknown op or a malformed message answers `invalid_requ
   On Linux and macOS the files are opened relative to directory handles without
   following links. On Windows, handle-relative opens and replacement reject reparse
   points. Other platforms answer `unavailable`. The configured data directory itself
-  is trusted host configuration and may be a link. A replacement writes and syncs a
-  private temp, rechecks authorization, renames it and syncs the containing directory.
-  An error after rename can leave the complete new version published.
+  is trusted host configuration and may be a link. A change first writes each new file
+  to a new private blob and syncs it and the directory. The index replacement then
+  writes and syncs a private temp, rechecks authorization, renames it and syncs the
+  containing directory. Last, the blobs the index no longer names are removed. An error
+  after rename can leave the complete new version published. Blobs an interrupted
+  change left are removed by the next change, or when the storage is next opened. An
+  index from before blobs, version 1 with every file's data in it, is read as it is
+  and moves to blobs on its first change.
   A persistent, no-follow `tree.lock` is held from loading the tree through mutation,
-  replacement and migration readback. It uses an exclusive native lock through fs2
+  replacement, blob removal and migration readback. It uses an exclusive native lock through fs2
   on Unix and Windows; contention answers `busy` without waiting, and other lock
   failures are explicit errors. The lock is never replaced or unlinked. The same
   root handle is used for loading and publication, so a second process cannot

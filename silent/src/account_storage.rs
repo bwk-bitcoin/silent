@@ -429,7 +429,7 @@ pub fn delete_musig_account(name: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, sync::Arc};
+    use std::{collections::BTreeMap, fs, sync::Arc};
 
     use bwk::{
         bwk_electrum::persistence::{BackendFactory, BackendIdentity, BackendKind},
@@ -573,6 +573,122 @@ mod tests {
             fs::read_dir(dir.path()).expect("physical roots").count(),
             2,
             "only the visible SP and MuSig plugin roots, no filesystem wallet backend"
+        );
+    }
+
+    /// The configuration of the account `name`, its data in `dir`.
+    fn account_config(dir: &TempDir, name: &str) -> Config {
+        let mut config = Config::new(
+            name.into(),
+            Network::Regtest,
+            String::new(),
+            String::new(),
+            String::new(),
+            None,
+        );
+        config.data_dir = dir.path().to_path_buf();
+        config
+    }
+
+    #[test]
+    fn header_stores_past_the_plugin_file_bound_persist_and_reopen() {
+        state_crypt::unlock_for_tests();
+        let dir = TempDir::new().expect("isolated logical tree");
+        // 20000 headers: more than twice the file bound a plugin keeps, once encoded.
+        let headers = |seed: u8| -> BTreeMap<String, Vec<u8>> {
+            (0..20_000u32)
+                .map(|height| {
+                    let mut header = vec![seed; bitcoin::block::Header::SIZE];
+                    header[..4].copy_from_slice(&height.to_le_bytes());
+                    (height.to_string(), header)
+                })
+                .collect()
+        };
+        let accounts = [("large-one", headers(1)), ("large-two", headers(2))];
+        for (name, rows) in &accounts {
+            let config = account_config(&dir, name);
+            let factory = Factory::open(&config).expect("account factory");
+            let backend = factory
+                .open(&BackendIdentity {
+                    account: config.account_name.clone(),
+                    network: bitcoin::Network::Regtest,
+                    kind: BackendKind::Headers,
+                })
+                .expect("header backend");
+            let rows: Vec<(String, Vec<u8>)> = rows.clone().into_iter().collect();
+            backend
+                .flush_batch(bwk::persist::HEADERS_STORE_KEY, &rows, &[])
+                .expect("a header store past the plugin file bound");
+            let stored = AccountStorage::open(&config)
+                .expect("logical account")
+                .read("headers/headers.json")
+                .expect("header file")
+                .expect("saved headers");
+            assert!(
+                stored.len() > 2 * crate::storage::MAX_FILE_BYTES,
+                "{name}: {} bytes",
+                stored.len()
+            );
+        }
+        for (name, rows) in &accounts {
+            let config = account_config(&dir, name);
+            let factory = Factory::open(&config).expect("reopened account factory");
+            let backend = factory
+                .open(&BackendIdentity {
+                    account: config.account_name.clone(),
+                    network: bitcoin::Network::Regtest,
+                    kind: BackendKind::Headers,
+                })
+                .expect("reopened header backend");
+            let reopened: BTreeMap<String, Vec<u8>> = backend
+                .get_rows(bwk::persist::HEADERS_STORE_KEY)
+                .expect("reopened header rows")
+                .into_iter()
+                .collect();
+            assert_eq!(&reopened, rows, "{name}: every header intact");
+        }
+    }
+
+    #[test]
+    fn account_deletion_leaves_no_blob_of_its_files() {
+        state_crypt::unlock_for_tests();
+        let dir = TempDir::new().expect("isolated logical tree");
+        let blobs = || {
+            let mut blobs: Vec<String> = fs::read_dir(dir.path().join("sp"))
+                .expect("module root")
+                .map(|entry| {
+                    entry
+                        .expect("entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .filter(|name| name.ends_with(".blob"))
+                .collect();
+            blobs.sort();
+            blobs
+        };
+        let kept = AccountStorage::open(&account_config(&dir, "kept")).expect("kept account");
+        kept.create().expect("kept directory");
+        kept.write("config.json", b"kept".to_vec(), true)
+            .expect("kept config");
+        let kept_blobs = blobs();
+        let deleted =
+            AccountStorage::open(&account_config(&dir, "deleted")).expect("deleted account");
+        deleted.create().expect("deleted directory");
+        deleted
+            .write("config.json", b"deleted".to_vec(), true)
+            .expect("deleted config");
+        deleted
+            .write("wallet.json", vec![3; 4096], true)
+            .expect("deleted wallet");
+        assert_eq!(blobs().len(), 3, "one blob per file");
+        let _lease = deleted.lease().expect("account lease");
+        deleted.remove().expect("account deletion");
+        assert_eq!(blobs(), kept_blobs, "only the kept account's blob is left");
+        assert_eq!(
+            kept.read("config.json").expect("kept read"),
+            Some(b"kept".to_vec())
         );
     }
 

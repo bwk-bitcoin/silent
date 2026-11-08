@@ -9,9 +9,11 @@
 //!
 //! A request is a JSON object with a string `id` and an `op`; each operation accepts
 //! only its own fields, any other field or operation is `invalid_request`. File data
-//! is base64. The bounds: a request of `MAX_MESSAGE_BYTES` of JSON text, a file of
-//! `MAX_FILE_BYTES` decoded, a tree of `MAX_ENTRIES` entries and `MAX_TREE_BYTES` of
-//! JSON text before sealing, a listing page of `MAX_PAGE` entries.
+//! is base64. The bounds: a request of `MAX_MESSAGE_BYTES` of JSON text, a tree of
+//! `MAX_ENTRIES` entries, a listing page of `MAX_PAGE` entries. A file of a session is
+//! also bounded to `MAX_FILE_BYTES` decoded and its tree to `MAX_TREE_BYTES` of JSON
+//! text counted as if every file's data were in the document, in base64. The host's
+//! own wallet stores, through `Client`, are not: they grow with the wallet.
 //!
 //! A logical path is names joined by `/`, relative to the tree's root, the root itself
 //! the empty path. A name is 1 to `MAX_NAME_BYTES` bytes of UTF-8, not `.` or `..`,
@@ -19,22 +21,31 @@
 //! one; a path is at most `MAX_PATH_BYTES` bytes. Names are compared byte for byte:
 //! case-sensitive, never normalized.
 //!
-//! The whole tree is one document sealed with the app state key, `tree.bip138`, in
-//! `<data dir>/<plugin id>/`: the plugin id is visible on disk, its names, directories
-//! and bytes are not. The document names the plugin it belongs to, so a tree copied to
-//! another root, or two ids sharing a root on a case-insensitive disk, is `corrupt`. A
-//! change re-reads the document, applies the change and replaces the document
-//! atomically, so a rename or a recursive removal lands whole or not at all. Operations
-//! of every session are serialized. A persistent native file lock excludes other
-//! processes from load through publication; contention is `busy`, never a wait.
-//! Revoking or cancelling never waits for an operation.
+//! The tree lives in `<data dir>/<plugin id>/`, sealed with the app state key: the
+//! document `tree.bip138` is its index, every entry's path and kind and every file's
+//! size and blob, and each file's data is sealed in its own blob beside it, named
+//! `<random id>.blob`. The plugin id is visible on disk, its names, directories and
+//! bytes are not. The document names the plugin it belongs to, and a blob the plugin
+//! and the id it is stored under, so a tree or a blob copied to another root or name,
+//! or two ids sharing a root on a case-insensitive disk, is `corrupt`.
+//!
+//! A change re-reads the document and applies the change. A file it writes is sealed
+//! in a new blob, synced with its directory entry; then the document is replaced
+//! atomically, so a rename or a recursive removal lands whole or not at all; then the
+//! blobs the document no longer names are removed. A write costs the blob of the file
+//! it writes and the index, never the other files. Blobs left by an interrupted change
+//! are removed by the next change or the next `open`. A version 1 document, every
+//! file's data in it, is read as it is and moves to blobs on its first change.
+//! Operations of every session are serialized. A persistent native file lock excludes
+//! other processes from load through publication and removal; contention is `busy`,
+//! never a wait. Revoking or cancelling never waits for an operation.
 //!
 //! Disk access never follows a link: on Unix it is relative to directory handles
 //! opened without following one (`disk` below), on Windows it refuses reparse points
 //! (`storage_windows.rs`), elsewhere the storage is `unavailable`.
 
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fmt,
     fs::File,
     ops::Bound,
@@ -89,8 +100,16 @@ const PRIVATE_STORAGE_NAME: &str = "Private plugin storage";
 const DOCUMENT: &str = "tree.bip138";
 const DOCUMENT_TEMP: &str = "tree.tmp";
 const DOCUMENT_LOCK: &str = "tree.lock";
-const TREE_VERSION: u32 = 1;
+/// The document holds the index only, every file's data sealed in its own blob.
+const TREE_VERSION: u32 = 2;
+/// The document held every file's data in base64: read, and replaced on the next change.
+const INLINE_TREE_VERSION: u32 = 1;
 const HANDLE_BYTES: usize = 16;
+/// The random bytes of a blob id, its file named by their hex.
+const BLOB_ID_BYTES: usize = 16;
+const BLOB_EXTENSION: &str = "blob";
+/// The owner and id fields beside a blob's data, in bytes of JSON text.
+const MAX_BLOB_FIELDS_BYTES: usize = 1024;
 
 /// Directories the host keeps in the data directory, `locked` being where a locked
 /// account path points. A plugin id never equals one, ignoring case.
@@ -234,6 +253,8 @@ fn clear_private_tree(data_dir: &Path, plugin_id: &str) -> Result<PrivatePurge, 
                 root.remove_temporary().map_err(|error| {
                     format!("Private staging deletion failed: {}", error.as_str())
                 })?;
+                // Blobs of a first write interrupted before its document was published.
+                remove_blobs(&root, &Tree::default())?;
                 return Ok(PrivatePurge::Absent);
             }
             Ok(Some(bytes)) => Some(bytes),
@@ -256,6 +277,7 @@ fn clear_private_tree(data_dir: &Path, plugin_id: &str) -> Result<PrivatePurge, 
         }
         root.remove_temporary()
             .map_err(|error| format!("Private staging deletion failed: {}", error.as_str()))?;
+        remove_blobs(&root, &Tree::default())?;
         return Ok(PrivatePurge::Cleared);
     }
     // One replacement clears all accounts/files and permanently fences legacy import.
@@ -272,7 +294,14 @@ fn clear_private_tree(data_dir: &Path, plugin_id: &str) -> Result<PrivatePurge, 
                 error.as_str()
             )
         })?;
+    remove_blobs(&root, &tree)?;
     Ok(PrivatePurge::Cleared)
+}
+
+/// Removes the blobs of the cleared private tree in `root`, `tree` its document now.
+fn remove_blobs(root: &disk::LockedRoot, tree: &Tree) -> Result<(), String> {
+    collect_garbage(root, tree)
+        .map_err(|error| format!("Private blob deletion failed: {}", error.as_str()))
 }
 
 fn private_tree_owned(bytes: &[u8], plugin_id: &str) -> Result<bool, String> {
@@ -715,7 +744,61 @@ fn valid_root(plugin_id: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Node {
     Directory,
-    File(Vec<u8>),
+    File(Content),
+}
+
+/// Where a file's data is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Content {
+    /// Not sealed in a blob yet: written by the current operation, or read from a
+    /// version 1 document. Publication seals it in a new blob.
+    Inline(Vec<u8>),
+    Blob(BlobRef),
+}
+
+impl Content {
+    fn size(&self) -> u64 {
+        match self {
+            Content::Inline(data) => data.len() as u64,
+            Content::Blob(blob) => blob.size,
+        }
+    }
+}
+
+/// A file's data sealed in the blob `id`, `size` bytes before sealing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BlobRef {
+    id: String,
+    size: u64,
+}
+
+impl BlobRef {
+    /// The name of the blob's file in the plugin root.
+    fn file_name(&self) -> String {
+        format!("{}.{BLOB_EXTENSION}", self.id)
+    }
+
+    /// The largest sealed blob of its size: its base64 and fields, sealed.
+    fn sealed_limit(&self) -> u64 {
+        (base64_len(self.size) + MAX_BLOB_FIELDS_BYTES + MAX_ENVELOPE_BYTES) as u64
+    }
+}
+
+/// The length of the base64 of `size` bytes.
+fn base64_len(size: u64) -> usize {
+    size.div_ceil(3) as usize * 4
+}
+
+/// Whether `name` is the file of a blob: never a name of the document, its lock or a
+/// lease.
+fn is_blob_file(name: &str) -> bool {
+    name.strip_suffix(BLOB_EXTENSION)
+        .and_then(|stem| stem.strip_suffix('.'))
+        .is_some_and(valid_blob_id)
+}
+
+fn valid_blob_id(id: &str) -> bool {
+    id.len() == BLOB_ID_BYTES * 2 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 static ROOT: Node = Node::Directory;
@@ -724,18 +807,49 @@ static ROOT: Node = Node::Directory;
 /// migrated, and every entry with its full path, parents first.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Document {
+struct Document<E> {
     version: u32,
     owner: String,
     migrated: bool,
-    entries: Vec<DocumentEntry>,
+    entries: Vec<E>,
 }
 
+/// Only the version of a document, to pick how to read the rest.
+#[derive(Debug, Deserialize)]
+struct DocumentVersion {
+    version: u32,
+}
+
+/// An entry of a version 2 document: a file names the blob holding its data.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 enum DocumentEntry {
+    Directory {
+        path: String,
+    },
+    File {
+        path: String,
+        blob: String,
+        size: u64,
+    },
+}
+
+/// An entry of a version 1 document: a file holds its data in base64.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+enum InlineEntry {
     Directory { path: String },
     File { path: String, data: String },
+}
+
+/// What a blob seals: its data in base64, bound to the plugin and the id it is stored
+/// under, so a blob copied to another name or root is `corrupt`.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BlobDocument {
+    owner: String,
+    blob: String,
+    data: String,
 }
 
 /// A plugin's tree, every entry by its path, the root implied.
@@ -751,37 +865,41 @@ impl Tree {
     /// Reads the document of `owner`, refusing anything this module would not have
     /// written for it.
     fn decode(text: &str, owner: &str) -> Result<Self, ErrorCode> {
-        let document: Document = serde_json::from_str(text).map_err(|error| {
+        let unreadable = |error: serde_json::Error| {
             log::error!("storage: unreadable tree of '{owner}': {error}");
             ErrorCode::Corrupt
-        })?;
-        if document.version != TREE_VERSION || document.entries.len() > MAX_ENTRIES {
-            return Err(ErrorCode::Corrupt);
-        }
-        if document.owner != owner {
-            log::error!(
-                "storage: the tree in the root of '{owner}' belongs to '{}'",
-                document.owner
-            );
-            return Err(ErrorCode::Corrupt);
-        }
+        };
+        let version: DocumentVersion = serde_json::from_str(text).map_err(unreadable)?;
+        let (migrated, entries) = match version.version {
+            TREE_VERSION => {
+                let document: Document<DocumentEntry> =
+                    serde_json::from_str(text).map_err(unreadable)?;
+                Self::check_owner(&document, owner)?;
+                let entries = document
+                    .entries
+                    .into_iter()
+                    .map(Self::indexed_node)
+                    .collect::<Result<Vec<_>, _>>()?;
+                (document.migrated, entries)
+            }
+            INLINE_TREE_VERSION => {
+                let document: Document<InlineEntry> =
+                    serde_json::from_str(text).map_err(unreadable)?;
+                Self::check_owner(&document, owner)?;
+                let entries = document
+                    .entries
+                    .into_iter()
+                    .map(Self::inline_node)
+                    .collect::<Result<Vec<_>, _>>()?;
+                (document.migrated, entries)
+            }
+            _ => return Err(ErrorCode::Corrupt),
+        };
         let mut tree = Self {
             nodes: BTreeMap::new(),
-            migrated: document.migrated,
+            migrated,
         };
-        for entry in document.entries {
-            let (path, node) = match entry {
-                DocumentEntry::Directory { path } => (path, Node::Directory),
-                DocumentEntry::File { path, data } => {
-                    let data = BASE64_STANDARD
-                        .decode(data)
-                        .map_err(|_| ErrorCode::Corrupt)?;
-                    if data.len() > MAX_FILE_BYTES {
-                        return Err(ErrorCode::Corrupt);
-                    }
-                    (path, Node::File(data))
-                }
-            };
+        for (path, node) in entries {
             let path = LogicalPath::parse_entry(&path).map_err(|_| ErrorCode::Corrupt)?;
             if tree.nodes.insert(path, node).is_some() {
                 return Err(ErrorCode::Corrupt);
@@ -797,35 +915,130 @@ impl Tree {
         Ok(tree)
     }
 
-    /// The document of `owner` holding this tree.
+    fn check_owner<E>(document: &Document<E>, owner: &str) -> Result<(), ErrorCode> {
+        if document.entries.len() > MAX_ENTRIES {
+            return Err(ErrorCode::Corrupt);
+        }
+        if document.owner != owner {
+            log::error!(
+                "storage: the tree in the root of '{owner}' belongs to '{}'",
+                document.owner
+            );
+            return Err(ErrorCode::Corrupt);
+        }
+        Ok(())
+    }
+
+    fn indexed_node(entry: DocumentEntry) -> Result<(String, Node), ErrorCode> {
+        match entry {
+            DocumentEntry::Directory { path } => Ok((path, Node::Directory)),
+            DocumentEntry::File { path, blob, size } => {
+                if !valid_blob_id(&blob) {
+                    return Err(ErrorCode::Corrupt);
+                }
+                Ok((path, Node::File(Content::Blob(BlobRef { id: blob, size }))))
+            }
+        }
+    }
+
+    fn inline_node(entry: InlineEntry) -> Result<(String, Node), ErrorCode> {
+        match entry {
+            InlineEntry::Directory { path } => Ok((path, Node::Directory)),
+            InlineEntry::File { path, data } => {
+                let data = BASE64_STANDARD
+                    .decode(data)
+                    .map_err(|_| ErrorCode::Corrupt)?;
+                if data.len() > MAX_FILE_BYTES {
+                    return Err(ErrorCode::Corrupt);
+                }
+                Ok((path, Node::File(Content::Inline(data))))
+            }
+        }
+    }
+
+    /// The document of `owner` holding this tree, every file already sealed in a blob.
     fn encode(&self, owner: &str) -> Result<String, ErrorCode> {
         let entries = self
             .nodes
             .iter()
             .map(|(path, node)| match node {
-                Node::Directory => DocumentEntry::Directory {
+                Node::Directory => Ok(DocumentEntry::Directory {
                     path: path.to_string(),
-                },
-                Node::File(data) => DocumentEntry::File {
+                }),
+                Node::File(Content::Blob(blob)) => Ok(DocumentEntry::File {
                     path: path.to_string(),
-                    data: BASE64_STANDARD.encode(data),
-                },
+                    blob: blob.id.clone(),
+                    size: blob.size,
+                }),
+                Node::File(Content::Inline(_)) => {
+                    log::error!("storage: '{path}' of '{owner}' is not sealed in a blob");
+                    Err(ErrorCode::Io)
+                }
             })
-            .collect();
-        let document = Document {
-            version: TREE_VERSION,
-            owner: owner.to_string(),
-            migrated: self.migrated,
-            entries,
-        };
-        let text = serde_json::to_string(&document).map_err(|error| {
-            log::error!("storage: cannot serialize the tree of '{owner}': {error}");
-            ErrorCode::Io
-        })?;
+            .collect::<Result<_, _>>()?;
+        let text = Self::serialize(
+            &Document {
+                version: TREE_VERSION,
+                owner: owner.to_string(),
+                migrated: self.migrated,
+                entries,
+            },
+            owner,
+        )?;
         if text.len() > MAX_TREE_BYTES {
             return Err(ErrorCode::TooLarge);
         }
         Ok(text)
+    }
+
+    /// The length of this tree's version 1 document, every file's data in base64 in
+    /// it: what bounds a plugin's tree, as before files had their own blobs.
+    fn inline_len(&self, owner: &str) -> Result<usize, ErrorCode> {
+        let mut data_len = 0;
+        let entries = self
+            .nodes
+            .iter()
+            .map(|(path, node)| match node {
+                Node::Directory => InlineEntry::Directory {
+                    path: path.to_string(),
+                },
+                Node::File(content) => {
+                    data_len += base64_len(content.size());
+                    InlineEntry::File {
+                        path: path.to_string(),
+                        data: String::new(),
+                    }
+                }
+            })
+            .collect();
+        let text = Self::serialize(
+            &Document {
+                version: INLINE_TREE_VERSION,
+                owner: owner.to_string(),
+                migrated: self.migrated,
+                entries,
+            },
+            owner,
+        )?;
+        Ok(text.len() + data_len)
+    }
+
+    fn serialize<E: Serialize>(document: &Document<E>, owner: &str) -> Result<String, ErrorCode> {
+        serde_json::to_string(document).map_err(|error| {
+            log::error!("storage: cannot serialize the tree of '{owner}': {error}");
+            ErrorCode::Io
+        })
+    }
+
+    /// The blob files this tree refers to.
+    fn blob_files(&self) -> HashSet<String> {
+        self.nodes
+            .values()
+            .filter_map(|node| match node {
+                Node::File(Content::Blob(blob)) => Some(blob.file_name()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The node at `path`, `None` when its parent holds nothing by that name.
@@ -850,7 +1063,7 @@ impl Tree {
     fn entry(&self, path: &LogicalPath) -> Result<Entry, ErrorCode> {
         let (kind, size) = match self.existing(path)? {
             Node::Directory => (EntryKind::Directory, 0),
-            Node::File(data) => (EntryKind::File, data.len() as u64),
+            Node::File(content) => (EntryKind::File, content.size()),
         };
         Ok(Entry {
             path: path.clone(),
@@ -888,10 +1101,11 @@ impl Tree {
         Ok((entries, next))
     }
 
-    fn read(&self, path: &LogicalPath) -> Result<Vec<u8>, ErrorCode> {
+    /// Where the data of the file `path` is: `Store::content` reads it.
+    fn read(&self, path: &LogicalPath) -> Result<&Content, ErrorCode> {
         match self.existing(path)? {
             Node::Directory => Err(ErrorCode::IsDirectory),
-            Node::File(data) => Ok(data.clone()),
+            Node::File(content) => Ok(content),
         }
     }
 
@@ -918,10 +1132,13 @@ impl Tree {
             (Some(Node::File(_)), WriteMode::Create) => Err(ErrorCode::AlreadyExists),
             (None, WriteMode::Replace) => Err(ErrorCode::NotFound),
             (Some(Node::File(_)), WriteMode::Replace | WriteMode::Upsert) => {
-                self.nodes.insert(path.clone(), Node::File(data));
+                self.nodes
+                    .insert(path.clone(), Node::File(Content::Inline(data)));
                 Ok(())
             }
-            (None, WriteMode::Create | WriteMode::Upsert) => self.create(path, Node::File(data)),
+            (None, WriteMode::Create | WriteMode::Upsert) => {
+                self.create(path, Node::File(Content::Inline(data)))
+            }
         }
     }
 
@@ -990,6 +1207,9 @@ struct Session {
     plugin_hash: String,
     /// False for a module the host itself ships: it needs no grant.
     external: bool,
+    /// False for the host's own wallet stores through `Client`: they grow with the
+    /// wallet, past the file and tree bounds every `IStorage` caller keeps.
+    bounded: bool,
     storage_epoch: u64,
     /// The only storage handle valid on this session.
     handle: String,
@@ -1043,6 +1263,7 @@ impl Session {
             plugin_id,
             plugin_hash,
             external,
+            bounded: true,
             storage_epoch,
             handle: hex::encode(handle),
             revoked: AtomicBool::new(false),
@@ -1146,19 +1367,22 @@ fn lookup(session: u64) -> Option<Arc<Session>> {
 
 fn open_session(data_dir: PathBuf, plugin_id: String, plugin_hash: String, external: bool) -> u64 {
     match Session::new(data_dir, plugin_id, plugin_hash, external) {
-        Ok(session) => {
-            let id = NEXT_SESSION.fetch_add(1, Ordering::SeqCst);
-            SESSIONS
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(id, Arc::new(session));
-            id
-        }
+        Ok(session) => register(session),
         Err(error) => {
             log::error!("storage: no session: {error}");
             0
         }
     }
+}
+
+/// Adds `session` to the open ones, answering its id.
+fn register(session: Session) -> u64 {
+    let id = NEXT_SESSION.fetch_add(1, Ordering::SeqCst);
+    SESSIONS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id, Arc::new(session));
+    id
 }
 
 /// Bumps the generation of every session `select` picks.
@@ -1347,10 +1571,126 @@ impl<'a> Store<'a> {
         Tree::decode(&text, &session.plugin_id)
     }
 
-    /// Replaces the tree on disk with `tree`. The request is authorized again once the
-    /// new tree is written and synced, right before it replaces the old one.
-    fn publish(&self, tree: &Tree) -> Result<(), ErrorCode> {
+    /// The data of a file of the tree on disk.
+    fn content(&self, content: &Content) -> Result<Vec<u8>, ErrorCode> {
+        match content {
+            Content::Inline(data) => Ok(data.clone()),
+            Content::Blob(blob) => self.read_blob(blob),
+        }
+    }
+
+    /// The data sealed in `blob`: a blob missing, unreadable or not the one the index
+    /// names is `corrupt`.
+    fn read_blob(&self, blob: &BlobRef) -> Result<Vec<u8>, ErrorCode> {
         let session = self.session();
+        let root = self.root.as_ref().ok_or(ErrorCode::Corrupt)?;
+        let sealed = match root.read_blob(&blob.file_name(), blob.sealed_limit()) {
+            Ok(Some(sealed)) => sealed,
+            Ok(None) | Err(ErrorCode::TooLarge) => {
+                log::error!(
+                    "storage: blob {} of '{}' is missing or too large",
+                    blob.id,
+                    session.plugin_id
+                );
+                return Err(ErrorCode::Corrupt);
+            }
+            Err(error) => return Err(error),
+        };
+        if !state_crypt::is_sealed(&sealed) {
+            log::error!(
+                "storage: blob {} of '{}' is not encrypted",
+                blob.id,
+                session.plugin_id
+            );
+            return Err(ErrorCode::Corrupt);
+        }
+        let text = state_crypt::open(&sealed).map_err(|error| {
+            log::error!(
+                "storage: cannot open blob {} of '{}': {error}",
+                blob.id,
+                session.plugin_id
+            );
+            locked_or(ErrorCode::Corrupt)
+        })?;
+        let document: BlobDocument = serde_json::from_str(&text).map_err(|error| {
+            log::error!(
+                "storage: unreadable blob {} of '{}': {error}",
+                blob.id,
+                session.plugin_id
+            );
+            ErrorCode::Corrupt
+        })?;
+        if document.owner != session.plugin_id || document.blob != blob.id {
+            log::error!(
+                "storage: blob {} of '{}' was sealed as blob {} of '{}'",
+                blob.id,
+                session.plugin_id,
+                document.blob,
+                document.owner
+            );
+            return Err(ErrorCode::Corrupt);
+        }
+        let data = BASE64_STANDARD
+            .decode(document.data)
+            .map_err(|_| ErrorCode::Corrupt)?;
+        if data.len() as u64 != blob.size {
+            return Err(ErrorCode::Corrupt);
+        }
+        Ok(data)
+    }
+
+    /// Seals `data` in a new blob, synced with its directory entry before any document
+    /// refers to it.
+    fn write_blob(&self, root: &disk::LockedRoot, data: &[u8]) -> Result<BlobRef, ErrorCode> {
+        let session = self.session();
+        let mut id = [0u8; BLOB_ID_BYTES];
+        getrandom::getrandom(&mut id).map_err(|error| {
+            log::error!("storage: no blob id: {error}");
+            ErrorCode::Io
+        })?;
+        let blob = BlobRef {
+            id: hex::encode(id),
+            size: data.len() as u64,
+        };
+        let text = serde_json::to_string(&BlobDocument {
+            owner: session.plugin_id.clone(),
+            blob: blob.id.clone(),
+            data: BASE64_STANDARD.encode(data),
+        })
+        .map_err(|error| {
+            log::error!(
+                "storage: cannot serialize a blob of '{}': {error}",
+                session.plugin_id
+            );
+            ErrorCode::Io
+        })?;
+        let sealed = state_crypt::seal(&text).map_err(|error| {
+            log::error!(
+                "storage: cannot seal a blob of '{}': {error}",
+                session.plugin_id
+            );
+            locked_or(ErrorCode::Io)
+        })?;
+        root.create_blob(&blob.file_name(), &sealed)?;
+        Ok(blob)
+    }
+
+    /// Replaces the tree on disk with `tree`: seals each file written since it was
+    /// loaded in a new blob, replaces the document, then removes the blobs it no longer
+    /// names. A bounded session keeps the bound of the whole document, files included.
+    /// The request is authorized again once the new document is written and synced,
+    /// right before it replaces the old one.
+    fn publish(&self, tree: &mut Tree) -> Result<(), ErrorCode> {
+        let session = self.session();
+        if session.bounded && tree.inline_len(&session.plugin_id)? > MAX_TREE_BYTES {
+            return Err(ErrorCode::TooLarge);
+        }
+        let root = self.root.as_ref().ok_or(ErrorCode::Io)?;
+        for node in tree.nodes.values_mut() {
+            if let Node::File(Content::Inline(data)) = node {
+                *node = Node::File(Content::Blob(self.write_blob(root, data)?));
+            }
+        }
         let text = tree.encode(&session.plugin_id)?;
         let sealed = state_crypt::seal(&text).map_err(|error| {
             log::error!(
@@ -1359,14 +1699,20 @@ impl<'a> Store<'a> {
             );
             locked_or(ErrorCode::Io)
         })?;
-        self.root
-            .as_ref()
-            .ok_or(ErrorCode::Io)?
-            .replace(&sealed, || {
-                let guard = (!session.external).then(state_crypt::publication_guard);
-                self.pending.authorize_locked()?;
-                Ok(guard)
-            })
+        root.replace(&sealed, || {
+            let guard = (!session.external).then(state_crypt::publication_guard);
+            self.pending.authorize_locked()?;
+            Ok(guard)
+        })?;
+        collect_garbage(root, tree)
+    }
+
+    /// Removes the blobs the tree on disk, `tree`, does not name.
+    fn collect_garbage(&self, tree: &Tree) -> Result<(), ErrorCode> {
+        match &self.root {
+            Some(root) => collect_garbage(root, tree),
+            None => Ok(()),
+        }
     }
 
     /// The bytes of the blob the plugin saved before its file storage, `None` when it
@@ -1415,6 +1761,22 @@ fn locked_or(code: ErrorCode) -> ErrorCode {
     }
 }
 
+/// Removes every blob in `root` that `tree`, the document published there, does not
+/// name: superseded data and blobs a write interrupted before publication left. The
+/// root lock excludes every other writer, so no blob of a pending write is removed.
+fn collect_garbage(root: &disk::LockedRoot, tree: &Tree) -> Result<(), ErrorCode> {
+    let named = tree.blob_files();
+    let unnamed: Vec<String> = root
+        .names()?
+        .into_iter()
+        .filter(|name| is_blob_file(name) && !named.contains(name))
+        .collect();
+    if unnamed.is_empty() {
+        return Ok(());
+    }
+    root.remove_all(&unnamed)
+}
+
 fn execute(pending: &Pending, operation: Operation) -> Result<Reply, ErrorCode> {
     pending.authorize()?;
     match operation {
@@ -1452,7 +1814,8 @@ fn open(pending: &Pending, storage: &str) -> Result<Reply, ErrorCode> {
         return Err(ErrorCode::NotFound);
     }
     let store = Store::lock(pending, false)?;
-    store.load()?;
+    let tree = store.load()?;
+    store.collect_garbage(&tree)?;
     Ok(Reply::Storage(pending.session.handle.clone()))
 }
 
@@ -1488,14 +1851,15 @@ fn mkdir(pending: &Pending, storage: &str, path: &str) -> Result<Reply, ErrorCod
     let store = Store::open_mut(pending, storage)?;
     let mut tree = store.load()?;
     tree.create(&path, Node::Directory)?;
-    store.publish(&tree)?;
+    store.publish(&mut tree)?;
     Ok(Reply::Done)
 }
 
 fn read(pending: &Pending, storage: &str, path: &str) -> Result<Reply, ErrorCode> {
     let path = LogicalPath::parse_entry(path)?;
     let store = Store::open(pending, storage)?;
-    store.load()?.read(&path).map(Reply::Data)
+    let tree = store.load()?;
+    store.content(tree.read(&path)?).map(Reply::Data)
 }
 
 fn write(
@@ -1509,13 +1873,13 @@ fn write(
     let data = BASE64_STANDARD
         .decode(data)
         .map_err(|_| ErrorCode::InvalidRequest)?;
-    if data.len() > MAX_FILE_BYTES {
+    if pending.session.bounded && data.len() > MAX_FILE_BYTES {
         return Err(ErrorCode::TooLarge);
     }
     let store = Store::open_mut(pending, storage)?;
     let mut tree = store.load()?;
     tree.write(&path, data, mode)?;
-    store.publish(&tree)?;
+    store.publish(&mut tree)?;
     Ok(Reply::Done)
 }
 
@@ -1525,7 +1889,7 @@ fn rename(pending: &Pending, storage: &str, path: &str, to: &str) -> Result<Repl
     let store = Store::open_mut(pending, storage)?;
     let mut tree = store.load()?;
     tree.rename(&from, &to)?;
-    store.publish(&tree)?;
+    store.publish(&mut tree)?;
     Ok(Reply::Done)
 }
 
@@ -1539,7 +1903,7 @@ fn remove(
     let store = Store::open_mut(pending, storage)?;
     let mut tree = store.load()?;
     tree.remove(&path, recursive)?;
-    store.publish(&tree)?;
+    store.publish(&mut tree)?;
     Ok(Reply::Done)
 }
 
@@ -1558,9 +1922,9 @@ fn migrate(pending: &Pending, storage: &str, path: &str) -> Result<Reply, ErrorC
     };
     tree.write(&path, data.clone(), WriteMode::Create)?;
     tree.migrated = true;
-    store.publish(&tree)?;
+    store.publish(&mut tree)?;
     let stored = store.load()?;
-    if !stored.migrated || stored.read(&path)? != data {
+    if !stored.migrated || store.content(stored.read(&path)?)? != data {
         log::error!(
             "storage: '{}' migrated, but reads back different",
             store.session().plugin_id
@@ -1577,6 +1941,9 @@ fn migrate(pending: &Pending, storage: &str, path: &str) -> Result<Reply, ErrorC
 // - `read()`: the sealed tree, `None` when absent, `corrupt` past the size bound;
 // - `replace(sealed, authorize)`: writes and syncs a new private temp, retains the
 //   authorization guard through rename and syncs the directory;
+// - `read_blob(name, limit)`, `create_blob(name, sealed)`, `names()`,
+//   `remove_all(names)`: the blobs beside the document, created once and never
+//   replaced, listed and removed under the same lock;
 // - `read_legacy(data_dir, name, limit)`: the file `name` in the legacy plugin state
 //   directory, `None` when there is none, `too_large` past `limit` bytes.
 
@@ -1585,14 +1952,14 @@ mod disk {
     use std::{
         ffi::OsStr,
         fs::File,
-        io::Read,
+        io::{Read, Write},
         os::fd::{AsFd, OwnedFd},
         path::Path,
     };
 
     use fs2::FileExt;
     use rustix::{
-        fs::{fstat, fsync, mkdirat, open, openat, unlinkat, AtFlags, FileType, Mode, OFlags},
+        fs::{fstat, fsync, mkdirat, open, openat, unlinkat, AtFlags, Dir, FileType, Mode, OFlags},
         io::Errno,
     };
 
@@ -1682,6 +2049,56 @@ mod disk {
                 sealed,
                 authorize,
             )
+        }
+
+        pub(crate) fn read_blob(
+            &self,
+            name: &str,
+            limit: u64,
+        ) -> Result<Option<Vec<u8>>, ErrorCode> {
+            read_file(&self.root, name, limit)
+        }
+
+        /// Creates the private file `name`, never replacing one, and syncs it and the
+        /// root.
+        pub(crate) fn create_blob(&self, name: &str, sealed: &[u8]) -> Result<(), ErrorCode> {
+            let created = openat(
+                &self.root,
+                name,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )
+            .map_err(std::io::Error::from)?;
+            let mut file = File::from(created);
+            file.write_all(sealed)?;
+            file.sync_all()?;
+            fsync(&self.root).map_err(std::io::Error::from)?;
+            Ok(())
+        }
+
+        /// The names of the root's entries that are UTF-8.
+        pub(crate) fn names(&self) -> Result<Vec<String>, ErrorCode> {
+            let mut names = Vec::new();
+            for entry in Dir::read_from(&self.root).map_err(std::io::Error::from)? {
+                let entry = entry.map_err(std::io::Error::from)?;
+                if let Ok(name) = entry.file_name().to_str() {
+                    names.push(name.to_string());
+                }
+            }
+            Ok(names)
+        }
+
+        /// Unlinks the entries `names`, also when one is already absent, and syncs the
+        /// root once.
+        pub(crate) fn remove_all(&self, names: &[String]) -> Result<(), ErrorCode> {
+            for name in names {
+                match unlinkat(&self.root, name.as_str(), AtFlags::empty()) {
+                    Ok(()) | Err(Errno::NOENT) => {}
+                    Err(error) => return Err(std::io::Error::from(error).into()),
+                }
+            }
+            fsync(&self.root).map_err(std::io::Error::from)?;
+            Ok(())
         }
     }
 
@@ -1857,6 +2274,26 @@ mod disk {
         ) -> Result<(), ErrorCode> {
             Err(ErrorCode::Unavailable)
         }
+
+        pub(crate) fn read_blob(
+            &self,
+            _name: &str,
+            _limit: u64,
+        ) -> Result<Option<Vec<u8>>, ErrorCode> {
+            Err(ErrorCode::Unavailable)
+        }
+
+        pub(crate) fn create_blob(&self, _name: &str, _sealed: &[u8]) -> Result<(), ErrorCode> {
+            Err(ErrorCode::Unavailable)
+        }
+
+        pub(crate) fn names(&self) -> Result<Vec<String>, ErrorCode> {
+            Err(ErrorCode::Unavailable)
+        }
+
+        pub(crate) fn remove_all(&self, _names: &[String]) -> Result<(), ErrorCode> {
+            Err(ErrorCode::Unavailable)
+        }
     }
 
     pub(crate) fn read_legacy(
@@ -2000,7 +2437,9 @@ impl Client {
             .map_err(|e| e.as_str().to_string())
     }
     pub(crate) fn builtin(data_dir: PathBuf, caller: BuiltinCaller) -> Result<Self, String> {
-        let id = open_session(data_dir, caller.id().into(), String::new(), false);
+        let mut session = Session::new(data_dir, caller.id().into(), String::new(), false)?;
+        session.bounded = false;
+        let id = register(session);
         let session = lookup(id).ok_or("unavailable")?;
         Ok(Self {
             session,
@@ -2058,17 +2497,15 @@ impl Client {
             Store::open_mut(&pending, &self.session.handle).map_err(|e| e.as_str().to_string())?;
         let mut tree = store.load().map_err(|e| e.as_str().to_string())?;
         let previous = match tree.read(&path) {
-            Ok(bytes) => Some(bytes),
+            Ok(content) => Some(store.content(content).map_err(|e| e.as_str().to_string())?),
             Err(ErrorCode::NotFound) => None,
             Err(error) => return Err(error.as_str().into()),
         };
         if create && previous.is_some() {
             return Err("already_exists".into());
         }
+        // A client's session is not bounded: its wallet stores grow with the wallet.
         let bytes = update(previous)?;
-        if bytes.len() > MAX_FILE_BYTES {
-            return Err("too_large".into());
-        }
         tree.write(
             &path,
             bytes,
@@ -2079,7 +2516,7 @@ impl Client {
             },
         )
         .map_err(|e| e.as_str().to_string())?;
-        store.publish(&tree).map_err(|e| e.as_str().to_string())
+        store.publish(&mut tree).map_err(|e| e.as_str().to_string())
     }
 
     pub(crate) fn list(&self, path: &str) -> Result<Vec<String>, String> {
@@ -2134,10 +2571,11 @@ mod tests {
     use crate::{
         state_crypt::{self, DurableWriteStage},
         storage::{
-            disk, lookup, open_session, purge_plugin_in, storage_request, storage_request_cancel,
-            storage_request_forget, storage_session_revoke, LogicalPath, Node, Tree, DOCUMENT,
-            DOCUMENT_LOCK, DOCUMENT_TEMP, MAX_ENTRIES, MAX_FILE_BYTES, MAX_MESSAGE_BYTES,
-            MAX_NAME_BYTES, MAX_OUTSTANDING, MAX_PATH_BYTES, OPERATIONS,
+            disk, is_blob_file, lookup, open_session, purge_plugin_in, storage_request,
+            storage_request_cancel, storage_request_forget, storage_session_revoke, BuiltinCaller,
+            Client, Content, Document, InlineEntry, LogicalPath, Node, Tree, DOCUMENT,
+            DOCUMENT_LOCK, DOCUMENT_TEMP, INLINE_TREE_VERSION, MAX_ENTRIES, MAX_FILE_BYTES,
+            MAX_MESSAGE_BYTES, MAX_NAME_BYTES, MAX_OUTSTANDING, MAX_PATH_BYTES, OPERATIONS,
         },
     };
 
@@ -2159,6 +2597,30 @@ mod tests {
                 session,
                 handle,
             }
+        }
+
+        /// The blob files in the plugin root, sorted.
+        fn blobs(&self) -> Vec<String> {
+            let mut blobs: Vec<String> = fs::read_dir(self.root())
+                .expect("plugin root")
+                .map(|entry| {
+                    entry
+                        .expect("entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .filter(|name| is_blob_file(name))
+                .collect();
+            blobs.sort();
+            blobs
+        }
+
+        /// The sealed document, opened.
+        fn document(&self) -> Value {
+            let sealed = fs::read(self.root().join(DOCUMENT)).expect("sealed tree");
+            serde_json::from_str(&state_crypt::open(&sealed).expect("opened tree"))
+                .expect("tree document")
         }
 
         fn data_dir(&self) -> &Path {
@@ -2239,11 +2701,41 @@ mod tests {
         json!({"path": path, "kind": kind, "size": size})
     }
 
-    /// Seals `tree` as the tree of `PLUGIN` in `data_dir`, bypassing the request bounds.
+    /// Seals `tree` as the version 1 tree of `PLUGIN` in `data_dir`, every file's data
+    /// in the document, bypassing the request bounds.
     fn seed(data_dir: &Path, tree: &Tree) {
-        let text = tree.encode(PLUGIN).expect("seed tree");
-        let sealed = state_crypt::seal(&text).expect("sealed seed");
+        let sealed = state_crypt::seal(&inline_text(tree, PLUGIN)).expect("sealed seed");
         disk::replace(data_dir, PLUGIN, &sealed, || Ok(())).expect("seeded tree");
+    }
+
+    /// The version 1 document of `owner` holding `tree`, as it was sealed before files
+    /// had their own blobs.
+    fn inline_text(tree: &Tree, owner: &str) -> String {
+        let entries = tree
+            .nodes
+            .iter()
+            .map(|(path, node)| match node {
+                Node::Directory => InlineEntry::Directory {
+                    path: path.to_string(),
+                },
+                Node::File(Content::Inline(data)) => InlineEntry::File {
+                    path: path.to_string(),
+                    data: BASE64_STANDARD.encode(data),
+                },
+                Node::File(Content::Blob(_)) => panic!("a version 1 tree has no blob"),
+            })
+            .collect();
+        serde_json::to_string(&Document {
+            version: INLINE_TREE_VERSION,
+            owner: owner.to_string(),
+            migrated: tree.migrated,
+            entries,
+        })
+        .expect("version 1 document")
+    }
+
+    fn file(data: &[u8]) -> Node {
+        Node::File(Content::Inline(data.to_vec()))
     }
 
     /// Seals `text` as the tree of `PLUGIN` in its root, as found on disk.
@@ -3234,7 +3726,7 @@ mod tests {
     // ===== Disk =====
 
     #[test]
-    fn the_tree_is_one_sealed_document_below_the_visible_plugin_root() {
+    fn the_tree_is_a_sealed_index_and_sealed_blobs_below_the_visible_plugin_root() {
         let f = Fixture::new();
         assert_eq!(f.call("mkdir", json!({"path": "secret-directory"})), ok());
         assert_eq!(
@@ -3250,6 +3742,7 @@ mod tests {
                     .to_string_lossy()
                     .into_owned()
             })
+            .filter(|name| !is_blob_file(name))
             .collect();
         names.sort();
         assert_eq!(
@@ -3257,25 +3750,29 @@ mod tests {
             vec![DOCUMENT.to_string(), DOCUMENT_LOCK.to_string()],
             "names never reach the disk"
         );
-        let sealed = fs::read(f.root().join(DOCUMENT)).expect("sealed tree");
-        assert!(state_crypt::is_sealed(&sealed), "a BIP138 envelope");
-        for clear in [
-            &b"secret"[..],
-            BASE64_STANDARD.encode(b"secret-content").as_bytes(),
-        ] {
-            assert!(
-                !sealed.windows(clear.len()).any(|window| window == clear),
-                "nothing in clear"
-            );
+        let blobs = f.blobs();
+        assert_eq!(blobs.len(), 1, "one blob for the one file");
+        for name in [DOCUMENT, blobs[0].as_str()] {
+            let sealed = fs::read(f.root().join(name)).expect("sealed file");
+            assert!(state_crypt::is_sealed(&sealed), "{name}: a BIP138 envelope");
+            for clear in [
+                &b"secret"[..],
+                BASE64_STANDARD.encode(b"secret-content").as_bytes(),
+            ] {
+                assert!(
+                    !sealed.windows(clear.len()).any(|window| window == clear),
+                    "{name}: nothing in clear"
+                );
+            }
+            let mode = fs::metadata(f.root().join(name))
+                .expect("sealed file")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "{name}: a private file");
         }
         let mode = fs::metadata(f.root()).expect("root").permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "a private root");
-        let mode = fs::metadata(f.root().join(DOCUMENT))
-            .expect("tree")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o600, "a private tree");
     }
     #[test]
     fn a_corrupt_tree_is_refused_and_never_replaced() {
@@ -3297,7 +3794,7 @@ mod tests {
             (
                 "version",
                 state_crypt::seal(
-                    r#"{"version":2,"owner":"example","migrated":false,"entries":[]}"#,
+                    r#"{"version":3,"owner":"example","migrated":false,"entries":[]}"#,
                 )
                 .expect("sealed"),
             ),
@@ -3321,6 +3818,20 @@ mod tests {
                     PLUGIN,
                     r#""entries":[{"kind":"file","path":"f","data":""},{"kind":"file","path":"f/g","data":""}]"#,
                 ),
+            ),
+            (
+                "inline data in an index",
+                state_crypt::seal(
+                    r#"{"version":2,"owner":"example","migrated":false,"entries":[{"kind":"file","path":"f","data":""}]}"#,
+                )
+                .expect("sealed"),
+            ),
+            (
+                "invalid blob id",
+                state_crypt::seal(
+                    r#"{"version":2,"owner":"example","migrated":false,"entries":[{"kind":"file","path":"f","blob":"../tree","size":0}]}"#,
+                )
+                .expect("sealed"),
             ),
             (
                 "duplicate",
@@ -3449,7 +3960,7 @@ mod tests {
         for index in 0..11 {
             tree.nodes.insert(
                 LogicalPath(vec![format!("f{index}")]),
-                Node::File(vec![index; MAX_FILE_BYTES]),
+                file(&vec![index; MAX_FILE_BYTES]),
             );
         }
         seed(f.data_dir(), &tree);
@@ -3469,6 +3980,288 @@ mod tests {
             "a smaller tree is fine"
         );
     }
+    #[test]
+    fn built_in_client_files_and_trees_pass_the_session_bounds() {
+        state_crypt::unlock_for_tests();
+        let dir = TempDir::new().expect("temporary data directory");
+        let client =
+            Client::builtin(dir.path().to_path_buf(), BuiltinCaller::Sp).expect("built-in client");
+        let larger = vec![1; MAX_FILE_BYTES + 1];
+        client
+            .write("big", larger.clone(), true)
+            .expect("a file past the session bound");
+        assert_eq!(client.read("big").expect("big"), Some(larger));
+        // Twelve largest files pass the tree bound a session keeps.
+        for index in 0..12 {
+            client
+                .write(&format!("f{index}"), vec![index; MAX_FILE_BYTES], true)
+                .expect("a tree past the session bound");
+        }
+        assert_eq!(
+            client.read("f11").expect("f11"),
+            Some(vec![11; MAX_FILE_BYTES])
+        );
+        let blobs = fs::read_dir(dir.path().join("sp"))
+            .expect("module root")
+            .filter(|entry| {
+                is_blob_file(&entry.as_ref().expect("entry").file_name().to_string_lossy())
+            })
+            .count();
+        assert_eq!(blobs, 13, "one blob per file");
+
+        // A session on the same tree keeps both bounds.
+        let (session, handle) = session_on(dir.path(), "sp");
+        assert_eq!(
+            call(
+                session,
+                &handle,
+                "write",
+                json!({"path": "one-more", "data": data(b"x"), "mode": "create"})
+            ),
+            failed("too_large"),
+            "the tree bound"
+        );
+        assert_eq!(
+            call(
+                session,
+                &handle,
+                "write",
+                json!({"path": "f0", "data": data(&vec![0; MAX_FILE_BYTES + 1]), "mode": "replace"})
+            ),
+            failed("too_large"),
+            "the file bound"
+        );
+        storage_session_revoke(session);
+    }
+
+    #[test]
+    fn a_version_1_tree_opens_and_moves_to_blobs_on_its_first_write() {
+        let f = Fixture::new();
+        let mut tree = Tree::default();
+        tree.nodes
+            .insert(LogicalPath(vec!["d".into()]), Node::Directory);
+        tree.nodes.insert(
+            LogicalPath(vec!["d".into(), "nested".into()]),
+            file(b"nested bytes"),
+        );
+        tree.nodes
+            .insert(LogicalPath(vec!["empty".into()]), file(b""));
+        tree.nodes.insert(
+            LogicalPath(vec!["large".into()]),
+            file(&vec![5; MAX_FILE_BYTES]),
+        );
+        tree.migrated = true;
+        seed(f.data_dir(), &tree);
+        let seeded = fs::read(f.root().join(DOCUMENT)).expect("version 1 tree");
+        let expected = [
+            ("d/nested", b"nested bytes".to_vec()),
+            ("empty", Vec::new()),
+            ("large", vec![5; MAX_FILE_BYTES]),
+        ];
+        for (path, bytes) in &expected {
+            assert_eq!(
+                f.read(path),
+                json!({"id": "r", "error": "", "data": data(bytes)}),
+                "{path} reads from the version 1 tree"
+            );
+        }
+        assert_eq!(
+            fs::read(f.root().join(DOCUMENT)).expect("tree after reads"),
+            seeded,
+            "reading leaves the version 1 tree as it is"
+        );
+        assert!(f.blobs().is_empty(), "no blob before the first write");
+
+        assert_eq!(f.write("new", b"new bytes", "create"), ok());
+        let document = f.document();
+        assert_eq!(document["version"], 2, "the first write moves to blobs");
+        assert_eq!(document["migrated"], true, "the migration mark is kept");
+        assert!(
+            document["entries"]
+                .as_array()
+                .expect("entries")
+                .iter()
+                .all(|entry| entry.get("data").is_none()),
+            "no data left in the index: {document}"
+        );
+        assert_eq!(f.blobs().len(), 4, "one blob per file");
+        for (path, bytes) in expected
+            .iter()
+            .chain([("new", b"new bytes".to_vec())].iter())
+        {
+            assert_eq!(
+                f.read(path),
+                json!({"id": "r", "error": "", "data": data(bytes)}),
+                "{path} reads from its blob"
+            );
+        }
+        assert_eq!(
+            f.call("inspect", json!({"path": "large"})),
+            json!({"id": "r", "error": "", "entry": entry("large", "file", MAX_FILE_BYTES as u64)})
+        );
+    }
+
+    #[test]
+    fn blobs_the_tree_does_not_name_are_collected_on_open() {
+        let f = Fixture::new();
+        assert_eq!(f.write("kept", b"kept", "create"), ok());
+        let kept = f.blobs();
+        let orphan = format!("{}.blob", "ab".repeat(16));
+        fs::write(f.root().join(&orphan), b"left by an interrupted write").expect("orphan");
+        let stray = f.root().join("notes.txt");
+        fs::write(&stray, b"not a blob").expect("stray file");
+        let (session, _) = session_on(f.data_dir(), PLUGIN);
+        assert_eq!(f.blobs(), kept, "the orphan blob is collected");
+        assert!(stray.exists(), "a file that is not a blob is never removed");
+        assert_eq!(
+            f.read("kept"),
+            json!({"id": "r", "error": "", "data": data(b"kept")})
+        );
+        storage_session_revoke(session);
+
+        // A first write interrupted before its tree was published leaves only a blob.
+        let f = Fixture::new();
+        state_crypt::fail_durable_write_at(DurableWriteStage::TempSynced);
+        assert_eq!(f.write("lost", b"lost", "create"), failed("io"));
+        assert!(!f.root().join(DOCUMENT).exists(), "no tree published");
+        assert_eq!(f.blobs().len(), 1, "the interrupted blob is left");
+        let (session, _) = session_on(f.data_dir(), PLUGIN);
+        assert!(f.blobs().is_empty(), "collected with no tree");
+        storage_session_revoke(session);
+    }
+
+    #[test]
+    fn replaced_renamed_and_removed_files_leave_no_stale_blob() {
+        let f = Fixture::new();
+        assert_eq!(f.write("file", b"first", "create"), ok());
+        let first = f.blobs();
+        assert_eq!(first.len(), 1);
+        assert_eq!(f.write("file", b"second", "replace"), ok());
+        let second = f.blobs();
+        assert_eq!(second.len(), 1, "the replaced blob is removed");
+        assert_ne!(second, first, "a replacement is a new blob");
+
+        assert_eq!(
+            f.call("rename", json!({"path": "file", "to": "moved"})),
+            ok()
+        );
+        assert_eq!(f.blobs(), second, "a rename keeps the blob");
+        assert_eq!(
+            f.read("moved"),
+            json!({"id": "r", "error": "", "data": data(b"second")})
+        );
+
+        assert_eq!(f.call("remove", json!({"path": "moved"})), ok());
+        assert!(f.blobs().is_empty(), "a removed file leaves no blob");
+
+        assert_eq!(f.call("mkdir", json!({"path": "d"})), ok());
+        assert_eq!(f.call("mkdir", json!({"path": "d/e"})), ok());
+        assert_eq!(f.write("d/one", b"one", "create"), ok());
+        assert_eq!(f.write("d/e/two", b"two", "create"), ok());
+        assert_eq!(f.write("outside", b"outside", "create"), ok());
+        assert_eq!(f.blobs().len(), 3);
+        assert_eq!(
+            f.call("remove", json!({"path": "d", "recursive": true})),
+            ok()
+        );
+        assert_eq!(f.blobs().len(), 1, "a recursive removal leaves no blob");
+        assert_eq!(
+            f.read("outside"),
+            json!({"id": "r", "error": "", "data": data(b"outside")})
+        );
+
+        purge_plugin_in(f.data_dir(), PLUGIN).expect("private plugin purge");
+        assert!(f.blobs().is_empty(), "a purge leaves no blob");
+    }
+
+    #[test]
+    fn a_write_leaves_the_blobs_of_other_files_untouched() {
+        let f = Fixture::new();
+        assert_eq!(f.write("a", b"first a", "create"), ok());
+        let a = f.blobs();
+        assert_eq!(f.write("b", &vec![9; 4096], "create"), ok());
+        let b: Vec<String> = f
+            .blobs()
+            .into_iter()
+            .filter(|name| !a.contains(name))
+            .collect();
+        assert_eq!(b.len(), 1);
+        let b_path = f.root().join(&b[0]);
+        let b_bytes = fs::read(&b_path).expect("b's blob");
+        let b_modified = fs::metadata(&b_path)
+            .and_then(|metadata| metadata.modified())
+            .expect("b's blob time");
+        thread::sleep(Duration::from_millis(20));
+
+        assert_eq!(f.write("a", b"second a", "replace"), ok());
+        let after = f.blobs();
+        assert!(after.contains(&b[0]), "b keeps its blob");
+        assert!(!after.contains(&a[0]), "a has a new blob");
+        assert_eq!(
+            fs::read(&b_path).expect("b's blob"),
+            b_bytes,
+            "b's blob unchanged"
+        );
+        assert_eq!(
+            fs::metadata(&b_path)
+                .and_then(|metadata| metadata.modified())
+                .expect("b's blob time"),
+            b_modified,
+            "b's blob never rewritten"
+        );
+    }
+
+    #[test]
+    fn a_blob_under_another_name_or_root_is_corrupt() {
+        let f = Fixture::new();
+        assert_eq!(f.write("a", b"a", "create"), ok());
+        let a = f.blobs();
+        assert_eq!(f.write("b", b"b", "create"), ok());
+        let b: Vec<String> = f
+            .blobs()
+            .into_iter()
+            .filter(|name| !a.contains(name))
+            .collect();
+        fs::copy(f.root().join(&a[0]), f.root().join(&b[0])).expect("a's blob as b's");
+        assert_eq!(f.read("b"), failed("corrupt"), "a blob bound to another id");
+        assert_eq!(
+            f.read("a"),
+            json!({"id": "r", "error": "", "data": data(b"a")})
+        );
+
+        let (other, handle) = session_on(f.data_dir(), "other");
+        assert_eq!(
+            call(
+                other,
+                &handle,
+                "write",
+                json!({"path": "c", "data": data(b"c"), "mode": "create"})
+            ),
+            ok()
+        );
+        let other_root = f.data_dir().join("other");
+        let other_blob = fs::read_dir(&other_root)
+            .expect("other root")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .find(|name| is_blob_file(name))
+            .expect("other's blob");
+        fs::copy(f.root().join(&a[0]), other_root.join(&other_blob)).expect("a's blob as c's");
+        assert_eq!(
+            call(other, &handle, "read", json!({"path": "c"})),
+            failed("corrupt"),
+            "a blob bound to another plugin"
+        );
+
+        fs::remove_file(f.root().join(&a[0])).expect("drop a's blob");
+        assert_eq!(f.read("a"), failed("corrupt"), "a missing blob");
+    }
+
     #[test]
     fn links_in_the_data_directory_are_never_followed() {
         let f = Fixture::new();

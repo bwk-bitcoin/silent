@@ -179,12 +179,13 @@ fn grants_lock_and_upgrades_decide_who_reaches_the_tree() {
                 .to_string_lossy()
                 .into_owned()
         })
+        .filter(|name| !name.ends_with(".blob"))
         .collect();
     roots.sort();
     assert_eq!(
         roots,
         vec!["tree.bip138".to_string(), "tree.lock".to_string()],
-        "one tree and its persistent lock for every library version"
+        "one tree, its blobs and its persistent lock for every library version"
     );
     storage_session_revoke(v1);
     storage_session_revoke(builtin);
