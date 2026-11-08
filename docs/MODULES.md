@@ -1005,10 +1005,11 @@ capabilities or rates remain unavailable; another provider never supplies a subs
 sources retain their configured IDs; the host never automatically selects another.
 Invalid or withdrawn rates are unavailable, not zero-fee recommendations.
 
-Global Settings displays all four cached recommendations as read-only values in
-sat/vB, including in Manual mode. Each missing value is the literal `-`, also when
-the selected source is None or unavailable. Both fee notifications refresh this
-display from `selectedFees()` without requesting provider data or saving preferences.
+Global Settings shows the fee mode and the provider on one row and no rate: the
+recommendations `selectedFees()` holds are a cache, used by Send only. With no provider
+selected the mode is Manual and cannot change, and choosing None selects Manual. Both
+fee notifications refresh the pickers from `selectedFees()` without requesting provider
+data or saving preferences.
 
 `selectFees(preferences)` applies the runtime coordinator selection immediately and
 queues persistence on a Host-owned worker in FIFO order. Only fee-preference writes

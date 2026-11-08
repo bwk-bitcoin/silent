@@ -49,7 +49,6 @@
 #include <Qontrol>
 #include <algorithm>
 #include <common.h>
-#include <optional>
 
 namespace modal {
 
@@ -87,11 +86,6 @@ auto foldable(const QString &label) -> catalog::Section * {
 auto withNote(catalog::FieldGroup *field, catalog::FieldNote *note) -> QWidget * {
     field->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
     return (new qontrol::Column)->spacing(resolve(Spacing::XS))->push(field)->push(note);
-}
-
-auto feeRecommendation(const std::optional<double> &rate) -> QString {
-    return rate.has_value() ? QStringLiteral("%1 sat/vB").arg(QString::number(*rate, 'g', 15))
-                            : QStringLiteral("-");
 }
 
 } // namespace
@@ -314,31 +308,24 @@ void AppSettings::connectPrices() {
 void AppSettings::initFees() {
     m_fee_mode_picker = new catalog::ComboBox;
     m_fee_mode_picker->setObjectName(QStringLiteral("settings-fee-mode"));
+    m_fee_mode_picker->setFixedWidth(metric::SETTINGS_PICKER_WIDTH);
     m_fee_source_picker = new catalog::ComboBox;
     m_fee_source_picker->setObjectName(QStringLiteral("settings-fee-source"));
+    m_fee_source_picker->setMinimumWidth(metric::SETTINGS_PICKER_WIDTH);
+    m_fee_source_picker->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_fee_source_picker->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     m_fee_mode_field = new catalog::FieldGroup;
     m_fee_mode_field->addField(TR("settings-fee-mode"), m_fee_mode_picker);
     m_fee_source_field = new catalog::FieldGroup;
     m_fee_source_field->addField(TR("settings-fee-source"), m_fee_source_picker);
-    m_fee_default_label = new Label;
-    m_fee_default_label->setObjectName(QStringLiteral("settings-fee-default"));
-    m_fee_low_label = new Label;
-    m_fee_low_label->setObjectName(QStringLiteral("settings-fee-low"));
-    m_fee_medium_label = new Label;
-    m_fee_medium_label->setObjectName(QStringLiteral("settings-fee-medium"));
-    m_fee_fast_label = new Label;
-    m_fee_fast_label->setObjectName(QStringLiteral("settings-fee-fast"));
-    m_fee_recommendations = new catalog::FieldGroup;
-    m_fee_recommendations->addField(TR("fee-default"), m_fee_default_label)
-        ->addField(TR("fee-low"), m_fee_low_label)
-        ->addField(TR("fee-medium"), m_fee_medium_label)
-        ->addField(TR("fee-fast"), m_fee_fast_label);
     m_fees = foldable(TR("settings-fees"));
-    m_fees->setContent((new qontrol::Column)
-                           ->spacing(resolve(Spacing::S))
-                           ->push(m_fee_mode_field)
-                           ->push(m_fee_source_field)
-                           ->push(m_fee_recommendations));
+    // Mode and provider on one row. No rate shows here: the ones the host holds are a
+    // cache, only Send uses them.
+    m_fees->setContent((new qontrol::Row)
+                           ->spacing(resolve(Spacing::XL))
+                           ->push(m_fee_mode_field, 0, Qt::AlignTop)
+                           ->push(m_fee_source_field, 0, Qt::AlignTop)
+                           ->pushSpacer());
     onFeeSourcesChanged();
 }
 
@@ -354,12 +341,7 @@ void AppSettings::connectFees() {
 }
 
 void AppSettings::onFeeSourcesChanged() {
-    auto selected = m_host->selectedFees();
-    auto preferences = selected.preferences;
-    m_fee_default_label->setText(feeRecommendation(selected.default_rate));
-    m_fee_low_label->setText(feeRecommendation(selected.low));
-    m_fee_medium_label->setText(feeRecommendation(selected.medium));
-    m_fee_fast_label->setText(feeRecommendation(selected.fast));
+    auto preferences = m_host->selectedFees().preferences;
     m_fee_source_picker->clear();
     m_fee_source_picker->addItem(TR("settings-price-none"), QString());
     bool hasDefault = false;
@@ -388,13 +370,18 @@ void AppSettings::onFeeSourcesChanged() {
     if (hasSmart || preferences.mode == FeeMode::Smart) {
         m_fee_mode_picker->addItem(TR("fee-smart"), static_cast<int>(FeeMode::Smart));
     }
-    m_fee_mode_picker->setCurrentIndex(
-        m_fee_mode_picker->findData(static_cast<int>(preferences.mode)));
+    // No provider: the fee is entered by hand, the mode is Manual and cannot change.
+    bool noProvider = preferences.source.isEmpty();
+    auto mode = noProvider ? FeeMode::Manual : preferences.mode;
+    m_fee_mode_picker->setCurrentIndex(m_fee_mode_picker->findData(static_cast<int>(mode)));
+    m_fee_mode_picker->setEnabled(!noProvider);
 }
 
 void AppSettings::onFeePreferencesActivated([[maybe_unused]] int index) {
-    m_host->selectFees({.mode = static_cast<FeeMode>(m_fee_mode_picker->currentData().toInt()),
-                        .source = m_fee_source_picker->currentData().toString()});
+    auto source = m_fee_source_picker->currentData().toString();
+    auto mode = source.isEmpty() ? FeeMode::Manual
+                                 : static_cast<FeeMode>(m_fee_mode_picker->currentData().toInt());
+    m_host->selectFees({.mode = mode, .source = source});
 }
 
 auto AppSettings::buildPlugins() -> QWidget * {
@@ -684,10 +671,6 @@ void AppSettings::retranslateUi() {
     m_fees->header()->setLabel(TR("settings-fees"));
     m_fee_mode_field->setFieldLabel(m_fee_mode_picker, TR("settings-fee-mode"));
     m_fee_source_field->setFieldLabel(m_fee_source_picker, TR("settings-fee-source"));
-    m_fee_recommendations->setFieldLabel(m_fee_default_label, TR("fee-default"));
-    m_fee_recommendations->setFieldLabel(m_fee_low_label, TR("fee-low"));
-    m_fee_recommendations->setFieldLabel(m_fee_medium_label, TR("fee-medium"));
-    m_fee_recommendations->setFieldLabel(m_fee_fast_label, TR("fee-fast"));
     onFeeSourcesChanged();
     m_prices->header()->setLabel(TR("settings-prices"));
     m_price_source_field->setFieldLabel(m_price_source_picker, TR("settings-price-source"));
