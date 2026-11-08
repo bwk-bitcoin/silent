@@ -30,7 +30,7 @@ void HotRouteFlow::start() {
     if (request().context == Context::Sign) {
         showWaiting();
         m_hot_req = module()->nextReqId();
-        module()->publishHotCached(m_hot_req, row().fingerprint, psbt());
+        module()->publishHotCached(m_hot_req, row().fingerprint, psbt(), request().routes);
         return;
     }
     if (request().context == Context::Nonces) {
@@ -154,6 +154,7 @@ void HotRouteFlow::onCachedReady(ReqId req_id, bool needs_password, bool is_ok,
     }
     m_hot_req = 0;
     if (needs_password && is_ok) {
+        m_request_psbt = psbt_v2_hex;
         onAskPassword();
         return;
     }
@@ -201,7 +202,8 @@ void HotRouteFlow::onPasswordEntered(const QString &password) {
     m_hot_req = module()->nextReqId();
     switch (request().context) {
     case Context::Sign:
-        module()->signHot(m_hot_req, row().fingerprint, password, psbt());
+        module()->signHot(m_hot_req, row().fingerprint, password,
+                          m_request_psbt.isEmpty() ? psbt() : m_request_psbt, request().routes);
         break;
     case Context::Nonces:
         module()->createHotSessions(m_hot_req, row().fingerprint, password, request().descriptor,

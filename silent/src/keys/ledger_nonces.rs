@@ -2,8 +2,8 @@
 
 pub use crate::keys::musig_sessions::{
     can_publish, check_round2, count, descriptor, ensure_snapshot, finish, has_cache,
-    invalidate_signing, prepare, refresh, requested_by, restart, signing_status, start_attempt,
-    SessionSource, Signing, SigningError,
+    invalidate_signing, prepare_request, refresh, requested_by, restart, signing_status,
+    start_attempt, SessionSource, Signing, SigningError,
 };
 
 use std::{collections::BTreeSet, path::Path};

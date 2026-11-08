@@ -1255,7 +1255,7 @@ mod tests {
         let mut routes = std::collections::BTreeMap::new();
         routes.insert(fixture.fingerprint, RouteKind::Qr);
         routes.insert(fixture.b.fingerprint(), RouteKind::Hot);
-        let (session_id, request) = crate::keys::musig_sessions::allocate_first_request_at(
+        let (session_id, request) = crate::keys::musig_sessions::qr_first_request_at(
             fixture.root(),
             &fixture.policy,
             &bytes,
@@ -1302,6 +1302,75 @@ mod tests {
     }
 
     #[test]
+    fn a_hot_first_request_takes_the_qr_signers_prepared_session_and_pins_it() {
+        let fixture = fixture();
+        let session = device_session(&fixture.a, &fixture, [12; 32]);
+        let preparation = prepare(&fixture);
+        accept_prepared_ok(&fixture, &session, preparation.session_id);
+        {
+            let mut hot_store =
+                LockedCache::open(fixture.root(), fixture.b.fingerprint()).expect("hot cache");
+            crate::keys::musig_sessions::hot_provider::create_locked(
+                &mut hot_store,
+                &fixture.b,
+                &fixture.policy,
+                MusigSessionId([81; 32]),
+                None,
+            )
+            .expect("hot session");
+        }
+        let mut tx = transaction(&fixture.policy, 0);
+        crate::keys::musig_sessions::start_attempt(&mut tx).expect("attempt id");
+        let mut routes = std::collections::BTreeMap::new();
+        routes.insert(fixture.fingerprint, RouteKind::Qr);
+        routes.insert(fixture.b.fingerprint(), RouteKind::Hot);
+        assert!(
+            crate::keys::musig_sessions::hot_provider::first_request_at(
+                fixture.root(),
+                fixture.b.fingerprint(),
+                &fixture.policy,
+                &mut tx,
+                &routes,
+                None,
+            )
+            .expect("hot first request"),
+            "the hot key's cached session crafts the request"
+        );
+        let parsed = fixture.parsed();
+        for signer in [fixture.fingerprint, fixture.b.fingerprint()] {
+            let slots = bwk::bwk_sign::musig::own_slots(&tx, &parsed, signer).expect("own slots");
+            assert!(
+                !slots.is_empty()
+                    && slots.iter().all(|slot| {
+                        bwk::bwk_tx::bwk_psbt::musig::musig_input_pub_nonce(
+                            &tx.inputs[slot.input_index],
+                            slot.participant,
+                            slot.aggregate,
+                            slot.leaf_hash,
+                        )
+                        .expect("nonce field")
+                        .is_some()
+                    }),
+                "the hot request carries {signer}'s nonces"
+            );
+        }
+        let store = LockedCache::open(fixture.root(), fixture.fingerprint).expect("QR cache");
+        assert!(
+            store.state.available.is_empty(),
+            "the QR preparation was taken by the hot request"
+        );
+        assert_eq!(
+            store.state.allocated[0].state,
+            AllocationState::Active,
+            "the QR session is bound to this attempt"
+        );
+        assert!(
+            store.state.allocated[0].qr_transcript.is_some(),
+            "the QR transcript is pinned in the same pass"
+        );
+    }
+
+    #[test]
     fn allocate_first_request_fails_without_touching_any_cache_when_a_signer_is_not_ready() {
         let fixture = fixture();
         let session = device_session(&fixture.a, &fixture, [11; 32]);
@@ -1318,7 +1387,7 @@ mod tests {
         routes.insert(fixture.fingerprint, RouteKind::Qr);
         routes.insert(fixture.b.fingerprint(), RouteKind::Hot);
         assert!(
-            crate::keys::musig_sessions::allocate_first_request_at(
+            crate::keys::musig_sessions::qr_first_request_at(
                 fixture.root(),
                 &fixture.policy,
                 &bytes,

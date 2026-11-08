@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 
+#include <QHash>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -14,6 +15,7 @@
 class ISigner;
 struct LedgerNonceSignResult;
 struct SignResult;
+enum class KeyRouteKind : std::uint8_t;
 
 namespace keys {
 class KeysModule;
@@ -38,8 +40,9 @@ public:
     DeviceSign(KeysModule *module, ISigner *device, QString instance_id, QString psbt_v2_hex,
                QString fingerprint, QObject *parent = nullptr);
     ~DeviceSign() override;
-    // Asks the device to sign for the wallet `descriptor`.
-    void start(const QString &descriptor);
+    // Asks the device to sign for the wallet `descriptor`. `routes` name each pending
+    // MuSig2 signer's route, for a Ledger's first request to take every session.
+    void start(const QString &descriptor, const QHash<QString, KeyRouteKind> &routes);
 
 signals:
     void signedPsbt(QString psbt_v2_hex);
@@ -72,6 +75,7 @@ private:
     QString m_psbt_v2_hex;
     QString m_descriptor;
     QString m_fingerprint;
+    QHash<QString, KeyRouteKind> m_routes;
     bool m_ledger_musig = false;
     bool m_replenish = false;
     std::shared_ptr<LedgerNonceSignResult> m_prepared;

@@ -73,6 +73,9 @@ protected:
 
 private:
     ReqId m_hot_req = 0;
+    // The MuSig first signature request crafted from the cache, which the password
+    // signs; empty signs the transaction as it came.
+    QString m_request_psbt;
     bool m_cancelled = false;
     catalog::ModalStatus *m_waiting_step = nullptr;
     QPointer<modal::Unseal> m_unseal;

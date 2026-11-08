@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -24,7 +25,7 @@ class HotSign final : public QObject {
 
 public:
     HotSign(KeysModule *module, ReqId bus_req, Network network, QString fingerprint, QString alias,
-            QString psbt);
+            QString psbt, QHash<QString, KeyRouteKind> routes);
     void start();
 
 signals:
@@ -52,6 +53,7 @@ private:
     QString m_fingerprint;
     QString m_alias;
     QString m_psbt;
+    QHash<QString, KeyRouteKind> m_routes;
     bool m_submitted = false;
     bool m_wrong_password = false;
     bool m_live = true;

@@ -94,7 +94,7 @@ void operationRouting(keys::KeysModule &module, ExternalSigner &signer, quint32 
                                                    psbt, signer.fingerprint());
         QObject::connect(request, &keys::flow::DeviceSign::failed, &failed, &SignalSpy::onSignal,
                          qontrol::UNIQUE);
-        request->start(QString());
+        request->start(QString(), {});
         require(signer.signCalls() - calls == (supported ? 1 : 0),
                 "unsupported device operations are refused before dispatch");
         require(failed.count() == (supported ? 0 : 1), "device refusal emits its failure result");

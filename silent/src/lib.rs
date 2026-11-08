@@ -1278,10 +1278,10 @@ mod ffi {
         pub cache_supported: bool,
     }
 
-    /// One pending signer's plan route, for the cached signing allocation to bind
-    /// every required session.
+    /// One pending signer's plan route, for the first signature request to take
+    /// every required session, whichever route makes it.
     #[derive(Debug, Clone)]
-    pub struct QrMusigSignerRoute {
+    pub struct MusigSignerRoute {
         pub fingerprint: String,
         pub route: KeyRouteKind,
     }
@@ -1304,6 +1304,10 @@ mod ffi {
         pub wrong_password: bool,
     }
 
+    /// A hot key's passwordless step. Without `needs_password`, `psbt_v2_hex` is the
+    /// answer: its cached nonce alone. With it the password signs `psbt_v2_hex`, the
+    /// MuSig first signature request crafted (every allocated nonce in), or the
+    /// transaction as it is when empty.
     #[derive(Debug, Clone)]
     pub struct HotCachedNonceResult {
         pub is_ok: bool,
@@ -1313,6 +1317,10 @@ mod ffi {
         pub psbt_v2_hex: String,
     }
 
+    /// A Ledger signing request. `psbt_v2_hex` is a nonce-round answer with no device
+    /// round; `psbt_base64` the device payload, built from `request_v2_hex` when a
+    /// first signature request took every session (the device's answer merges into
+    /// it), else from the transaction asked with.
     #[derive(Debug, Clone)]
     pub struct LedgerNonceSignResult {
         pub is_ok: bool,
@@ -1323,6 +1331,7 @@ mod ffi {
         pub from_cache: bool,
         pub psbt_v2_hex: String,
         pub psbt_base64: String,
+        pub request_v2_hex: String,
     }
 
     /// Signer picker for one PSBT, built by `KeysModule::signing_plan`.
@@ -2728,9 +2737,16 @@ mod ffi {
         fn hot_reveal(material: &HotMaterial, password: &str) -> MnemonicResult;
 
         /// Signs `psbt_v2_hex` with `material`'s hot secret and returns the signed
-        /// PSBT as v2 hex. Blocks on Argon2id while opening the envelope: call from
-        /// a QThread, never from the GUI thread.
-        fn hot_sign(material: &HotMaterial, password: &str, psbt_v2_hex: &str) -> SignResult;
+        /// PSBT as v2 hex. In a MuSig nonce round it is the first signature request,
+        /// taking every pending signer's session over `routes` first. Blocks on
+        /// Argon2id while opening the envelope: call from a QThread, never from the
+        /// GUI thread.
+        fn hot_sign(
+            material: &HotMaterial,
+            password: &str,
+            psbt_v2_hex: &str,
+            routes: Vec<MusigSignerRoute>,
+        ) -> SignResult;
 
         /// The BIP392 sp() descriptor of `material`'s hot key, origin included, for
         /// account creation. Blocks on Argon2id while opening the envelope: call
@@ -2772,7 +2788,11 @@ mod ffi {
             policy: &str,
             quantity: u32,
         ) -> MusigSessionCreateResult;
-        fn hot_cached_nonces(material: &HotMaterial, psbt_v2_hex: &str) -> HotCachedNonceResult;
+        fn hot_cached_nonces(
+            material: &HotMaterial,
+            psbt_v2_hex: &str,
+            routes: Vec<MusigSignerRoute>,
+        ) -> HotCachedNonceResult;
         /// Persists xpub usage from the accounts of `network`, returning cache updates.
         /// Reads and writes storage: call it off the GUI thread.
         type AccountXpubUsage;
@@ -2800,7 +2820,7 @@ mod ffi {
             fingerprint: &str,
             policy: &str,
             psbt_v2_hex: &str,
-            routes: Vec<QrMusigSignerRoute>,
+            routes: Vec<MusigSignerRoute>,
         ) -> Box<QrMusigSign>;
         fn qr_musig_accept(
             answer: Box<QrResponse>,
@@ -2860,6 +2880,7 @@ mod ffi {
             fingerprint: &str,
             policy: &str,
             psbt_v2_hex: &str,
+            routes: Vec<MusigSignerRoute>,
         ) -> LedgerNonceSignResult;
 
         /// Merges a signer's v2 answer, made on an earlier copy of the PSBT, into
@@ -3700,21 +3721,21 @@ pub use ffi::{
     KeyDevice, KeyFileFailure, KeyInfo, KeyInfoResult, KeyOpResult, KeyRouteKind,
     KeyUnusableReason, KeyXpub, LabelEditResult, LabelEntry, LabelKind, LabelSnapshot, LiveDevice,
     LogLevel, MnemonicResult, MusigAttemptSnapshot, MusigCreationRequest, MusigFinalizeResult,
-    MusigRound, MusigSpendLeaf, Network, Notification, NotificationFlag, Output, PluginAccess,
-    PluginAccessHistory, PluginAccessRequest, PluginGrant, PluginGrantedAccess, PluginMetadata,
-    PluginMetadataField, PluginMetadataKind, PluginRemovalEntry, PluginRemovalListResult,
-    PluginRemovalPhase, PolicyCompileResult, PolicyDraft, PolicyDraftError, PolicyDraftResult,
-    PolicyDurationUnit, PolicyKey, PolicyKeyType, PolicyLocktime, PolicyPath, PolicyReview,
-    PolicyReviewKey, PolicyReviewPath, PolicySemantic, PolicySpec, PsbtExport, PsbtFileResult,
-    PsbtImport, PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult,
-    QrMusigSignerRoute, QrResponseKind, ReceiveAddress, ReceiveAddressResult, ReceiveKind,
-    RegtestDefaults, RetryDecision, RustChainTip, RustCoin, RustSelectedInput, RustSpendCoin,
-    RustSpendLock, RustSpendVariant, RustTx, RustTxDetails, RustTxIo, SavedPsbtAttempt,
-    SavedPsbtAttemptState, SavedPsbtEntry, SavedPsbtImport, SavedPsbtInput, SavedPsbtList,
-    SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore, SendAmounts, SignResult,
-    SigningCandidate, SigningPlan, SigningProgress, SigningStage, SpCreationRequest,
-    SpendAvailability, SpendCoinStatus, SpendCoinsResult, SpendError, SpendLockKind, SpendMaturity,
-    TransactionSimulation, TransactionTemplate, UnsignedPsbt,
+    MusigRound, MusigSignerRoute, MusigSpendLeaf, Network, Notification, NotificationFlag, Output,
+    PluginAccess, PluginAccessHistory, PluginAccessRequest, PluginGrant, PluginGrantedAccess,
+    PluginMetadata, PluginMetadataField, PluginMetadataKind, PluginRemovalEntry,
+    PluginRemovalListResult, PluginRemovalPhase, PolicyCompileResult, PolicyDraft,
+    PolicyDraftError, PolicyDraftResult, PolicyDurationUnit, PolicyKey, PolicyKeyType,
+    PolicyLocktime, PolicyPath, PolicyReview, PolicyReviewKey, PolicyReviewPath, PolicySemantic,
+    PolicySpec, PsbtExport, PsbtFileResult, PsbtImport, PsbtPayloadResult, PsbtValidation,
+    QrErrorKind, QrMessageResult, QrResponseKind, ReceiveAddress, ReceiveAddressResult,
+    ReceiveKind, RegtestDefaults, RetryDecision, RustChainTip, RustCoin, RustSelectedInput,
+    RustSpendCoin, RustSpendLock, RustSpendVariant, RustTx, RustTxDetails, RustTxIo,
+    SavedPsbtAttempt, SavedPsbtAttemptState, SavedPsbtEntry, SavedPsbtImport, SavedPsbtInput,
+    SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore,
+    SendAmounts, SignResult, SigningCandidate, SigningPlan, SigningProgress, SigningStage,
+    SpCreationRequest, SpendAvailability, SpendCoinStatus, SpendCoinsResult, SpendError,
+    SpendLockKind, SpendMaturity, TransactionSimulation, TransactionTemplate, UnsignedPsbt,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{

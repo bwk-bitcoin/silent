@@ -2,7 +2,7 @@
 //! mnemonic derives to on a given network. `HotSigner::new` is never used here: it
 //! asserts on mainnet, which is exactly where a hot key has to work.
 
-use std::str::FromStr;
+use std::{collections::BTreeMap, str::FromStr};
 
 use bitcoin::{
     bip32::{ChildNumber, DerivationPath, Fingerprint, Xpub},
@@ -32,7 +32,7 @@ use crate::keys::{
     error::Error,
     musig_sessions,
     psbt::parse_v2,
-    record::{KeyRecord, SecretEnvelope},
+    record::{KeyRecord, RouteKind, SecretEnvelope},
 };
 
 pub const MNEMONIC_WORDS_SHORT: usize = 12;
@@ -167,13 +167,15 @@ pub fn xpub_at(
 }
 
 /// Signs `psbt_v2_bytes` with this key's hot secret and returns the re-serialized
-/// PSBTv2. Blocks on Argon2id while opening the envelope, so it must not run on a
-/// GUI thread.
+/// PSBTv2. In a MuSig nonce round `routes` name each pending signer's plan route, for
+/// the sessions the first signature request takes. Blocks on Argon2id while opening
+/// the envelope, so it must not run on a GUI thread.
 pub fn sign_hot(
     record: &KeyRecord,
     network: Network,
     password: Password,
     psbt_v2_bytes: &[u8],
+    routes: &BTreeMap<Fingerprint, RouteKind>,
 ) -> Result<Vec<u8>, Error> {
     let mnemonic = crypto::open_mnemonic(record, network, password)?;
 
@@ -225,7 +227,7 @@ pub fn sign_hot(
             .map_err(Error::State)?
             .is_some()
         {
-            musig_sessions::sign_hot_session(&signer, &entry.descriptor, &mut v0)?;
+            musig_sessions::sign_hot_session(&signer, &entry.descriptor, &mut v0, routes)?;
             miniscript_signed_any = true;
             continue;
         }
@@ -274,12 +276,31 @@ pub fn create_sessions(
     musig_sessions::create_hot(&signer, policy, quantity).map_err(Error::State)
 }
 
-/// No mnemonic is opened here. None asks the caller to request the key password.
-pub fn publish_cached(record: &KeyRecord, bytes: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+/// What a hot key's passwordless step produced.
+pub enum CachedPublication {
+    /// Its cached nonce alone: the whole answer of an explicit nonce round.
+    Nonces(Vec<u8>),
+    /// The first signature request, every required session taken: the key's password
+    /// signs it.
+    FirstRequest(Vec<u8>),
+    /// Nothing without the password, which signs the transaction as it is.
+    NeedsPassword,
+}
+
+/// No mnemonic is opened here. In a MuSig nonce round this crafts the key's first
+/// signature request: its cached session and every other pending signer's are
+/// taken, `routes` naming each pending signer's plan route. With no routes it is an
+/// explicit nonce round (a coordinator's MuSig nonce stage): only the key's cached
+/// nonce is published.
+pub fn publish_cached(
+    record: &KeyRecord,
+    bytes: &[u8],
+    routes: &BTreeMap<Fingerprint, RouteKind>,
+) -> Result<CachedPublication, Error> {
     let mut psbt = parse_v2(bytes)?;
     let mut real = match psbt.clone().into_bitcoin_psbt() {
         Ok(real) => real,
-        Err(_) => return Ok(None),
+        Err(_) => return Ok(CachedPublication::NeedsPassword),
     };
     let mut matched = false;
     for entry in &record.descriptors {
@@ -294,20 +315,35 @@ pub fn publish_cached(record: &KeyRecord, bytes: &[u8]) -> Result<Option<Vec<u8>
         {
             continue;
         }
-        if !musig_sessions::publish_hot(record.fingerprint, &entry.descriptor, &mut real)? {
-            return Ok(None);
+        let published = if routes.is_empty() {
+            musig_sessions::publish_hot(record.fingerprint, &entry.descriptor, &mut real)?
+        } else {
+            musig_sessions::first_request_hot(
+                record.fingerprint,
+                &entry.descriptor,
+                &mut real,
+                routes,
+            )?
+        };
+        if !published {
+            return Ok(CachedPublication::NeedsPassword);
         }
         matched = true;
     }
     if !matched {
-        return Ok(None);
+        return Ok(CachedPublication::NeedsPassword);
     }
     for (input, updated) in psbt.inputs.iter_mut().zip(real.inputs) {
         input.psbt = updated;
     }
-    psbt.serialize()
-        .map(Some)
-        .map_err(|e| Error::PsbtSerialize(e.to_string()))
+    let bytes = psbt
+        .serialize()
+        .map_err(|e| Error::PsbtSerialize(e.to_string()))?;
+    Ok(if routes.is_empty() {
+        CachedPublication::Nonces(bytes)
+    } else {
+        CachedPublication::FirstRequest(bytes)
+    })
 }
 
 #[cfg(test)]
@@ -522,6 +558,7 @@ mod tests {
             Network::Regtest,
             password(),
             &psbt.serialize().unwrap(),
+            &BTreeMap::new(),
         )
         .expect("the hot key signs");
         let signed = PsbtV2::deserialize(&signed).unwrap();

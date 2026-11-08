@@ -398,7 +398,7 @@ fn test_hot_material_sign_is_independent_of_a_later_module_mutation() {
             .serialize()
             .expect("serialize psbt"),
     );
-    let wrong = silent::hot_sign(&material, "wrong password", &psbt_hex);
+    let wrong = silent::hot_sign(&material, "wrong password", &psbt_hex, Vec::new());
     assert!(!wrong.is_ok, "expected a wrong password to be refused");
     assert!(
         wrong.wrong_password,
@@ -406,7 +406,7 @@ fn test_hot_material_sign_is_independent_of_a_later_module_mutation() {
         wrong.error
     );
 
-    let result = silent::hot_sign(&material, "password", &psbt_hex);
+    let result = silent::hot_sign(&material, "password", &psbt_hex, Vec::new());
     assert!(result.is_ok, "expected ok, got error: {}", result.error);
     assert!(
         !result.wrong_password,
@@ -458,7 +458,7 @@ fn test_hot_sign_with_no_matching_descriptor_returns_nothing_signed() {
             .serialize()
             .expect("serialize psbt"),
     );
-    let result = silent::hot_sign(&material, "password", &psbt_hex);
+    let result = silent::hot_sign(&material, "password", &psbt_hex, Vec::new());
 
     assert!(!result.is_ok, "expected the sign to fail");
     assert!(
@@ -648,7 +648,7 @@ fn hot_round1(network: FfiNetwork, btc_network: Network) -> (Box<silent::HotMate
         material.get_error()
     );
     let psbt_hex = hex::encode(musig_psbt(&descriptor).serialize().expect("serialize psbt"));
-    let result = silent::hot_sign(&material, "password", &psbt_hex);
+    let result = silent::hot_sign(&material, "password", &psbt_hex, Vec::new());
     assert!(
         result.is_ok,
         "expected round 1 ok, got error: {}",
@@ -698,7 +698,7 @@ fn hot_round2_without_its_session_is_musig_session() {
     set_musig_input_pub_nonce(input, &nonce);
 
     let psbt_hex = hex::encode(psbt.serialize().expect("serialize psbt"));
-    let result = silent::hot_sign(&material, "password", &psbt_hex);
+    let result = silent::hot_sign(&material, "password", &psbt_hex, Vec::new());
     assert!(!result.is_ok, "expected round 2 refused");
     assert!(
         result.musig_session,
@@ -747,7 +747,7 @@ fn persisted_hot_cache_publishes_without_password_and_wrong_password_does_not_bu
             .serialize()
             .expect("serialize original"),
     );
-    let missing = silent::hot_cached_nonces(&material, &original);
+    let missing = silent::hot_cached_nonces(&material, &original, Vec::new());
     assert!(
         missing.is_ok && missing.needs_password,
         "empty cache requests password for on-demand creation"
@@ -769,7 +769,7 @@ fn persisted_hot_cache_publishes_without_password_and_wrong_password_does_not_bu
         0,
         "hardware count stays independent"
     );
-    let nonces = silent::hot_cached_nonces(&material, &original);
+    let nonces = silent::hot_cached_nonces(&material, &original, Vec::new());
     assert!(
         nonces.is_ok && !nonces.needs_password,
         "cached publication needs no password: {}",
@@ -796,17 +796,17 @@ fn persisted_hot_cache_publishes_without_password_and_wrong_password_does_not_bu
             .serialize()
             .expect("serialize round2"),
     );
-    let needs_password = silent::hot_cached_nonces(&material, &round2);
+    let needs_password = silent::hot_cached_nonces(&material, &round2, Vec::new());
     assert!(
         needs_password.is_ok && needs_password.needs_password,
         "actual signature always asks for password"
     );
-    let wrong = silent::hot_sign(&material, "wrong", &round2);
+    let wrong = silent::hot_sign(&material, "wrong", &round2, Vec::new());
     assert!(
         !wrong.is_ok && wrong.wrong_password && !wrong.musig_session,
         "wrong password does not invalidate allocation"
     );
-    let signed = silent::hot_sign(&material, "password", &round2);
+    let signed = silent::hot_sign(&material, "password", &round2, Vec::new());
     assert!(
         signed.is_ok,
         "password retry signs existing persisted allocation: {}",
@@ -817,7 +817,7 @@ fn persisted_hot_cache_publishes_without_password_and_wrong_password_does_not_bu
         4,
         "cached origin refills one session"
     );
-    let reused = silent::hot_sign(&material, "password", &round2);
+    let reused = silent::hot_sign(&material, "password", &round2, Vec::new());
     assert!(
         !reused.is_ok && reused.musig_session,
         "consumed attempt reports typed session loss"

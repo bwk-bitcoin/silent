@@ -377,6 +377,7 @@ fn funded_sp_bip32_and_multikey_hot_spend_through_public_api() {
         &keys.hot_material(&first.fingerprint()),
         "first",
         &prepared.psbt_v2_hex,
+        Vec::new(),
     );
     assert!(
         first_signed.is_ok,
@@ -414,6 +415,7 @@ fn funded_sp_bip32_and_multikey_hot_spend_through_public_api() {
         &keys.hot_material(&second.fingerprint()),
         "second",
         &partial.psbt_v2_hex,
+        Vec::new(),
     );
     assert!(
         second_signed.is_ok,
@@ -735,6 +737,7 @@ fn funded_sp_output(
         &keys.hot_material(fingerprint),
         "first",
         &prepared.psbt_v2_hex,
+        Vec::new(),
     );
     assert!(signed.is_ok, "combined SP signer: {}", signed.error);
     let accepted = coordination_accept(
@@ -866,6 +869,7 @@ fn funded_sp_output(
         &keys.hot_material(fingerprint),
         "first",
         &prepared.psbt_v2_hex,
+        Vec::new(),
     );
     assert!(signed.is_ok, "SP input hot signature: {}", signed.error);
     let accepted = coordination_accept(
@@ -965,7 +969,7 @@ fn nonce_input_request(text: &str, index: usize) -> PsbtV2 {
 fn cached_input_nonce(material: &silent::HotMaterial, text: &str, index: usize) -> String {
     // The external coordinator requests one policy's contribution, preserving the transaction.
     let request = nonce_input_request(text, index);
-    let published = hot_cached_nonces(material, &encoded(&request));
+    let published = hot_cached_nonces(material, &encoded(&request), Vec::new());
     assert!(
         published.is_ok && !published.needs_password,
         "cached input {index} nonce: {}",
@@ -1192,7 +1196,7 @@ fn funded_musig(
         SpendError::Unsupported,
         "stage-unaware routes must refuse unequal nonce progress before side effects"
     );
-    let missing_password = hot_cached_nonces(&a, &uneven.psbt_v2_hex);
+    let missing_password = hot_cached_nonces(&a, &uneven.psbt_v2_hex, Vec::new());
     assert!(
         missing_password.is_ok && missing_password.needs_password,
         "real hot route needs a password with ready A and uncached B"
@@ -1214,7 +1218,11 @@ fn funded_musig(
         partial.psbt_v2_hex,
         "refused IKeys request did not retire or consume cached A nonces"
     );
-    let uncached = hot_cached_nonces(&a, &encoded(&nonce_input_request(&uneven.psbt_v2_hex, 1)));
+    let uncached = hot_cached_nonces(
+        &a,
+        &encoded(&nonce_input_request(&uneven.psbt_v2_hex, 1)),
+        Vec::new(),
+    );
     assert!(
         uncached.is_ok && uncached.needs_password,
         "refused IKeys request did not allocate B nonces"
@@ -1269,7 +1277,7 @@ fn funded_musig(
         SigningStage::MusigSignatures,
     );
     assert!(round_two.is_ok, "second round: {}", round_two.error);
-    let sig_a = hot_sign(&a, "first", &round_two.psbt_v2_hex);
+    let sig_a = hot_sign(&a, "first", &round_two.psbt_v2_hex, Vec::new());
     assert!(sig_a.is_ok, "first partial: {}", sig_a.error);
     let mut invalid_partial =
         PsbtV2::deserialize(&hex::decode(&sig_a.psbt_v2_hex).expect("partial hex"))
@@ -1316,7 +1324,7 @@ fn funded_musig(
         SigningProgress::Partial,
         "missing second partial signature"
     );
-    let sig_b = hot_sign(&b, "second", &partial.psbt_v2_hex);
+    let sig_b = hot_sign(&b, "second", &partial.psbt_v2_hex, Vec::new());
     assert!(sig_b.is_ok, "second partial: {}", sig_b.error);
     let signed = coordination_accept(
         &partial.psbt_v2_hex,
@@ -1368,7 +1376,7 @@ fn funded_musig(
         released.psbt_v2_hex, prepared.psbt_v2_hex,
         "release creates a fresh attempt identity"
     );
-    let stale = hot_cached_nonces(&a, &prepared.psbt_v2_hex);
+    let stale = hot_cached_nonces(&a, &prepared.psbt_v2_hex, Vec::new());
     assert!(
         !stale.is_ok && stale.musig_session,
         "retired attempt cannot publish cached nonces again"
@@ -1396,7 +1404,7 @@ fn funded_musig(
             let allocated = result["lifecyclePsbt"]
                 .as_str()
                 .expect("real IKeys nonce allocation result");
-            let stale = hot_cached_nonces(&a, allocated);
+            let stale = hot_cached_nonces(&a, allocated, Vec::new());
             assert!(!stale.is_ok && stale.musig_session,
                     "real IKeys allocation must be retired after prep failure plus caller unload, or failed Release plus retry; retry_release={retry_release}");
         }

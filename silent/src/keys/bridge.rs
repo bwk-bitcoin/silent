@@ -34,7 +34,10 @@ use crate::{
     hwi::{parse_hmac, wallet_name},
     keys::{
         crypto::{open_mnemonic, Password},
-        hot::{create_sessions, publish_cached, seal_mnemonic, sign_hot, sp_descriptor, xpub_at},
+        hot::{
+            create_sessions, publish_cached, seal_mnemonic, sign_hot, sp_descriptor, xpub_at,
+            CachedPublication,
+        },
         ledger_nonces::{self, Fetch, SessionSource, Signing},
         manager::{
             descriptor_has_key, KeyManager, KeyManagerImpl, LiveDevice, SigningCandidate, UsedXpub,
@@ -853,6 +856,22 @@ impl HotMaterial {
     }
 }
 
+/// The plan route of each pending signer, keyed by fingerprint. An entry that does
+/// not parse names no route.
+fn plan_routes(routes: &[ffi::MusigSignerRoute]) -> BTreeMap<Fingerprint, RouteKind> {
+    let mut parsed = BTreeMap::new();
+    for signer in routes {
+        let Ok(fingerprint) = Fingerprint::from_str(&signer.fingerprint) else {
+            continue;
+        };
+        let Ok(route) = RouteKind::try_from(signer.route) else {
+            continue;
+        };
+        parsed.insert(fingerprint, route);
+    }
+    parsed
+}
+
 /// A persisted cache preparation, or why none could be persisted. Born in the
 /// worker that ran the disk work, consumed by the GUI thread's
 /// `KeysModule::qr_request_prepare_musig`.
@@ -896,7 +915,7 @@ pub fn qr_musig_sign_material(
     fingerprint: &str,
     policy: &str,
     psbt_v2_hex: &str,
-    routes: Vec<ffi::QrMusigSignerRoute>,
+    routes: Vec<ffi::MusigSignerRoute>,
 ) -> Box<QrMusigSign> {
     let failed = |error: String| Box::new(QrMusigSign { inner: Err(error) });
     let Ok(qr_fingerprint) = Fingerprint::from_str(fingerprint) else {
@@ -905,20 +924,10 @@ pub fn qr_musig_sign_material(
     let Ok(bytes) = hex::decode(psbt_v2_hex) else {
         return failed("invalid psbt hex".to_string());
     };
-    let mut plan_routes = BTreeMap::new();
-    for signer in &routes {
-        let Ok(fingerprint) = Fingerprint::from_str(&signer.fingerprint) else {
-            continue;
-        };
-        let Ok(route) = RouteKind::try_from(signer.route) else {
-            continue;
-        };
-        plan_routes.insert(fingerprint, route);
-    }
-    let (session_id, psbt) = match musig_sessions::allocate_first_request(
+    let (session_id, psbt) = match musig_sessions::qr_first_request(
         policy,
         &bytes,
-        &plan_routes,
+        &plan_routes(&routes),
         qr_fingerprint,
     ) {
         Ok(allocated) => allocated,
@@ -1097,7 +1106,12 @@ pub fn hot_reveal(material: &HotMaterial, password: &str) -> ffi::MnemonicResult
 /// Signs `psbt_v2_hex` with `material`'s hot secret and returns the signed PSBT as v2
 /// hex. Blocks on Argon2id while opening the envelope: call from a QThread, never
 /// from the GUI thread.
-pub fn hot_sign(material: &HotMaterial, password: &str, psbt_v2_hex: &str) -> ffi::SignResult {
+pub fn hot_sign(
+    material: &HotMaterial,
+    password: &str,
+    psbt_v2_hex: &str,
+    routes: Vec<ffi::MusigSignerRoute>,
+) -> ffi::SignResult {
     let password = Password::new(password.to_string());
     let (record, network) = match material.inner.as_ref() {
         Ok(pair) => pair,
@@ -1107,7 +1121,13 @@ pub fn hot_sign(material: &HotMaterial, password: &str, psbt_v2_hex: &str) -> ff
         Ok(bytes) => bytes,
         Err(e) => return failed_sign(&format!("invalid psbt hex: {e}")),
     };
-    match sign_hot(record, *network, password, &psbt_bytes) {
+    match sign_hot(
+        record,
+        *network,
+        password,
+        &psbt_bytes,
+        &plan_routes(&routes),
+    ) {
         Ok(signed) => ffi::SignResult {
             is_ok: true,
             error: String::new(),
@@ -1198,7 +1218,11 @@ pub fn hot_create_sessions(
     }
 }
 
-pub fn hot_cached_nonces(material: &HotMaterial, psbt_v2_hex: &str) -> ffi::HotCachedNonceResult {
+pub fn hot_cached_nonces(
+    material: &HotMaterial,
+    psbt_v2_hex: &str,
+    routes: Vec<ffi::MusigSignerRoute>,
+) -> ffi::HotCachedNonceResult {
     let mut response = ffi::HotCachedNonceResult {
         is_ok: false,
         error: String::new(),
@@ -1212,14 +1236,19 @@ pub fn hot_cached_nonces(material: &HotMaterial, psbt_v2_hex: &str) -> ffi::HotC
             .as_ref()
             .map_err(|error| Error::State(error.clone()))?;
         let bytes = hex::decode(psbt_v2_hex).map_err(|error| Error::State(error.to_string()))?;
-        publish_cached(record, &bytes)
+        publish_cached(record, &bytes, &plan_routes(&routes))
     })();
     match result {
-        Ok(Some(bytes)) => {
+        Ok(CachedPublication::Nonces(bytes)) => {
             response.is_ok = true;
             response.psbt_v2_hex = hex::encode(bytes);
         }
-        Ok(None) => {
+        Ok(CachedPublication::FirstRequest(bytes)) => {
+            response.is_ok = true;
+            response.needs_password = true;
+            response.psbt_v2_hex = hex::encode(bytes);
+        }
+        Ok(CachedPublication::NeedsPassword) => {
             response.is_ok = true;
             response.needs_password = true;
         }
@@ -1736,6 +1765,7 @@ pub fn ledger_nonce_sign(
     fingerprint: &str,
     policy: &str,
     psbt_v2_hex: &str,
+    routes: Vec<ffi::MusigSignerRoute>,
 ) -> ffi::LedgerNonceSignResult {
     let mut response = ffi::LedgerNonceSignResult {
         is_ok: false,
@@ -1746,6 +1776,7 @@ pub fn ledger_nonce_sign(
         from_cache: false,
         psbt_v2_hex: String::new(),
         psbt_base64: String::new(),
+        request_v2_hex: String::new(),
     };
     let result: Result<(), ledger_nonces::SigningError> = (|| {
         let fp = parse_fingerprint(fingerprint)?;
@@ -1769,14 +1800,19 @@ pub fn ledger_nonce_sign(
             return Ok(());
         }
         response.musig = true;
-        match ledger_nonces::prepare(fp, policy, &bytes)? {
+        match ledger_nonces::prepare_request(fp, policy, &bytes, &plan_routes(&routes))? {
             Signing::Nonces { bytes, source } => {
                 response.psbt_v2_hex = hex::encode(bytes);
                 response.from_cache = source == SessionSource::Cached;
             }
             Signing::Missing => response.need_fetch = true,
-            Signing::Payload { psbt, source } => {
+            Signing::Payload {
+                psbt,
+                source,
+                request,
+            } => {
                 response.psbt_base64 = BASE64_STANDARD.encode(psbt.serialize());
+                response.request_v2_hex = hex::encode(request);
                 response.from_cache = source == SessionSource::Cached;
             }
         }

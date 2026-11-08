@@ -1,6 +1,6 @@
 //! Hot provider material. Allocation, ordering and encrypted storage belong to the common cache.
 
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use bitcoin::{bip32::Fingerprint, Psbt};
 use bwk::{
@@ -19,8 +19,9 @@ use crate::{
     config::datadir,
     keys::{
         musig_sessions::{
-            binding, descriptor, AllocationState, LockedCache, Nonce, PublishedNonce,
-            SecretPayload, Session, SessionSource, SigningError, MAX_INPUT, MAX_SESSIONS,
+            allocate_first_request_at, binding, descriptor, AllocationState, LockedCache, Nonce,
+            PublishedNonce, SecretPayload, Session, SessionSource, SigningError, MAX_INPUT,
+            MAX_SESSIONS,
         },
         record::RouteKind,
     },
@@ -153,9 +154,49 @@ fn published(
         .collect()
 }
 
-/// Returns false when a password is needed to generate an on-demand session or to sign.
+/// Publishes this key's cached nonce alone: an explicit nonce round. Returns false
+/// when a password is needed to generate an on-demand session or to sign.
 pub fn publish_hot(fp: Fingerprint, policy: &str, real: &mut Psbt) -> Result<bool, SigningError> {
     publish_at(&datadir().join("musig-sessions"), fp, policy, real, None)
+}
+
+/// Crafts this key's first signature request without its mnemonic: its cached
+/// session and every other pending signer's are taken (`first_request_at`). False
+/// when a password is needed to generate an on-demand session or to sign.
+pub fn first_request_hot(
+    fp: Fingerprint,
+    policy: &str,
+    real: &mut Psbt,
+    routes: &BTreeMap<Fingerprint, RouteKind>,
+) -> Result<bool, SigningError> {
+    first_request_at(
+        &datadir().join("musig-sessions"),
+        fp,
+        policy,
+        real,
+        routes,
+        None,
+    )
+}
+
+/// In the nonce round, takes this key's session (from the cache, or generated from
+/// `signer` when the cache is empty), then every other pending signer's
+/// (`allocate_first_request`), so the request carries the complete nonce set. False
+/// when there is nothing to take: past the nonce round, or no cached session and no
+/// `signer` to generate one.
+pub(crate) fn first_request_at(
+    root: &Path,
+    fp: Fingerprint,
+    policy: &str,
+    real: &mut Psbt,
+    routes: &BTreeMap<Fingerprint, RouteKind>,
+    signer: Option<&HotSigner>,
+) -> Result<bool, SigningError> {
+    if !publish_at(root, fp, policy, real, signer)? {
+        return Ok(false);
+    }
+    allocate_first_request_at(root, policy, real, routes)?;
+    Ok(true)
 }
 
 pub(crate) fn publish_at(
@@ -218,12 +259,23 @@ pub(crate) fn publish_at(
 }
 
 /// The caller must open and validate the mnemonic before entering this operation.
+/// In the nonce round this is the first signature request: it takes every pending
+/// signer's session first (`first_request_at`), `routes` naming each pending signer's
+/// plan route. With no routes it is an explicit nonce round (a coordinator's MuSig
+/// nonce stage) and only publishes this key's nonce.
 pub fn sign_hot_session(
     signer: &HotSigner,
     policy: &str,
     real: &mut Psbt,
+    routes: &BTreeMap<Fingerprint, RouteKind>,
 ) -> Result<(), SigningError> {
-    sign_at(&datadir().join("musig-sessions"), signer, policy, real)
+    sign_at(
+        &datadir().join("musig-sessions"),
+        signer,
+        policy,
+        real,
+        routes,
+    )
 }
 
 fn sign_at(
@@ -231,11 +283,16 @@ fn sign_at(
     signer: &HotSigner,
     policy: &str,
     real: &mut Psbt,
+    routes: &BTreeMap<Fingerprint, RouteKind>,
 ) -> Result<(), SigningError> {
     let fp = signer.fingerprint();
     let parsed = descriptor(policy)?;
-    if publish_at(root, fp, policy, real, Some(signer))? {
-        return Ok(());
+    if routes.is_empty() {
+        if publish_at(root, fp, policy, real, Some(signer))? {
+            return Ok(());
+        }
+    } else {
+        first_request_at(root, fp, policy, real, routes, Some(signer))?;
     }
     let binding = binding(real, &parsed, fp)?;
     let mut store = LockedCache::open(root, fp)?;
@@ -269,7 +326,7 @@ fn sign_at(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path, str::FromStr};
+    use std::{collections::BTreeMap, fs, path::Path, str::FromStr};
 
     use bitcoin::{
         absolute::LockTime, bip32::DerivationPath, transaction::Version, Amount, Network, OutPoint,
@@ -292,7 +349,7 @@ mod tests {
         keys::{
             musig_sessions::{
                 descriptor,
-                hot_provider::{create_locked, publish_at, secret_aad, sign_at},
+                hot_provider::{create_locked, first_request_at, publish_at, secret_aad, sign_at},
                 restart_at, AllocationState, LockedCache, SessionSource, SigningError,
             },
             record::RouteKind,
@@ -401,8 +458,10 @@ mod tests {
                 !publish_at(tmp.path(), a.fingerprint(), &policy, &mut tx, None)
                     .expect("password needed")
             );
-            sign_at(tmp.path(), &a, &policy, &mut tx)
-                .expect("on-demand publication while unlocked");
+            assert!(
+                publish_at(tmp.path(), a.fingerprint(), &policy, &mut tx, Some(&a))
+                    .expect("on-demand publication while unlocked")
+            );
         }
         assert_eq!(
             count(tmp.path(), &a, &policy),
@@ -437,7 +496,8 @@ mod tests {
             .cosigners
             .iter()
             .all(|entry| entry.nonces == entry.expected));
-        sign_at(tmp.path(), &a, &policy, &mut tx).expect("round two after reopening");
+        sign_at(tmp.path(), &a, &policy, &mut tx, &BTreeMap::new())
+            .expect("round two after reopening");
         assert_eq!(
             musig_input_partial_sigs(&tx.inputs[0])
                 .expect("partial signatures")
@@ -466,7 +526,7 @@ mod tests {
         drop(store);
         assert!(
             matches!(
-                sign_at(tmp.path(), &a, &policy, &mut tx),
+                sign_at(tmp.path(), &a, &policy, &mut tx, &BTreeMap::new()),
                 Err(SigningError::SessionLost(_))
             ),
             "consumed session cannot be reused"
@@ -481,6 +541,92 @@ mod tests {
     #[test]
     fn on_demand_zero_to_zero_to_zero_with_reopen() {
         lifecycle(false);
+    }
+
+    fn both_hot(a: &HotSigner, b: &HotSigner) -> BTreeMap<bitcoin::bip32::Fingerprint, RouteKind> {
+        BTreeMap::from([
+            (a.fingerprint(), RouteKind::Hot),
+            (b.fingerprint(), RouteKind::Hot),
+        ])
+    }
+
+    fn nonces_complete(policy: &str, tx: &Psbt) -> bool {
+        musig_status(tx, &descriptor(policy).expect("policy"))
+            .expect("status")
+            .cosigners
+            .iter()
+            .all(|entry| entry.nonces == entry.expected)
+    }
+
+    fn peer_allocation(root: &Path, b: &HotSigner) -> AllocationState {
+        LockedCache::open(root, b.fingerprint())
+            .expect("peer cache")
+            .state
+            .allocated[0]
+            .state
+    }
+
+    #[test]
+    fn a_passwordless_first_request_takes_every_required_signers_session() {
+        let tmp = TempDir::new().expect("temp directory");
+        let (a, b) = signers();
+        let policy = policy(&a, &b, 0);
+        create(tmp.path(), &a, &policy, 1);
+        create(tmp.path(), &b, &policy, 2);
+        let routes = both_hot(&a, &b);
+        let mut tx = transaction(&policy, 0, 3);
+        assert!(
+            first_request_at(tmp.path(), a.fingerprint(), &policy, &mut tx, &routes, None)
+                .expect("first request crafted without a password"),
+            "a cached session crafts the request"
+        );
+        assert!(
+            nonces_complete(&policy, &tx),
+            "the request carries every required signer's nonces"
+        );
+        assert_eq!(count(tmp.path(), &a, &policy), 0, "own session taken");
+        assert_eq!(count(tmp.path(), &b, &policy), 0, "peer session taken");
+        assert_eq!(
+            peer_allocation(tmp.path(), &b),
+            AllocationState::Active,
+            "the peer's session is bound to this attempt"
+        );
+        sign_at(tmp.path(), &a, &policy, &mut tx, &routes).expect("password signs the request");
+        assert_eq!(
+            musig_input_partial_sigs(&tx.inputs[0])
+                .expect("partial signatures")
+                .len(),
+            1,
+            "the first request signs"
+        );
+    }
+
+    #[test]
+    fn an_unlocked_first_request_takes_every_required_signers_session_and_signs() {
+        let tmp = TempDir::new().expect("temp directory");
+        let (a, b) = signers();
+        let policy = policy(&a, &b, 0);
+        create(tmp.path(), &b, &policy, 2);
+        let mut tx = transaction(&policy, 1, 4);
+        sign_at(tmp.path(), &a, &policy, &mut tx, &both_hot(&a, &b))
+            .expect("first signature request");
+        assert!(
+            nonces_complete(&policy, &tx),
+            "the request carries every required signer's nonces"
+        );
+        assert_eq!(count(tmp.path(), &b, &policy), 0, "peer session taken");
+        assert_eq!(
+            peer_allocation(tmp.path(), &b),
+            AllocationState::Active,
+            "the peer's session is bound to this attempt"
+        );
+        assert_eq!(
+            musig_input_partial_sigs(&tx.inputs[0])
+                .expect("partial signatures")
+                .len(),
+            1,
+            "the first request signs, with no second request"
+        );
     }
 
     #[test]
@@ -535,7 +681,7 @@ mod tests {
             peer_nonces(&b, &policy, &mut tx);
             assert!(
                 matches!(
-                    sign_at(tmp.path(), &a, &policy, &mut tx),
+                    sign_at(tmp.path(), &a, &policy, &mut tx, &BTreeMap::new()),
                     Err(SigningError::SessionLost(_))
                 ),
                 "old allocation cannot sign"
@@ -610,7 +756,7 @@ mod tests {
         peer_nonces(&b, &policy, &mut tx);
         let nonces = tx.clone();
         fs::create_dir(&path).expect("block burn");
-        assert!(sign_at(tmp.path(), &a, &policy, &mut tx).is_err());
+        assert!(sign_at(tmp.path(), &a, &policy, &mut tx, &BTreeMap::new()).is_err());
         assert_eq!(tx, nonces, "signer never called before durable burn");
         assert!(
             LockedCache::open(tmp.path(), a.fingerprint())
@@ -645,7 +791,7 @@ mod tests {
         set_musig_input_pub_nonce(&mut tx.inputs[0], &field);
         let before = tx.clone();
         assert!(
-            sign_at(tmp.path(), &a, &policy, &mut tx).is_err(),
+            sign_at(tmp.path(), &a, &policy, &mut tx, &BTreeMap::new()).is_err(),
             "invalid peer nonce fails signing"
         );
         assert_eq!(tx, before, "upstream signing failure leaves PSBT unchanged");
@@ -661,7 +807,7 @@ mod tests {
         );
         drop(store);
         assert!(matches!(
-            sign_at(tmp.path(), &a, &policy, &mut tx),
+            sign_at(tmp.path(), &a, &policy, &mut tx, &BTreeMap::new()),
             Err(SigningError::SessionLost(_))
         ));
     }
@@ -681,7 +827,7 @@ mod tests {
             next.fetch_order = u64::MAX;
             store.save(next).expect("exhaust refill order");
         }
-        sign_at(tmp.path(), &a, &policy, &mut tx)
+        sign_at(tmp.path(), &a, &policy, &mut tx, &BTreeMap::new())
             .expect("successful signature survives refill failure");
         assert_eq!(
             musig_input_partial_sigs(&tx.inputs[0])
@@ -725,7 +871,7 @@ mod tests {
         drop(store);
         peer_nonces(&b, &policy, &mut tx);
         assert!(matches!(
-            sign_at(tmp.path(), &a, &policy, &mut tx),
+            sign_at(tmp.path(), &a, &policy, &mut tx, &BTreeMap::new()),
             Err(SigningError::SessionLost(_))
         ));
         publish_at(tmp.path(), a.fingerprint(), &policy, &mut restarted, None)

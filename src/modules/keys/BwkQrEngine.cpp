@@ -114,14 +114,9 @@ void BwkQrEngine::signMusig(const QString &fingerprint, const QString &psbt_v2_h
     m_musig_policy = descriptor;
     m_musig_psbt = psbt_v2_hex;
     // Every required signer's session is allocated on disk before the request leaves.
-    rust::Vec<::QrMusigSignerRoute> planRoutes;
-    for (auto it = routes.cbegin(); it != routes.cend(); ++it) {
-        planRoutes.push_back(::QrMusigSignerRoute{
-            .fingerprint = rust::String(it.key().toStdString()), .route = it.value()});
-    }
     auto *thread = QThread::create(
         [this, fingerprint = fingerprint.toStdString(), descriptor = descriptor.toStdString(),
-         psbt = psbt_v2_hex.toStdString(), routes = std::move(planRoutes)]() mutable {
+         psbt = psbt_v2_hex.toStdString(), routes = KeysModule::toBridgeRoutes(routes)]() mutable {
             auto signing =
                 ::qr_musig_sign_material(fingerprint, descriptor, psbt, std::move(routes));
             emit musigSignReady(reinterpret_cast<quintptr>(signing.into_raw()));

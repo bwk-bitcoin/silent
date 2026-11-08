@@ -1077,7 +1077,7 @@ struct KeyOpResult;
 struct QrMessageResult;
 struct KeyInfoResult;
 struct SigningCandidate;
-struct QrMusigSignerRoute;
+struct MusigSignerRoute;
 struct QrMusigCacheResult;
 struct MusigSessionCreateResult;
 struct HotCachedNonceResult;
@@ -2810,17 +2810,17 @@ struct SigningCandidate final {
 };
 #endif // CXXBRIDGE1_STRUCT_SigningCandidate
 
-#ifndef CXXBRIDGE1_STRUCT_QrMusigSignerRoute
-#define CXXBRIDGE1_STRUCT_QrMusigSignerRoute
-// One pending signer's plan route, for the cached signing allocation to bind
-// every required session.
-struct QrMusigSignerRoute final {
+#ifndef CXXBRIDGE1_STRUCT_MusigSignerRoute
+#define CXXBRIDGE1_STRUCT_MusigSignerRoute
+// One pending signer's plan route, for the first signature request to take
+// every required session, whichever route makes it.
+struct MusigSignerRoute final {
   ::rust::String fingerprint;
   ::KeyRouteKind route;
 
   using IsRelocatable = ::std::true_type;
 };
-#endif // CXXBRIDGE1_STRUCT_QrMusigSignerRoute
+#endif // CXXBRIDGE1_STRUCT_MusigSignerRoute
 
 #ifndef CXXBRIDGE1_STRUCT_QrMusigCacheResult
 #define CXXBRIDGE1_STRUCT_QrMusigCacheResult
@@ -2850,6 +2850,10 @@ struct MusigSessionCreateResult final {
 
 #ifndef CXXBRIDGE1_STRUCT_HotCachedNonceResult
 #define CXXBRIDGE1_STRUCT_HotCachedNonceResult
+// A hot key's passwordless step. Without `needs_password`, `psbt_v2_hex` is the
+// answer: its cached nonce alone. With it the password signs `psbt_v2_hex`, the
+// MuSig first signature request crafted (every allocated nonce in), or the
+// transaction as it is when empty.
 struct HotCachedNonceResult final {
   bool is_ok CXX_DEFAULT_VALUE(false);
   ::rust::String error;
@@ -2863,6 +2867,10 @@ struct HotCachedNonceResult final {
 
 #ifndef CXXBRIDGE1_STRUCT_LedgerNonceSignResult
 #define CXXBRIDGE1_STRUCT_LedgerNonceSignResult
+// A Ledger signing request. `psbt_v2_hex` is a nonce-round answer with no device
+// round; `psbt_base64` the device payload, built from `request_v2_hex` when a
+// first signature request took every session (the device's answer merges into
+// it), else from the transaction asked with.
 struct LedgerNonceSignResult final {
   bool is_ok CXX_DEFAULT_VALUE(false);
   ::rust::String error;
@@ -2872,6 +2880,7 @@ struct LedgerNonceSignResult final {
   bool from_cache CXX_DEFAULT_VALUE(false);
   ::rust::String psbt_v2_hex;
   ::rust::String psbt_base64;
+  ::rust::String request_v2_hex;
 
   using IsRelocatable = ::std::true_type;
 };
@@ -4848,9 +4857,11 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 ::MnemonicResult hot_reveal(::HotMaterial const &material, ::rust::Str password) noexcept;
 
 // Signs `psbt_v2_hex` with `material`'s hot secret and returns the signed
-// PSBT as v2 hex. Blocks on Argon2id while opening the envelope: call from
-// a QThread, never from the GUI thread.
-::SignResult hot_sign(::HotMaterial const &material, ::rust::Str password, ::rust::Str psbt_v2_hex) noexcept;
+// PSBT as v2 hex. In a MuSig nonce round it is the first signature request,
+// taking every pending signer's session over `routes` first. Blocks on
+// Argon2id while opening the envelope: call from a QThread, never from the
+// GUI thread.
+::SignResult hot_sign(::HotMaterial const &material, ::rust::Str password, ::rust::Str psbt_v2_hex, ::rust::Vec<::MusigSignerRoute> routes) noexcept;
 
 // The BIP392 sp() descriptor of `material`'s hot key, origin included, for
 // account creation. Blocks on Argon2id while opening the envelope: call
@@ -4883,7 +4894,7 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 
 ::MusigSessionCreateResult hot_create_sessions(::HotMaterial const &material, ::rust::Str password, ::rust::Str policy, ::std::uint32_t quantity) noexcept;
 
-::HotCachedNonceResult hot_cached_nonces(::HotMaterial const &material, ::rust::Str psbt_v2_hex) noexcept;
+::HotCachedNonceResult hot_cached_nonces(::HotMaterial const &material, ::rust::Str psbt_v2_hex, ::rust::Vec<::MusigSignerRoute> routes) noexcept;
 
 ::rust::Box<::AccountXpubUsage> account_xpub_usage(::Network network) noexcept;
 
@@ -4899,7 +4910,7 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 
 ::rust::Box<::QrMusigPrepare> qr_musig_prepare_material(::rust::Str fingerprint, ::rust::Str descriptor) noexcept;
 
-::rust::Box<::QrMusigSign> qr_musig_sign_material(::rust::Str fingerprint, ::rust::Str policy, ::rust::Str psbt_v2_hex, ::rust::Vec<::QrMusigSignerRoute> routes) noexcept;
+::rust::Box<::QrMusigSign> qr_musig_sign_material(::rust::Str fingerprint, ::rust::Str policy, ::rust::Str psbt_v2_hex, ::rust::Vec<::MusigSignerRoute> routes) noexcept;
 
 ::QrMusigCacheResult qr_musig_accept(::rust::Box<::QrResponse> answer, ::rust::Str fingerprint, ::rust::Str policy, ::rust::Str psbt_v2_hex) noexcept;
 
@@ -4921,7 +4932,7 @@ bool mnemonic_is_valid(::rust::Str mnemonic) noexcept;
 
 ::SignResult ledger_nonce_merge(::rust::Str fingerprint, ::rust::Str policy, ::rust::Str original, ::rust::Str signed_psbt) noexcept;
 
-::LedgerNonceSignResult ledger_nonce_sign(::rust::Str fingerprint, ::rust::Str policy, ::rust::Str psbt_v2_hex) noexcept;
+::LedgerNonceSignResult ledger_nonce_sign(::rust::Str fingerprint, ::rust::Str policy, ::rust::Str psbt_v2_hex, ::rust::Vec<::MusigSignerRoute> routes) noexcept;
 
 // Merges a signer's v2 answer, made on an earlier copy of the PSBT, into
 // `current_v2_hex`: its signatures and MuSig2 nonces / partial signatures join

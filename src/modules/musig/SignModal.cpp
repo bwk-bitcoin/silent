@@ -320,7 +320,11 @@ void SignModal::render(const MusigRoundStatus &status) {
     for (const auto &[fingerprint, in] : signers) {
         fingerprints.append(fingerprint);
         auto entry = entries.value(fingerprint.toLower());
-        if (!in) {
+        // On the nonce step a key whose session is already cached has nothing to do: it
+        // counts as done.
+        bool cached = !in && !partial && candidates.value(fingerprint.toLower()).cache_ready &&
+                      candidates.value(fingerprint.toLower()).cache_supported;
+        if (!in && !cached) {
             ++left;
         }
         bool signing = !in && busy.contains(fingerprint.toLower());
@@ -356,12 +360,10 @@ void SignModal::render(const MusigRoundStatus &status) {
         }
         bool usable = why.isEmpty();
         if (usable) {
-            auto candidate = candidates.value(fingerprint.toLower());
             if (signing) {
                 pill = entry.route == plugin::KeyRouteKind::Hot ? catalog::pillMusigSigning()
                                                                 : catalog::pillMusigOnDevice();
-            } else if (!in && !partial && candidate.cache_ready && candidate.cache_supported) {
-                // Its session sits in the cache already: nothing to prepare.
+            } else if (cached) {
                 pill = catalog::pillMusigCached();
             } else if (!in) {
                 pill = catalog::pillMusigNeeded();
@@ -373,10 +375,7 @@ void SignModal::render(const MusigRoundStatus &status) {
         }
         auto *row = keyRow(entry, fingerprint, pill);
         // Each key answers one request at a time; the others stay clickable meanwhile.
-        // On the nonce step a key whose session is already cached has nothing to do.
-        bool done = !in && !partial && candidates.value(fingerprint.toLower()).cache_ready &&
-                    candidates.value(fingerprint.toLower()).cache_supported;
-        row->setClickable(!in && usable && !signing && !done && m_plan->is_ok &&
+        row->setClickable(!in && usable && !signing && !cached && m_plan->is_ok &&
                           !m_controller->restartPending() && !m_controller->isRestarting());
         if (!usable) {
             greyRow(row, why);

@@ -151,7 +151,7 @@ fn test_prepared_psbt_signs_with_the_hot_key_and_finalizes() {
     );
     let material = keys.hot_material(TEST_FINGERPRINT_HEX);
     assert!(material.is_ok(), "hot material: {}", material.get_error());
-    let signed = silent::hot_sign(&material, KEY_PASSWORD, &hex::encode(&psbt));
+    let signed = silent::hot_sign(&material, KEY_PASSWORD, &hex::encode(&psbt), Vec::new());
     assert!(
         signed.is_ok,
         "the hot key signs the prepared PSBT: {}",

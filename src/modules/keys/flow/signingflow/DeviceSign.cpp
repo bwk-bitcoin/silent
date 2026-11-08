@@ -47,8 +47,16 @@ DeviceSign::~DeviceSign() {
     }
 }
 
-void DeviceSign::start(const QString &descriptor) {
+void DeviceSign::start(const QString &descriptor, const QHash<QString, KeyRouteKind> &routes) {
     m_descriptor = descriptor;
+    m_routes = routes;
+    // A signature request reaches the device, a Ledger's first MuSig2 one included: no
+    // session is taken for a device that is not there. Only an explicit nonce round
+    // (no routes) is answered from a Ledger's cache alone.
+    if (m_device.isNull() && !m_routes.isEmpty()) {
+        fail(UsbError::Disconnected, QString());
+        return;
+    }
     if (!m_device.isNull()) {
         if (m_module.isNull() || m_module->rust() == nullptr ||
             m_device->state() != plugin::SignerState::Ready) {
@@ -87,8 +95,9 @@ void DeviceSign::prepareLedger() {
     auto prepared = m_prepared;
     auto *thread = QThread::create([prepared, fingerprint = m_fingerprint.toStdString(),
                                     descriptor = m_descriptor.toStdString(),
-                                    psbt = m_psbt_v2_hex.toStdString()] {
-        *prepared = ::ledger_nonce_sign(fingerprint, descriptor, psbt);
+                                    psbt = m_psbt_v2_hex.toStdString(),
+                                    routes = KeysModule::toBridgeRoutes(m_routes)]() mutable {
+        *prepared = ::ledger_nonce_sign(fingerprint, descriptor, psbt, std::move(routes));
     });
     connect(thread, &QThread::finished, this, &DeviceSign::onPrepared, qontrol::UNIQUE);
     connect(thread, &QThread::finished, thread, &QObject::deleteLater, qontrol::UNIQUE);
@@ -117,6 +126,11 @@ void DeviceSign::onPrepared() {
     if (m_prepared->need_fetch) {
         fetchNonces();
         return;
+    }
+    // A first MuSig2 request took every pending signer's session: the device's
+    // answer merges into the transaction carrying them all.
+    if (!m_prepared->request_v2_hex.empty()) {
+        m_psbt_v2_hex = KeysModule::toQt(m_prepared->request_v2_hex);
     }
     m_ledger_musig = m_prepared->musig;
     m_replenish = m_ledger_musig && m_prepared->from_cache;

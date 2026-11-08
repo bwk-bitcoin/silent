@@ -449,11 +449,11 @@ fn accept_signed_progress_reports_the_allocation_right_after_it_succeeds() {
     assert!(active.is_ok, "the active attempt is open: {}", active.error);
 
     let routes = vec![
-        silent::QrMusigSignerRoute {
+        silent::MusigSignerRoute {
             fingerprint: a.fingerprint().to_string(),
             route: KeyRouteKind::Qr,
         },
-        silent::QrMusigSignerRoute {
+        silent::MusigSignerRoute {
             fingerprint: b.fingerprint().to_string(),
             route: KeyRouteKind::Qr,
         },

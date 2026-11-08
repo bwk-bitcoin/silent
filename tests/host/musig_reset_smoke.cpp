@@ -1,14 +1,17 @@
 #include "MockPlugin.h"
+#include "SpSigningProbe.h"
 #include "ViewServices.h"
 
+#include "AppController.h"
 #include "catalog/Button.h"
 #include "catalog/containers/ModalActions.h"
 #include "catalog/display/Label.h"
 #include "catalog/panels/home/RowClickTable.h"
+#include "host/Host.h"
 #include "i18n/Tr.h"
 #include "modules/musig/MusigAccountController.h"
+#include "modules/musig/MusigPlugin.h"
 #include "modules/musig/SavedPsbts.h"
-#include "modules/musig/SignModal.h"
 
 #include <QApplication>
 #include <QElapsedTimer>
@@ -17,6 +20,14 @@
 #include <QThread>
 #include <common.h>
 #include <initializer_list>
+#include <memory>
+#include <silent.h>
+
+#define private public
+#define protected public
+#include "modules/musig/SignModal.h"
+#undef protected
+#undef private
 
 namespace smoke {
 namespace {
@@ -154,6 +165,141 @@ void savedAttempts(MusigAccountController &controller, ViewServices &services) {
     require(opened.count() == 0, "folding opens nothing");
 }
 
+// The keys a signing modal lists, without any device or key store behind them.
+class ListedKeys final : public DeferredKeys {
+public:
+    void setEntries(const QList<KeyEntry> &entries) {
+        m_entries = entries;
+    }
+
+protected:
+    [[nodiscard]] auto readKeys([[maybe_unused]] plugin::Network network) const
+        -> KeyListResult override {
+        return {.is_ok = true, .entries = m_entries};
+    }
+
+private:
+    QList<KeyEntry> m_entries;
+};
+
+const char *const CACHED_FINGERPRINT = "aaaaaaaa";
+const char *const OTHER_FINGERPRINT = "bbbbbbbb";
+
+auto candidate(const char *fingerprint, bool nonces_done, bool cache_ready) -> SigningCandidate {
+    SigningCandidate entry{};
+    entry.fingerprint = rust::String(fingerprint);
+    entry.route = KeyRouteKind::Hot;
+    entry.can_sign = true;
+    entry.unusable = KeyUnusableReason::None;
+    entry.registered = true;
+    entry.musig_done = nonces_done;
+    entry.nonces_done = nonces_done;
+    entry.cache_ready = cache_ready;
+    entry.cache_supported = true;
+    return entry;
+}
+
+// The nonce step over two cosigners, each as `first` and `second` say.
+void renderNonceStep(musig::SignModal &signing, const SigningCandidate &first,
+                     const SigningCandidate &second) {
+    SigningPlan plan{};
+    plan.is_ok = true;
+    plan.candidates.push_back(first);
+    plan.candidates.push_back(second);
+    *signing.m_plan = plan;
+    signing.m_plan_ready = true;
+    signing.m_partial = false;
+    MusigRoundStatus status{};
+    status.is_ok = true;
+    status.round = MusigRound::Nonces;
+    for (const auto *fingerprint : {CACHED_FINGERPRINT, OTHER_FINGERPRINT}) {
+        status.cosigners.push_back(MusigCosignerStatus{.fingerprint = rust::String(fingerprint),
+                                                       .nonces = 0,
+                                                       .partial_sigs = 0,
+                                                       .expected = 1});
+    }
+    signing.render(status);
+}
+
+// The reason the footer shows, empty when it shows none.
+auto footerReason(musig::SignModal &signing) -> QString {
+    for (auto *label : signing.m_actions->findChildren<catalog::Label *>()) {
+        if (label->isVisibleTo(signing.m_actions)) {
+            return label->text();
+        }
+    }
+    return {};
+}
+
+// A cosigner whose session is cached counts as done on the nonce step: the counter
+// leaves it out and Continue opens once every cosigner is cached or in.
+void cachedNonceStep() {
+    AppController::get()->registerBuiltinPlugin(std::make_unique<MusigPlugin>());
+    auto *host = dynamic_cast<HostImpl *>(Host::get());
+    require(host != nullptr, "real host exists");
+    ListedKeys keys;
+    keys.setEntries({KeyEntry{.fingerprint = QString::fromLatin1(CACHED_FINGERPRINT)},
+                     KeyEntry{.fingerprint = QString::fromLatin1(OTHER_FINGERPRINT)}});
+    host->setKeys(&keys, MusigModule::get());
+    auto descriptor = QStringLiteral("tr(musig("
+                                     "tpubDEGU7K8ab62XbG1bKoCnHDtUx44DxVKyAQVS96EN1EUVTQRW2KnFEvTtm"
+                                     "nUJSonudSK8HcXTexf56Kir1JzoQAzFRHfvNLEcqV7KxUHZVYa,"
+                                     "tpubDDzMtUDKwjvTehAmAfwYiBGzUFDcF8AyEaJf78JhQam5knvsGTgqF7Vvh"
+                                     "uuDZLYityND66FG88sS3q28Yi5Ysumvx5DfMgdm6nc6zntvpHM"
+                                     ")/<0;1>/*)");
+    auto name = QStringLiteral("smoke-musig-cached-nonces");
+    auto config = ::new_config(rust::String(name.toStdString()), Network::Testnet,
+                               rust::String(descriptor.toStdString()), rust::String(""),
+                               rust::String(""), 546, rust::String("musig"));
+    require(config->save().empty(), "save an offline MuSig account");
+    {
+        MusigAccountController controller(name, nullptr);
+        QElapsedTimer opening;
+        opening.start();
+        while (controller.accountLoading() && opening.elapsed() < 30000) {
+            QApplication::processEvents();
+            QThread::msleep(1);
+        }
+        require(controller.hasAccountMetadata(), "the offline MuSig account opens");
+        ViewServices services;
+        musig::SignModal signing(&controller, &services.blockchain);
+        signing.show();
+
+        renderNonceStep(signing, candidate(CACHED_FINGERPRINT, false, true),
+                        candidate(OTHER_FINGERPRINT, false, false));
+        require(footerReason(signing) == TR("musig-sign-reason-one"),
+                "a cached cosigner is not counted as still to go");
+        require(signing.m_continue_btn->isVisible() && !signing.m_continue_btn->isEnabled(),
+                "Continue waits for the cosigner whose session is missing");
+
+        renderNonceStep(signing, candidate(CACHED_FINGERPRINT, false, true),
+                        candidate(OTHER_FINGERPRINT, false, true));
+        require(footerReason(signing).isEmpty(), "no cosigner is left once every one is cached");
+        require(signing.m_continue_btn->isEnabled(),
+                "Continue opens once every cosigner is cached");
+
+        renderNonceStep(signing, candidate(CACHED_FINGERPRINT, false, true),
+                        candidate(OTHER_FINGERPRINT, true, true));
+        require(footerReason(signing).isEmpty() && signing.m_continue_btn->isEnabled(),
+                "a cached cosigner and one whose nonces are in leave none to go");
+        signing.reject();
+
+        SignalSpy stopped;
+        QObject::connect(&controller, &MusigAccountController::stopped, &stopped,
+                         &SignalSpy::onSignal, qontrol::UNIQUE);
+        controller.stop();
+        QElapsedTimer stopping;
+        stopping.start();
+        while (stopped.count() == 0 && stopping.elapsed() < 30000) {
+            QApplication::processEvents();
+            QThread::msleep(1);
+        }
+        require(stopped.count() == 1, "the MuSig account shuts down");
+    }
+    require(::delete_musig_account(rust::String(name.toStdString())).empty(),
+            "remove the MuSig test account");
+}
+
 } // namespace
 
 void musigResetSmoke() {
@@ -205,6 +351,7 @@ void musigResetSmoke() {
             "rendering leaves controller state unchanged and broadcasts nothing");
     signing.reject();
     savedAttempts(controller, services);
+    cachedNonceStep();
 }
 
 } // namespace smoke

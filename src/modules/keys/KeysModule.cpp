@@ -156,8 +156,8 @@ void KeysBus::coordinate(ReqId req_id, const plugin::SigningRequest &request) {
             descriptors.append(input.variant.descriptor);
         }
     }
-    sign(req_id, request.network, active.psbtV2Hex, descriptors, request.walletName,
-         request.fingerprint);
+    signOn(req_id, request.network, active.psbtV2Hex, descriptors, request.walletName,
+           request.fingerprint, request.stage == plugin::SigningStage::MusigNonces);
 }
 
 void KeysBus::cancelRequest(ReqId req_id) {
@@ -204,12 +204,18 @@ void KeysBus::onCoordinationReleased() {
 void KeysBus::sign(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
                    const QStringList &descriptors, const QString &wallet_name,
                    const QString &fingerprint) {
+    signOn(req_id, network, psbt_v2_hex, descriptors, wallet_name, fingerprint, false);
+}
+
+void KeysBus::signOn(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
+                     const QStringList &descriptors, const QString &wallet_name,
+                     const QString &fingerprint, bool nonce_stage) {
     auto converted = requestNetwork(network, req_id);
     if (!converted.has_value()) {
         return;
     }
     NetworkScope scope(m_module, *converted);
-    m_module->sign(req_id, psbt_v2_hex, descriptors, wallet_name, fingerprint);
+    m_module->sign(req_id, psbt_v2_hex, descriptors, wallet_name, fingerprint, nonce_stage);
 }
 
 void KeysBus::signOnDevice(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
@@ -737,7 +743,7 @@ void KeysModule::runFlow(flow::SigningFlow *flow) {
 }
 
 void KeysModule::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors,
-                      const QString &wallet_name, const QString &fingerprint) {
+                      const QString &wallet_name, const QString &fingerprint, bool nonce_stage) {
     if (rust() == nullptr) {
         m_bus->deliverError(req_id, TR("keys-module-not-ready"));
         return;
@@ -749,13 +755,14 @@ void KeysModule::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringLis
         m_bus->deliverError(req_id, toQt(plan.error));
         return;
     }
+    auto routes = nonce_stage ? QHash<QString, KeyRouteKind>() : signingRoutes(plan);
     for (const auto &candidate : plan.candidates) {
         if (candidate.route != KeyRouteKind::Hot || !candidate.can_sign ||
             toQt(candidate.fingerprint).compare(fingerprint, Qt::CaseInsensitive) != 0) {
             continue;
         }
         auto *sign = new flow::HotSign(this, req_id, activeNetwork(), fingerprint,
-                                       toQt(candidate.alias), psbt_v2_hex);
+                                       toQt(candidate.alias), psbt_v2_hex, routes);
         connect(sign, &flow::HotSign::signedPsbt, m_bus.get(), &KeysBus::deliverSigned,
                 qontrol::UNIQUE);
         connect(sign, &flow::HotSign::failed, m_bus.get(), &KeysBus::deliverError, qontrol::UNIQUE);
@@ -768,18 +775,12 @@ void KeysModule::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringLis
     // A QR key whose device advertises the cache capability signs from prepared
     // sessions: its first request allocates every pending signer's session, over the
     // routes the plan names.
-    bool cachedMusig = false;
-    QHash<QString, KeyRouteKind> routes;
-    for (const auto &candidate : plan.candidates) {
-        if (!candidate.can_sign || candidate.route == KeyRouteKind::Unknown) {
-            continue;
-        }
-        routes.insert(toQt(candidate.fingerprint).toLower(), candidate.route);
-        if (candidate.route == KeyRouteKind::Qr && candidate.cache_supported &&
-            toQt(candidate.fingerprint).compare(fingerprint, Qt::CaseInsensitive) == 0) {
-            cachedMusig = true;
-        }
-    }
+    bool cachedMusig =
+        !nonce_stage && std::ranges::any_of(plan.candidates, [&fingerprint](const auto &candidate) {
+            return candidate.can_sign && candidate.route == KeyRouteKind::Qr &&
+                   candidate.cache_supported &&
+                   toQt(candidate.fingerprint).compare(fingerprint, Qt::CaseInsensitive) == 0;
+        });
     runFlow(new flow::SigningFlow(
         this, {.context = flow::Context::Sign,
                .req_id = req_id,
@@ -793,15 +794,24 @@ void KeysModule::sign(ReqId req_id, const QString &psbt_v2_hex, const QStringLis
 
 void KeysModule::signOnDevice(ReqId req_id, const QString &psbt_v2_hex, const QString &descriptor,
                               const QString &fingerprint) {
+    if (rust() == nullptr) {
+        m_bus->deliverError(req_id, TR("keys-module-not-ready"));
+        return;
+    }
+    // signing_plan() blocks on nothing (no device I/O), so calling it from the GUI
+    // thread is safe: see its doc comment in lib/include/silent.h.
+    auto plan = rust()->signing_plan(rust::String(psbt_v2_hex.toStdString()));
+    if (!plan.is_ok) {
+        m_bus->deliverError(req_id, toQt(plan.error));
+        return;
+    }
     auto device = flow::liveDevice(fingerprint);
     if (!device.has_value()) {
         bool ledger = false;
-        if (rust() != nullptr) {
-            for (const auto &record : rust()->key_devices(fingerprint.toStdString())) {
-                if (toQt(record.kind).startsWith(QStringLiteral("ledger"), Qt::CaseInsensitive)) {
-                    ledger = true;
-                    break;
-                }
+        for (const auto &record : rust()->key_devices(fingerprint.toStdString())) {
+            if (toQt(record.kind).startsWith(QStringLiteral("ledger"), Qt::CaseInsensitive)) {
+                ledger = true;
+                break;
             }
         }
         if (!ledger) {
@@ -820,7 +830,7 @@ void KeysModule::signOnDevice(ReqId req_id, const QString &psbt_v2_hex, const QS
             qontrol::UNIQUE);
     connect(sign, &flow::DeviceSign::failed, this, &KeysModule::onDeviceSignFailed,
             qontrol::UNIQUE);
-    sign->start(descriptor);
+    sign->start(descriptor, signingRoutes(plan));
 }
 
 void KeysModule::prepareNonces(ReqId req_id, const QString &psbt_v2_hex, const QString &descriptor,
@@ -1199,7 +1209,8 @@ void KeysModule::createHotSessions(ReqId req_id, const QString &fingerprint,
 }
 
 void KeysModule::publishHotCached(ReqId req_id, const QString &fingerprint,
-                                  const QString &psbt_v2_hex) {
+                                  const QString &psbt_v2_hex,
+                                  const QHash<QString, KeyRouteKind> &routes) {
     if (rust() == nullptr) {
         emit hotCachedReady(req_id, false, false, {}, TR("keys-module-not-ready"), false);
         return;
@@ -1207,9 +1218,10 @@ void KeysModule::publishHotCached(ReqId req_id, const QString &fingerprint,
     auto material = rust()->hot_material(rust::String(fingerprint.toStdString()));
     auto result = std::make_shared<HotWork>(HotWorkKind::PublishCached, req_id);
     auto *thread =
-        QThread::create([result, material = material.into_raw(), psbt = psbt_v2_hex.toStdString()] {
+        QThread::create([result, material = material.into_raw(), psbt = psbt_v2_hex.toStdString(),
+                         routes = toBridgeRoutes(routes)]() mutable {
             auto box = rust::Box<HotMaterial>::from_raw(material);
-            auto cached = ::hot_cached_nonces(*box, psbt);
+            auto cached = ::hot_cached_nonces(*box, psbt, std::move(routes));
             result->is_ok = cached.is_ok;
             result->needs_password = cached.needs_password;
             result->psbt = KeysModule::toQt(cached.psbt_v2_hex);
@@ -1223,7 +1235,7 @@ void KeysModule::publishHotCached(ReqId req_id, const QString &fingerprint,
 }
 
 void KeysModule::signHot(ReqId req_id, const QString &fingerprint, const QString &password,
-                         const QString &psbt_v2_hex) {
+                         const QString &psbt_v2_hex, const QHash<QString, KeyRouteKind> &routes) {
     if (rust() == nullptr) {
         emit hotSignFinished(req_id, false, QString(), TR("keys-module-not-ready"), false, false);
         return;
@@ -1234,11 +1246,11 @@ void KeysModule::signHot(ReqId req_id, const QString &fingerprint, const QString
         return;
     }
     auto result = std::make_shared<HotWork>(HotWorkKind::Sign, req_id);
-    auto *thread =
-        QThread::create([result, material = material.into_raw(), password = password.toStdString(),
-                         psbt = psbt_v2_hex.toStdString()]() mutable {
+    auto *thread = QThread::create(
+        [result, material = material.into_raw(), password = password.toStdString(),
+         psbt = psbt_v2_hex.toStdString(), routes = toBridgeRoutes(routes)]() mutable {
             auto box = rust::Box<HotMaterial>::from_raw(material);
-            auto signedPsbt = ::hot_sign(*box, password, psbt);
+            auto signedPsbt = ::hot_sign(*box, password, psbt, std::move(routes));
             password.assign(password.size(), '\0');
             password.clear();
             result->is_ok = signedPsbt.is_ok;
@@ -1256,7 +1268,8 @@ void KeysModule::signHot(ReqId req_id, const QString &fingerprint, const QString
 void KeysModule::onHotWorkFinished() {
     auto *thread = qobject_cast<QThread *>(sender());
     auto work = m_hot_work.take(thread);
-    if (work->is_ok && !work->needs_password) {
+    // A passwordless step took sessions once it published a nonce or crafted a request.
+    if (work->is_ok && (!work->needs_password || !work->psbt.isEmpty())) {
         emit nonceSessionsChanged();
     }
     switch (work->kind) {
@@ -1717,6 +1730,26 @@ auto KeysModule::toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice {
             rust::String(entry.module->meta().value(QStringLiteral("id")).toStdString());
     }
     return device;
+}
+
+auto KeysModule::signingRoutes(const SigningPlan &plan) -> QHash<QString, KeyRouteKind> {
+    QHash<QString, KeyRouteKind> routes;
+    for (const auto &candidate : plan.candidates) {
+        if (candidate.can_sign && candidate.route != KeyRouteKind::Unknown) {
+            routes.insert(toQt(candidate.fingerprint).toLower(), candidate.route);
+        }
+    }
+    return routes;
+}
+
+auto KeysModule::toBridgeRoutes(const QHash<QString, KeyRouteKind> &routes)
+    -> rust::Vec<MusigSignerRoute> {
+    rust::Vec<MusigSignerRoute> bridged;
+    for (auto it = routes.cbegin(); it != routes.cend(); ++it) {
+        bridged.push_back(MusigSignerRoute{.fingerprint = rust::String(it.key().toStdString()),
+                                           .route = it.value()});
+    }
+    return bridged;
 }
 
 RustKeys *KeysModule::rust() const {

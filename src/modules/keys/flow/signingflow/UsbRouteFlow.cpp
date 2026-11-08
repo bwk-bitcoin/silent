@@ -62,7 +62,7 @@ void UsbRouteFlow::start() {
                 qontrol::UNIQUE);
         connect(sign, &DeviceSign::failed, this, &UsbRouteFlow::onDeviceSignFailed,
                 qontrol::UNIQUE);
-        sign->start(request().descriptor);
+        sign->start(request().descriptor, request().routes);
         break;
     }
     case Context::Nonces: {

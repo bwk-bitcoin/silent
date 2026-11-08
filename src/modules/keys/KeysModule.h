@@ -141,6 +141,10 @@ protected:
     [[nodiscard]] auto readKeys(plugin::Network network) const -> KeyListResult override;
     [[nodiscard]] auto requestNetwork(plugin::Network network, std::optional<ReqId> req_id) const
         -> std::optional<Network>;
+    // sign() on `network`; `nonce_stage` as KeysModule::sign() takes it.
+    void signOn(ReqId req_id, plugin::Network network, const QString &psbt_v2_hex,
+                const QStringList &descriptors, const QString &wallet_name,
+                const QString &fingerprint, bool nonce_stage);
 
 private:
     KeysModule *m_module = nullptr;
@@ -227,6 +231,12 @@ public:
     // Converts public signer metadata to the Rust device protocol bits.
     [[nodiscard]] static auto deviceCapabilities(const plugin::SignerEntry &entry) -> quint32;
     [[nodiscard]] static auto toLiveDevice(const plugin::SignerEntry &entry) -> LiveDevice;
+    // Each signer of `plan` that can sign, by lowercase fingerprint: its route, for a
+    // MuSig first signature request to take every pending signer's session.
+    [[nodiscard]] static auto signingRoutes(const SigningPlan &plan)
+        -> QHash<QString, KeyRouteKind>;
+    [[nodiscard]] static auto toBridgeRoutes(const QHash<QString, KeyRouteKind> &routes)
+        -> rust::Vec<MusigSignerRoute>;
     // 0 on Bitcoin, 1 on every test network.
     [[nodiscard]] static auto coinType() -> int;
     // The Rust handle, for the tab and the modals of this module only. Null until the
@@ -239,9 +249,11 @@ public:
     // Each request below opens one signing flow modal and returns once it has closed;
     // the flow answers `req_id` through the bus exactly once.
     // Signs `psbt_v2_hex` with every key it needs, one after the other, or with the key
-    // `fingerprint` alone when it is set.
+    // `fingerprint` alone when it is set. In a MuSig nonce round the request is the first
+    // signature request and takes every pending signer's session, unless `nonce_stage`
+    // (a coordinator's MuSig nonce stage) asks the key for its own nonce only.
     void sign(ReqId req_id, const QString &psbt_v2_hex, const QStringList &descriptors,
-              const QString &wallet_name, const QString &fingerprint);
+              const QString &wallet_name, const QString &fingerprint, bool nonce_stage);
     // Signs `psbt_v2_hex` with the key `fingerprint` on its connected USB device, no
     // window; answers `req_id` through the bus.
     void signOnDevice(ReqId req_id, const QString &psbt_v2_hex, const QString &descriptor,
@@ -293,9 +305,14 @@ public:
     void importHotKey(ReqId req_id, const QString &mnemonic, const QString &alias,
                       const QString &password);
     void revealMnemonic(ReqId req_id, const QString &fingerprint, const QString &password);
+    // In a MuSig nonce round each crafts the key's first signature request, taking every
+    // pending signer's session over `routes`: publishHotCached() from the cache, before
+    // the password, answering with the request the password then signs. With no routes
+    // each only publishes the key's own nonce, an explicit nonce round.
     void signHot(ReqId req_id, const QString &fingerprint, const QString &password,
-                 const QString &psbt_v2_hex);
-    void publishHotCached(ReqId req_id, const QString &fingerprint, const QString &psbt_v2_hex);
+                 const QString &psbt_v2_hex, const QHash<QString, KeyRouteKind> &routes);
+    void publishHotCached(ReqId req_id, const QString &fingerprint, const QString &psbt_v2_hex,
+                          const QHash<QString, KeyRouteKind> &routes);
     void createHotSessions(ReqId req_id, const QString &fingerprint, const QString &password,
                            const QString &descriptor, unsigned int quantity);
     void fetchHotSpDescriptor(ReqId req_id, const QString &fingerprint, const QString &password);

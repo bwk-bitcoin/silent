@@ -13,14 +13,15 @@
 namespace keys::flow {
 
 HotSign::HotSign(KeysModule *module, ReqId bus_req, Network network, QString fingerprint,
-                 QString alias, QString psbt)
+                 QString alias, QString psbt, QHash<QString, KeyRouteKind> routes)
     : QObject(module),
       m_module(module),
       m_bus_req(bus_req),
       m_network(network),
       m_fingerprint(std::move(fingerprint)),
       m_alias(std::move(alias)),
-      m_psbt(std::move(psbt)) {
+      m_psbt(std::move(psbt)),
+      m_routes(std::move(routes)) {
     auto queued = static_cast<Qt::ConnectionType>(Qt::QueuedConnection | Qt::UniqueConnection);
     connect(module, &KeysModule::hotSigned, this, &HotSign::onHotSigned, queued);
     connect(module, &KeysModule::hotCachedReady, this, &HotSign::onCachedReady, qontrol::UNIQUE);
@@ -31,7 +32,7 @@ HotSign::HotSign(KeysModule *module, ReqId bus_req, Network network, QString fin
 void HotSign::start() {
     m_hot_req = m_module->nextReqId();
     NetworkScope scope(m_module, m_network);
-    m_module->publishHotCached(m_hot_req, m_fingerprint, m_psbt);
+    m_module->publishHotCached(m_hot_req, m_fingerprint, m_psbt, m_routes);
 }
 
 void HotSign::askPassword() {
@@ -69,7 +70,7 @@ void HotSign::onPasswordEntered(const QString &password) {
     m_submitted = true;
     m_hot_req = m_module->nextReqId();
     NetworkScope scope(m_module, m_network);
-    m_module->signHot(m_hot_req, m_fingerprint, password, m_psbt);
+    m_module->signHot(m_hot_req, m_fingerprint, password, m_psbt, m_routes);
 }
 
 void HotSign::onHotSigned(ReqId req_id, bool is_ok, const QString &psbt_v2_hex,
@@ -100,6 +101,10 @@ void HotSign::onCachedReady(ReqId req_id, bool needs_password, bool is_ok,
     }
     if (needs_password && is_ok) {
         m_hot_req = 0;
+        // The password signs the first signature request crafted from the cache.
+        if (!psbt_v2_hex.isEmpty()) {
+            m_psbt = psbt_v2_hex;
+        }
         askPassword();
         return;
     }
