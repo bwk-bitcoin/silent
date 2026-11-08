@@ -217,11 +217,14 @@ void Theme::apply() {
                    // --- ScrollArea ---
                    "QScrollArea { border: none; }"
                    // --- Tooltip (dark bubble per design) ---
-                   "QToolTip { background: %3; color: %4; border: none; padding: 5px 9px; }")
+                   "QToolTip { background: %3; color: %4; border: none; padding: 5px 9px; }"
+                   // --- Account sidebar (the menu column of an account page) ---
+                   "QWidget[class=\"sidebar\"] { background: %5; }")
                    .arg(p.textSecondary.name()) // %1
                    .arg(p.border.name())        // %2
                    .arg(p.text.name())          // %3 tooltip bg
-                   .arg(p.bg.name());           // %4 tooltip fg
+                   .arg(p.bg.name())            // %4 tooltip fg
+                   .arg(p.bgSecondary.name());  // %5 sidebar bg
 
     qss += catalog::Tab::qss(p);
     qss += catalog::Button::qss(p);

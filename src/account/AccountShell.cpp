@@ -11,7 +11,6 @@
 #include "i18n/Tr.h"
 #include "theme/Icon.h"
 #include "theme/Palette.h"
-#include "theme/Theme.h"
 
 #include <QAbstractButton>
 #include <QButtonGroup>
@@ -42,10 +41,10 @@ AccountShell::AccountShell(QList<MenuEntry> entries, QWidget *status, QWidget *p
       m_widget(new QWidget(parent)) {
     auto *menu = new qontrol::Column;
     menu->setFixedWidth(metric::SIDEBAR_WIDTH);
-    menu->setAutoFillBackground(true);
-    auto menuPal = menu->palette();
-    menuPal.setColor(QPalette::Window, Theme::get()->palette().bgSecondary);
-    menu->setPalette(menuPal);
+    // Styled by the theme's stylesheet, which a theme switch rebuilds: a palette set here
+    // would keep the color of the theme the page was built under.
+    menu->setProperty("class", "sidebar");
+    menu->setAttribute(Qt::WA_StyledBackground, true);
     int padding = resolve(Padding::XS);
     menu->layout()->setContentsMargins(padding, padding, padding, padding);
 

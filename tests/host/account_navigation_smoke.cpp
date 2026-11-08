@@ -14,13 +14,19 @@
 #include "modules/sp/AccountController.h"
 #include "modules/sp/AccountWidget.h"
 #include "modules/sp/StatusBar.h"
+#include "theme/Palette.h"
+#include "theme/Theme.h"
 #include "views/MenuTab.h"
 
 #include <QAbstractButton>
 #include <QApplication>
 #include <QButtonGroup>
+#include <QColor>
+#include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QImage>
 #include <QMouseEvent>
+#include <QPixmap>
 #include <QPointer>
 #include <QPushButton>
 #include <QThread>
@@ -187,6 +193,38 @@ void unavailablePanels() {
     click(menuButton(*group, QStringLiteral("Coins")));
 }
 
+// The color of the sidebar's padding, left of the menu buttons.
+auto sidebarColor(QWidget *sidebar) -> QColor {
+    QCoreApplication::processEvents();
+    return sidebar->grab().toImage().pixelColor(1, sidebar->height() / 2);
+}
+
+// A theme switch repaints an account page's sidebar in the new theme, not only after a
+// restart (#84).
+void sidebarFollowsTheme() {
+    auto *theme = Theme::get();
+    auto initial = theme->mode();
+    QWidget parent;
+    account::AccountShell shell(account::accountMenuEntries(), new QWidget, &parent);
+    parent.resize(1000, 700);
+    parent.show();
+    QWidget *sidebar = nullptr;
+    for (auto *widget : shell.widget()->findChildren<QWidget *>()) {
+        if (widget->minimumWidth() == metric::SIDEBAR_WIDTH &&
+            widget->maximumWidth() == metric::SIDEBAR_WIDTH) {
+            sidebar = widget;
+        }
+    }
+    require(sidebar != nullptr, "the account page has a sidebar");
+    theme->setMode(ThemeMode::Dark);
+    require(sidebarColor(sidebar) == Palette::dark().bgSecondary,
+            "the sidebar takes the dark theme on a switch");
+    theme->setMode(ThemeMode::Light);
+    require(sidebarColor(sidebar) == Palette::light().bgSecondary,
+            "the sidebar takes the light theme on a switch back");
+    theme->setMode(initial);
+}
+
 #ifdef SILENT_CUSTOM_WIDGET_FIXTURE
 auto fixtureModule(PluginRegistry &registry, const QString &id) -> IModule * {
     for (auto *plugin : registry.plugins()) {
@@ -314,6 +352,8 @@ void accountNavigationSmoke() {
                                                        musig);
 #endif
     }
+    // After the main window: a theme switch restyles every widget of the app.
+    sidebarFollowsTheme();
     AppController::get()->start(nullptr);
 }
 
