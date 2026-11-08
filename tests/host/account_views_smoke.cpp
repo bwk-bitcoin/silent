@@ -2,12 +2,14 @@
 // the account answers, and when, is the test's. Covers reads by polling and by notification
 // around a funds read that answers later, coin selection answered inline, later and stale,
 // independent templates of two Send views, a label kept in RAM when its save fails, a label
-// being edited kept through a funds change, and the broadcast outcomes the SP signing step
-// shows.
+// being edited kept through a funds change, the broadcast outcomes the SP signing step
+// shows, Send's fee row at the narrowest column and the Multikey step of a finalized
+// transaction.
 
 #include <QApplication>
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDialog>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -15,12 +17,15 @@
 #include <QLineEdit>
 #include <QList>
 #include <QPointer>
+#include <QRect>
 #include <QString>
 #include <QStringList>
 #include <QThread>
 #include <QTimer>
 #include <Qontrol>
+#include <algorithm>
 #include <common.h>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -36,15 +41,22 @@
 #include "account/views/Receive.h"
 #include "account/views/Send.h"
 #include "account/views/Settings.h"
+#include "catalog/Button.h"
+#include "catalog/Variants.h"
 #include "catalog/containers/FoldSection.h"
 #include "catalog/display/Label.h"
 #include "catalog/feedback/Notice.h"
 #include "catalog/form/EndpointRow.h"
 #include "catalog/form/LabelCell.h"
+#include "catalog/form/ValidatedInput.h"
+#include "catalog/format.h"
 #include "catalog/inputs/Checkbox.h"
+#include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
+#include "catalog/inputs/Toggle.h"
 #include "catalog/panels/home/CoinsTable.h"
 #include "catalog/panels/home/HistoryTable.h"
+#include "catalog/panels/send/TxFlow.h"
 #include "i18n/I18nManager.h"
 #include "i18n/Tr.h"
 #include "interfaces/backend/account.h"
@@ -52,6 +64,9 @@
 #include "interfaces/backend/labels.h"
 #include "interfaces/backend/settings.h"
 #include "interfaces/backend/transaction.h"
+#include "interfaces/host.h"
+#include "modules/musig/MusigAccountController.h"
+#include "modules/musig/SigningSection.h"
 #include "modules/sp/AccountController.h"
 #include "modules/sp/SpSigning.h"
 #undef private
@@ -341,7 +356,11 @@ public:
     }
 
 private:
-    QWidget *m_actions = new QWidget;
+    // A Multikey step's buttons, as wide as they are there.
+    QWidget *m_actions = (new qontrol::Row)
+                             ->spacing(resolve(Spacing::S))
+                             ->push(catalog::btnExportPsbt())
+                             ->push(catalog::btnSign());
 };
 
 class Answers final : public QObject {
@@ -736,6 +755,114 @@ void finalizeReasonShown() {
     require(!signing.m_tx_template.has_value(), "nothing is held after a failed prepare");
 }
 
+// The fee inputs and the step's buttons of `send` shown now.
+auto feeRowItems(account::view::Send &send, account::SendSigning &signing) -> QList<QWidget *> {
+    QList<QWidget *> items;
+    for (QWidget *item : std::initializer_list<QWidget *>{
+             send.m_fee_mode_picker, send.m_fee_tier_picker, send.m_fee_rate_label,
+             send.m_fee_toggle, send.m_fee_field, send.m_fee_label, send.m_clear_outputs_btn}) {
+        items.append(item);
+    }
+    for (auto *button : signing.actions()->findChildren<catalog::Button *>()) {
+        items.append(button);
+    }
+    items.removeIf([&send](QWidget *item) { return !item->isVisibleTo(&send); });
+    return items;
+}
+
+// Send's fee row holds the design's fee inputs (mode, tier, the fee rate under its label)
+// and the step's buttons, each at its full width, none over another and all within the
+// transaction column: side by side at the narrowest two-column width and stacked at a
+// narrow one, with the Smart tier or without. Held by the signing step, the fee inputs are
+// gone and no amount shows outside the summary and the flow, the summary has the fee.
+void feeRow() {
+    ViewContext context;
+    ViewServices view(&context);
+    context.onFundsChanged();
+    auto *signing = new RecordingSigning;
+    account::view::Send send(view.services, signing);
+    pay(send, QStringLiteral("0.0001"));
+    require(send.m_preview.has_value(), "the transaction is built");
+    for (int width : {account::view::Send::SPLIT_WIDTH, 800}) {
+        for (auto mode : {FeeMode::Manual, FeeMode::Smart}) {
+            send.m_fee_mode = mode;
+            send.m_fee_tier_picker->setVisible(mode == FeeMode::Smart);
+            send.resize(width, 1200);
+            send.show();
+            waitFor([&send, width] { return send.width() == width; }, "Send takes its width");
+            QApplication::processEvents();
+            auto *column = send.m_transaction_frame;
+            auto items = feeRowItems(send, *signing);
+            require(items.size() == (mode == FeeMode::Smart ? 9 : 8),
+                    "the fee row shows the fee inputs and the step's buttons");
+            QList<QRect> placed;
+            for (auto *item : items) {
+                QRect at(item->mapTo(column, QPoint(0, 0)), item->size());
+                bool overlaps = std::ranges::any_of(
+                    placed, [&at](const QRect &other) { return other.intersects(at); });
+                if (item->width() < item->sizeHint().width() || overlaps ||
+                    !column->rect().contains(at)) {
+                    qWarning() << "fee row at" << width << item->metaObject()->className() << at
+                               << "hint" << item->sizeHint() << "column" << column->rect();
+                }
+                require(item->width() >= item->sizeHint().width() && !overlaps &&
+                            column->rect().contains(at),
+                        "each fee input and button has its full width, over no other, within "
+                        "the column");
+                placed.append(at);
+            }
+        }
+    }
+
+    emit signing->lockedChanged(true);
+    QApplication::processEvents();
+    require(feeRowItems(send, *signing).size() == 2,
+            "held, the fee inputs and Clear are gone, the step's buttons stay");
+    QList<QLabel *> summary{send.m_sending_btc, send.m_fee_btc, send.m_change_btc,
+                            send.m_total_btc};
+    for (auto *label : send.m_transaction_frame->findChildren<QLabel *>()) {
+        bool amount = label->isVisibleTo(&send) && label->text().contains(QStringLiteral("BTC"));
+        require(!amount || summary.contains(label) || send.m_flow_card->isAncestorOf(label),
+                "held, no amount shows outside the summary and the flow");
+    }
+    require(send.m_fee_btc->text() == toBitcoin(FEE), "the summary has the fee");
+    send.hide();
+}
+
+// A Multikey session whose transaction is finalized offers Broadcast where Sign was: the
+// transaction is not signed again.
+void finalizedBroadcast() {
+    ViewContext context;
+    ViewServices view(&context);
+    // An unloaded controller: no account fixture or device is needed for the step's buttons.
+    MusigAccountController controller(QStringLiteral("missing-finalized-smoke-account"), nullptr);
+    waitFor([&controller] { return !controller.accountLoading(); },
+            "the missing account opening finishes");
+    musig::SigningSection signing(&controller, view.services);
+    auto *actions = signing.actions();
+    actions->show();
+    auto shown = [actions](const QString &text) {
+        return std::ranges::any_of(
+            actions->findChildren<catalog::Button *>(), [actions, &text](catalog::Button *button) {
+                return button->isVisibleTo(actions) && button->text() == text;
+            });
+    };
+
+    signing.m_session = true;
+    signing.updateSignState();
+    require(shown(TR("btn-sign")) && !shown(TR("common-broadcast")),
+            "a session still signing offers Sign");
+    controller.m_tx_hex = QStringLiteral("0200");
+    emit controller.transactionReady(controller.m_tx_hex);
+    require(!shown(TR("btn-sign")) && shown(TR("common-broadcast")) && shown(TR("common-cancel")),
+            "a finalized session offers Cancel and Broadcast, no Sign");
+    controller.m_tx_hex.clear();
+    signing.closeSession();
+    require(shown(TR("btn-sign")) && !shown(TR("common-broadcast")),
+            "the session gone, Sign is back");
+    actions->hide();
+}
+
 } // namespace
 
 void accountViewsSmoke() {
@@ -749,6 +876,8 @@ void accountViewsSmoke() {
     settingsIgnoresScanUpdates();
     receiveFollowsKindNames();
     finalizeReasonShown();
+    feeRow();
+    finalizedBroadcast();
 }
 
 } // namespace smoke

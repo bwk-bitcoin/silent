@@ -103,11 +103,14 @@ void SigningSection::init() {
     m_export_btn->setVisible(false);
     m_sign_btn = catalog::btnSign();
     m_sign_btn->setEnabled(false);
+    m_broadcast_btn = catalog::btnBroadcast();
+    m_broadcast_btn->setVisible(false);
     m_actions = (new qontrol::Row)
                     ->spacing(resolve(Spacing::S))
                     ->push(m_cancel_btn)
                     ->push(m_export_btn)
-                    ->push(m_sign_btn);
+                    ->push(m_sign_btn)
+                    ->push(m_broadcast_btn);
 }
 
 void SigningSection::doConnect() {
@@ -121,6 +124,8 @@ void SigningSection::doConnect() {
             qontrol::UNIQUE);
     connect(m_sign_btn, &QPushButton::clicked, this, &SigningSection::onSignClicked,
             qontrol::UNIQUE);
+    connect(m_broadcast_btn, &QPushButton::clicked, this, &SigningSection::onSignClicked,
+            qontrol::UNIQUE);
     connect(m_cancel_btn, &QPushButton::clicked, this, &SigningSection::onCancelClicked,
             qontrol::UNIQUE);
     connect(m_export_btn, &QPushButton::clicked, this, &SigningSection::onExportClicked,
@@ -128,6 +133,8 @@ void SigningSection::doConnect() {
 
     connect(m_controller, &MusigAccountController::prepared, this, &SigningSection::onPrepared,
             qontrol::UNIQUE);
+    connect(m_controller, &MusigAccountController::transactionReady, this,
+            &SigningSection::onTransactionReady, qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::sessionLoading, this,
             &SigningSection::onSessionLoading, qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::prepareFailed, this,
@@ -161,6 +168,7 @@ void SigningSection::retranslateUi() {
         m_leaf_combo->setItemText(static_cast<int>(i), leafText(m_leaves.leaves[i], keys));
     }
     m_sign_btn->setText(TR("btn-sign"));
+    m_broadcast_btn->setText(TR("common-broadcast"));
     m_cancel_btn->setText(TR("common-cancel"));
     m_export_btn->setText(TR("btn-export-psbt"));
     updateSignState();
@@ -253,10 +261,15 @@ void SigningSection::updateSignState() {
         m_sign_btn->setEnabled(false);
         return;
     }
-    // While a session runs, Sign opens its modal again and Cancel drops it.
+    // While a session runs, Sign opens its modal again and Cancel drops it; a finalized
+    // transaction is not signed again: Broadcast opens the modal at its Broadcast.
     m_cancel_btn->setVisible(m_session);
+    bool finalized = m_session && !m_controller->finalizedTx().isEmpty();
+    m_sign_btn->setVisible(!finalized);
+    m_broadcast_btn->setVisible(finalized);
     if (m_session) {
         m_sign_btn->setEnabled(!m_loading);
+        m_broadcast_btn->setEnabled(!m_loading);
         m_reason_label->setVisible(false);
         return;
     }
@@ -404,6 +417,10 @@ void SigningSection::onSignClicked() {
     }
     // Starts the session: onPrepared() opens the Sign modal.
     m_controller->adoptTransaction(m_tx.value(), *leaf, *psbt);
+}
+
+void SigningSection::onTransactionReady() {
+    updateSignState();
 }
 
 void SigningSection::onPrepared([[maybe_unused]] const QString &psbt_v2_hex,

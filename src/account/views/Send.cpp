@@ -31,6 +31,7 @@
 #include <QComboBox>
 #include <QDebug>
 #include <QDoubleValidator>
+#include <QEvent>
 #include <QIntValidator>
 #include <QLocale>
 #include <QResizeEvent>
@@ -78,6 +79,49 @@ auto normalizedMoneyText(const QLineEdit &field) -> std::optional<QString> {
     }
     return text;
 }
+
+// The fee inputs and the step's buttons on one line, the buttons right-aligned on a line
+// of their own under the fee inputs when one line cannot hold both at their full width.
+class ActionRow : public QWidget {
+public:
+    ActionRow(QWidget *fee_inputs, QWidget *buttons)
+        : m_fee_inputs(fee_inputs),
+          m_buttons(buttons) {
+        auto *box = new QBoxLayout(QBoxLayout::LeftToRight, this);
+        box->setContentsMargins(0, 0, 0, 0);
+        box->setSpacing(resolve(Spacing::S));
+        box->addWidget(fee_inputs, 0, Qt::AlignLeft | Qt::AlignBottom);
+        box->addWidget(buttons, 1, Qt::AlignBottom);
+    }
+
+protected:
+    auto event(QEvent *event) -> bool override {
+        // A fee input or a button shown or hidden changes what one line needs.
+        if (event->type() == QEvent::LayoutRequest) {
+            fit();
+        }
+        return QWidget::event(event);
+    }
+
+    void resizeEvent(QResizeEvent *event) override {
+        fit();
+        QWidget::resizeEvent(event);
+    }
+
+    void fit() {
+        auto *box = static_cast<QBoxLayout *>(layout());
+        int oneLine =
+            m_fee_inputs->sizeHint().width() + box->spacing() + m_buttons->sizeHint().width();
+        auto direction = oneLine <= width() ? QBoxLayout::LeftToRight : QBoxLayout::TopToBottom;
+        if (box->direction() != direction) {
+            box->setDirection(direction);
+        }
+    }
+
+private:
+    QWidget *m_fee_inputs = nullptr;
+    QWidget *m_buttons = nullptr;
+};
 
 auto fiatAmount(uint64_t sats) -> QString {
     auto price = Host::get()->selectedPrice();
@@ -290,8 +334,6 @@ void Send::restoreTransaction(const backend::TransactionTemplate &transaction,
     onFeeToggled();
     m_fee_value_input->setText(QString::number(m_estimated_fee));
     onUpdateFeeValidation();
-    m_fee_estimate_label->setText(TR("send-fee-estimate").arg(toBitcoin(m_estimated_fee)));
-    m_fee_estimate_label->setVisible(true);
     m_warning_label->setText(warning);
     m_warning_label->setVisible(!warning.isEmpty());
     view();
@@ -339,9 +381,6 @@ void Send::init() {
     m_signing->setParent(this);
     m_last_balance = m_services.blockchain->balance();
 
-    m_fee_estimate_label = new Label();
-    m_fee_estimate_label->setVisible(false);
-
     // Fee toggle: OFF = sats (absolute), ON = sats/vb (rate)
     m_fee_toggle = new Toggle;
     m_fee_toggle->setChecked(true); // Default to sats/vb mode
@@ -360,11 +399,23 @@ void Send::init() {
     m_fee_tier_picker->addItems({TR("fee-low"), TR("fee-medium"), TR("fee-fast")});
     m_fee_tier_picker->setVisible(false);
 
-    m_fee_rate_label = new Label(TR("send-fee-rate-label"), LabelRole::InfoLabel);
+    // The design's field label: an eyebrow over the toggle, the value and its unit.
+    m_fee_rate_label = new Label(TR("send-fee-rate-label"), LabelRole::Eyebrow);
+    m_fee_rate_label->setTone(catalog::LabelTone::Muted);
 
     m_fee_label = new Label(TR("send-fee-rate-unit"));
     m_fee_label->setFixedWidth(
         m_fee_label->fontMetrics().horizontalAdvance(TR("send-fee-rate-unit")) + 5);
+
+    auto *feeValueRow = (new qontrol::Row)
+                            ->spacing(resolve(Spacing::S))
+                            ->push(m_fee_toggle)
+                            ->push(m_fee_field)
+                            ->push(m_fee_label);
+    m_fee_rate_group = (new qontrol::Column)
+                           ->spacing(resolve(Spacing::XS))
+                           ->push(m_fee_rate_label)
+                           ->push(feeValueRow);
 
     m_warning_label = new Label();
     m_warning_label->setVisible(false);
@@ -684,12 +735,15 @@ void Send::updateTransactionFlow() {
     m_flow_card->setInputs(inputs);
     m_flow_card->setOutputs(outputs);
 
+    // The fee, and what follows from it, once the signing step can tell it (a Multikey
+    // account needs its spend path).
+    bool estimated = m_estimated_fee > 0 && m_signing->estimatesFee();
     m_sending_btc->setText(sendingTotal > 0 ? toBitcoin(sendingTotal) : QString("--"));
     m_sending_fiat->setText(sendingTotal > 0 ? fiatAmount(sendingTotal) : QString());
-    m_fee_btc->setText(m_estimated_fee > 0 ? toBitcoin(m_estimated_fee) : QString("--"));
-    m_fee_fiat->setText(m_estimated_fee > 0 ? fiatAmount(m_estimated_fee) : QString());
-    m_total_btc->setText(total > 0 ? toBitcoin(total) : QString("--"));
-    m_total_fiat->setText(total > 0 ? fiatAmount(total) : QString());
+    m_fee_btc->setText(estimated ? toBitcoin(m_estimated_fee) : QString("--"));
+    m_fee_fiat->setText(estimated ? fiatAmount(m_estimated_fee) : QString());
+    m_total_btc->setText(total > 0 && estimated ? toBitcoin(total) : QString("--"));
+    m_total_fiat->setText(total > 0 && estimated ? fiatAmount(total) : QString());
     m_change_btc->setText(toBitcoin(change));
     m_change_fiat->setText(fiatAmount(change));
     bool hasPrice = Host::get()->selectedPrice().rate.has_value();
@@ -697,7 +751,7 @@ void Send::updateTransactionFlow() {
     m_fee_fiat->setVisible(hasPrice);
     m_total_fiat->setVisible(hasPrice);
     // Design hides the change row when there is no change.
-    bool hasChange = change > 0;
+    bool hasChange = change > 0 && estimated;
     m_change_label->setVisible(hasChange);
     m_change_btc->setVisible(hasChange);
     m_change_fiat->setVisible(hasChange && hasPrice);
@@ -760,22 +814,19 @@ auto Send::transactionView() -> QWidget * {
     summary->push(m_total_btc, sr, 3);
 
     auto *warningRow = (new qontrol::Row)->push(m_warning_label)->pushSpacer();
-    auto *actionRow = (new qontrol::Row)
-                          ->push(m_fee_mode_picker)
-                          ->push(m_fee_tier_picker)
-                          ->push(m_fee_rate_label)
-                          ->pushSpacer(resolve(Spacing::S))
-                          ->push(m_fee_toggle)
-                          ->pushSpacer(resolve(Spacing::S))
-                          ->push(m_fee_field)
-                          ->pushSpacer(resolve(Spacing::S))
-                          ->push(m_fee_label)
-                          ->pushSpacer(resolve(Spacing::S))
-                          ->push(m_fee_estimate_label)
-                          ->pushSpacer();
-    actionRow->push(m_clear_outputs_btn)
-        ->pushSpacer(resolve(Spacing::S))
-        ->push(m_signing->actions());
+    // The design's fee row: mode, tier, then the fee rate under its label, the step's
+    // buttons at the end, all on the bottom line.
+    auto *feeInputs = (new qontrol::Row)
+                          ->spacing(resolve(Spacing::S))
+                          ->push(m_fee_mode_picker, 0, Qt::AlignBottom)
+                          ->push(m_fee_tier_picker, 0, Qt::AlignBottom)
+                          ->push(m_fee_rate_group, 0, Qt::AlignBottom);
+    auto *buttons = (new qontrol::Row)
+                        ->spacing(resolve(Spacing::S))
+                        ->pushSpacer()
+                        ->push(m_clear_outputs_btn, 0, Qt::AlignBottom)
+                        ->push(m_signing->actions(), 0, Qt::AlignBottom);
+    auto *actionRow = new ActionRow(feeInputs, buttons);
 
     // The Coins selection heading's style and height, so the two line up.
     auto *title = new Label(TR("send-transaction-title"), LabelRole::Eyebrow);
@@ -803,13 +854,10 @@ auto Send::transactionView() -> QWidget * {
 }
 
 void Send::applyLocked() {
-    // Held by the signing step, the fee is settled: only the processed fee stays, and
-    // the step's own Cancel lets go of the transaction where Clear would empty the
-    // payments.
-    for (QWidget *feeInput : std::initializer_list<QWidget *>{m_fee_rate_label, m_fee_toggle,
-                                                              m_fee_field, m_fee_label}) {
-        feeInput->setVisible(!m_locked);
-    }
+    // Held by the signing step, the fee is settled: the fee inputs go, the summary keeps
+    // the fee, and the step's own Cancel lets go of the transaction where Clear would
+    // empty the payments.
+    m_fee_rate_group->setVisible(!m_locked);
     m_fee_mode_picker->setVisible(!m_locked);
     m_fee_tier_picker->setVisible(!m_locked && m_fee_mode == FeeMode::Smart);
     m_clear_outputs_btn->setVisible(!m_locked);
@@ -1335,7 +1383,6 @@ void Send::onProcess() {
     auto txTemp = txTemplate();
     if (!txTemp.has_value()) {
         m_signing->setTransaction(std::nullopt, {});
-        m_fee_estimate_label->setVisible(false);
         // Clear auto selection when outputs are invalid
         if (m_auto_coin_selection->isChecked() && !m_auto_selected_outpoints.isEmpty()) {
             m_auto_selected_outpoints.clear();
@@ -1397,13 +1444,7 @@ void Send::applyCraft(const backend::CraftResult &result) {
         onUpdateInputsTotal();
     }
     m_signing->setTransaction(crafted, spentOutpoints());
-
-    // The estimated fee, once the signing step can tell it (a Multikey account needs its
-    // spend path).
-    bool estimates = m_signing->estimatesFee();
     m_estimated_fee = crafted.fee;
-    m_fee_estimate_label->setText(TR("send-fee-estimate").arg(toBitcoin(crafted.fee)));
-    m_fee_estimate_label->setVisible(estimates);
 
     onUpdateInputsTotal();
     // Reflect the updated inputs/outputs/fee in the graphical flow as the user types.
@@ -1413,7 +1454,6 @@ void Send::applyCraft(const backend::CraftResult &result) {
 void Send::clearTransaction(const QString &warning) {
     m_signing->setTransaction(std::nullopt, {});
     m_estimated_fee = 0;
-    m_fee_estimate_label->setVisible(false);
     m_warning_label->setText(warning);
     m_warning_label->setVisible(!warning.isEmpty());
     onUpdateInputsTotal();

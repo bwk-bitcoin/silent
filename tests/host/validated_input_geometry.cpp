@@ -223,9 +223,12 @@ void sendFields() {
         require(address->hasFocus() && address->cursorPosition() == 12,
                 "validation update preserves address focus and cursor");
         send.onSigningLocked(true);
-        require(wrapper(fee)->isHidden() && !fee->isVisible(), "locked fee hides entire wrapper");
+        // Hidden with its fee rate group: the whole wrapper goes, not only the input.
+        require(!wrapper(fee)->isVisibleTo(&send) && !fee->isVisible(),
+                "locked fee hides entire wrapper");
         send.onSigningLocked(false);
-        require(!wrapper(fee)->isHidden() && fee->isVisible(), "unlock restores fee wrapper");
+        require(wrapper(fee)->isVisibleTo(&send) && fee->isVisible(),
+                "unlock restores fee wrapper");
         settle(send);
         checkGeometry(*wrapper(fee));
         address->setFocus();

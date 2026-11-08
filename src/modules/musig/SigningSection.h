@@ -29,7 +29,8 @@ namespace musig {
 // Sign, which finalizes the crafted transaction into a PSBT (ITransaction::finalize()),
 // has the controller adopt it and runs its MuSig2 rounds in the Sign modal, ending on
 // Broadcast. While a session runs, Cancel drops it, Export hands its PSBT out as base64
-// and Sign opens the modal again at its round.
+// and Sign opens the modal again at its round; once the transaction is finalized,
+// Broadcast takes Sign's place and opens the modal at its Broadcast.
 class SigningSection final : public account::SendSigning {
     Q_OBJECT
 
@@ -54,7 +55,10 @@ public slots:
     // A finalize() failure gives its reason as error() of request 0.
     void onTransactionError(backend::RequestId request_id, const QString &message);
     void onSpendLeafChosen(int index);
+    // Sign, and Broadcast once the transaction is finalized: the Sign modal broadcasts.
     void onSignClicked();
+    // The session's transaction is finalized: Broadcast takes Sign's place.
+    void onTransactionReady();
     void onPrepared(const QString &psbt_v2_hex, const QString &txid);
     void onSessionLoading();
     void onPrepareFailed(const QString &message);
@@ -112,6 +116,7 @@ private:
     catalog::Button *m_cancel_btn = nullptr;
     catalog::Button *m_export_btn = nullptr;
     catalog::Button *m_sign_btn = nullptr;
+    catalog::Button *m_broadcast_btn = nullptr;
     QString m_keys_error;
     QString m_finalize_error;
 };

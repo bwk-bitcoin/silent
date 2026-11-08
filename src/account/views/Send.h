@@ -234,6 +234,8 @@ private:
     catalog::Label *m_fee_label = nullptr;
     catalog::Label *m_fee_rate_label = nullptr;
     catalog::ValidatedInput *m_fee_field = nullptr;
+    // The fee rate label over its toggle, value and unit, hidden with them.
+    QWidget *m_fee_rate_group = nullptr;
 
     catalog::Label *m_warning_label = nullptr;
     catalog::Label *m_inputs_title_label = nullptr;
@@ -255,7 +257,6 @@ private:
     catalog::Button *m_clear_outputs_btn = nullptr;
     catalog::Button *m_clear_inputs_btn = nullptr;
 
-    catalog::Label *m_fee_estimate_label = nullptr;
     uint64_t m_estimated_fee = 0;
     std::optional<Preview> m_preview;
     // The coin selection in flight, 0 when none: an older answer is stale.
