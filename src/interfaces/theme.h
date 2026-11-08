@@ -30,4 +30,4 @@ signals:
     void error(std::optional<ReqId> req_id, QString message);
 };
 
-Q_DECLARE_INTERFACE(IThemeProvider, "dev.silent.IThemeProvider/1.0")
+Q_DECLARE_INTERFACE(IThemeProvider, "dev.silent.IThemeProvider/2.0")

@@ -1798,17 +1798,36 @@ they are not evidence of a supported funded signing combination.
 The current plugin IID is `dev.silent.IPlugin/11.0`, the module IID is
 `dev.silent.IModule/3.0`, the signer IID is
 `dev.silent.ISigner/3.0`, the account IID is
-`dev.silent.IAccount/4.0`, the keys IID is `dev.silent.IKeys/3.0`, and the transaction
-service IID is `dev.silent.ITransactions/2.0`. The feed IID remains
+`dev.silent.IAccount/4.0`, the keys IID is `dev.silent.IKeys/4.0`, the transaction
+service IID is `dev.silent.ITransactions/2.0` and the theme provider IID is
+`dev.silent.IThemeProvider/2.0`. The feed IID remains
 `dev.silent.IFeed/3.0`. The account UI services carry their own IIDs (see Account UI
 Services) and change no existing one. Public Keys and spending enums are SDK-owned, not generated
 Rust types. Root ABI 10 changed `FeePreferences` to mode and one source, removing the
-global tier. Root ABI 11 adds the chain tip to `IAccount::coins` (IAccount/4.0).
+global tier. Root ABI 11 adds the chain tip to `IAccount::coins` (IAccount/4.0), the
+`IKeys::prepareNonces` request and its `noncesPrepared` signal (IKeys/4.0), and the
+`theme::Palette` fields added since 1.0 to the `palette` signal (IThemeProvider/2.0).
 The `IFeed` methods, signals and IID are unchanged. Rebuild plugins
 against this checkout and use `SILENT_IPlugin_IID` in plugin metadata. Include both
 `src` only for public interfaces; generated `lib/include` and CXX headers are not needed.
 Only the exact root IID is accepted. Old 1.0 to 10.0 plugins and future 12.0 plugins
 are refused rather than called through incompatible vtables.
+
+Every header under `src/interfaces/` is guarded by `src/interfaces/abi_hashes.txt`
+and `cargo test --manifest-path silent/Cargo.toml --test interface_abi`. Each row is
+a header, the IIDs it declares (`-` for none), the root plugin IID it shipped under and
+the sha256 of its declarations: comments, whitespace and IID literals are left out, so
+a comment edit is not a layout change. A header whose declarations change fails the
+test, naming the header and the IIDs to raise: its own IIDs and always the root
+`SILENT_IPlugin_IID`, since only the root IID is checked at admission. A header with
+no IID of its own (`types.h`, `enums.h`, `host.h`, `storage.h`, `tr.h`,
+`backend/service.h`, `backend/types.h`) raises only the root IID; when its types reach
+an interface, raise that interface's IID too. Raise the IIDs, then append the row the
+failure prints. Rows are append-only: a second layout under an IID already in the
+table fails as an IID that was not raised, and raising the root IID appends a
+`module.h` row. A type an interface carries from outside `interfaces/` joins that
+interface's layout: `struct Palette` of `src/theme/Palette.h` counts as part of
+`theme.h`, while the rest of `Palette.h` (UI constants) is not guarded.
 
 `interfaces/enums.h` defines the shared `plugin::Network`, `plugin::KeyRouteKind`
 and spending/coordination enums. Network wire integers are Bitcoin=0, Testnet=1,
