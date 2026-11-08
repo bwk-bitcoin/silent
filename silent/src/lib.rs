@@ -892,6 +892,15 @@ mod ffi {
         pub value: u64,
     }
 
+    /// One signing attempt of a saved PSBT, read from that attempt's own PSBT.
+    #[derive(Debug, Clone, Default)]
+    pub struct SavedPsbtAttemptState {
+        /// Counted from 0, shown from 1.
+        pub attempt_id: u64,
+        pub active: bool,
+        pub signatures_complete: u32,
+    }
+
     #[derive(Debug, Clone, Default)]
     pub struct SavedPsbtEntry {
         pub record: SavedPsbtRecord,
@@ -907,6 +916,8 @@ mod ffi {
         pub signatures_complete: u32,
         pub signatures_required: u32,
         pub signatures_known: bool,
+        /// The active attempt first, then the archived ones, newest first.
+        pub attempts: Vec<SavedPsbtAttemptState>,
     }
 
     #[derive(Debug, Clone, Default)]
@@ -3686,12 +3697,12 @@ pub use ffi::{
     PsbtImport, PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult,
     QrMusigSignerRoute, QrResponseKind, ReceiveAddress, ReceiveAddressResult, ReceiveKind,
     RegtestDefaults, RetryDecision, RustCoin, RustSelectedInput, RustSpendCoin, RustSpendLock,
-    RustSpendVariant, RustTx, RustTxDetails, RustTxIo, SavedPsbtAttempt, SavedPsbtEntry,
-    SavedPsbtImport, SavedPsbtInput, SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord,
-    SavedPsbtReset, SavedPsbtRestore, SendAmounts, SignResult, SigningCandidate, SigningPlan,
-    SigningProgress, SigningStage, SpCreationRequest, SpendAvailability, SpendCoinStatus,
-    SpendCoinsResult, SpendError, SpendLockKind, SpendMaturity, TransactionSimulation,
-    TransactionTemplate, UnsignedPsbt,
+    RustSpendVariant, RustTx, RustTxDetails, RustTxIo, SavedPsbtAttempt, SavedPsbtAttemptState,
+    SavedPsbtEntry, SavedPsbtImport, SavedPsbtInput, SavedPsbtList, SavedPsbtMutation,
+    SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore, SendAmounts, SignResult, SigningCandidate,
+    SigningPlan, SigningProgress, SigningStage, SpCreationRequest, SpendAvailability,
+    SpendCoinStatus, SpendCoinsResult, SpendError, SpendLockKind, SpendMaturity,
+    TransactionSimulation, TransactionTemplate, UnsignedPsbt,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};
 pub use hwi_config::{

@@ -67,11 +67,27 @@ auto amount(const SavedPsbtEntry &entry) -> uint64_t {
     return total;
 }
 
-auto signedText(const SavedPsbtEntry &entry) -> QString {
+auto signedText(const SavedPsbtEntry &entry, uint32_t complete) -> QString {
     if (!entry.signatures_known) {
         return QStringLiteral("-");
     }
-    return QStringLiteral("%1/%2").arg(entry.signatures_complete).arg(entry.signatures_required);
+    return QStringLiteral("%1/%2").arg(complete).arg(entry.signatures_required);
+}
+
+auto signedText(const SavedPsbtEntry &entry) -> QString {
+    return signedText(entry, entry.signatures_complete);
+}
+
+// Each attempt of the entry: its id, active or not, its signatures in.
+auto attemptsText(const SavedPsbtEntry &entry) -> QString {
+    QStringList attempts;
+    for (const auto &attempt : entry.attempts) {
+        attempts.append(QStringLiteral("%1:%2:%3")
+                            .arg(attempt.attempt_id)
+                            .arg(static_cast<int>(attempt.active))
+                            .arg(attempt.signatures_complete));
+    }
+    return attempts.join(QStringLiteral(","));
 }
 
 enum class PsbtStatus : std::uint8_t { Signing, Ready, Unconfirmed, Confirmed, Deprecated };
@@ -254,6 +270,7 @@ void SavedPsbts::renderRows() {
     m_open_notes.clear();
     m_label_cells.clear();
     m_shown_rows = shownRows();
+    m_table->addColumn({.width = resolve(BtnWidth::Icon), .icon = true});
     m_table->addColumn(
         {.title = TR("psbt-last-edited"), .width = catalog::dateColumnWidth(m_compact)});
     m_table->addColumn({.title = TR("psbt-signed"), .width = resolve(Size::XXS)});
@@ -273,6 +290,9 @@ void SavedPsbts::renderRows() {
         }
         m_empty_label->hide();
         addRow(entry);
+        if (m_unfolded.contains(text(entry.record.id))) {
+            addAttemptRows(entry);
+        }
     }
 }
 
@@ -300,10 +320,37 @@ void SavedPsbts::addRow(const SavedPsbtEntry &entry) {
     // children.
     auto *exportCell = (new qontrol::Row)->push(exportButton);
     auto *removeCell = (new qontrol::Row)->push(remove);
+    // A single attempt has nothing to fold.
+    auto *foldCell = new qontrol::Row;
+    if (entry.attempts.size() > 1) {
+        auto *fold = catalog::btnFoldAttempts(m_unfolded.contains(id));
+        fold->setProperty(K_SAVED_ID, id);
+        connect(fold, &QPushButton::clicked, this, &SavedPsbts::onFoldClicked, qontrol::UNIQUE);
+        foldCell->push(fold);
+    }
 
-    m_table->addClickableRow(id, {catalog::dateStamp(entry.record.updated_at, false, m_compact),
+    m_table->addClickableRow(id, {foldCell,
+                                  catalog::dateStamp(entry.record.updated_at, false, m_compact),
                                   signatures, label, label->takeEditButton(), statusCell(entry),
                                   catalog::amountLabel(amount(entry)), exportCell, removeCell});
+}
+
+void SavedPsbts::addAttemptRows(const SavedPsbtEntry &entry) {
+    auto id = text(entry.record.id);
+    for (const auto &attempt : entry.attempts) {
+        auto *signatures = new catalog::Label(signedText(entry, attempt.signatures_complete),
+                                              catalog::LabelRole::Mono);
+        signatures->setProperty("tblmono", "secondary");
+        auto *name = new catalog::Label(
+            (attempt.active ? TR("psbt-attempt-active") : TR("psbt-attempt-archived"))
+                .arg(attempt.attempt_id + 1));
+        name->setTone(catalog::LabelTone::Muted);
+        // Under Signed and Label, the other cells empty. Not clickable: an attempt is
+        // shown, never made the active one from here.
+        m_table->addWidgetRow(id + QStringLiteral("/attempt/") +
+                                  QString::number(attempt.attempt_id),
+                              {nullptr, nullptr, signatures, name});
+    }
 }
 
 auto SavedPsbts::shownRows() const -> QStringList {
@@ -313,7 +360,7 @@ auto SavedPsbts::shownRows() const -> QStringList {
             continue;
         }
         rows.append(QStringList{text(entry.record.id), QString::number(entry.record.updated_at),
-                                signedText(entry), text(entry.record.label),
+                                signedText(entry), attemptsText(entry), text(entry.record.label),
                                 QString::number(static_cast<int>(statusOf(entry))),
                                 notesOf(entry).join(QStringLiteral("\n")),
                                 QString::number(amount(entry)), openTxid(entry)}
@@ -392,6 +439,15 @@ void SavedPsbts::onRowClicked(const QString &id) {
     if (self != nullptr) {
         m_modal_open = false;
     }
+}
+
+void SavedPsbts::onFoldClicked() {
+    auto id = sender()->property(K_SAVED_ID).toString();
+    if (!m_unfolded.remove(id)) {
+        m_unfolded.insert(id);
+    }
+    // The fold button is deleted later, once this click is handled.
+    renderRows();
 }
 
 void SavedPsbts::onDeleteClicked() {

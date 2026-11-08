@@ -1047,6 +1047,7 @@ struct SavedPsbtAttempt;
 struct SavedPsbtReset;
 struct SavedPsbtRecord;
 struct SavedPsbtInput;
+struct SavedPsbtAttemptState;
 struct SavedPsbtEntry;
 struct SavedPsbtList;
 struct SavedPsbtRestore;
@@ -2302,6 +2303,19 @@ struct SavedPsbtInput final {
 };
 #endif // CXXBRIDGE1_STRUCT_SavedPsbtInput
 
+#ifndef CXXBRIDGE1_STRUCT_SavedPsbtAttemptState
+#define CXXBRIDGE1_STRUCT_SavedPsbtAttemptState
+// One signing attempt of a saved PSBT, read from that attempt's own PSBT.
+struct SavedPsbtAttemptState final {
+  // Counted from 0, shown from 1.
+  ::std::uint64_t attempt_id CXX_DEFAULT_VALUE(0);
+  bool active CXX_DEFAULT_VALUE(false);
+  ::std::uint32_t signatures_complete CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_SavedPsbtAttemptState
+
 #ifndef CXXBRIDGE1_STRUCT_SavedPsbtEntry
 #define CXXBRIDGE1_STRUCT_SavedPsbtEntry
 struct SavedPsbtEntry final {
@@ -2318,6 +2332,8 @@ struct SavedPsbtEntry final {
   ::std::uint32_t signatures_complete CXX_DEFAULT_VALUE(0);
   ::std::uint32_t signatures_required CXX_DEFAULT_VALUE(0);
   bool signatures_known CXX_DEFAULT_VALUE(false);
+  // The active attempt first, then the archived ones, newest first.
+  ::rust::Vec<::SavedPsbtAttemptState> attempts;
 
   using IsRelocatable = ::std::true_type;
 };

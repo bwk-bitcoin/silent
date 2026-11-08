@@ -5,6 +5,7 @@
 #include "catalog/display/Badge.h"
 #include "i18n/Tr.h"
 #include "theme/Icon.h"
+#include "theme/Palette.h"
 
 namespace catalog {
 
@@ -544,6 +545,14 @@ auto btnExportRow() -> Button * {
                  .icon = icon::upload,
                  .iconSize = 15,
                  .tooltip = TR("btn-export-psbt"),
+                 .width = BtnWidth::Icon});
+}
+
+auto btnFoldAttempts(bool open) -> Button * {
+    return make({.role = ButtonRole::InlineIcon,
+                 .icon = open ? icon::chevronDown : icon::chevronRight,
+                 .iconSize = metric::FOLD_CHEVRON_SIZE,
+                 .tooltip = open ? TR("btn-hide-attempts") : TR("btn-show-attempts"),
                  .width = BtnWidth::Icon});
 }
 

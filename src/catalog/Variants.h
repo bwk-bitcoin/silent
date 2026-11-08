@@ -98,6 +98,8 @@ auto btnEditLabelRow() -> Button *;
 // A saved PSBT list row's delete.
 auto btnDeleteRow() -> Button *;
 auto btnExportRow() -> Button *;
+// A saved PSBT list row's fold of its signing attempts: chevron down when `open`.
+auto btnFoldAttempts(bool open) -> Button *;
 auto btnMoveDown() -> Button *;
 auto btnMoveUp() -> Button *;
 auto btnRemovePayment() -> Button *;

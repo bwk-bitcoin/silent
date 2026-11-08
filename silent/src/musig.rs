@@ -46,8 +46,9 @@ use crate::{
         MusigDescriptorResult, MusigElectrumUrlResult, MusigFinalizeResult, MusigReceiveAddress,
         MusigRound, MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, Output,
         ReceiveAddress, ReceiveAddressResult, ReceiveKind, RustCoin, RustTx, RustTxDetails,
-        SavedPsbtEntry, SavedPsbtImport, SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord,
-        SavedPsbtReset, SavedPsbtRestore, TransactionSimulation, TransactionTemplate, UnsignedPsbt,
+        SavedPsbtAttemptState, SavedPsbtEntry, SavedPsbtImport, SavedPsbtList, SavedPsbtMutation,
+        SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore, TransactionSimulation,
+        TransactionTemplate, UnsignedPsbt,
     },
     keys::{
         bridge::{merge_signed_psbt, musig_session_restart},
@@ -1086,32 +1087,35 @@ impl MusigAccount {
             .as_ref()
             .ok_or_else(|| NOT_INITIALIZED.to_string())?;
         let mut entry = frozen_entry(record)?;
-        let status = self.round_status(&record.current_psbt_v2_hex);
-        if !status.is_ok {
-            return Err(status.error);
-        }
         entry.signatures_required = record.spend.fingerprints.len() as u32;
         entry.signatures_known = entry.signatures_required > 0;
-        let psbt = decode_psbt(&record.current_psbt_v2_hex)?;
-        entry.signatures_complete = record
-            .spend
-            .fingerprints
+        entry.signatures_complete = self.signatures_in(
+            record,
+            &record.current_psbt_v2_hex,
+            !record.finalized_tx_hex.is_empty(),
+        )?;
+        entry.attempts.push(SavedPsbtAttemptState {
+            attempt_id: record.attempt_id,
+            active: true,
+            signatures_complete: entry.signatures_complete,
+        });
+        // While a reset is pending, the active attempt is also the last archived one.
+        for attempt in record
+            .archived_attempts
             .iter()
-            .filter(|fingerprint| {
-                if !record.finalized_tx_hex.is_empty() {
-                    return true;
-                }
-                if let Some(cosigner) = status
-                    .cosigners
-                    .iter()
-                    .find(|cosigner| cosigner.fingerprint.eq_ignore_ascii_case(fingerprint))
-                {
-                    return cosigner.expected > 0 && cosigner.partial_sigs == cosigner.expected;
-                }
-                bitcoin::bip32::Fingerprint::from_str(fingerprint)
-                    .is_ok_and(|fp| ordinary_signature_complete(&psbt, fp))
-            })
-            .count() as u32;
+            .rev()
+            .filter(|attempt| attempt.attempt_id != record.attempt_id)
+        {
+            entry.attempts.push(SavedPsbtAttemptState {
+                attempt_id: attempt.attempt_id,
+                active: false,
+                signatures_complete: self.signatures_in(
+                    record,
+                    &attempt.current_psbt_v2_hex,
+                    false,
+                )?,
+            });
+        }
         apply_chain_state(&mut entry, &inner.account.scanner().tx_history());
         let coins = inner.account.scanner().coins();
         if !entry.in_history
@@ -1127,6 +1131,40 @@ impl MusigAccount {
                 "Inputs are marked spent. Signing and broadcast can still be attempted".into();
         }
         Ok(entry)
+    }
+
+    /// The signers of `record` whose signatures `psbt_v2_hex` holds: all of them once
+    /// `finalized`.
+    fn signatures_in(
+        &self,
+        record: &SavedPsbtRecord,
+        psbt_v2_hex: &str,
+        finalized: bool,
+    ) -> Result<u32, String> {
+        let status = self.round_status(psbt_v2_hex);
+        if !status.is_ok {
+            return Err(status.error);
+        }
+        let psbt = decode_psbt(psbt_v2_hex)?;
+        Ok(record
+            .spend
+            .fingerprints
+            .iter()
+            .filter(|fingerprint| {
+                if finalized {
+                    return true;
+                }
+                if let Some(cosigner) = status
+                    .cosigners
+                    .iter()
+                    .find(|cosigner| cosigner.fingerprint.eq_ignore_ascii_case(fingerprint))
+                {
+                    return cosigner.expected > 0 && cosigner.partial_sigs == cosigner.expected;
+                }
+                bitcoin::bip32::Fingerprint::from_str(fingerprint)
+                    .is_ok_and(|fp| ordinary_signature_complete(&psbt, fp))
+            })
+            .count() as u32)
     }
 
     pub fn saved_psbts(&self, include_confirmed: bool) -> SavedPsbtList {

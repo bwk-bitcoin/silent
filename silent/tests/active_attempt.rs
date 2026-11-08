@@ -178,6 +178,60 @@ impl Funded {
         hex::encode(psbt.serialize().expect("serialize signed PSBT"))
     }
 
+    /// The attempts of the saved PSBT as listed: (attempt id, active, signatures in).
+    fn attempts(&self) -> Vec<(u64, bool, u32)> {
+        let list = self.account.saved_psbts(true);
+        assert!(list.is_ok, "list saved PSBTs: {}", list.error);
+        list.entries
+            .iter()
+            .find(|entry| entry.record.id == self.id)
+            .expect("saved PSBT listed")
+            .attempts
+            .iter()
+            .map(|attempt| {
+                (
+                    attempt.attempt_id,
+                    attempt.active,
+                    attempt.signatures_complete,
+                )
+            })
+            .collect()
+    }
+
+    /// Closes the account and opens it again from its stored state.
+    fn restart(mut self) -> Self {
+        drop(self.account);
+        self.account = silent::new_musig_account(self.config.account_name.clone());
+        assert!(self.account.is_ok(), "reopen: {}", self.account.get_error());
+        self
+    }
+
+    /// Both nonces then, when `partial`, the partial signature of signer 0, saved.
+    fn sign_attempt(&self, psbt: &str, partial: bool) -> String {
+        let mut psbt = self.sign(1, &self.sign(0, psbt));
+        if partial {
+            psbt = self.sign(0, &psbt);
+        }
+        let saved = self.account.update_saved_psbt(&self.id, &psbt);
+        assert!(
+            saved.is_ok && saved.save_error.is_empty(),
+            "save signing progress: {} {}",
+            saved.error,
+            saved.save_error
+        );
+        psbt
+    }
+
+    fn reset(&self) -> String {
+        let reset = self.account.reset_saved_psbt(&self.id);
+        assert!(
+            reset.is_ok && !reset.reset_pending,
+            "reset: {}",
+            reset.error
+        );
+        reset.psbt_v2_hex
+    }
+
     fn finish(self) {
         let name = self.config.account_name.clone();
         drop(self.account);
@@ -517,4 +571,40 @@ fn endpoint_commands_still_refuse_accounts_that_never_initialized() {
         !musig.endpoint_result().is_ok && !musig.endpoint_result().error.is_empty(),
         "MuSig refusal is explicit"
     );
+}
+
+#[test]
+fn saved_psbt_attempts_read_each_attempt_own_psbt() {
+    let fixture = Funded::new(Policy::Musig);
+    assert_eq!(
+        fixture.attempts(),
+        vec![(0, true, 0)],
+        "no reset: the active attempt alone"
+    );
+    fixture.sign_attempt(&fixture.prepared, true);
+    let fixture = fixture.restart();
+    assert_eq!(
+        fixture.attempts(),
+        vec![(0, true, 1)],
+        "no reset after a restart: one partial signature in"
+    );
+
+    let second = fixture.reset();
+    let fixture = fixture.restart();
+    assert_eq!(
+        fixture.attempts(),
+        vec![(1, true, 0), (0, false, 1)],
+        "one reset after a restart: the fresh attempt has none, the archived one keeps its own"
+    );
+
+    fixture.sign_attempt(&second, false);
+    let third = fixture.reset();
+    fixture.sign_attempt(&third, true);
+    let fixture = fixture.restart();
+    assert_eq!(
+        fixture.attempts(),
+        vec![(2, true, 1), (1, false, 0), (0, false, 1)],
+        "two resets after a restart: every attempt read from its own PSBT"
+    );
+    fixture.finish();
 }
