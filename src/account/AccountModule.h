@@ -14,9 +14,11 @@
 #include <silent.h>
 #include <string>
 
-class AccountBackend;
+class AccountLifecycle;
 
 namespace account {
+
+class ServiceContext;
 
 // Shared built-in lifecycle coordinator, not a required external plugin base. Supplies
 // every UI service of its open accounts.
@@ -32,7 +34,8 @@ public:
     auto list() -> ReqId override;
     void deleteAccount(ReqId req_id, const QString &id) override;
     [[nodiscard]] auto accountUnavailable(const QString &id) const -> bool;
-    void watchAccount(const QString &id, AccountBackend *backend);
+    // Follows the open account `id`: its lifecycle, and the context its services read.
+    void watchAccount(const QString &id, AccountLifecycle *lifecycle, ServiceContext *services);
     // A service of the open, loaded account `account` on `network`, null otherwise.
     [[nodiscard]] auto service(const QString &account, backend::Network network,
                                backend::ServiceKind kind) -> backend::IService * override;
@@ -59,7 +62,8 @@ protected:
 
 private:
     struct Runtime {
-        QPointer<AccountBackend> backend;
+        QPointer<AccountLifecycle> lifecycle;
+        QPointer<ServiceContext> services;
         bool stopped = false;
         QString error;
     };

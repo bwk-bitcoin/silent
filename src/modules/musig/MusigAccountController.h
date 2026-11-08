@@ -1,9 +1,9 @@
 #pragma once
 
-#include "account/AccountBackend.h"
 #include "account/ElectrumReconnect.h"
 #include "interfaces/backend/types.h"
 #include "interfaces/types.h"
+#include "modules/shared/AccountLifecycle.h"
 
 #include <QByteArray>
 #include <QHash>
@@ -25,6 +25,7 @@ class MusigAccountWidget;
 
 namespace account {
 class AccountShell;
+class ServiceContext;
 } // namespace account
 
 namespace musig {
@@ -35,7 +36,7 @@ class QThread;
 // Owns the Rust account and the PSBT in flight. Drives MuSig2 as one
 // keys()->sign() per round: Nonces, then PartialSigs, then finalize at Ready. On
 // SignError::MusigSession requires an explicit restart before signing can continue.
-class MusigAccountController : public AccountBackend {
+class MusigAccountController : public AccountLifecycle {
     Q_OBJECT
 
 public:
@@ -52,7 +53,7 @@ public:
     auto getAccount() -> std::optional<rust::Box<MusigAccount>> &;
     auto network() -> Network override;
     // A new taproot address, the only kind it receives on. Empty on failure.
-    auto newAddress(AddressKind kind) -> QString;
+    auto newAddress() -> QString;
     auto getDescriptor() -> rust::String;
     auto cosignerFingerprints() -> QStringList;
     // Electrum only.
@@ -60,15 +61,16 @@ public:
     auto endpointUrl(Endpoint endpoint) -> QString override;
     [[nodiscard]] auto verifiesCertificate() const -> bool override;
     [[nodiscard]] auto isEndpointRunning(Endpoint endpoint) const -> bool override;
+    // Electrum is running and no endpoint change is under way: a read may go online.
+    [[nodiscard]] auto electrumUsable() const -> bool;
     // A signing request, a finalization, a reset or a broadcast runs.
     [[nodiscard]] auto endpointChangeRefusal() const -> QString override;
     // What Settings shows below the endpoints: the descriptor, the cosigners and Delete.
     auto settingsExtras() -> QWidget *;
-    [[nodiscard]] auto services() const -> account::ServiceContext * override;
+    [[nodiscard]] auto services() const -> account::ServiceContext *;
     auto module() -> IModule * override;
     // stop() waits for the worker before it drops the account.
     void startWorker(QThread *worker) override;
-    void requestTxDetails(uint64_t req_id, const QString &txid) override;
     void requestEndpointTip(uint64_t req_id, Endpoint endpoint) override;
     void setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) override;
     auto electrumUrl() -> QString;
@@ -104,6 +106,9 @@ public:
     void importSavedPsbt(const QByteArray &text);
 
 signals:
+    // The account's coins and balance, polled after they may have changed.
+    void updateCoins(CoinState coins);
+    void updateBalance(uint64_t balance);
     void signingPlanReady(uint64_t req_id, SigningPlan plan);
     void electrumConnected(QString address);
     void electrumDisconnected();

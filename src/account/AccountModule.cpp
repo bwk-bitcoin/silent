@@ -1,9 +1,9 @@
 #include "account/AccountModule.h"
 
-#include "account/AccountBackend.h"
 #include "account/services/ServiceAdapters.h"
 #include "account/services/ServiceContext.h"
 #include "interfaces/host.h"
+#include "modules/shared/AccountLifecycle.h"
 
 #include <QPointer>
 #include <QThread>
@@ -88,28 +88,28 @@ auto AccountModule::accountUnavailable(const QString &id) const -> bool {
     return m_pending.contains(id) || (m_runtimes.contains(id) && !m_runtimes.value(id).stopped);
 }
 
-void AccountModule::watchAccount(const QString &id, AccountBackend *backend) {
-    if (backend == nullptr) {
+void AccountModule::watchAccount(const QString &id, AccountLifecycle *lifecycle,
+                                 ServiceContext *services) {
+    if (lifecycle == nullptr) {
         return;
     }
-    m_runtimes.insert(id, {.backend = backend});
-    backend->setProperty("logicalAccountId", id);
-    connect(backend, &AccountBackend::shutdownFinished, this, &AccountModule::onShutdownFinished,
-            qontrol::UNIQUE);
+    m_runtimes.insert(id, {.lifecycle = lifecycle, .services = services});
+    lifecycle->setProperty("logicalAccountId", id);
+    connect(lifecycle, &AccountLifecycle::shutdownFinished, this,
+            &AccountModule::onShutdownFinished, qontrol::UNIQUE);
 }
 
 auto AccountModule::service(const QString &account, backend::Network network,
                             backend::ServiceKind kind) -> backend::IService * {
     auto runtime = m_runtimes.value(account);
-    if (runtime.backend == nullptr || runtime.stopped || m_pending.contains(account) ||
-        runtime.backend->accountLoading() || !runtime.backend->hasAccountMetadata()) {
+    if (runtime.lifecycle == nullptr || runtime.stopped || m_pending.contains(account) ||
+        runtime.lifecycle->accountLoading() || !runtime.lifecycle->hasAccountMetadata()) {
         return nullptr;
     }
-    auto *context = runtime.backend->services();
-    if (context == nullptr || context->network() != network) {
+    if (runtime.services == nullptr || runtime.services->network() != network) {
         return nullptr;
     }
-    return serviceAdapter(kind, context, this);
+    return serviceAdapter(kind, runtime.services, this);
 }
 
 void AccountModule::releaseService(backend::IService *service) {
@@ -122,8 +122,8 @@ void AccountModule::deleteAccount(ReqId req_id, const QString &id) {
         return;
     }
     m_pending.insert(id, {.req_id = req_id});
-    if (auto backend = m_runtimes.value(id).backend; backend != nullptr) {
-        backend->setAccountDeletionPending(true);
+    if (auto lifecycle = m_runtimes.value(id).lifecycle; lifecycle != nullptr) {
+        lifecycle->setAccountDeletionPending(true);
     }
     auto *worker = QThread::create([this, id, check = m_check] {
         auto error = check(rust::String(id.toStdString()));
@@ -158,11 +158,11 @@ void AccountModule::onDeletionChecked(const QString &id, const QString &error) {
 }
 
 void AccountModule::onShutdownFinished(const QString &error) {
-    auto *backend = qobject_cast<AccountBackend *>(sender());
-    if (backend == nullptr) {
+    auto *lifecycle = qobject_cast<AccountLifecycle *>(sender());
+    if (lifecycle == nullptr) {
         return;
     }
-    auto id = backend->property("logicalAccountId").toString();
+    auto id = lifecycle->property("logicalAccountId").toString();
     auto &runtime = m_runtimes[id];
     runtime.stopped = true;
     runtime.error = error;
@@ -204,8 +204,8 @@ void AccountModule::finishDeletion(const QString &id, const QString &error) {
     if (!m_pending.contains(id)) {
         return;
     }
-    if (auto backend = m_runtimes.value(id).backend; backend != nullptr) {
-        backend->setAccountDeletionPending(false);
+    if (auto lifecycle = m_runtimes.value(id).lifecycle; lifecycle != nullptr) {
+        lifecycle->setAccountDeletionPending(false);
     }
     auto pending = m_pending.take(id);
     emit accountDeleted(pending.req_id, id, error);

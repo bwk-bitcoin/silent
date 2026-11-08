@@ -1,7 +1,7 @@
 #pragma once
 
-#include "account/AccountBackend.h"
 #include "account/services/ServiceContext.h"
+#include "modules/shared/AccountLifecycle.h"
 
 #include <QHash>
 #include <QList>
@@ -19,16 +19,15 @@ class QThread;
 namespace account {
 
 // The service context of a built-in account controller: publishes its funds, labels,
-// receive addresses, connection state and endpoint settings as the controller changes
-// them, and forwards connection, tip and transaction details requests to it. The
-// controller owns it; the module side reads and works on the Rust account.
+// receive addresses, connection state and endpoint settings as they change, and forwards
+// connection and tip requests to the controller's lifecycle. The controller owns it; the
+// module side (AccountServices) reads and works on the Rust account itself.
 class ControllerServices : public ServiceContext {
     Q_OBJECT
 
 public:
-    ControllerServices(const QString &account, AccountBackend *controller);
+    ControllerServices(const QString &account, AccountLifecycle *controller);
 
-    void fetchTransactionDetails(backend::RequestId token, QString txid) override;
     void connectAll(backend::RequestId token, bool start) override;
     void setConnected(backend::RequestId token, QString connection, bool connected) override;
     void refreshTip(backend::RequestId token, QString connection) override;
@@ -44,13 +43,14 @@ signals:
     void addressFinished(backend::RequestId token, bool ok, backend::Address address,
                          QString error);
     void broadcastDone(backend::RequestId token, backend::BroadcastResult result);
+    void detailsFinished(backend::RequestId token, RustTxDetails details);
 
 public slots:
     void onAccountLoaded();
     void onCoinsUpdated();
     void onEndpointStateChanged();
     void onScanProgress(uint32_t height, uint32_t tip);
-    void onTxDetailsReady(uint64_t req_id, const RustTxDetails &details);
+    void onDetailsFinished(backend::RequestId token, const RustTxDetails &details);
     void onEndpointTipReady(uint64_t req_id, Endpoint endpoint, const ElectrumTipResult &result);
     void onEndpointRequestFinished(uint64_t req_id, Endpoint endpoint,
                                    const EndpointResult &result);
@@ -66,7 +66,8 @@ public slots:
     void onFundsWorkerFinished();
 
 protected:
-    [[nodiscard]] auto controller() const -> AccountBackend *;
+    static auto unavailable() -> QString;
+    [[nodiscard]] auto controller() const -> AccountLifecycle *;
     // The account is loaded and neither closing nor being deleted.
     [[nodiscard]] auto available() const -> bool;
     // Starts `worker` on the controller, which waits for it before it drops the account.
@@ -94,8 +95,7 @@ private:
         Endpoint endpoint = Endpoint::Electrum;
     };
 
-    QPointer<AccountBackend> m_controller;
-    QHash<uint64_t, backend::RequestId> m_details_reqs;
+    QPointer<AccountLifecycle> m_controller;
     QHash<uint64_t, Connecting> m_connect_reqs;
     QHash<uint64_t, Tip> m_tip_reqs;
     QHash<uint64_t, backend::RequestId> m_info_reqs;

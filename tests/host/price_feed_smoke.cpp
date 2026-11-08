@@ -3,6 +3,7 @@
 #include "AppController.h"
 #include "MainWindow.h"
 #include "account/AccountShell.h"
+#include "account/services/ServiceContext.h"
 #include "account/views/Send.h"
 #include "catalog/containers/Tabs.h"
 #include "catalog/display/Label.h"
@@ -267,7 +268,7 @@ void accountWidgetLifetime(HostImpl *host, PriceModule *module) {
         require(config->save().empty(), "save isolated Testnet lifetime account");
         auto *widget = new MusigAccountWidget(name);
         QPointer<MusigAccountController> controller = widget->controller();
-        MusigModule::get()->watchAccount(name, controller);
+        MusigModule::get()->watchAccount(name, controller, controller->services());
         QElapsedTimer opening;
         opening.start();
         // The funds panels follow the first funds read.
@@ -312,7 +313,7 @@ void accountWidgetLifetime(HostImpl *host, PriceModule *module) {
                          &PriceEvents::onAccountStopped, qontrol::UNIQUE);
         QObject::connect(controller, &QObject::destroyed, &events, &PriceEvents::onAccountDestroyed,
                          qontrol::UNIQUE);
-        controller->requestTxDetails(1, QString(64, QLatin1Char('f')));
+        controller->services()->fetchTransactionDetails(1, QString(64, QLatin1Char('f')));
         controller->stop();
         QElapsedTimer deadline;
         deadline.start();

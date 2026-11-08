@@ -43,7 +43,7 @@ auto toQString(const rust::String &value) -> QString {
 
 // The widget owns the controller: deleting it on stopped() frees both.
 MusigAccountController::MusigAccountController(const QString &account, MusigAccountWidget *widget)
-    : AccountBackend(widget),
+    : AccountLifecycle(widget),
       m_widget(widget),
       // Before the account loads, so its services follow the load.
       m_services(new musig::MusigServices(account, this)) {
@@ -62,7 +62,7 @@ void MusigAccountController::init(const QString &account) {
             &MusigAccountController::onElectrumReconnect, qontrol::UNIQUE);
     connect(m_reconnect, &account::ElectrumReconnect::gaveUp, this,
             &MusigAccountController::onElectrumGaveUp, qontrol::UNIQUE);
-    connect(this, &AccountBackend::settingsIdle, this, &MusigAccountController::onSettingsIdle,
+    connect(this, &AccountLifecycle::settingsIdle, this, &MusigAccountController::onSettingsIdle,
             qontrol::UNIQUE);
 
     // Notifications come from a blocking recv() on a dedicated thread.
@@ -173,7 +173,7 @@ auto MusigAccountController::getAccount() -> std::optional<rust::Box<MusigAccoun
     return m_account;
 }
 
-auto MusigAccountController::newAddress([[maybe_unused]] AddressKind kind) -> QString {
+auto MusigAccountController::newAddress() -> QString {
     if (m_account.has_value() && !accountDeletionPending() && !endpointsStopping()) {
         return toQString(m_account.value()->new_addr());
     }
@@ -976,9 +976,8 @@ void MusigAccountController::onStorageFinished() {
     }
 }
 
-void MusigAccountController::requestTxDetails(uint64_t req_id, const QString &txid) {
-    requestAccountTxDetails(req_id, txid, m_account.has_value() ? &*m_account.value() : nullptr,
-                            isEndpointRunning(Endpoint::Electrum) && !m_endpoint_busy);
+auto MusigAccountController::electrumUsable() const -> bool {
+    return isEndpointRunning(Endpoint::Electrum) && !m_endpoint_busy;
 }
 
 void MusigAccountController::requestEndpointTip(uint64_t req_id, Endpoint endpoint) {

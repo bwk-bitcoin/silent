@@ -8,6 +8,7 @@
 #include <QSet>
 #include <QString>
 #include <QThread>
+#include <common.h>
 #include <optional>
 #include <silent.h>
 #include <string>
@@ -16,7 +17,8 @@
 namespace account {
 
 // The service context of a built-in account whose controller holds a `Rust` account (the
-// SP Account or the MusigAccount, which share the service bridge methods). Reads and pure
+// SP Account or the MusigAccount, which share the service bridge methods). It reads and
+// works on that account itself, notified by the controller's updateCoins(). Reads and pure
 // crafting run on the GUI thread, on RAM state; every other request runs on a worker the
 // controller waits for before it drops the account.
 template <typename Controller, typename Rust> class AccountServices : public ControllerServices {
@@ -24,6 +26,8 @@ public:
     AccountServices(const QString &account, Controller *controller)
         : ControllerServices(account, controller),
           m_owner(controller) {
+        connect(controller, &Controller::updateCoins, this, &ControllerServices::onCoinsUpdated,
+                qontrol::UNIQUE);
     }
 
     auto craft(const backend::TransactionTemplate &transaction) -> backend::CraftResult override {
@@ -90,6 +94,19 @@ public:
                       auto result = wallet->set_label(kind, rust::String(id), rust::String(text));
                       emit labelEditFinished(token, result.is_ok, result.changed,
                                              services::toQString(result.error));
+                  }));
+    }
+
+    // Online only while the controller's Electrum connection serves reads.
+    void fetchTransactionDetails(backend::RequestId token, QString txid) override {
+        auto *wallet = rustAccount();
+        if (wallet == nullptr) {
+            emit failed(token, unavailable());
+            return;
+        }
+        startWork(token, QThread::create([this, wallet, token, id = txid.toStdString(),
+                                          online = m_owner->electrumUsable()] {
+                      emit detailsFinished(token, wallet->tx_details(rust::Str(id), online));
                   }));
     }
 

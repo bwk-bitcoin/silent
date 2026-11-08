@@ -32,9 +32,9 @@ StatusBar::StatusBar(AccountController *controller, QWidget *parent)
             qontrol::UNIQUE);
     connect(m_electrum_item, &catalog::StatusBarItem::toggled, this, &StatusBar::onElectrumToggled,
             qontrol::UNIQUE);
-    connect(m_controller, &AccountBackend::endpointStateChanged, this,
+    connect(m_controller, &AccountLifecycle::endpointStateChanged, this,
             &StatusBar::onEndpointStateChanged, qontrol::UNIQUE);
-    connect(m_controller, &AccountBackend::endpointRequestFinished, this,
+    connect(m_controller, &AccountLifecycle::endpointRequestFinished, this,
             &StatusBar::onEndpointRequestFinished, qontrol::UNIQUE);
 }
 

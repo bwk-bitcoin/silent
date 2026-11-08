@@ -1501,7 +1501,7 @@ broadcast outcomes the SP signing step shows.
 
 `account::AccountShell` (`src/account/AccountShell.h`) is the account page every account kind
 shares: the menu, the status bar and the panels. It is UI composition, not a plugin
-interface, and depends on no controller nor on `account::AccountBackend`.
+interface, and depends on no controller nor on `AccountLifecycle`.
 
 - `assemble()` takes a `host::AssemblyRequest`: each service from its own source, which the
   shell neither owns nor parents. It keeps the assembly, and only that. The built-in
@@ -1523,10 +1523,15 @@ interface, and depends on no controller nor on `account::AccountBackend`.
   (`deleteLater()`), and assembles nothing again. Deleting the shell deletes the panels first
   too; the built-in pages delete it before their controller, which the signing steps use.
 
-`account::AccountBackend` remains the built-in controllers' own base, inside the SP and
-Multikey modules: the account lifecycle `account::AccountModule` watches, the endpoint
-connections their status details drive and read, and the requests behind
-`account::ControllerServices`. Neither the shell nor the views use it.
+The built-in SP and Multikey services (`account::AccountServices`) read and work on the
+controller's Rust account directly: funds, history, transaction details, labels, receive
+addresses, crafting and broadcast, notified by the controller's `updateCoins()`. Only the
+connections go through `AccountLifecycle` (`src/modules/shared/AccountLifecycle.h`), the
+controllers' shared base inside their modules: the account's load and shutdown that
+`account::AccountModule` watches, its workers, and its endpoint connections (the BlindBit
+scanner, the Electrum probe and reconnect, endpoint changes, settings tests) that the
+status details drive and read. It carries no coin, history, details or label. Neither the
+shell nor the views use it, and `silent/tests/account_boundary.rs` keeps it that way.
 
 ### Backup and restore
 

@@ -101,7 +101,8 @@ void navigation(MainWindow &window, const QString &name, const QList<Entry> &ent
     auto *widget = new Widget(name);
     auto *controller = widget->controller();
     // The panels' services come from the account module, for the accounts it watches.
-    qobject_cast<account::AccountModule *>(controller->module())->watchAccount(name, controller);
+    qobject_cast<account::AccountModule *>(controller->module())
+        ->watchAccount(name, controller, controller->services());
     controller->loadPanel(QStringLiteral("settings"));
     window.addTab(widget, name);
     waitFor([controller] {

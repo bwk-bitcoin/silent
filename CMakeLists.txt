@@ -124,6 +124,8 @@ set(SILENT_APP_SOURCES
     src/i18n/Tr.h
     src/MainWindow.h
     src/MainWindow.cpp
+    src/modules/shared/AccountLifecycle.h
+    src/modules/shared/AccountLifecycle.cpp
     src/modules/sp/AccountController.h
     src/modules/sp/AccountController.cpp
     src/modules/sp/AccountWidget.h
@@ -277,8 +279,6 @@ set(SILENT_APP_SOURCES
     src/views/utils.cpp
     src/views/DashboardLayout.h
     src/views/DashboardLayout.cpp
-    src/account/AccountBackend.h
-    src/account/AccountBackend.cpp
     src/account/AccountModule.h
     src/account/AccountModule.cpp
     src/account/services/AccountServices.h

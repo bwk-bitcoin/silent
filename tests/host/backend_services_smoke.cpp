@@ -175,7 +175,8 @@ class PanelOrder final : public QObject {
     Q_OBJECT
 
 public:
-    QPointer<AccountBackend> controller;
+    QPointer<AccountLifecycle> controller;
+    QPointer<account::ServiceContext> context;
     std::function<bool()> panels;
     bool checked = false;
     bool early = false;
@@ -183,8 +184,7 @@ public:
 public slots:
 
     void onLoaded() {
-        auto *context = controller == nullptr ? nullptr : controller->services();
-        if (context == nullptr) {
+        if (controller == nullptr || context == nullptr) {
             return;
         }
         checked = true;
@@ -519,14 +519,14 @@ void closeAccount(account::AccountModule *module, const QString &id) {
     waitFor([module, &id] { return !module->accountUnavailable(id); }, "the account closes");
 }
 
-auto electrumConnecting(const AccountBackend &controller) -> bool {
+auto electrumConnecting(const AccountLifecycle &controller) -> bool {
     return controller.endpointOperation(Endpoint::Electrum) == EndpointOperation::Connecting;
 }
 
 // Selects coins of the account while `controller` tries to connect Electrum: `inputs` are
 // selected, and the attempt still runs once the selection answered.
 void selectWhileConnecting(const host::ServiceAssembly &assembly, Answers &answers,
-                           const AccountBackend &controller, backend::RequestId token,
+                           const AccountLifecycle &controller, backend::RequestId token,
                            const QStringList &inputs) {
     require(electrumConnecting(controller), "a connection attempt runs");
     answers.selected.reset();
@@ -542,7 +542,7 @@ void selectWhileConnecting(const host::ServiceAssembly &assembly, Answers &answe
 }
 
 // Waits for the attempt on the silent server to fail, Electrum still disconnected.
-void waitForFailedAttempt(const AccountBackend &controller) {
+void waitForFailedAttempt(const AccountLifecycle &controller) {
     waitFor(
         [&controller] {
             return controller.endpointOperation(Endpoint::Electrum) == EndpointOperation::Idle &&
@@ -599,17 +599,19 @@ void backendServicesSmoke() {
     require(spWidget != nullptr && multikeyWidget != nullptr, "both accounts open in tabs");
     PanelOrder spOrder;
     spOrder.controller = spWidget->controller();
+    spOrder.context = spWidget->controller()->services();
     spOrder.panels = [controller = spWidget->controller()] {
         return controller->screen(QStringLiteral("history")).has_value();
     };
     PanelOrder multikeyOrder;
     multikeyOrder.controller = multikeyWidget->controller();
+    multikeyOrder.context = multikeyWidget->controller()->services();
     multikeyOrder.panels = [controller = multikeyWidget->controller()] {
         return controller->screen(QStringLiteral("history")).has_value();
     };
     // Queued: checked right after the load, before the first funds read can answer.
     for (auto *order : {&spOrder, &multikeyOrder}) {
-        QObject::connect(order->controller, &AccountBackend::accountLoadFinished, order,
+        QObject::connect(order->controller, &AccountLifecycle::accountLoadFinished, order,
                          &PanelOrder::onLoaded,
                          Qt::ConnectionType(Qt::QueuedConnection | Qt::UniqueConnection));
     }

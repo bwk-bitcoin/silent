@@ -1,4 +1,4 @@
-#include "account/AccountBackend.h"
+#include "modules/shared/AccountLifecycle.h"
 
 #include "metatypes.h"
 
@@ -6,32 +6,28 @@
 #include <Qontrol>
 #include <common.h>
 
-AccountBackend::AccountBackend(QObject *parent) : QObject(parent) {
-    connect(this, &AccountBackend::shutdownDrained, this, &AccountBackend::onShutdownDrained,
+AccountLifecycle::AccountLifecycle(QObject *parent) : QObject(parent) {
+    connect(this, &AccountLifecycle::shutdownDrained, this, &AccountLifecycle::onShutdownDrained,
             qontrol::UNIQUE);
-    connect(this, &AccountBackend::endpointTipFetched, this, &AccountBackend::onEndpointTipFetched,
-            qontrol::UNIQUE);
-    connect(this, &AccountBackend::endpointInfoFetched, this,
-            &AccountBackend::onEndpointInfoFetched, qontrol::UNIQUE);
-    connect(this, &AccountBackend::electrumProbed, this, &AccountBackend::onElectrumProbed,
+    connect(this, &AccountLifecycle::endpointTipFetched, this,
+            &AccountLifecycle::onEndpointTipFetched, qontrol::UNIQUE);
+    connect(this, &AccountLifecycle::endpointInfoFetched, this,
+            &AccountLifecycle::onEndpointInfoFetched, qontrol::UNIQUE);
+    connect(this, &AccountLifecycle::electrumProbed, this, &AccountLifecycle::onElectrumProbed,
             qontrol::UNIQUE);
 }
 
-void AccountBackend::onShutdownDrained(const QString &error) {
+void AccountLifecycle::onShutdownDrained(const QString &error) {
     emit shutdownFinished(error);
     emit stopped();
 }
 
-auto AccountBackend::services() const -> account::ServiceContext * {
-    return nullptr;
-}
-
-auto AccountBackend::endpointOperationsBusy() const -> bool {
+auto AccountLifecycle::endpointOperationsBusy() const -> bool {
     return m_deletion_pending || m_account_loading || m_endpoints_stopping || m_settings_busy ||
            m_operation != EndpointOperation::Idle;
 }
 
-void AccountBackend::setSettingsBusy(bool busy) {
+void AccountLifecycle::setSettingsBusy(bool busy) {
     m_settings_busy = busy;
     publishEndpointState();
     if (!busy) {
@@ -39,53 +35,53 @@ void AccountBackend::setSettingsBusy(bool busy) {
     }
 }
 
-auto AccountBackend::settingsBusy() const -> bool {
+auto AccountLifecycle::settingsBusy() const -> bool {
     return m_settings_busy;
 }
 
-auto AccountBackend::endpointChangeRefusal() const -> QString {
+auto AccountLifecycle::endpointChangeRefusal() const -> QString {
     return {};
 }
 
-void AccountBackend::setAccountDeletionPending(bool pending) {
+void AccountLifecycle::setAccountDeletionPending(bool pending) {
     m_deletion_pending = pending;
     if (auto *widget = qobject_cast<QWidget *>(parent()); widget != nullptr) {
         widget->setEnabled(!pending);
     }
 }
 
-auto AccountBackend::accountDeletionPending() const -> bool {
+auto AccountLifecycle::accountDeletionPending() const -> bool {
     return m_deletion_pending;
 }
 
-auto AccountBackend::accountLoading() const -> bool {
+auto AccountLifecycle::accountLoading() const -> bool {
     return m_account_loading;
 }
 
-auto AccountBackend::accountLoadError() const -> QString {
+auto AccountLifecycle::accountLoadError() const -> QString {
     return m_account_load_error;
 }
 
-auto AccountBackend::hasAccountMetadata() const -> bool {
+auto AccountLifecycle::hasAccountMetadata() const -> bool {
     return m_config.has_value() && m_config.value()->is_ok();
 }
 
-auto AccountBackend::accountConfig() const -> const Config & {
+auto AccountLifecycle::accountConfig() const -> const Config & {
     if (!hasAccountMetadata()) {
         qFatal("Account metadata is not loaded");
     }
     return *m_config.value();
 }
 
-void AccountBackend::setAccountDescriptor(const rust::String &descriptor) {
+void AccountLifecycle::setAccountDescriptor(const rust::String &descriptor) {
     m_account_descriptor = descriptor;
 }
 
-auto AccountBackend::accountDescriptor() const -> rust::String {
+auto AccountLifecycle::accountDescriptor() const -> rust::String {
     return m_account_descriptor;
 }
 
-auto AccountBackend::installLoadedConfig() -> QString {
+auto AccountLifecycle::installLoadedConfig() -> QString {
     m_config = std::move(*m_loading_config);
     m_loading_config = nullptr;
     if (hasAccountMetadata()) {
@@ -99,31 +95,31 @@ auto AccountBackend::installLoadedConfig() -> QString {
     return QString::fromUtf8(error.data(), error.size());
 }
 
-void AccountBackend::finishAccountLoad(const QString &error) {
+void AccountLifecycle::finishAccountLoad(const QString &error) {
     m_account_load_error = error;
     m_account_loading = false;
     publishEndpointState();
     emit accountLoadFinished();
 }
 
-auto AccountBackend::endpointsStopping() const -> bool {
+auto AccountLifecycle::endpointsStopping() const -> bool {
     return m_endpoints_stopping;
 }
 
-auto AccountBackend::endpointOperation(Endpoint endpoint) const -> EndpointOperation {
+auto AccountLifecycle::endpointOperation(Endpoint endpoint) const -> EndpointOperation {
     return endpoint == m_operation_endpoint ? m_operation : EndpointOperation::Idle;
 }
 
-auto AccountBackend::endpointError(Endpoint endpoint) const -> QString {
+auto AccountLifecycle::endpointError(Endpoint endpoint) const -> QString {
     return m_endpoint_failures.value(endpoint).error;
 }
 
-auto AccountBackend::endpointErrorKind(Endpoint endpoint) const -> BackendErrorKind {
+auto AccountLifecycle::endpointErrorKind(Endpoint endpoint) const -> BackendErrorKind {
     return m_endpoint_failures.value(endpoint).kind;
 }
 
-void AccountBackend::reportEndpointFailure(Endpoint endpoint, const rust::String &error,
-                                           BackendErrorKind kind) {
+void AccountLifecycle::reportEndpointFailure(Endpoint endpoint, const rust::String &error,
+                                             BackendErrorKind kind) {
     if (endpointsStopping()) {
         return;
     }
@@ -132,36 +128,36 @@ void AccountBackend::reportEndpointFailure(Endpoint endpoint, const rust::String
     emit endpointStateChanged(endpoint);
 }
 
-void AccountBackend::clearEndpointFailure(Endpoint endpoint) {
+void AccountLifecycle::clearEndpointFailure(Endpoint endpoint) {
     if (m_endpoint_failures.remove(endpoint)) {
         emit endpointStateChanged(endpoint);
     }
 }
 
-void AccountBackend::setSavedEndpoint(Endpoint endpoint, const rust::String &url,
-                                      bool verify_certificate) {
+void AccountLifecycle::setSavedEndpoint(Endpoint endpoint, const rust::String &url,
+                                        bool verify_certificate) {
     m_saved_endpoint_urls.insert(endpoint, QString::fromUtf8(url.data(), url.size()));
     if (endpoint == Endpoint::Electrum) {
         m_saved_endpoint_verify = verify_certificate;
     }
 }
 
-auto AccountBackend::savedEndpointUrl(Endpoint endpoint) const -> QString {
+auto AccountLifecycle::savedEndpointUrl(Endpoint endpoint) const -> QString {
     return m_saved_endpoint_urls.value(endpoint);
 }
 
-auto AccountBackend::savedEndpointVerify() const -> bool {
+auto AccountLifecycle::savedEndpointVerify() const -> bool {
     return m_saved_endpoint_verify;
 }
 
-void AccountBackend::publishEndpointState() {
+void AccountLifecycle::publishEndpointState() {
     for (auto endpoint : endpoints()) {
         emit endpointStateChanged(endpoint);
     }
 }
 
-void AccountBackend::beginEndpointOperation(uint64_t req_id, Endpoint endpoint,
-                                            EndpointOperation operation) {
+void AccountLifecycle::beginEndpointOperation(uint64_t req_id, Endpoint endpoint,
+                                              EndpointOperation operation) {
     ++m_endpoint_generation;
     m_operation_req = req_id;
     m_operation_endpoint = endpoint;
@@ -171,7 +167,7 @@ void AccountBackend::beginEndpointOperation(uint64_t req_id, Endpoint endpoint,
     publishEndpointState();
 }
 
-void AccountBackend::finishEndpointOperation(const EndpointResult &result) {
+void AccountLifecycle::finishEndpointOperation(const EndpointResult &result) {
     if (m_endpoints_stopping) {
         return;
     }
@@ -191,8 +187,8 @@ void AccountBackend::finishEndpointOperation(const EndpointResult &result) {
     emit endpointRequestFinished(req, endpoint, result);
 }
 
-void AccountBackend::finishEndpointConnection(Endpoint endpoint, bool connected,
-                                              const rust::String &error, BackendErrorKind kind) {
+void AccountLifecycle::finishEndpointConnection(Endpoint endpoint, bool connected,
+                                                const rust::String &error, BackendErrorKind kind) {
     if (!m_connection_result.has_value() || endpoint != m_operation_endpoint) {
         return;
     }
@@ -204,7 +200,7 @@ void AccountBackend::finishEndpointConnection(Endpoint endpoint, bool connected,
     finishEndpointOperation(result);
 }
 
-void AccountBackend::stopEndpointOperations() {
+void AccountLifecycle::stopEndpointOperations() {
     if (m_endpoints_stopping) {
         return;
     }
@@ -222,7 +218,7 @@ void AccountBackend::stopEndpointOperations() {
     }
 }
 
-void AccountBackend::probeElectrum(bool retry) {
+void AccountLifecycle::probeElectrum(bool retry) {
     beginEndpointOperation(0, Endpoint::Electrum, EndpointOperation::Connecting);
     startWorker(QThread::create([this, retry, generation = m_endpoint_generation,
                                  url = endpointUrl(Endpoint::Electrum).toStdString(),
@@ -233,7 +229,7 @@ void AccountBackend::probeElectrum(bool retry) {
     }));
 }
 
-void AccountBackend::requestAccountEndpointTip(uint64_t req_id, Endpoint endpoint) {
+void AccountLifecycle::requestAccountEndpointTip(uint64_t req_id, Endpoint endpoint) {
     auto url = endpointUrl(endpoint).toStdString();
     auto verify = verifiesCertificate();
     startWorker(
@@ -251,7 +247,7 @@ void AccountBackend::requestAccountEndpointTip(uint64_t req_id, Endpoint endpoin
         }));
 }
 
-void AccountBackend::requestEndpointInfo(uint64_t req_id, Endpoint endpoint) {
+void AccountLifecycle::requestEndpointInfo(uint64_t req_id, Endpoint endpoint) {
     if (endpoint != Endpoint::Blindbit || endpointOperationsBusy() ||
         endpointUrl(endpoint).isEmpty()) {
         BackendInfo info{};
@@ -266,22 +262,22 @@ void AccountBackend::requestEndpointInfo(uint64_t req_id, Endpoint endpoint) {
     }));
 }
 
-void AccountBackend::onEndpointTipFetched(uint64_t req_id, uint64_t generation, Endpoint endpoint,
-                                          const ElectrumTipResult &result) {
+void AccountLifecycle::onEndpointTipFetched(uint64_t req_id, uint64_t generation, Endpoint endpoint,
+                                            const ElectrumTipResult &result) {
     if (generation == m_endpoint_generation && !endpointsStopping()) {
         emit endpointTipReady(req_id, endpoint, result);
     }
 }
 
-void AccountBackend::onEndpointInfoFetched(uint64_t req_id, uint64_t generation, Endpoint endpoint,
-                                           const BackendInfo &info) {
+void AccountLifecycle::onEndpointInfoFetched(uint64_t req_id, uint64_t generation,
+                                             Endpoint endpoint, const BackendInfo &info) {
     if (generation == m_endpoint_generation && !endpointsStopping()) {
         emit endpointInfoReady(req_id, endpoint, info);
     }
 }
 
-void AccountBackend::onElectrumProbed(uint64_t generation, bool retry,
-                                      const EndpointResult &result) {
+void AccountLifecycle::onElectrumProbed(uint64_t generation, bool retry,
+                                        const EndpointResult &result) {
     if (generation != m_endpoint_generation || m_endpoints_stopping) {
         return;
     }

@@ -5,7 +5,7 @@
 
 namespace account {
 
-// A request id unique across every view of every account: AccountBackend answers
+// A request id unique across every view of every account: an account answers
 // on signals all its views listen to, each view keeps only the answers to its ids.
 inline auto nextRequestId() -> uint64_t {
     static std::atomic<uint64_t> next{1};

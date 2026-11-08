@@ -1,7 +1,7 @@
 #pragma once
 
-#include "account/AccountBackend.h"
 #include "account/ElectrumReconnect.h"
+#include "modules/shared/AccountLifecycle.h"
 
 #include <QList>
 #include <QPointer>
@@ -16,9 +16,10 @@ class AccountWidget;
 
 namespace account {
 class AccountShell;
+class ServiceContext;
 } // namespace account
 
-class AccountController : public AccountBackend {
+class AccountController : public AccountLifecycle {
     Q_OBJECT
 
 public:
@@ -40,18 +41,23 @@ public:
     auto endpointUrl(Endpoint endpoint) -> QString override;
     [[nodiscard]] auto verifiesCertificate() const -> bool override;
     [[nodiscard]] auto isEndpointRunning(Endpoint endpoint) const -> bool override;
-    [[nodiscard]] auto services() const -> account::ServiceContext * override;
+    // Electrum is running and no endpoint change is under way: a read may go online.
+    [[nodiscard]] auto electrumUsable() const -> bool;
+    // The account's service context, null for a mock account.
+    [[nodiscard]] auto services() const -> account::ServiceContext *;
     auto module() -> IModule * override;
     [[nodiscard]] auto coins() const -> qontrol::Screen *;
     auto getAccount() -> std::optional<rust::Box<Account>> &;
     // stop() waits for the worker before it drops the account and before stopped()
     // lets the owner delete them.
     void startWorker(QThread *worker) override;
-    void requestTxDetails(uint64_t req_id, const QString &txid) override;
     void requestEndpointTip(uint64_t req_id, Endpoint endpoint) override;
     void setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) override;
 
 signals:
+    // The account's coins and balance, polled after they may have changed.
+    void updateCoins(CoinState coins);
+    void updateBalance(uint64_t balance);
     void newAddress(rust::String addr);
     void waitingForBlocks(uint32_t tip_height);
     void scannerStateChanged(bool running);

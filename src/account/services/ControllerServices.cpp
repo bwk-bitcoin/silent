@@ -26,10 +26,6 @@ auto server(Endpoint endpoint) -> BackendServer {
     return endpoint == Endpoint::Blindbit ? BackendServer::Blindbit : BackendServer::Electrum;
 }
 
-auto unavailable() -> QString {
-    return QStringLiteral("Account is not available");
-}
-
 // An endpoint failure as Settings shows it: what kind of failure, then the server's words.
 auto endpointError(BackendErrorKind kind, const QString &error) -> QString {
     return mapBackendErrorSummary(kind) + QStringLiteral(" ") + error;
@@ -37,24 +33,20 @@ auto endpointError(BackendErrorKind kind, const QString &error) -> QString {
 
 } // namespace
 
-ControllerServices::ControllerServices(const QString &account, AccountBackend *controller)
+ControllerServices::ControllerServices(const QString &account, AccountLifecycle *controller)
     : ServiceContext(account, controller),
       m_controller(controller) {
-    connect(controller, &AccountBackend::accountLoadFinished, this,
+    connect(controller, &AccountLifecycle::accountLoadFinished, this,
             &ControllerServices::onAccountLoaded, qontrol::UNIQUE);
-    connect(controller, &AccountBackend::updateCoins, this, &ControllerServices::onCoinsUpdated,
-            qontrol::UNIQUE);
-    connect(controller, &AccountBackend::endpointStateChanged, this,
+    connect(controller, &AccountLifecycle::endpointStateChanged, this,
             &ControllerServices::onEndpointStateChanged, qontrol::UNIQUE);
-    connect(controller, &AccountBackend::scanProgress, this, &ControllerServices::onScanProgress,
+    connect(controller, &AccountLifecycle::scanProgress, this, &ControllerServices::onScanProgress,
             qontrol::UNIQUE);
-    connect(controller, &AccountBackend::txDetailsReady, this,
-            &ControllerServices::onTxDetailsReady, qontrol::UNIQUE);
-    connect(controller, &AccountBackend::endpointTipReady, this,
+    connect(controller, &AccountLifecycle::endpointTipReady, this,
             &ControllerServices::onEndpointTipReady, qontrol::UNIQUE);
-    connect(controller, &AccountBackend::endpointRequestFinished, this,
+    connect(controller, &AccountLifecycle::endpointRequestFinished, this,
             &ControllerServices::onEndpointRequestFinished, qontrol::UNIQUE);
-    connect(controller, &AccountBackend::endpointInfoReady, this,
+    connect(controller, &AccountLifecycle::endpointInfoReady, this,
             &ControllerServices::onEndpointInfoReady, qontrol::UNIQUE);
     connect(this, &ControllerServices::endpointTestFinished, this,
             &ControllerServices::onEndpointTestFinished, qontrol::UNIQUE);
@@ -66,9 +58,15 @@ ControllerServices::ControllerServices(const QString &account, AccountBackend *c
             &ControllerServices::onAddressFinished, qontrol::UNIQUE);
     connect(this, &ControllerServices::broadcastDone, this, &ControllerServices::onBroadcastDone,
             qontrol::UNIQUE);
+    connect(this, &ControllerServices::detailsFinished, this,
+            &ControllerServices::onDetailsFinished, qontrol::UNIQUE);
 }
 
-auto ControllerServices::controller() const -> AccountBackend * {
+auto ControllerServices::unavailable() -> QString {
+    return QStringLiteral("Account is not available");
+}
+
+auto ControllerServices::controller() const -> AccountLifecycle * {
     return m_controller.data();
 }
 
@@ -179,17 +177,6 @@ void ControllerServices::publishEndpoints() {
     publishNetwork(settings.network);
     publishState(state);
     publishSettings(settings);
-}
-
-void ControllerServices::fetchTransactionDetails(backend::RequestId token, QString txid) {
-    if (!available()) {
-        emit failed(token, unavailable());
-        return;
-    }
-    auto req = nextRequestId();
-    // The answer may come during the call.
-    m_details_reqs.insert(req, token);
-    m_controller->requestTxDetails(req, txid);
 }
 
 void ControllerServices::connectAll(backend::RequestId token, bool start) {
@@ -340,13 +327,7 @@ void ControllerServices::onScanProgress(uint32_t height, uint32_t tip) {
     publishEndpoints();
 }
 
-void ControllerServices::onTxDetailsReady(uint64_t req_id, const RustTxDetails &details) {
-    auto found = m_details_reqs.find(req_id);
-    if (found == m_details_reqs.end()) {
-        return;
-    }
-    auto token = found.value();
-    m_details_reqs.erase(found);
+void ControllerServices::onDetailsFinished(backend::RequestId token, const RustTxDetails &details) {
     if (!details.is_ok) {
         emit failed(token, services::toQString(details.error));
         return;

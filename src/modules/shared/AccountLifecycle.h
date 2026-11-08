@@ -14,30 +14,23 @@
 
 class IModule;
 
-namespace account {
-class ServiceContext;
-} // namespace account
-
-// A kind of address a built-in account receives on. The silent payment address is
-// static; the others are generated one at a time.
-enum class AddressKind : std::uint8_t { SilentPayment, Segwit, Taproot };
-
 // A server an account syncs from.
 enum class Endpoint : std::uint8_t { Blindbit, Electrum };
 Q_DECLARE_METATYPE(Endpoint)
 
 enum class EndpointOperation : std::uint8_t { Idle, Connecting, Disconnecting };
 
-// What the built-in sp and musig account controllers share: the account's lifecycle,
-// its endpoint connections and the requests behind its UI services
-// (account::ControllerServices), and what the status bars read. The account panels use
-// the services, not this class.
-class AccountBackend : public QObject {
+// What the built-in SP and Multikey account controllers share, inside their modules: the
+// account's load and shutdown, its workers and its endpoint connections (the BlindBit
+// scanner, the Electrum probe and reconnect, endpoint changes and settings tests), which
+// the status bars read. It carries no coin, history, details or label: the account
+// services read those from the controller's account (account::AccountServices).
+class AccountLifecycle : public QObject {
     Q_OBJECT
 
 public:
-    explicit AccountBackend(QObject *parent = nullptr);
-    ~AccountBackend() override = default;
+    explicit AccountLifecycle(QObject *parent = nullptr);
+    ~AccountLifecycle() override = default;
 
     // The account's network, the one the keys it signs with are registered on.
     virtual auto network() -> Network = 0;
@@ -70,15 +63,11 @@ public:
     void setAccountDeletionPending(bool pending);
     [[nodiscard]] auto accountDeletionPending() const -> bool;
     [[nodiscard]] auto hasAccountMetadata() const -> bool;
-    // The state and requests behind the account's UI services, a child of this backend.
-    // Null for a backend serving none, such as a mock account.
-    [[nodiscard]] virtual auto services() const -> account::ServiceContext *;
     // Records `url` as the saved endpoint, as the account's config now holds it.
     void setSavedEndpoint(Endpoint endpoint, const rust::String &url, bool verify_certificate);
 
     // Starts a worker thread that uses the account or a view: the account outlives it.
     virtual void startWorker(QThread *worker) = 0;
-    virtual void requestTxDetails(uint64_t req_id, const QString &txid) = 0;
     virtual void requestEndpointTip(uint64_t req_id, Endpoint endpoint) = 0;
     void requestEndpointInfo(uint64_t req_id, Endpoint endpoint);
     virtual void setEndpointConnected(uint64_t req_id, Endpoint endpoint, bool connected) = 0;
@@ -90,12 +79,9 @@ signals:
     void shutdownFinished(QString error);
     void shutdownDrained(QString error);
     void accountLoadFinished();
-    void updateCoins(CoinState coins);
-    void updateBalance(uint64_t balance);
     void scanProgress(uint32_t height, uint32_t tip);
     // `endpoint` started or stopped.
     void endpointStateChanged(Endpoint endpoint);
-    void txDetailsReady(uint64_t req_id, RustTxDetails details);
     void endpointTipReady(uint64_t req_id, Endpoint endpoint, ElectrumTipResult result);
     // Connecting completes on backend confirmation. Later connection losses update endpoint state.
     void endpointRequestFinished(uint64_t req_id, Endpoint endpoint, EndpointResult result);
@@ -212,20 +198,6 @@ protected:
             }
             account->value() = take(std::move(change));
         });
-    }
-
-    template <typename T>
-    void requestAccountTxDetails(uint64_t req_id, const QString &txid, T *account, bool online) {
-        if (account == nullptr || endpointsStopping() || accountDeletionPending()) {
-            RustTxDetails result;
-            result.is_ok = false;
-            result.error = rust::String("Account is not available");
-            emit txDetailsReady(req_id, result);
-            return;
-        }
-        startWorker(QThread::create([this, account, req_id, id = txid.toStdString(), online] {
-            emit txDetailsReady(req_id, account->tx_details(rust::Str(id), online));
-        }));
     }
 
 private:

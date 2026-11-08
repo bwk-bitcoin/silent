@@ -851,7 +851,7 @@ void endpointWorkerPresentation() {
     require(controller.getAccount().has_value(), "real SP endpoint fixture opens");
     EndpointSpy replies;
     SignalSpy stopped;
-    QObject::connect(&controller, &AccountBackend::endpointRequestFinished, &replies,
+    QObject::connect(&controller, &AccountLifecycle::endpointRequestFinished, &replies,
                      &EndpointSpy::onFinished, qontrol::UNIQUE);
     QObject::connect(&controller, &AccountController::stopped, &stopped, &SignalSpy::onSignal,
                      qontrol::UNIQUE);
@@ -1025,7 +1025,8 @@ void endpointPolicyScope() {
 }
 
 // The services the account module hands the panels of `controller`, children of `owner`.
-auto controllerServices(AccountBackend &controller, QObject *owner) -> account::Services {
+template <typename Controller>
+auto controllerServices(Controller &controller, QObject *owner) -> account::Services {
     auto *context = controller.services();
     require(context != nullptr, "the real controller serves its account");
     auto adapter = [context, owner](backend::ServiceKind kind) {
@@ -1043,10 +1044,10 @@ auto controllerServices(AccountBackend &controller, QObject *owner) -> account::
 }
 
 // The account module supplies the panels' services of the accounts it watches only.
-void watch(AccountBackend &controller, const QString &name) {
+template <typename Controller> void watch(Controller &controller, const QString &name) {
     auto *module = qobject_cast<account::AccountModule *>(controller.module());
     require(module != nullptr, "the controller belongs to an account module");
-    module->watchAccount(name, &controller);
+    module->watchAccount(name, &controller, controller.services());
 }
 
 // Every answer of the settings and blockchain services.
@@ -1318,7 +1319,7 @@ void musigEndpointStatusPresentation() {
     ServiceAnswers answers(services);
     EndpointSpy replies;
     SignalSpy stopped;
-    QObject::connect(&controller, &AccountBackend::endpointRequestFinished, &replies,
+    QObject::connect(&controller, &AccountLifecycle::endpointRequestFinished, &replies,
                      &EndpointSpy::onFinished, qontrol::UNIQUE);
     QObject::connect(&controller, &MusigAccountController::stopped, &stopped, &SignalSpy::onSignal,
                      qontrol::UNIQUE);
@@ -1401,7 +1402,7 @@ template <typename Controller, typename Bar> void endpointInteractions(const QSt
     Controller controller(name, nullptr);
     waitFor([&controller] { return !controller.accountLoading(); },
             "offline opening precedes views");
-    AccountBackend *backend = &controller;
+    AccountLifecycle *backend = &controller;
     QObject adapters;
     auto services = controllerServices(controller, &adapters);
     ServiceAnswers answers(services);
@@ -1420,7 +1421,7 @@ template <typename Controller, typename Bar> void endpointInteractions(const QSt
     SignalSpy connected;
     QObject::connect(&controller, &Controller::electrumConnected, &connected, &SignalSpy::onSignal,
                      qontrol::UNIQUE);
-    QObject::connect(backend, &AccountBackend::endpointRequestFinished, &replies,
+    QObject::connect(backend, &AccountLifecycle::endpointRequestFinished, &replies,
                      &EndpointSpy::onFinished, qontrol::UNIQUE);
     QObject::connect(&controller, &Controller::stopped, &stopped, &SignalSpy::onSignal,
                      qontrol::UNIQUE);
@@ -1617,7 +1618,7 @@ template <typename Controller, typename Bar> void endpointShutdown(const QString
     Controller controller(name, nullptr);
     waitFor([&controller] { return !controller.accountLoading(); },
             "shutdown fixture opening finishes");
-    AccountBackend *backend = &controller;
+    AccountLifecycle *backend = &controller;
     QObject adapters;
     auto services = controllerServices(controller, &adapters);
     ServiceAnswers answers(services);
@@ -1625,7 +1626,7 @@ template <typename Controller, typename Bar> void endpointShutdown(const QString
     Bar bar(&controller);
     EndpointSpy replies;
     SignalSpy stopped;
-    QObject::connect(backend, &AccountBackend::endpointRequestFinished, &replies,
+    QObject::connect(backend, &AccountLifecycle::endpointRequestFinished, &replies,
                      &EndpointSpy::onFinished, qontrol::UNIQUE);
     QObject::connect(&controller, &Controller::stopped, &stopped, &SignalSpy::onSignal,
                      qontrol::UNIQUE);
@@ -1672,15 +1673,15 @@ void blindbitReadsAndShutdown() {
     AccountController controller(QStringLiteral("boundary-sp"), nullptr);
     waitFor([&controller] { return !controller.accountLoading(); },
             "BlindBit fixture opening finishes");
-    AccountBackend *backend = &controller;
+    AccountLifecycle *backend = &controller;
     QObject adapters;
     auto services = controllerServices(controller, &adapters);
     ServiceAnswers answers(services);
     EndpointSpy replies;
     SignalSpy stopped;
-    QObject::connect(backend, &AccountBackend::endpointRequestFinished, &replies,
+    QObject::connect(backend, &AccountLifecycle::endpointRequestFinished, &replies,
                      &EndpointSpy::onFinished, qontrol::UNIQUE);
-    QObject::connect(backend, &AccountBackend::endpointInfoReady, &replies, &EndpointSpy::onInfo,
+    QObject::connect(backend, &AccountLifecycle::endpointInfoReady, &replies, &EndpointSpy::onInfo,
                      qontrol::UNIQUE);
     QObject::connect(&controller, &AccountController::stopped, &stopped, &SignalSpy::onSignal,
                      qontrol::UNIQUE);
@@ -1741,7 +1742,7 @@ void caughtUpBlindbitConnection() {
     waitFor([&controller] { return !controller.accountLoading(); }, "caught-up account opens");
     EndpointSpy replies;
     SignalSpy stopped;
-    QObject::connect(&controller, &AccountBackend::endpointRequestFinished, &replies,
+    QObject::connect(&controller, &AccountLifecycle::endpointRequestFinished, &replies,
                      &EndpointSpy::onFinished, qontrol::UNIQUE);
     QObject::connect(&controller, &AccountController::notificationReceived, &replies,
                      &EndpointSpy::onNotification, qontrol::UNIQUE);
@@ -1808,7 +1809,7 @@ void caughtUpBlindbitConnection() {
     auto *opening = widget->controller();
     EndpointSpy startup;
     SignalSpy openingStopped;
-    QObject::connect(opening, &AccountBackend::endpointRequestFinished, &startup,
+    QObject::connect(opening, &AccountLifecycle::endpointRequestFinished, &startup,
                      &EndpointSpy::onFinished, qontrol::UNIQUE);
     QObject::connect(opening, &AccountController::notificationReceived, &startup,
                      &EndpointSpy::onNotification, qontrol::UNIQUE);
@@ -1851,7 +1852,7 @@ void asynchronousAccountStartup(const QString &source, const QString &name, cons
     watch(*controller, name);
     EndpointSpy replies;
     SignalSpy stopped;
-    QObject::connect(controller, &AccountBackend::endpointRequestFinished, &replies,
+    QObject::connect(controller, &AccountLifecycle::endpointRequestFinished, &replies,
                      &EndpointSpy::onFinished, qontrol::UNIQUE);
     QObject::connect(controller, &Controller::stopped, &stopped, &SignalSpy::onSignal,
                      qontrol::UNIQUE);

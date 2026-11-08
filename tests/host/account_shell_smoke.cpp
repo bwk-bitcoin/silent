@@ -32,7 +32,6 @@
 #define protected public
 #include "AppController.h"
 #include "MainWindow.h"
-#include "account/AccountBackend.h"
 #include "account/AccountModule.h"
 #include "account/AccountShell.h"
 #include "account/services/ServiceAdapters.h"
@@ -49,6 +48,7 @@
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigPlugin.h"
 #include "modules/musig/creator/MusigCreatorModule.h"
+#include "modules/shared/AccountLifecycle.h"
 #include "modules/sp/AccountWidget.h"
 #include "modules/sp/SpModule.h"
 #include "modules/sp/SpPlugin.h"
@@ -163,9 +163,9 @@ auto openAccount(account::AccountModule *module, QWidget &window, const QString 
     // A request finds the account busy while its startup connection runs.
     waitFor(
         [&] {
-            for (auto *backend : window.findChildren<AccountBackend *>()) {
-                if (backend->property("logicalAccountId").toString() == id) {
-                    return !backend->endpointOperationsBusy();
+            for (auto *lifecycle : window.findChildren<AccountLifecycle *>()) {
+                if (lifecycle->property("logicalAccountId").toString() == id) {
+                    return !lifecycle->endpointOperationsBusy();
                 }
             }
             return false;

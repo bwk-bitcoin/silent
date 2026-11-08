@@ -18,14 +18,14 @@
 
 // The widget owns the controller: deleting it on stopped() frees both.
 AccountController::AccountController(const QString &account, AccountWidget *widget)
-    : AccountBackend(widget) {
+    : AccountLifecycle(widget) {
     m_widget = widget;
     // Before the account loads, so its services follow the load.
     m_services = new account::AccountServices<AccountController, Account>(account, this);
     init(account);
 }
 
-AccountController::AccountController(AccountWidget *widget) : AccountBackend(widget) {
+AccountController::AccountController(AccountWidget *widget) : AccountLifecycle(widget) {
     m_widget = widget;
 }
 
@@ -38,7 +38,7 @@ auto AccountController::init(const QString &account) -> void {
             &AccountController::onElectrumReconnect, qontrol::UNIQUE);
     connect(m_reconnect, &account::ElectrumReconnect::gaveUp, this,
             &AccountController::onElectrumGaveUp, qontrol::UNIQUE);
-    connect(this, &AccountBackend::settingsIdle, this, &AccountController::onSettingsIdle,
+    connect(this, &AccountLifecycle::settingsIdle, this, &AccountController::onSettingsIdle,
             qontrol::UNIQUE);
 
     // Take the notification receiver and spawn a blocking listener thread
@@ -486,9 +486,8 @@ auto AccountController::getAccount() -> std::optional<rust::Box<Account>> & {
     return m_account;
 }
 
-void AccountController::requestTxDetails(uint64_t req_id, const QString &txid) {
-    requestAccountTxDetails(req_id, txid, m_account.has_value() ? &*m_account.value() : nullptr,
-                            isEndpointRunning(Endpoint::Electrum) && !m_endpoint_busy);
+auto AccountController::electrumUsable() const -> bool {
+    return isEndpointRunning(Endpoint::Electrum) && !m_endpoint_busy;
 }
 
 void AccountController::requestEndpointTip(uint64_t req_id, Endpoint endpoint) {

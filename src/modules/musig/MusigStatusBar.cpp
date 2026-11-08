@@ -26,11 +26,11 @@ void MusigStatusBar::init() {
 void MusigStatusBar::doConnect() {
     connect(m_electrum_item, &catalog::StatusBarItem::toggled, this,
             &MusigStatusBar::onElectrumToggled, qontrol::UNIQUE);
-    connect(m_controller, &AccountBackend::endpointStateChanged, this,
+    connect(m_controller, &AccountLifecycle::endpointStateChanged, this,
             &MusigStatusBar::onEndpointStateChanged, qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::electrumUrlChanged, this,
             &MusigStatusBar::onReloadUrl, qontrol::UNIQUE);
-    connect(m_controller, &AccountBackend::endpointRequestFinished, this,
+    connect(m_controller, &AccountLifecycle::endpointRequestFinished, this,
             &MusigStatusBar::onEndpointRequestFinished, qontrol::UNIQUE);
 }
 

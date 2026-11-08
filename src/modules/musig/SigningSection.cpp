@@ -143,7 +143,7 @@ void SigningSection::doConnect() {
             &SigningSection::onCoinsChanged, qontrol::UNIQUE);
     connect(m_services.transaction, &backend::IService::error, this,
             &SigningSection::onTransactionError, qontrol::UNIQUE);
-    connect(m_controller, &AccountBackend::endpointStateChanged, this,
+    connect(m_controller, &AccountLifecycle::endpointStateChanged, this,
             &SigningSection::onEndpointStateChanged, qontrol::UNIQUE);
 }
 
