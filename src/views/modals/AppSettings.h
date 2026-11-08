@@ -141,7 +141,8 @@ private:
     catalog::FieldNote *m_language_note = nullptr;
     catalog::Section *m_prices = nullptr;
     catalog::Separator *m_prices_separator = nullptr;
-    catalog::FieldGroup *m_price_fields = nullptr;
+    catalog::FieldGroup *m_price_source_field = nullptr;
+    catalog::FieldGroup *m_price_currency_field = nullptr;
     catalog::ComboBox *m_price_source_picker = nullptr;
     catalog::ComboBox *m_price_currency_picker = nullptr;
     catalog::Section *m_fees = nullptr;

@@ -285,11 +285,17 @@ void AppSettings::initPrices() {
     m_price_source_picker->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     m_price_source_picker->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     m_price_currency_picker->setFixedWidth(metric::SETTINGS_PICKER_WIDTH);
-    m_price_fields = new catalog::FieldGroup;
-    m_price_fields->addField(TR("settings-price-source"), m_price_source_picker);
-    m_price_fields->addField(TR("settings-price-currency"), m_price_currency_picker);
+    m_price_source_field = new catalog::FieldGroup;
+    m_price_source_field->addField(TR("settings-price-source"), m_price_source_picker);
+    m_price_currency_field = new catalog::FieldGroup;
+    m_price_currency_field->addField(TR("settings-price-currency"), m_price_currency_picker);
     m_prices = foldable(TR("settings-prices"));
-    m_prices->setContent(m_price_fields);
+    // Source and currency on one row, as Theme and Language are in General.
+    m_prices->setContent((new qontrol::Row)
+                             ->spacing(resolve(Spacing::XL))
+                             ->push(m_price_source_field, 0, Qt::AlignTop)
+                             ->push(m_price_currency_field, 0, Qt::AlignTop)
+                             ->pushSpacer());
     m_prices_separator = new catalog::Separator;
     onPriceSourcesChanged();
 }
@@ -684,8 +690,8 @@ void AppSettings::retranslateUi() {
     m_fee_recommendations->setFieldLabel(m_fee_fast_label, TR("fee-fast"));
     onFeeSourcesChanged();
     m_prices->header()->setLabel(TR("settings-prices"));
-    m_price_fields->setFieldLabel(m_price_source_picker, TR("settings-price-source"));
-    m_price_fields->setFieldLabel(m_price_currency_picker, TR("settings-price-currency"));
+    m_price_source_field->setFieldLabel(m_price_source_picker, TR("settings-price-source"));
+    m_price_currency_field->setFieldLabel(m_price_currency_picker, TR("settings-price-currency"));
     onPriceSourcesChanged();
     // The language is picked on the main view: a flow is always opened in it.
     if (m_flow == nullptr) {

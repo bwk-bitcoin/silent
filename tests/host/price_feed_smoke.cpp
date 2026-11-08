@@ -870,6 +870,18 @@ void priceSourceGeometry(HostImpl *host, const QString &first_id, const QString 
     auto minimumWidth = window.minimumWidth();
     window.resize(minimumWidth, window.height());
     window.show();
+    QApplication::processEvents();
+    QComboBox *currency = nullptr;
+    for (auto *picker : settings->findChildren<QComboBox *>()) {
+        if (picker != source && picker->findData(QStringLiteral("EUR")) >= 0) {
+            currency = picker;
+        }
+    }
+    require(currency != nullptr &&
+                source->mapTo(settings, source->rect().center()).y() ==
+                    currency->mapTo(settings, currency->rect().center()).y() &&
+                source->mapTo(settings, QPoint()).x() < currency->mapTo(settings, QPoint()).x(),
+            "price source and currency share one row, source first (#86)");
     for (const auto &id : {QString(), first_id, second_id}) {
         auto index = source->findData(id);
         require(index >= 0, "all source choices remain available");
