@@ -1,12 +1,14 @@
 // Account UI service assembly: one provider, split providers (two external plugins, a
 // built-in module and the host's explicit unsupported implementation), refusals that keep
 // nothing, a supplying plugin retained until the assembly using it is deleted and every
-// service it was handed back is destroyed, and the account shell over two plugins.
+// service it was handed back is destroyed, the payloads it handed out outliving its unload,
+// and the account shell over one plugin and over two, its panels showing each one's data.
 
 #include "AppController.h"
 #include "PluginBundleFixture.h"
 #include "account/AccountShell.h"
 #include "account/SendSigning.h"
+#include "catalog/form/LabelCell.h"
 #include "host/Host.h"
 #include "host/PluginRegistry.h"
 #include "host/ServiceAssembly.h"
@@ -23,11 +25,13 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QJsonValue>
+#include <QLineEdit>
 #include <QPointer>
 #include <QStringList>
 #include <QThread>
 #include <QWidget>
 #include <Qontrol>
+#include <algorithm>
 #include <common.h>
 #include <memory>
 #include <optional>
@@ -173,6 +177,12 @@ public:
     backend::RequestId errorRequest = 0;
     backend::RequestId valueRequest = 0;
     QJsonValue value;
+    QString valueOperation;
+    QJsonValue valueEvent;
+    backend::RequestId rawRequest = 0;
+    QByteArray raw;
+    QString rawOperation;
+    QByteArray rawEvent;
     int retired = 0;
     bool stopFinished = false;
     QString stopError;
@@ -186,6 +196,21 @@ public slots:
     void onValueResult(backend::RequestId request_id, const QJsonValue &payload) {
         valueRequest = request_id;
         value = payload;
+    }
+
+    void onValueEvent(const QString &operation, const QJsonValue &payload) {
+        valueOperation = operation;
+        valueEvent = payload;
+    }
+
+    void onRawResult(backend::RequestId request_id, const QByteArray &payload) {
+        rawRequest = request_id;
+        raw = payload;
+    }
+
+    void onRawEvent(const QString &operation, const QByteArray &payload) {
+        rawOperation = operation;
+        rawEvent = payload;
     }
 
     void onRetired() {
@@ -213,6 +238,13 @@ auto fixtureModule(PluginRegistry *registry, const QString &plugin_id) -> IModul
 
 auto outstanding(IModule *module) -> int {
     return module->property("outstanding").toInt();
+}
+
+// Whether the library of `plugin_id` is mapped into this process (from its memfd).
+auto libraryMapped(const QString &plugin_id) -> bool {
+    QFile maps(QStringLiteral("/proc/self/maps"));
+    require(maps.open(QIODevice::ReadOnly), "the process maps open");
+    return maps.readAll().contains(QStringLiteral("lib%1.so").arg(plugin_id).toUtf8());
 }
 
 void enableFixture(PluginRegistry *registry, const QString &id, const char *path) {
@@ -267,9 +299,24 @@ void oneProvider(HostImpl *host, IModule *full) {
     Replies replies;
     QObject::connect(assembly.blockchain(), &backend::IService::valueResult, &replies,
                      &Replies::onValueResult, qontrol::UNIQUE);
+    QObject::connect(assembly.blockchain(), &backend::IService::valueEvent, &replies,
+                     &Replies::onValueEvent, qontrol::UNIQUE);
+    QObject::connect(assembly.settings(), &backend::IService::rawResult, &replies,
+                     &Replies::onRawResult, qontrol::UNIQUE);
+    QObject::connect(assembly.settings(), &backend::IService::rawEvent, &replies,
+                     &Replies::onRawEvent, qontrol::UNIQUE);
     assembly.blockchain()->value(3, QStringLiteral("echo"), QJsonValue(QStringLiteral("x")));
     require(replies.valueRequest == 3 && replies.value.toString() == QStringLiteral("x"),
             "the JSON extension reaches the plugin and answers inline");
+    require(replies.valueOperation == QStringLiteral("echo") &&
+                replies.valueEvent.toString() == QStringLiteral("x"),
+            "a JSON event of the plugin reaches the consumer");
+    assembly.settings()->raw(4, QStringLiteral("echo"), QByteArrayLiteral("bytes"));
+    require(replies.rawRequest == 4 && replies.raw == QByteArrayLiteral("bytes"),
+            "the byte extension reaches the plugin and answers inline");
+    require(replies.rawOperation == QStringLiteral("echo") &&
+                replies.rawEvent == QByteArrayLiteral("bytes"),
+            "a byte event of the plugin reaches the consumer");
     require(outstanding(full) == 5, "the provider handed out five services");
     result.assembly.reset();
     require(outstanding(full) == 0, "deleting the assembly hands every service back");
@@ -400,6 +447,10 @@ void retention(HostImpl *host, PluginRegistry *registry,
                 outstanding(chain) == 2,
             "the chain plugin stays loaded while its services are assembled");
     QPointer<QObject> held = split->blockchain();
+    // Copies of what the chain plugin handed out, read again once it is unloaded.
+    auto history = split->blockchain()->history();
+    auto label = split->labels()->label({});
+    require(libraryMapped(CHAIN), "the chain library is mapped while it runs");
     split.release()->deleteLater();
     spin(RETAINED_MS);
     require(outstanding(chain) == 2 && registry->pluginStopPending(CHAIN),
@@ -415,7 +466,10 @@ void retention(HostImpl *host, PluginRegistry *registry,
     require(replies.stopError.isEmpty(), "the chain plugin stops cleanly once released");
     waitFor([registry] { return !registry->pluginStopPending(CHAIN); },
             "the chain plugin stop settles");
-    require(chainModule == nullptr, "the chain plugin is unloaded");
+    require(chainModule == nullptr && !libraryMapped(CHAIN), "the chain plugin is unloaded");
+    require(history.size() == 1 && history.first().txid == CHAIN &&
+                history.first().label == CHAIN && label == CHAIN,
+            "what the chain plugin handed out outlives its unload");
     require(outstanding(full) == 0 && builtin->outstanding == 0,
             "the other providers got their services back");
     require(registry->isPluginEnabled(FULL), "the other providers are not stopped");
@@ -443,6 +497,52 @@ public:
 private:
     QWidget *m_actions = new QWidget(this);
 };
+
+// Builds every shared panel of `shell`, then checks History shows the history of the plugin
+// `history_id` and Settings the endpoints of the plugin `settings_id`.
+void openPanels(account::AccountShell &shell, IModule *caller, const QString &history_id,
+                const QString &settings_id) {
+    shell.openSettings(nullptr, false);
+    shell.openFunds(new IdleSigning, caller);
+    for (const auto *name : {"history", "coins", "send", "receive", "settings"}) {
+        require(shell.screen(QString::fromLatin1(name)).has_value(),
+                "the shell builds every shared panel over them");
+    }
+    // A table lays its rows out on the next event loop pass.
+    QCoreApplication::processEvents();
+    auto labels =
+        shell.screen(QStringLiteral("history")).value()->findChildren<catalog::LabelCell *>();
+    require(std::ranges::any_of(labels,
+                                [&history_id](const catalog::LabelCell *cell) {
+                                    return cell->label() == history_id;
+                                }),
+            "History shows the history of the plugin supplying the blockchain");
+    auto fields = shell.screen(QStringLiteral("settings")).value()->findChildren<QLineEdit *>();
+    require(std::ranges::any_of(
+                fields,
+                [&settings_id](const QLineEdit *field) { return field->text() == settings_id; }),
+            "Settings shows the endpoints of the plugin supplying the settings");
+}
+
+// The account shell over one plugin supplying all five services.
+void shellOneProvider(IModule *full) {
+    {
+        QWidget page;
+        account::AccountShell shell(account::accountMenuEntries(), new QWidget, &page);
+        require(shell.assemble({.account = ACCOUNT,
+                                .network = backend::Network::Regtest,
+                                .account_backend = full,
+                                .blockchain = full,
+                                .transaction = full,
+                                .labels = full,
+                                .settings = full}),
+                "the shell assembles the services of one plugin");
+        require(outstanding(full) == 5, "the plugin handed out five services");
+        openPanels(shell, full, FULL, FULL);
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(outstanding(full) == 0, "deleting the shell hands every service back");
+}
 
 // The account shell takes each service from its own plugin, parents none of them, builds
 // its panels over them, and drops the panels, then the assembly, when a supplier stops.
@@ -474,12 +574,7 @@ void shellRetirement(PluginRegistry *registry, IModule *full) {
     require(services.account->parent() == full && services.blockchain->parent() == chain,
             "the shell parents no service: each stays its provider's");
     require(outstanding(full) == 3 && outstanding(chain) == 2, "five services handed out");
-    shell.openSettings(nullptr, false);
-    shell.openFunds(new IdleSigning, full);
-    for (const auto *name : {"history", "coins", "send", "receive", "settings"}) {
-        require(shell.screen(QString::fromLatin1(name)).has_value(),
-                "the shell builds every shared panel over them");
-    }
+    openPanels(shell, full, CHAIN, FULL);
     page.show();
     shell.showPanel(QStringLiteral("coins"));
     QPointer<qontrol::Screen> coins = shell.screen(QStringLiteral("coins")).value();
@@ -522,6 +617,7 @@ void accountServicesSmoke() {
     require(builtin->outstanding == 1, "the built-in provider handed out its service");
     refusals(host, full, chain);
     retention(host, registry, std::move(split), full, chain, builtin);
+    shellOneProvider(full);
     shellRetirement(registry, full);
 }
 

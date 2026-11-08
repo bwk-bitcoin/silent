@@ -1,6 +1,7 @@
 //! Rust rules behind the account UI services, over real isolated Regtest stores:
-//! crafting and finalizing without selection or derivation, change adoption, labels
-//! kept in RAM after a failed save, broadcast outcomes and endpoint settings.
+//! crafting and finalizing without selection or derivation, independent templates, change
+//! adoption, a restore bringing back no saved PSBT, labels kept in RAM after a failed save,
+//! broadcast outcomes and endpoint settings.
 
 mod common;
 
@@ -23,9 +24,9 @@ use bitcoin::{
 use bwk::{account::Account as BwkAccount, bwk_keys::nums::bip341_nums, bwk_tx::bwk_psbt::PsbtV2};
 use silent::{
     config_from_file, new_account, new_config, new_musig_account, new_musig_account_offline,
-    save_endpoints, test_endpoint, BackendErrorKind, BackendServer, BroadcastOutcome, Config,
-    EndpointSetting, LabelKind, MusigAccount, Network, Output, TransactionTemplate,
-    MUSIG_PLUGIN_ID,
+    restore_account_backup, save_endpoints, test_endpoint, BackendErrorKind, BackendServer,
+    BroadcastOutcome, Config, EndpointSetting, LabelKind, MusigAccount, Network, Output,
+    TransactionTemplate, MUSIG_PLUGIN_ID,
 };
 
 use common::{cleanup_test_account, descriptor_from_mnemonic, test_account_name, TEST_MNEMONIC};
@@ -34,6 +35,7 @@ const FUNDING: u64 = 100_000;
 const SENT: u64 = 40_000;
 const FEE: u64 = 1000;
 const CHANGE: u64 = FUNDING - SENT - FEE;
+const BACKUP_PASSWORD: &str = "correct horse battery";
 
 fn role_keys() -> Vec<String> {
     let secp = Secp256k1::new();
@@ -174,6 +176,21 @@ fn finalized(account: &MusigAccount, tx: &TransactionTemplate) -> Vec<u8> {
     let psbt = account.finalize_transaction(tx.clone());
     assert!(psbt.is_ok, "finalize: {}", psbt.error);
     psbt.psbt
+}
+
+/// What an unsigned PSBT pays: each output's script and amount, sorted.
+fn payments(psbt: &[u8]) -> Vec<(ScriptBuf, u64)> {
+    let mut outputs: Vec<_> = PsbtV2::deserialize(psbt)
+        .expect("PSBTv2")
+        .into_bitcoin_psbt()
+        .expect("bitcoin PSBT")
+        .unsigned_tx
+        .output
+        .into_iter()
+        .map(|txout| (txout.script_pubkey, txout.value.to_sat()))
+        .collect();
+    outputs.sort();
+    outputs
 }
 
 #[test]
@@ -348,6 +365,94 @@ fn multikey_crafting_selects_nothing_and_adoption_registers_change_once() {
     );
     drop(reopened);
     cleanup_test_account(&config.account_name);
+}
+
+#[test]
+fn independent_templates_craft_and_finalize_without_a_session() {
+    let (config, outpoint) = funded_multikey("");
+    let account = new_musig_account(config.account_name.clone());
+    assert!(account.is_ok(), "open Multikey: {}", account.get_error());
+    let first = template(recipient(), vec![outpoint.clone()]);
+    let mut second = first.clone();
+    second.outputs[0].amount = SENT / 2;
+
+    let first_psbt = finalized(&account, &first);
+    let second_psbt = finalized(&account, &second);
+    let change = change_script(&first_psbt);
+    let to = bitcoin::Address::from_str(&recipient())
+        .expect("recipient")
+        .assume_checked()
+        .script_pubkey();
+    let mut paid = vec![(to.clone(), SENT), (change.clone(), CHANGE)];
+    paid.sort();
+    assert_eq!(
+        payments(&first_psbt),
+        paid,
+        "the first PSBT pays the first template"
+    );
+    let mut paid = vec![(to, SENT / 2), (change, FUNDING - SENT / 2 - FEE)];
+    paid.sort();
+    assert_eq!(
+        payments(&second_psbt),
+        paid,
+        "the second PSBT pays the second template"
+    );
+    assert_eq!(
+        payments(&finalized(&account, &first)),
+        payments(&first_psbt),
+        "finalizing the second template leaves the first one as it was"
+    );
+    assert!(
+        account.craft_transaction(first).complete && account.craft_transaction(second).complete,
+        "both templates craft side by side"
+    );
+    assert!(
+        account.active_attempt().record_id.is_empty(),
+        "crafting and finalizing start no signing session"
+    );
+    drop(account);
+    cleanup_test_account(&config.account_name);
+}
+
+#[test]
+fn a_restored_backup_brings_back_no_saved_psbt() {
+    let (config, outpoint) = funded_multikey("");
+    let name = config.account_name.clone();
+    let account = new_musig_account(name.clone());
+    assert!(account.is_ok(), "open Multikey: {}", account.get_error());
+    let tx = template(recipient(), vec![outpoint.clone()]);
+    let psbt = finalized(&account, &tx);
+    let leaves = account.spend_leaves(vec![outpoint]);
+    assert!(leaves.is_ok, "spend leaves: {}", leaves.error);
+    let adopted = account.adopt_transaction(tx, leaves.leaves[0].clone(), &psbt);
+    assert!(adopted.is_ok(), "adopt: {}", adopted.get_psbt_error());
+    let saved = account.saved_psbts(true);
+    assert!(
+        saved.is_ok && saved.entries.len() == 1 && !account.active_attempt().record_id.is_empty(),
+        "the adopted PSBT is saved and active: {}",
+        saved.error
+    );
+    let backup = account.backup(BACKUP_PASSWORD.into());
+    assert!(backup.is_ok, "back the account up: {}", backup.error);
+    drop(account);
+    cleanup_test_account(&name);
+
+    let restored = restore_account_backup(MUSIG_PLUGIN_ID, &backup.bytes, BACKUP_PASSWORD.into());
+    assert!(restored.is_ok, "restore: {}", restored.error);
+    let account = new_musig_account(name.clone());
+    assert!(
+        account.is_ok(),
+        "open the restored account: {}",
+        account.get_error()
+    );
+    let saved = account.saved_psbts(true);
+    assert!(
+        saved.is_ok && saved.entries.is_empty() && account.active_attempt().record_id.is_empty(),
+        "the restored account holds no saved PSBT nor signing attempt: {}",
+        saved.error
+    );
+    drop(account);
+    cleanup_test_account(&name);
 }
 
 #[test]

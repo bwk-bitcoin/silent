@@ -1,6 +1,7 @@
 //! Account backups of the built-in accounts: a backup restores the account it was made
 //! of, with its address indexes and labels; a malformed backup, a wrong password, an
-//! existing account or another kind of account are refused, leaving nothing behind.
+//! existing account, another kind of account or another SP scan start are refused, leaving
+//! nothing behind.
 
 mod common;
 
@@ -409,9 +410,8 @@ fn sealed(payload: serde_json::Value) -> Vec<u8> {
     bytes
 }
 
-/// The JSON of the saved config of the Multikey account `name`, made then removed.
-fn multikey_config(name: &str) -> serde_json::Value {
-    create_multikey(name);
+/// The JSON of the saved config of the account `name`, which is then removed.
+fn removed_config(name: &str) -> serde_json::Value {
     let config = config_from_file(name.into());
     assert!(config.is_ok(), "read the config: {}", config.get_error());
     let json = serde_json::to_value(&*config).expect("config json");
@@ -422,7 +422,8 @@ fn multikey_config(name: &str) -> serde_json::Value {
 #[test]
 fn a_backup_of_a_newer_version_is_refused() {
     let name = test_account_name();
-    let config = multikey_config(&name);
+    create_multikey(&name);
+    let config = removed_config(&name);
     let bytes = sealed(serde_json::json!({ "version": 99, "config": config }));
     assert!(
         matches!(
@@ -441,7 +442,8 @@ fn a_backup_of_a_newer_version_is_refused() {
 #[test]
 fn a_restore_failing_after_creation_leaves_no_account() {
     let name = test_account_name();
-    let config = multikey_config(&name);
+    create_multikey(&name);
+    let config = removed_config(&name);
     let bytes = sealed(serde_json::json!({
         "version": account_backup::VERSION,
         "config": config,
@@ -460,4 +462,49 @@ fn a_restore_failing_after_creation_leaves_no_account() {
         !config_from_file(name).is_ok(),
         "the account it created is removed"
     );
+}
+
+#[test]
+fn an_sp_backup_scanning_from_another_block_is_refused() {
+    let name = test_account_name();
+    create_sp(&name);
+    let config = removed_config(&name);
+    let backup = |scan_start: u32| {
+        sealed(serde_json::json!({
+            "version": account_backup::VERSION,
+            "config": config,
+            "scan_start": scan_start,
+            "tips": [],
+            "labels": [],
+        }))
+    };
+
+    let refused = restore_account_backup("sp", &backup(500), PASSWORD.into());
+    assert_eq!(
+        (refused.is_ok, refused.failure),
+        (false, BackupFailure::Unsupported),
+        "a backup scanning from another block is refused: {}",
+        refused.error
+    );
+    assert!(
+        refused.error.contains("scans from block Some(500)"),
+        "the refusal names the block: {}",
+        refused.error
+    );
+    assert!(
+        !config_from_file(name.clone()).is_ok(),
+        "nothing is created for a refused scan start"
+    );
+
+    let restored = restore_account_backup("sp", &backup(1), PASSWORD.into());
+    assert!(
+        restored.is_ok,
+        "the block every new account scans from restores: {}",
+        restored.error
+    );
+    assert!(
+        config_from_file(name.clone()).is_ok(),
+        "the restored account is saved"
+    );
+    cleanup_test_account(&name);
 }

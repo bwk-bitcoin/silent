@@ -49,20 +49,21 @@ auto supplies(backend::ServiceKind kind) -> bool {
 #endif
 }
 
-// Both extensions echo their payload, so a consumer sees the request reach this plugin.
+// Both extensions echo their payload as the result, then as an event of the operation, so a
+// consumer sees the request reach this plugin.
 template <typename Service> class FixtureService : public Service {
 public:
     explicit FixtureService(QObject *parent) : Service(parent) {
     }
 
-    void raw(backend::RequestId request_id, [[maybe_unused]] QString operation,
-             QByteArray payload) override {
+    void raw(backend::RequestId request_id, QString operation, QByteArray payload) override {
         emit this->rawResult(request_id, payload);
+        emit this->rawEvent(operation, payload);
     }
 
-    void value(backend::RequestId request_id, [[maybe_unused]] QString operation,
-               QJsonValue payload) override {
+    void value(backend::RequestId request_id, QString operation, QJsonValue payload) override {
         emit this->valueResult(request_id, payload);
+        emit this->valueEvent(operation, payload);
     }
 };
 
@@ -146,7 +147,7 @@ public:
     }
 
     [[nodiscard]] auto history() const -> QList<backend::Transaction> override {
-        return {backend::Transaction{.txid = pluginId()}};
+        return {backend::Transaction{.txid = pluginId(), .label = pluginId()}};
     }
 
     [[nodiscard]] auto transactionDetails([[maybe_unused]] const QString &txid) const
@@ -243,7 +244,7 @@ public:
 
     [[nodiscard]] auto settings() const -> backend::Settings override {
         return {.network = backend::Network::Regtest,
-                .endpoints = {backend::Endpoint{.id = pluginId()}}};
+                .endpoints = {backend::Endpoint{.id = pluginId(), .url = pluginId()}}};
     }
 
     void testEndpoint(backend::RequestId request_id,

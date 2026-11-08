@@ -1,8 +1,9 @@
 // The shared account views over the built-in service adapters of a scripted account: what
 // the account answers, and when, is the test's. Covers reads by polling and by notification
 // around a funds read that answers later, coin selection answered inline, later and stale,
-// independent templates of two Send views, a label kept in RAM when its save fails, and the
-// broadcast outcomes the SP signing step shows.
+// independent templates of two Send views, a label kept in RAM when its save fails, a label
+// being edited kept through a funds change, and the broadcast outcomes the SP signing step
+// shows.
 
 #include <QApplication>
 #include <QByteArray>
@@ -39,8 +40,11 @@
 #include "catalog/display/Label.h"
 #include "catalog/feedback/Notice.h"
 #include "catalog/form/EndpointRow.h"
+#include "catalog/form/LabelCell.h"
 #include "catalog/inputs/Checkbox.h"
 #include "catalog/inputs/Input.h"
+#include "catalog/panels/home/CoinsTable.h"
+#include "catalog/panels/home/HistoryTable.h"
 #include "i18n/I18nManager.h"
 #include "i18n/Tr.h"
 #include "interfaces/backend/account.h"
@@ -63,6 +67,7 @@ constexpr quint64 COIN_B = 50000;
 
 const QString TX_A = QString(64, QLatin1Char('a'));
 const QString TX_B = QString(64, QLatin1Char('b'));
+const QString TX_C = QString(64, QLatin1Char('c'));
 const QString OUTPOINT_A = TX_A + QStringLiteral(":0");
 const QString OUTPOINT_B = TX_B + QStringLiteral(":1");
 const QString RECIPIENT = QStringLiteral("bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
@@ -208,6 +213,11 @@ public:
         for (auto &coin : funds.coins) {
             if (key.kind == backend::LabelKind::Outpoint && coin.outpoint == key.id) {
                 coin.label = text;
+            }
+        }
+        for (auto &tx : funds.history) {
+            if (key.kind == backend::LabelKind::Transaction && tx.txid == key.id) {
+                tx.label = text;
             }
         }
         onLabelsChanged();
@@ -558,6 +568,41 @@ void labelFailureShown() {
             "a save that goes through clears the failure");
 }
 
+// A label being edited in `View` (Coins or History) keeps its row and its text through a
+// funds change; the rows are rebuilt once the edit is done, with the change and the label.
+template <typename View> void labelEditKept(const QString &row_id) {
+    const QString typed = QStringLiteral("typed");
+    ViewContext context;
+    ViewServices view(&context);
+    context.onFundsChanged();
+    View panel(view.services);
+    QPointer table = panel.m_table;
+    QPointer<catalog::LabelCell> cell = table->m_label_cells.value(row_id);
+    require(cell != nullptr, "the row has a label cell");
+    cell->onEditClicked();
+    cell->m_input->setText(typed);
+
+    context.funds.coins.append({.outpoint = TX_C + QStringLiteral(":0"),
+                                .amount = COIN_B,
+                                .origin = QStringLiteral("SP"),
+                                .spendable = true});
+    context.funds.history.append({.txid = TX_C,
+                                  .direction = QStringLiteral("incoming"),
+                                  .status = QStringLiteral("unconfirmed"),
+                                  .amount = COIN_B});
+    context.onFundsChanged();
+    require(panel.m_table == table && cell != nullptr && cell->isEditing() &&
+                cell->m_input->text() == typed,
+            "a funds change keeps the label being edited");
+
+    cell->onEditFinished();
+    waitFor([&panel, &table] { return panel.m_table != table; },
+            "the rows are rebuilt once the edit is done");
+    require(panel.m_table->m_label_cells.size() == 3, "the rebuilt rows show the funds change");
+    auto edited = panel.m_table->m_label_cells.value(row_id);
+    require(edited != nullptr && edited->label() == typed, "the rebuilt row shows the label");
+}
+
 // The SP signing step broadcasts through IBlockchain: only an accepted transaction is shown
 // sent, rejected and unknown fates are failures with their error.
 void broadcastOutcomes() {
@@ -698,6 +743,8 @@ void accountViewsSmoke() {
     sendSelection();
     independentTemplates();
     labelFailureShown();
+    labelEditKept<account::view::Coins>(OUTPOINT_A);
+    labelEditKept<account::view::History>(TX_A);
     broadcastOutcomes();
     settingsIgnoresScanUpdates();
     receiveFollowsKindNames();

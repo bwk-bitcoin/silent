@@ -688,16 +688,25 @@ if(SILENT_BUILD_HOST_SMOKE)
             $<TARGET_PROPERTY:Qt6::Core,INTERFACE_INCLUDE_DIRECTORIES>)
         target_compile_definitions(storage_fixture PRIVATE
             $<TARGET_PROPERTY:Qt6::Core,INTERFACE_COMPILE_DEFINITIONS>)
-        # Account service providers built against the published SDK only: the guard
-        # headers fail the build if an interface pulls generated Rust/CXX headers.
+        # The published SDK alone, laid out as an out-of-tree plugin vendors it
+        # (sdk/include/src): the public interfaces and the palette they include, no other
+        # header of src/.
+        set(SILENT_SDK_INCLUDE "${CMAKE_CURRENT_BINARY_DIR}/sdk/include/src")
+        file(MAKE_DIRECTORY "${SILENT_SDK_INCLUDE}/theme")
+        file(CREATE_LINK "${CMAKE_SOURCE_DIR}/src/interfaces"
+            "${SILENT_SDK_INCLUDE}/interfaces" SYMBOLIC)
+        file(CREATE_LINK "${CMAKE_SOURCE_DIR}/src/theme/Palette.h"
+            "${SILENT_SDK_INCLUDE}/theme/Palette.h" SYMBOLIC)
+        # Account service providers built against that SDK only: the guard headers fail
+        # the build if an interface pulls generated Rust/CXX headers.
         foreach(SERVICE_FIXTURE full chain)
             qt_add_library(service_${SERVICE_FIXTURE}_fixture MODULE
                 tests/host/ServiceProviderPlugin.cpp)
             add_dependencies(service_${SERVICE_FIXTURE}_fixture RunBeforeBuild)
-            target_link_libraries(service_${SERVICE_FIXTURE}_fixture PRIVATE silent_interfaces)
             target_include_directories(service_${SERVICE_FIXTURE}_fixture BEFORE PRIVATE
                 ${CMAKE_SOURCE_DIR}/tests/interfaces/generated_guard)
             target_include_directories(service_${SERVICE_FIXTURE}_fixture PRIVATE
+                "${SILENT_SDK_INCLUDE}"
                 $<TARGET_PROPERTY:Qt6::Core,INTERFACE_INCLUDE_DIRECTORIES>)
             target_compile_definitions(service_${SERVICE_FIXTURE}_fixture PRIVATE
                 $<TARGET_PROPERTY:Qt6::Core,INTERFACE_COMPILE_DEFINITIONS>)

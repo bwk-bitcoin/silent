@@ -5,6 +5,7 @@
 #include "AppController.h"
 #include "MainWindow.h"
 #include "account/AccountModule.h"
+#include "account/Extensions.h"
 #include "account/services/ServiceAdapters.h"
 #include "account/services/ServiceContext.h"
 #include "host/Host.h"
@@ -25,6 +26,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QJsonValue>
 #include <QPointer>
 #include <QThread>
 #include <common.h>
@@ -203,6 +205,9 @@ public:
     std::optional<backend::CraftResult> selected;
     std::optional<backend::BroadcastResult> broadcast;
     QList<backend::RequestId> done;
+    // The extension::ENDPOINTS_BUSY events, in order.
+    QList<bool> busy;
+    std::optional<QJsonValue> value;
 
 public slots:
 
@@ -240,6 +245,16 @@ public slots:
 
     void onDone(backend::RequestId request_id) {
         done.append(request_id);
+    }
+
+    void onValueResult([[maybe_unused]] backend::RequestId request_id, const QJsonValue &payload) {
+        value = payload;
+    }
+
+    void onValueEvent(const QString &operation, const QJsonValue &payload) {
+        if (operation == account::extension::ENDPOINTS_BUSY) {
+            busy.append(payload.toBool());
+        }
     }
 };
 
@@ -356,19 +371,28 @@ void connectAnswers(const host::ServiceAssembly &assembly, Answers &answers) {
                      &Answers::onDone, qontrol::UNIQUE);
     QObject::connect(assembly.blockchain(), &backend::IBlockchain::completed, &answers,
                      &Answers::onDone, qontrol::UNIQUE);
+    QObject::connect(assembly.settings(), &backend::IService::valueResult, &answers,
+                     &Answers::onValueResult, qontrol::UNIQUE);
+    QObject::connect(assembly.settings(), &backend::IService::valueEvent, &answers,
+                     &Answers::onValueEvent, qontrol::UNIQUE);
 }
 
 // A settings write waits for the endpoint operation reading and writing the same config.
 void settingsWaitForEndpoints(const host::ServiceAssembly &assembly, Answers &answers) {
     auto settings = assembly.settings()->settings();
     settings.endpoints.first().url = QStringLiteral("tcp://127.0.0.1:1");
+    answers.busy.clear();
     assembly.blockchain()->setConnected(20, QStringLiteral("electrum"), false);
+    require(answers.busy == QList<bool>{true}, "an endpoint operation starting is a JSON event");
+    assembly.settings()->value(24, account::extension::ENDPOINTS_BUSY, QJsonValue());
+    require(answers.value == QJsonValue(true), "the JSON extension answers the operation running");
     assembly.settings()->save(21, settings);
     require(answers.errors.contains(21) &&
                 answers.lastError.contains(QStringLiteral("endpoint operation")),
             "a save during an endpoint operation is refused");
     waitFor([&answers] { return answers.done.contains(20) || answers.errors.contains(20); },
             "the disconnection answers");
+    require(answers.busy == QList<bool>{true, false}, "the operation ending is a JSON event");
     assembly.settings()->save(22, settings);
     // The running save is itself an endpoint operation: nothing else writes the config meanwhile.
     assembly.settings()->save(23, settings);
@@ -437,8 +461,9 @@ void commonServices(const host::ServiceAssembly &assembly, Answers &answers,
     // An open account is never restored over.
     assembly.accountBackend()->restore(16, QByteArrayLiteral("backup"), QByteArrayLiteral("pw"));
     assembly.settings()->value(17, QStringLiteral("anything"), QJsonValue());
-    require(answers.errors.size() >= 3 && answers.errors.sliced(answers.errors.size() - 3) ==
-                                              QList<backend::RequestId>{15, 16, 17},
+    assembly.blockchain()->raw(18, QStringLiteral("anything"), QByteArrayLiteral("bytes"));
+    require(answers.errors.size() >= 4 && answers.errors.sliced(answers.errors.size() - 4) ==
+                                              QList<backend::RequestId>{15, 16, 17, 18},
             "unsupported requests answer error()");
 }
 

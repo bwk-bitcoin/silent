@@ -1273,9 +1273,53 @@ public:
 class ChainBlockchain final : public backend::IBlockchain {
     Q_OBJECT
     Q_INTERFACES(backend::IBlockchain)
-    // getters, slots, raw() and value()
+
+public:
+    ChainBlockchain(QString account, backend::Network network, QObject *parent);
+
+    // Getters copy local state: no I/O, no lock held for long.
+    auto history() const -> QList<backend::Transaction> override {
+        return m_history;
+    }
+    // state(), coins(), balance(), transactionDetails() alike; empty data is a valid answer.
+
+    // A request answers once, possibly during the call.
+    void refreshTip(backend::RequestId request_id, QString connection_id) override {
+        m_pending.insert(request_id, connection_id); // answered by completed() later
+    }
+
+    // Unsupported: error(), never silence.
+    void rescan(backend::RequestId request_id, std::optional<quint64>) override {
+        emit error(request_id, QString::fromLatin1("rescan is not supported"));
+    }
+
+    // Extensions are namespaced by the provider and own their payloads.
+    void value(backend::RequestId request_id, QString operation, QJsonValue payload) override {
+        if (operation != QString::fromLatin1("chain.feeHistogram")) {
+            emit error(request_id, QString::fromLatin1("unknown operation"));
+            return;
+        }
+        emit valueResult(request_id, histogram(payload));
+    }
+    // raw() alike with bytes; rawEvent() and valueEvent() publish unrequested updates.
+
+    // start(), stop(), setConnected(), fetchTransactionDetails(), broadcast() as above.
 };
 ```
+
+It builds against the SDK alone, as an out-of-tree plugin vendors it (`sdk/include/src`:
+`interfaces/` and `theme/Palette.h`), with Qt Core headers and no Qt library of its own:
+
+```cmake
+qt_add_library(chain MODULE src/ChainPlugin.cpp)
+target_include_directories(chain PRIVATE sdk/include/src
+    $<TARGET_PROPERTY:Qt6::Core,INTERFACE_INCLUDE_DIRECTORIES>)
+target_compile_definitions(chain PRIVATE
+    $<TARGET_PROPERTY:Qt6::Core,INTERFACE_COMPILE_DEFINITIONS>)
+```
+
+`tests/host/ServiceProviderPlugin.cpp` is a complete provider of all five services, built
+this way (the host smoke build lays the SDK out under `build-smoke/sdk/include/src`).
 
 - `service()` answers this provider's service of one kind for an account (its instance id) on
   a network, or null. GUI thread, no I/O. Each non-null answer is handed back exactly once
@@ -1320,10 +1364,14 @@ back is destroyed too: a provider may delete one later than its release. The oth
 of a retired assembly keep running.
 
 `host_smoke --account-services` loads two provider plugins built against the SDK only
-(`tests/host/ServiceProviderPlugin.cpp`, with the guard headers that fail on generated
-Rust/CXX includes). It checks one-provider and split-provider assembly, attribution, the
-unsupported implementation, refusals and retention through a plugin stop, a service its
-provider deletes a while after its release included.
+(`tests/host/ServiceProviderPlugin.cpp`, whose include path holds the SDK layout and the
+guard headers that fail on generated Rust/CXX includes, nothing else of `src/`). It checks
+one-provider and split-provider assembly, attribution, the byte and JSON results and events
+of a plugin, the unsupported implementation, refusals and retention through a plugin stop,
+a service its provider deletes a while after its release included, and the payloads a
+plugin handed out read once its library is unmapped. The account shell runs over one plugin
+supplying all five services and over two, its History and Settings showing the data of the
+plugin each service comes from.
 
 ### Built-in providers
 
@@ -1392,7 +1440,12 @@ published again when the language changes.
 
 `host_smoke --backend-services` assembles both providers over Regtest fixture accounts and
 checks a history published after its coin through the same getters for a polling and a
-notified consumer.
+notified consumer, and `silent.endpointsBusy` as a `value()` answer and as the
+`valueEvent()` around an endpoint operation. `silent/tests/account_services.rs` checks the
+Rust rules: no selection while crafting or finalizing, independent templates finalized side
+by side, change adoption, labels kept in RAM, broadcast outcomes and endpoint settings.
+`silent/tests/validate_psbt.rs` takes the bytes of an SP `finalize()` through the signing
+flow: validation, the hot key's signature and the account's finalization.
 
 ### The shared account views
 
@@ -1434,6 +1487,14 @@ titles, endpoints and their presentation), and the amount and fee rules from
 
 - Settings ends with Backup, which opens `account::view::BackupAccount` over
   `IAccountBackend` (see Backup and restore).
+- History, Coins and the transaction details keep their rows while a label is being edited
+  or a details modal is open: a change meanwhile is shown once the edit is done.
+
+`host_smoke --account-views` runs the views over the built-in adapters of a scripted
+account: reads by polling and by notification around a funds read answered later, coin
+selection answered inline, later and stale, two Send views with their own templates, a
+label kept in RAM when its save fails, a label edit kept through a funds change, and the
+broadcast outcomes the SP signing step shows.
 
 ### The account shell
 
@@ -1520,8 +1581,10 @@ retirement, the Backup modal's password rules and refusal, and over the real SP 
 accounts a backup through the account service, a wrong password, another kind's restore
 target, an existing account, and a restore once the account is gone, which then opens.
 `silent/tests/account_backup.rs` checks both kinds' roundtrips, malformed backups, wrong
-passwords, a newer backup version, existing accounts, another kind, and a restore failing
-once the account is created, which leaves no account.
+passwords, a newer backup version, existing accounts, another kind, an SP backup scanning
+from another block, and a restore failing once the account is created, which leaves no
+account. `silent/tests/account_services.rs` restores a Multikey backup made while a PSBT was
+saved and active: the restored account holds neither.
 
 ## Inter-Account Operation: Send To / Spend From Siblings
 
