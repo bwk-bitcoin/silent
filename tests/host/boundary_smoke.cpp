@@ -703,6 +703,30 @@ void signerPlanPresentation(const SoftwareKey &key) {
     waitFor([&stopped] { return stopped.count() == 1; }, "signer fixture workers drain");
 }
 
+// bwk reports the connection, then the listener it starts: the second notification keeps
+// a Multikey account connected (#85).
+void multikeyElectrumStartedAfterConnected() {
+    MusigAccountController controller(QStringLiteral("boundary-policy"), nullptr);
+    waitFor([&controller] { return !controller.accountLoading(); },
+            "multikey account load finishes");
+    waitFor([&controller] { return !controller.endpointOperationsBusy(); },
+            "multikey startup connection settles");
+    Notification connected{};
+    connected.flag = NotificationFlag::ElectrumConnected;
+    connected.payload = rust::String("127.0.0.1:1");
+    controller.handleNotification(connected);
+    Notification started{};
+    started.flag = NotificationFlag::ElectrumStarted;
+    controller.handleNotification(started);
+    require(controller.electrumState() == MusigAccountController::ElectrumState::Connected,
+            "a listener started after the connection keeps the multikey account connected");
+    SignalSpy stopped;
+    QObject::connect(&controller, &MusigAccountController::stopped, &stopped, &SignalSpy::onSignal,
+                     qontrol::UNIQUE);
+    controller.stop();
+    waitFor([&stopped] { return stopped.count() == 1; }, "multikey fixture workers drain");
+}
+
 void numericNotificationDelivery() {
     AccountController controller(static_cast<AccountWidget *>(nullptr));
     NumericProgressSpy spy;
@@ -1940,6 +1964,7 @@ void boundarySmoke() {
     policyCreation(key, launcher);
     compiledPolicyPresentation(key);
     signerPlanPresentation(key);
+    multikeyElectrumStartedAfterConnected();
     numericNotificationDelivery();
     endpointWorkerPresentation();
 #ifdef Q_OS_UNIX

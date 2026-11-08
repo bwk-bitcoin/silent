@@ -427,9 +427,9 @@ void MusigAccountController::handleNotification(Notification notif) {
         pollCoins();
         refreshActiveWarning();
         break;
+    // The listener starts once connected, after ElectrumConnected: it changes no state
+    // (it used to take a connected account back to Connecting).
     case NotificationFlag::ElectrumStarted:
-        m_electrum_state = ElectrumState::Connecting;
-        emit endpointStateChanged(Endpoint::Electrum);
         break;
     case NotificationFlag::ElectrumConnected:
         m_electrum_state = ElectrumState::Connected;
