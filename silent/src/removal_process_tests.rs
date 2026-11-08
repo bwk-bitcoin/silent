@@ -44,7 +44,7 @@ const RESUME: &str = "resume";
 const PLUGIN: &str = "removal-probe";
 /// "data", base64.
 const DATA: &str = "ZGF0YQ==";
-const IID: &str = "dev.silent.IPlugin/10.0";
+const IID: &str = "dev.silent.IPlugin/11.0";
 const LIBRARY: &str = "libremoval.so";
 const UNIX_HOST: u16 = 3;
 const UNIX_REGULAR: u32 = 0o100_644;

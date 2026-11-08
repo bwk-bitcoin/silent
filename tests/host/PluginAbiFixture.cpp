@@ -1,7 +1,7 @@
 #if defined(SILENT_ABI2_FIXTURE) || defined(SILENT_ABI3_FIXTURE) ||                                \
     defined(SILENT_ABI4_FIXTURE) || defined(SILENT_ABI5_FIXTURE) ||                                \
     defined(SILENT_ABI6_FIXTURE) || defined(SILENT_ABI7_FIXTURE) ||                                \
-    defined(SILENT_ABI8_FIXTURE) || defined(SILENT_ABI9_FIXTURE)
+    defined(SILENT_ABI8_FIXTURE) || defined(SILENT_ABI9_FIXTURE) || defined(SILENT_ABI10_FIXTURE)
 #include "legacy/ModuleV2.h"
 #else
 #include "interfaces/module.h"
@@ -45,9 +45,9 @@ LibraryInitializer initializer;
 
 class Q_DECL_HIDDEN PluginAbiFixture final : public QObject, public IPlugin {
     Q_OBJECT
-#ifdef SILENT_ABI11_FIXTURE
-    Q_PLUGIN_METADATA(IID "dev.silent.IPlugin/11.0")
-#elif defined(SILENT_ABI10_FIXTURE)
+#ifdef SILENT_ABI12_FIXTURE
+    Q_PLUGIN_METADATA(IID "dev.silent.IPlugin/12.0")
+#elif defined(SILENT_ABI11_FIXTURE)
     Q_PLUGIN_METADATA(IID SILENT_IPlugin_IID FILE "PluginAbiFixture.json")
 #else
     Q_PLUGIN_METADATA(IID SILENT_IPlugin_IID)
@@ -63,10 +63,10 @@ public:
 #if defined(SILENT_ABI2_FIXTURE) || defined(SILENT_ABI3_FIXTURE) ||                                \
     defined(SILENT_ABI4_FIXTURE) || defined(SILENT_ABI5_FIXTURE) ||                                \
     defined(SILENT_ABI6_FIXTURE) || defined(SILENT_ABI7_FIXTURE) ||                                \
-    defined(SILENT_ABI8_FIXTURE) || defined(SILENT_ABI9_FIXTURE)
+    defined(SILENT_ABI8_FIXTURE) || defined(SILENT_ABI9_FIXTURE) || defined(SILENT_ABI10_FIXTURE)
         qFatal("registry must reject old ABI before calling plugin virtual methods");
 #else
-        return {{ QStringLiteral("id"), QStringLiteral("abi10") }};
+        return {{ QStringLiteral("id"), QStringLiteral("abi11") }};
 #endif
     }
 
@@ -74,7 +74,7 @@ public:
 #if defined(SILENT_ABI2_FIXTURE) || defined(SILENT_ABI3_FIXTURE) ||                                \
     defined(SILENT_ABI4_FIXTURE) || defined(SILENT_ABI5_FIXTURE) ||                                \
     defined(SILENT_ABI6_FIXTURE) || defined(SILENT_ABI7_FIXTURE) ||                                \
-    defined(SILENT_ABI8_FIXTURE) || defined(SILENT_ABI9_FIXTURE)
+    defined(SILENT_ABI8_FIXTURE) || defined(SILENT_ABI9_FIXTURE) || defined(SILENT_ABI10_FIXTURE)
         qFatal("registry must reject old ABI before discovering modules or feeds");
 #else
         return {};

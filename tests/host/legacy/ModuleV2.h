@@ -5,7 +5,7 @@
 #include <QObject>
 #include <QString>
 
-// Frozen IPlugin declarations from de26556 through ABI 9, independent of the current SDK.
+// Frozen IPlugin declarations from de26556 through ABI 10, independent of the current SDK.
 class IModule;
 
 class IPlugin {
@@ -15,7 +15,9 @@ public:
     [[nodiscard]] virtual QList<IModule *> modules() const = 0;
 };
 
-#ifdef SILENT_ABI9_FIXTURE
+#ifdef SILENT_ABI10_FIXTURE
+#define SILENT_IPlugin_IID "dev.silent.IPlugin/10.0"
+#elif defined(SILENT_ABI9_FIXTURE)
 #define SILENT_IPlugin_IID "dev.silent.IPlugin/9.0"
 #elif defined(SILENT_ABI8_FIXTURE)
 #define SILENT_IPlugin_IID "dev.silent.IPlugin/8.0"

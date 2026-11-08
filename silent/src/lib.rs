@@ -445,11 +445,23 @@ mod ffi {
         pub variants: Vec<RustSpendVariant>,
     }
 
+    /// The validated chain tip a spending-coins export was computed against.
+    #[derive(Debug, Clone, Default)]
+    pub struct RustChainTip {
+        pub height: u32,
+        pub hash: String,
+        /// BIP113 median-time-past of the tip.
+        pub median_time_past: u32,
+        pub has_median_time_past: bool,
+    }
+
     #[derive(Debug, Clone)]
     pub struct SpendCoinsResult {
         pub is_ok: bool,
         pub error: String,
         pub coins: Vec<RustSpendCoin>,
+        pub tip: RustChainTip,
+        pub has_tip: bool,
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -3696,12 +3708,12 @@ pub use ffi::{
     PolicyReviewKey, PolicyReviewPath, PolicySemantic, PolicySpec, PsbtExport, PsbtFileResult,
     PsbtImport, PsbtPayloadResult, PsbtValidation, QrErrorKind, QrMessageResult,
     QrMusigSignerRoute, QrResponseKind, ReceiveAddress, ReceiveAddressResult, ReceiveKind,
-    RegtestDefaults, RetryDecision, RustCoin, RustSelectedInput, RustSpendCoin, RustSpendLock,
-    RustSpendVariant, RustTx, RustTxDetails, RustTxIo, SavedPsbtAttempt, SavedPsbtAttemptState,
-    SavedPsbtEntry, SavedPsbtImport, SavedPsbtInput, SavedPsbtList, SavedPsbtMutation,
-    SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore, SendAmounts, SignResult, SigningCandidate,
-    SigningPlan, SigningProgress, SigningStage, SpCreationRequest, SpendAvailability,
-    SpendCoinStatus, SpendCoinsResult, SpendError, SpendLockKind, SpendMaturity,
+    RegtestDefaults, RetryDecision, RustChainTip, RustCoin, RustSelectedInput, RustSpendCoin,
+    RustSpendLock, RustSpendVariant, RustTx, RustTxDetails, RustTxIo, SavedPsbtAttempt,
+    SavedPsbtAttemptState, SavedPsbtEntry, SavedPsbtImport, SavedPsbtInput, SavedPsbtList,
+    SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore, SendAmounts, SignResult,
+    SigningCandidate, SigningPlan, SigningProgress, SigningStage, SpCreationRequest,
+    SpendAvailability, SpendCoinStatus, SpendCoinsResult, SpendError, SpendLockKind, SpendMaturity,
     TransactionSimulation, TransactionTemplate, UnsignedPsbt,
 };
 pub use hwi::{new_hwi_service, HwiPoll, HwiReceiver, HwiService};

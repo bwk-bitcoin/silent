@@ -10,9 +10,9 @@ There is no keep-data choice. Disable preserves private data.
 
 ## Native shutdown contract
 
-The current root IID is IPlugin/10.0; IModule remains at 3.0. The shutdown contract,
+The current root IID is IPlugin/11.0; IModule remains at 3.0. The shutdown contract,
 introduced with IPlugin/9.0 and IModule/3.0, uses `shutdown(req_id)` and
-`shutdownFinished(req_id, error)`. ABI 9 libraries are now incompatible and can be
+`shutdownFinished(req_id, error)`. ABI 9 and 10 libraries are now incompatible and can be
 removed without loading them. The host records the request before dispatch and
 receives completion through a queued connection, outside the native call stack.
 The default implementation refuses shutdown. A removed registration or tab is not

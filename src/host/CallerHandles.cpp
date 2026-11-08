@@ -640,8 +640,10 @@ AccountHandle::AccountHandle(HostImpl *host, IModule *module, IModule *owner, IA
             qontrol::UNIQUE);
     connect(target, qOverload<ReqId, QMap<QString, QString>>(&IAccount::info), this,
             &AccountHandle::onInfo, qontrol::UNIQUE);
-    connect(target, qOverload<ReqId, QList<plugin::Coin>>(&IAccount::coins), this,
-            &AccountHandle::onCoins, qontrol::UNIQUE);
+    connect(
+        target,
+        qOverload<ReqId, QList<plugin::Coin>, std::optional<plugin::ChainTip>>(&IAccount::coins),
+        this, &AccountHandle::onCoins, qontrol::UNIQUE);
     connect(target, qOverload<ReqId, plugin::Balance>(&IAccount::balance), this,
             &AccountHandle::onBalance, qontrol::UNIQUE);
     connect(target, &IAccount::receiveAddress, this, &AccountHandle::onReceiveAddress,
@@ -815,8 +817,9 @@ void AccountHandle::onInfo(ReqId req_id, const QMap<QString, QString> &info) {
     relay(req_id, [this, req_id, info]() { emit IAccount::info(req_id, info); });
 }
 
-void AccountHandle::onCoins(ReqId req_id, const QList<plugin::Coin> &coins) {
-    relay(req_id, [this, req_id, coins]() { emit IAccount::coins(req_id, coins); });
+void AccountHandle::onCoins(ReqId req_id, const QList<plugin::Coin> &coins,
+                            const std::optional<plugin::ChainTip> &tip) {
+    relay(req_id, [this, req_id, coins, tip]() { emit IAccount::coins(req_id, coins, tip); });
 }
 
 void AccountHandle::onBalance(ReqId req_id, plugin::Balance balance) {

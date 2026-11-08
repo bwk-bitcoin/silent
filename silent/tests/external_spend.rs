@@ -14,9 +14,9 @@ use silent::{
     coordination_accept, coordination_prepare, coordination_release, hot_cached_nonces,
     hot_create_sessions, hot_seal, hot_sign, hot_sp_descriptor, hot_xpub, new_account, new_config,
     new_keys_module, new_musig_account, segwit_descriptor_for, state_create_with_password,
-    transaction_broadcast, transaction_finalize, Network, RustSelectedInput, RustSpendCoin,
-    SigningProgress, SigningStage, SpendAvailability, SpendCoinStatus, SpendCoinsResult,
-    SpendError, SpendLockKind, MUSIG_PLUGIN_ID,
+    transaction_broadcast, transaction_finalize, Network, RustChainTip, RustSelectedInput,
+    RustSpendCoin, SigningProgress, SigningStage, SpendAvailability, SpendCoinStatus,
+    SpendCoinsResult, SpendError, SpendLockKind, MUSIG_PLUGIN_ID,
 };
 
 const FIRST: &str =
@@ -136,6 +136,38 @@ fn wait_coin(mut export: impl FnMut() -> SpendCoinsResult, txid: bitcoin::Txid) 
         assert!(
             Instant::now() < deadline,
             "funded coin not exported before deadline"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Wait until `export` reports the node's tip, and check its height, hash and
+/// median-time-past against the node.
+fn wait_tip(
+    mut export: impl FnMut() -> SpendCoinsResult,
+    node: &mut chain::corepc_node::Client,
+) -> RustChainTip {
+    let hash = node.best_block_hash().expect("node tip");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let coins = export();
+        assert!(coins.is_ok, "public coin export: {}", coins.error);
+        if coins.has_tip && coins.tip.hash == hash.to_string() {
+            let header = node
+                .get_block_header_verbose(&hash)
+                .expect("node tip header");
+            assert_eq!(i64::from(coins.tip.height), header.height, "tip height");
+            assert!(coins.tip.has_median_time_past, "regtest chain from genesis");
+            assert_eq!(
+                i64::from(coins.tip.median_time_past),
+                header.median_time,
+                "tip median-time-past"
+            );
+            return coins.tip;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "node tip not exported before deadline"
         );
         thread::sleep(Duration::from_millis(50));
     }
@@ -268,6 +300,13 @@ fn funded_sp_bip32_and_multikey_hot_spend_through_public_api() {
     chain::generate_blocks(&mut node.client, 1);
     let first_coin = wait_coin(|| sp_account.spending_coins(), first_tx);
     let second_coin = wait_coin(|| multikey.spending_coins(), second_tx);
+    let tip = wait_tip(|| sp_account.spending_coins(), &mut node.client);
+    let multikey_tip = wait_tip(|| multikey.spending_coins(), &mut node.client);
+    assert_eq!(
+        (tip.height, &tip.hash),
+        (multikey_tip.height, &multikey_tip.hash),
+        "both accounts read the same chain"
+    );
     assert_eq!(first_coin.variants.len(), 1, "BIP32 key path");
     assert_eq!(
         second_coin.variants.len(),
@@ -456,6 +495,7 @@ fn funded_sp_bip32_and_multikey_hot_spend_through_public_api() {
         multikey.close_backend();
         let fixture = serde_json::json!({
             "psbt": encoded(&tx), "endpoint": endpoint,
+            "tip": {"height": tip.height, "hash": tip.hash, "medianTimePast": tip.median_time_past},
             "firstFingerprint": first.fingerprint(), "secondFingerprint": second.fingerprint(),
             "inputs": selected.iter().map(|selected| {
                 let envelope = PsbtV2::deserialize(&hex::decode(&selected.variant.psbt_v2_hex).expect("envelope")).expect("PSBTv2");
@@ -894,6 +934,13 @@ fn funded_sp_output(
     }
     chain::generate_blocks(node, 2);
     let restored = wait_coin(|| account.spending_coins(), txid);
+    // The replacement branch outgrows the invalidated tip: the export follows it.
+    let reorged = wait_tip(|| account.spending_coins(), node);
+    assert_ne!(
+        reorged.hash,
+        tip.to_string(),
+        "the export reads the chain after the reorg"
+    );
     assert_eq!(
         restored.variants[0].availability,
         SpendAvailability::Available,

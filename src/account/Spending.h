@@ -3,6 +3,7 @@
 #include "account/InterfaceEnums.h"
 #include <algorithm>
 #include <interfaces/types.h>
+#include <optional>
 #include <silent.h>
 #include <string>
 
@@ -93,6 +94,19 @@ inline auto spendingCoin(const RustSpendCoin &coin) -> plugin::Coin {
         out.variants.append(path);
     }
     return out;
+}
+
+inline auto chainTip(const SpendCoinsResult &result) -> std::optional<plugin::ChainTip> {
+    if (!result.has_tip) {
+        return std::nullopt;
+    }
+    plugin::ChainTip tip;
+    tip.height = result.tip.height;
+    tip.hash = QString::fromStdString(std::string(result.tip.hash));
+    if (result.tip.has_median_time_past) {
+        tip.medianTimePast = result.tip.median_time_past;
+    }
+    return tip;
 }
 
 } // namespace account

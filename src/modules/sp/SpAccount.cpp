@@ -149,7 +149,7 @@ void SpAccount::emitCoins(ReqId req_id) {
     for (const auto &coin : result.coins) {
         out.append(account::spendingCoin(coin));
     }
-    emit IAccount::coins(req_id, out);
+    emit IAccount::coins(req_id, out, account::chainTip(result));
 }
 
 void SpAccount::emitBalance(ReqId req_id) {

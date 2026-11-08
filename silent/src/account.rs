@@ -569,7 +569,7 @@ impl Account {
         self.export_spending_coins().into()
     }
 
-    fn export_spending_coins(&self) -> Result<Vec<crate::ffi::RustSpendCoin>, String> {
+    fn export_spending_coins(&self) -> Result<crate::spending::SpendCoins, String> {
         let inner = self.inner.as_ref().ok_or("Account not initialized")?;
         let network = inner.network.into();
         let account_index =
@@ -592,21 +592,31 @@ impl Account {
                 source.clone(),
             )?);
         }
-        for scanner in inner.account.scanners() {
-            let history = scanner.tx_history();
-            for entry in scanner.coins().into_values() {
+        let scans: Vec<_> = inner
+            .account
+            .scanners()
+            .map(|scanner| (scanner.coins(), scanner.tx_history()))
+            .collect();
+        let heights = scans.iter().flat_map(|(entries, history)| {
+            crate::spending::funding_heights(entries.values().map(|entry| &entry.coin), history)
+        });
+        // One snapshot for every scanner: they share the account's header chain.
+        let snapshot = inner
+            .account
+            .header_store()
+            .and_then(|headers| headers.chain_snapshot(heights));
+        for (entries, history) in scans {
+            for entry in entries.into_values() {
                 let mut coin = entry.coin;
                 coin.label = inner.account.get_coin_label(&coin.outpoint);
-                let mut exported = crate::spending::descriptor_coin(&coin, network)?;
-                let coinbase = history
-                    .iter()
-                    .find(|tx| tx.txid() == coin.outpoint.txid)
-                    .map(|tx| tx.tx().is_coinbase());
-                crate::spending::set_availability(&mut exported, coinbase);
-                coins.push(exported);
+                let funding = crate::spending::Funding::new(
+                    snapshot.as_ref(),
+                    crate::spending::funding_tx(&coin, &history),
+                );
+                coins.push(crate::spending::descriptor_coin(&coin, network, &funding)?);
             }
         }
-        Ok(coins)
+        Ok(crate::spending::SpendCoins { coins, snapshot })
     }
 
     /// Get spendable coins summary (SP + sub-accounts).
@@ -1775,8 +1785,11 @@ pub(crate) fn broadcast_via_electrum(
 pub(crate) fn convert_notification(notif: BwkNotification) -> Notification {
     match notif {
         BwkNotification::Sp(sp) => convert_sp_notification(sp),
-        // A chain-tip-advance pass mutated tx state, so the coins need a refresh.
-        BwkNotification::CoinUpdate | BwkNotification::HeaderStoreUpdated => Notification {
+        // A chain-tip-advance pass mutated tx state, or the chain the coins'
+        // maturity is read against changed: the coins need a refresh.
+        BwkNotification::CoinUpdate
+        | BwkNotification::HeaderStoreUpdated
+        | BwkNotification::ChainChanged => Notification {
             flag: NotificationFlag::CoinUpdate,
             payload: String::new(),
             current: 0,

@@ -50,7 +50,11 @@ signals:
     void cancelled(ReqId req_id);
     void name(ReqId req_id, QString name);
     void info(ReqId req_id, QMap<QString, QString> info);
-    void coins(ReqId req_id, QList<plugin::Coin> coins);
+    // `tip` is the chain the variants' maturity and availability were read against,
+    // absent while the account has no validated chain (maturity is then Unknown
+    // wherever it depends on the chain). Emitted again with req_id 0 when the coins
+    // or the chain change, reorgs included.
+    void coins(ReqId req_id, QList<plugin::Coin> coins, std::optional<plugin::ChainTip> tip);
     void balance(ReqId req_id, plugin::Balance balance);
     void receiveAddress(ReqId req_id, QString address);
     void changeAddress(ReqId req_id, QString address);
@@ -62,4 +66,4 @@ private:
     plugin::Caller m_caller;
 };
 
-Q_DECLARE_INTERFACE(IAccount, "dev.silent.IAccount/3.0")
+Q_DECLARE_INTERFACE(IAccount, "dev.silent.IAccount/4.0")

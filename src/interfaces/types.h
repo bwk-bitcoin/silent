@@ -37,7 +37,18 @@ struct SpendVariant {
     SpendLock relativeLock;
     // Timelocks only, not coinbase maturity or signer availability.
     SpendMaturity maturity = SpendMaturity::Unknown;
+    // Spendable in the block after the tip: timelocks, coinbase maturity and spent status.
     SpendAvailability availability = SpendAvailability::Unknown;
+};
+
+// The validated chain tip a coins() answer was computed against: maturity holds for
+// the block after it. Height, hash and MTP come from one view of the chain.
+struct ChainTip {
+    quint32 height{};
+    QString hash; // block hash, hex in display order
+    // BIP113 median-time-past of the tip; absent when the account's header chain
+    // does not hold the 11 blocks it is computed over.
+    std::optional<quint32> medianTimePast;
 };
 
 struct Coin {
@@ -122,6 +133,7 @@ struct Access {
 Q_DECLARE_METATYPE(plugin::Coin)
 Q_DECLARE_METATYPE(plugin::Balance)
 Q_DECLARE_METATYPE(QList<plugin::Coin>)
+Q_DECLARE_METATYPE(std::optional<plugin::ChainTip>)
 Q_DECLARE_METATYPE(std::optional<ReqId>)
 Q_DECLARE_METATYPE(plugin::SignError)
 Q_DECLARE_METATYPE(plugin::SigningResult)

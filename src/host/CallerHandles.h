@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <utility>
 
 class HostImpl;
@@ -200,7 +201,8 @@ private slots:
     void onAccountDestroyed();
     void onAccountCancelled(ReqId req_id);
     void onInfo(ReqId req_id, const QMap<QString, QString> &info);
-    void onCoins(ReqId req_id, const QList<plugin::Coin> &coins);
+    void onCoins(ReqId req_id, const QList<plugin::Coin> &coins,
+                 const std::optional<plugin::ChainTip> &tip);
     void onBalance(ReqId req_id, plugin::Balance balance);
     void onReceiveAddress(ReqId req_id, const QString &address);
     void onChangeAddress(ReqId req_id, const QString &address);

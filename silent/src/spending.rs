@@ -3,14 +3,17 @@
 use bitcoin::{absolute, relative, transaction, Psbt, Transaction};
 use bwk::{
     bwk_coin::{Coin, CoinSourceKind, CoinSpendInfo, CoinStatus},
-    bwk_descriptor::spend::{restrict_variant, spend_variants, Locks, Maturity, Preimage},
+    bwk_descriptor::spend::{
+        restrict_variant, spend_variants, ChainContext, Confirmation, Locks, Maturity, Preimage,
+    },
+    bwk_electrum::{header_store::ChainSnapshot, tx_store::TxEntry},
     bwk_tx::{bwk_psbt::PsbtV2, recipient::SpUpdater},
 };
 use bwk_sp::account::updater::SpInputUpdater;
 
 use crate::ffi::{
-    Network, RustSpendCoin, RustSpendLock, RustSpendVariant, SpendAvailability, SpendCoinStatus,
-    SpendCoinsResult, SpendLockKind, SpendMaturity,
+    Network, RustChainTip, RustSpendCoin, RustSpendLock, RustSpendVariant, SpendAvailability,
+    SpendCoinStatus, SpendCoinsResult, SpendLockKind, SpendMaturity,
 };
 
 pub(crate) const SP_SATISFACTION_WU: u64 = 67;
@@ -75,20 +78,99 @@ impl From<Option<relative::LockTime>> for RustSpendLock {
     }
 }
 
-impl From<Result<Vec<RustSpendCoin>, String>> for SpendCoinsResult {
-    fn from(result: Result<Vec<RustSpendCoin>, String>) -> Self {
+/// An account's spending coins and the chain snapshot their maturity was read
+/// against, `None` without a validated chain.
+pub(crate) struct SpendCoins {
+    pub coins: Vec<RustSpendCoin>,
+    pub snapshot: Option<ChainSnapshot>,
+}
+
+impl From<Result<SpendCoins, String>> for SpendCoinsResult {
+    fn from(result: Result<SpendCoins, String>) -> Self {
         match result {
-            Ok(coins) => Self {
+            Ok(SpendCoins { coins, snapshot }) => Self {
                 is_ok: true,
                 error: String::new(),
                 coins,
+                has_tip: snapshot.is_some(),
+                tip: snapshot
+                    .as_ref()
+                    .map(RustChainTip::from)
+                    .unwrap_or_default(),
             },
             Err(error) => Self {
                 is_ok: false,
                 error,
                 coins: Vec::new(),
+                tip: RustChainTip::default(),
+                has_tip: false,
             },
         }
+    }
+}
+
+impl From<&ChainSnapshot> for RustChainTip {
+    fn from(snapshot: &ChainSnapshot) -> Self {
+        Self {
+            height: snapshot.height,
+            hash: snapshot.hash.to_string(),
+            median_time_past: snapshot.median_time_past.unwrap_or(0),
+            has_median_time_past: snapshot.median_time_past.is_some(),
+        }
+    }
+}
+
+/// Where the funding tx of a descriptor coin sits on the chain an export reads.
+pub(crate) struct Funding {
+    /// `None` without a validated chain.
+    context: Option<ChainContext>,
+    /// `None` when the funding tx is not in the account history.
+    coinbase: Option<bool>,
+}
+
+impl Funding {
+    pub(crate) fn new(snapshot: Option<&ChainSnapshot>, tx: Option<&TxEntry>) -> Self {
+        Self {
+            context: snapshot.map(|snapshot| {
+                snapshot.context(tx.map_or(Confirmation::Unknown, |tx| {
+                    snapshot.confirmation(tx.inclusion())
+                }))
+            }),
+            coinbase: tx.map(|tx| tx.tx().is_coinbase()),
+        }
+    }
+
+    fn coinbase_maturity(&self) -> Maturity {
+        match (self.coinbase, &self.context) {
+            (Some(false), _) => Maturity::Mature,
+            (Some(true), Some(context)) => context.coinbase_maturity(),
+            (Some(true), None) | (None, _) => Maturity::Unknown,
+        }
+    }
+}
+
+/// The funding tx of `coin` in its scanner's `history`.
+pub(crate) fn funding_tx<'a>(coin: &Coin, history: &'a [TxEntry]) -> Option<&'a TxEntry> {
+    history.iter().find(|tx| tx.txid() == coin.outpoint.txid)
+}
+
+/// The heights a chain snapshot must hold to place these coins' funding txs.
+pub(crate) fn funding_heights<'a>(
+    coins: impl IntoIterator<Item = &'a Coin>,
+    history: &[TxEntry],
+) -> Vec<u32> {
+    coins
+        .into_iter()
+        .filter_map(|coin| funding_tx(coin, history)?.inclusion().height())
+        .collect()
+}
+
+fn availability(status: SpendCoinStatus, maturity: Maturity) -> SpendAvailability {
+    match (status, maturity) {
+        (SpendCoinStatus::Spent | SpendCoinStatus::BeingSpent, _) => SpendAvailability::Spent,
+        (_, Maturity::Mature) => SpendAvailability::Available,
+        (_, Maturity::Immature) => SpendAvailability::Immature,
+        (_, Maturity::Unknown) => SpendAvailability::Unknown,
     }
 }
 
@@ -131,7 +213,11 @@ pub(crate) fn preimage_requirement(preimage: &Preimage) -> String {
     }
 }
 
-pub(crate) fn descriptor_coin(coin: &Coin, network: Network) -> Result<RustSpendCoin, String> {
+pub(crate) fn descriptor_coin(
+    coin: &Coin,
+    network: Network,
+    funding: &Funding,
+) -> Result<RustSpendCoin, String> {
     let CoinSpendInfo::Bip32 {
         coin_path: (keychain, index),
         descriptor,
@@ -142,12 +228,17 @@ pub(crate) fn descriptor_coin(coin: &Coin, network: Network) -> Result<RustSpend
     let keychain = u32::from(*keychain) as usize;
     let exported = spend_variants(descriptor, keychain, *index).map_err(|e| e.to_string())?;
     let template = envelope(coin)?;
+    let status = coin.status.into();
+    let coinbase = funding.coinbase_maturity();
     let mut variants = Vec::with_capacity(exported.variants.len());
     for variant in exported.variants {
         let mut psbt = template.clone();
         restrict_variant(descriptor, keychain, *index, &variant.id, &mut psbt, 0)
             .map_err(|e| e.to_string())?;
         let locks = variant.requirements.locks;
+        let maturity = locks
+            .maturity(funding.context.as_ref())
+            .map_err(|e| e.to_string())?;
         variants.push(RustSpendVariant {
             path_id: variant.id.to_string(),
             keychain: keychain as u32,
@@ -174,9 +265,8 @@ pub(crate) fn descriptor_coin(coin: &Coin, network: Network) -> Result<RustSpend
             satisfaction_wu: variant.satisfaction_wu,
             absolute_lock: locks.absolute.into(),
             relative_lock: locks.relative.into(),
-            // Scanner exposes no coherent tip/hash/MTP snapshot; do not invent one.
-            maturity: locks.maturity(None).map_err(|e| e.to_string())?.into(),
-            availability: SpendAvailability::Unknown,
+            maturity: maturity.into(),
+            availability: availability(status, maturity.and(coinbase)),
         });
     }
     Ok(public_coin(coin, network, variants))
@@ -214,26 +304,15 @@ pub(crate) fn sp_coin(
         absolute_lock: locks.absolute.into(),
         relative_lock: locks.relative.into(),
         maturity: SpendMaturity::Mature,
-        availability: SpendAvailability::Unknown,
+        // Never coinbase: BIP352 derives an SP output from the input keys of the
+        // tx paying it, and a coinbase input carries none.
+        availability: availability(coin.status.into(), Maturity::Mature),
     }];
     Ok(public_coin(coin, network, variants))
 }
 
-pub(crate) fn set_availability(coin: &mut RustSpendCoin, coinbase: Option<bool>) {
-    for variant in &mut coin.variants {
-        variant.availability = match (coin.status, variant.maturity, coinbase) {
-            (SpendCoinStatus::Spent | SpendCoinStatus::BeingSpent, _, _) => {
-                SpendAvailability::Spent
-            }
-            (_, SpendMaturity::Immature, _) => SpendAvailability::Immature,
-            (_, SpendMaturity::Mature, Some(false)) => SpendAvailability::Available,
-            _ => SpendAvailability::Unknown,
-        };
-    }
-}
-
 fn public_coin(coin: &Coin, network: Network, variants: Vec<RustSpendVariant>) -> RustSpendCoin {
-    let mut exported = RustSpendCoin {
+    RustSpendCoin {
         outpoint: coin.outpoint.to_string(),
         account_type: match coin.source() {
             CoinSourceKind::SilentPayment => "SP",
@@ -249,9 +328,7 @@ fn public_coin(coin: &Coin, network: Network, variants: Vec<RustSpendVariant>) -
         label: coin.label.clone().unwrap_or_default(),
         status: coin.status.into(),
         variants,
-    };
-    set_availability(&mut exported, None);
-    exported
+    }
 }
 
 #[cfg(test)]
@@ -266,18 +343,232 @@ mod tests {
     };
     use bwk::{
         bwk_coin::{derive_descriptor, Coin, CoinSpendInfo, CoinStatus, KeyChain},
-        bwk_descriptor::{spend::Locks, wallet::WalletDescriptor},
+        bwk_descriptor::{
+            spend::{ChainContext, Confirmation, Locks},
+            wallet::WalletDescriptor,
+        },
         bwk_tx::bwk_psbt::{Output, PsbtV2},
     };
 
     use crate::{
         coordination::coordination_prepare,
         ffi::{
-            Network, RustSelectedInput, SigningStage, SpendCoinStatus, SpendError, SpendLockKind,
-            SpendMaturity,
+            Network, RustSelectedInput, SigningStage, SpendAvailability, SpendCoinStatus,
+            SpendError, SpendLockKind, SpendMaturity,
         },
-        spending::{descriptor_coin, sp_coin},
+        spending::{descriptor_coin, sp_coin, Funding},
     };
+
+    /// A non-coinbase coin read without a validated chain.
+    fn unchained() -> Funding {
+        Funding {
+            context: None,
+            coinbase: Some(false),
+        }
+    }
+
+    /// A tip at `height` with `median_time_past`, the coin confirmed at
+    /// `confirmation` (`None` for unconfirmed) under a parent MTP of `previous_mtp`.
+    fn chain(
+        height: u32,
+        median_time_past: Option<u32>,
+        confirmation: Option<u32>,
+        previous_mtp: Option<u32>,
+    ) -> Option<ChainContext> {
+        Some(ChainContext {
+            tip: bitcoin::BlockHash::from_byte_array([7; 32]),
+            height,
+            median_time_past,
+            confirmation: match confirmation {
+                Some(height) => Confirmation::Confirmed {
+                    height,
+                    previous_mtp,
+                },
+                None => Confirmation::Unconfirmed,
+            },
+        })
+    }
+
+    /// The maturity and availability of the leaf of `tr(key, and_v(v:pk(key), lock))`.
+    fn leaf(lock: &str, context: Option<ChainContext>) -> (SpendMaturity, SpendAvailability) {
+        let text = format!("tr({},and_v(v:pk({}),{lock}))", key(1), key(2));
+        let funding = Funding {
+            context,
+            coinbase: Some(false),
+        };
+        let exported =
+            descriptor_coin(&coin(&text, 0), Network::Regtest, &funding).expect("locked export");
+        assert_eq!(
+            exported.variants[0].maturity,
+            SpendMaturity::Mature,
+            "key path has no lock"
+        );
+        let leaf = &exported.variants[1];
+        (leaf.maturity, leaf.availability)
+    }
+
+    #[test]
+    fn absolute_locks_follow_the_tip_height_and_median_time_past() {
+        for (lock, context, expected) in [
+            // The next block, tip + 1, must be above the locktime height.
+            (
+                "after(100)",
+                chain(99, None, Some(50), None),
+                (SpendMaturity::Immature, SpendAvailability::Immature),
+            ),
+            (
+                "after(100)",
+                chain(100, None, Some(50), None),
+                (SpendMaturity::Mature, SpendAvailability::Available),
+            ),
+            (
+                "after(100)",
+                chain(101, None, Some(50), None),
+                (SpendMaturity::Mature, SpendAvailability::Available),
+            ),
+            // BIP113: the tip MTP must be above the locktime.
+            (
+                "after(500000100)",
+                chain(200, Some(500_000_100), Some(50), None),
+                (SpendMaturity::Immature, SpendAvailability::Immature),
+            ),
+            (
+                "after(500000100)",
+                chain(200, Some(500_000_101), Some(50), None),
+                (SpendMaturity::Mature, SpendAvailability::Available),
+            ),
+            (
+                "after(500000100)",
+                chain(200, None, Some(50), None),
+                (SpendMaturity::Unknown, SpendAvailability::Unknown),
+            ),
+            (
+                "after(100)",
+                None,
+                (SpendMaturity::Unknown, SpendAvailability::Unknown),
+            ),
+        ] {
+            assert_eq!(leaf(lock, context), expected, "{lock} against {context:?}");
+        }
+    }
+
+    #[test]
+    fn relative_locks_follow_the_confirmation_and_its_parent_median_time_past() {
+        // 4194306 is two 512-second units, 1024 seconds.
+        for (lock, context, expected) in [
+            // Mined at 100, older(12) spends from block 112, the block after tip 111.
+            (
+                "older(12)",
+                chain(110, None, Some(100), None),
+                (SpendMaturity::Immature, SpendAvailability::Immature),
+            ),
+            (
+                "older(12)",
+                chain(111, None, Some(100), None),
+                (SpendMaturity::Mature, SpendAvailability::Available),
+            ),
+            // Unconfirmed: counted from the next block.
+            (
+                "older(12)",
+                chain(111, None, None, None),
+                (SpendMaturity::Immature, SpendAvailability::Immature),
+            ),
+            (
+                "older(12)",
+                None,
+                (SpendMaturity::Unknown, SpendAvailability::Unknown),
+            ),
+            (
+                "older(4194306)",
+                chain(200, Some(1_700_001_023), Some(100), Some(1_700_000_000)),
+                (SpendMaturity::Immature, SpendAvailability::Immature),
+            ),
+            (
+                "older(4194306)",
+                chain(200, Some(1_700_001_024), Some(100), Some(1_700_000_000)),
+                (SpendMaturity::Mature, SpendAvailability::Available),
+            ),
+            // The parent MTP is below a sparse anchor.
+            (
+                "older(4194306)",
+                chain(200, Some(1_700_001_024), Some(100), None),
+                (SpendMaturity::Unknown, SpendAvailability::Unknown),
+            ),
+        ] {
+            assert_eq!(leaf(lock, context), expected, "{lock} against {context:?}");
+        }
+    }
+
+    #[test]
+    fn coinbase_is_available_after_a_hundred_confirmations() {
+        let text = format!("tr({})", key(1));
+        let availability = |funding: Funding, status: CoinStatus| {
+            let mut input = coin(&text, 0);
+            input.status = status;
+            let exported =
+                descriptor_coin(&input, Network::Regtest, &funding).expect("coinbase export");
+            assert_eq!(
+                exported.variants[0].maturity,
+                SpendMaturity::Mature,
+                "coinbase maturity is not a timelock"
+            );
+            exported.variants[0].availability
+        };
+        let coinbase = |context| Funding {
+            context,
+            coinbase: Some(true),
+        };
+        // Mined at 100: tip 198 is 99 confirmations, tip 199 is 100.
+        assert_eq!(
+            availability(
+                coinbase(chain(198, None, Some(100), None)),
+                CoinStatus::Confirmed
+            ),
+            SpendAvailability::Immature
+        );
+        assert_eq!(
+            availability(
+                coinbase(chain(199, None, Some(100), None)),
+                CoinStatus::Confirmed
+            ),
+            SpendAvailability::Available
+        );
+        assert_eq!(
+            availability(coinbase(None), CoinStatus::Confirmed),
+            SpendAvailability::Unknown,
+            "no validated tip"
+        );
+        let mut unplaced = chain(199, None, None, None).expect("tip");
+        unplaced.confirmation = Confirmation::Unknown;
+        assert_eq!(
+            availability(coinbase(Some(unplaced)), CoinStatus::Confirmed),
+            SpendAvailability::Unknown,
+            "confirmation not on the snapshot chain"
+        );
+        assert_eq!(
+            availability(
+                Funding {
+                    context: chain(199, None, Some(100), None),
+                    coinbase: None,
+                },
+                CoinStatus::Confirmed
+            ),
+            SpendAvailability::Unknown,
+            "funding tx missing from history"
+        );
+        assert_eq!(
+            availability(
+                coinbase(chain(198, None, Some(100), None)),
+                CoinStatus::Spent
+            ),
+            SpendAvailability::Spent
+        );
+        assert_eq!(
+            availability(unchained(), CoinStatus::Unconfirmed),
+            SpendAvailability::Available,
+            "an ordinary coin needs no confirmation depth"
+        );
+    }
 
     fn key(seed: u8) -> String {
         let secp = Secp256k1::new();
@@ -317,8 +608,10 @@ mod tests {
     #[test]
     fn exports_independent_stable_paths_and_clean_v2_envelopes() {
         let text = format!("tr({},and_v(v:pk({}),older(12)))", key(1), key(2));
-        let first = descriptor_coin(&coin(&text, 0), Network::Regtest).expect("first export");
-        let second = descriptor_coin(&coin(&text, 7), Network::Regtest).expect("second export");
+        let first =
+            descriptor_coin(&coin(&text, 0), Network::Regtest, &unchained()).expect("first export");
+        let second = descriptor_coin(&coin(&text, 7), Network::Regtest, &unchained())
+            .expect("second export");
         assert_eq!(
             first.variants.len(),
             2,
@@ -392,7 +685,8 @@ mod tests {
             key(2),
             key(3)
         );
-        let exported = descriptor_coin(&coin(&text, 0), Network::Signet).expect("alternatives");
+        let exported =
+            descriptor_coin(&coin(&text, 0), Network::Signet, &unchained()).expect("alternatives");
         assert_eq!(
             exported.variants.len(),
             3,
@@ -471,6 +765,11 @@ mod tests {
             );
         }
         assert_eq!(variant.satisfaction_wu, 67, "SP schnorr witness bound");
+        assert_eq!(
+            variant.availability,
+            SpendAvailability::Available,
+            "an SP output is never coinbase"
+        );
     }
 
     fn mock_sp_input(spend_pk: PublicKey, index: u32) -> Coin {
@@ -541,7 +840,7 @@ mod tests {
         let mut input = coin(&format!("tr({})", key(1)), 0);
         input.txout.script_pubkey = coin(&format!("tr({})", key(2)), 0).txout.script_pubkey;
         assert!(
-            descriptor_coin(&input, Network::Regtest).is_err(),
+            descriptor_coin(&input, Network::Regtest, &unchained()).is_err(),
             "mismatched prevout must fail, not export a false policy"
         );
     }
@@ -549,15 +848,19 @@ mod tests {
     #[test]
     fn exports_segwit_but_refuses_incomplete_legacy_metadata() {
         for text in [format!("wpkh({})", key(1)), format!("sh(wpkh({}))", key(1))] {
-            let exported =
-                descriptor_coin(&coin(&text, 0), Network::Regtest).expect("segwit export");
+            let exported = descriptor_coin(&coin(&text, 0), Network::Regtest, &unchained())
+                .expect("segwit export");
             assert_eq!(exported.variants.len(), 1, "one segwit satisfaction");
             assert!(
                 exported.variants[0].satisfaction_wu > 67,
                 "ECDSA and pubkey witness"
             );
         }
-        let result = descriptor_coin(&coin(&format!("pkh({})", key(1)), 0), Network::Regtest);
+        let result = descriptor_coin(
+            &coin(&format!("pkh({})", key(1)), 0),
+            Network::Regtest,
+            &unchained(),
+        );
         assert_eq!(
             result.expect_err("legacy requires full previous transaction"),
             "unsupported legacy coin export: full previous transaction unavailable"
@@ -596,8 +899,8 @@ mod tests {
                 _ => unreachable!("fixed test kinds"),
             };
             let coin = coin(&format!("wsh(and_v(v:pk({}),{kind}({digest})))", key(1)), 0);
-            let exported =
-                descriptor_coin(&coin, Network::Regtest).expect("hash requirement export");
+            let exported = descriptor_coin(&coin, Network::Regtest, &unchained())
+                .expect("hash requirement export");
             let variant = exported.variants[0].clone();
             assert_eq!(
                 variant.required_preimages,

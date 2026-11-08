@@ -10,8 +10,10 @@
 #include <QPointer>
 #include <QThread>
 #include <QTimer>
+#include <algorithm>
 #include <interfaces/account.h>
 #include <interfaces/instance.h>
+#include <utility>
 
 namespace smoke {
 namespace {
@@ -117,18 +119,26 @@ void ExternalSpendConsumer::run(const QString &fixture) {
     m_request.psbtV2Hex = data.value(QStringLiteral("psbt")).toString();
     m_request.walletName = QStringLiteral("external-consumer");
     auto selections = data.value(QStringLiteral("inputs")).toArray();
+    qsizetype accounts = 0;
     for (auto *instance : m_host->instances(m_caller)) {
         auto *account = instance->account();
         if (account == nullptr || !account->implemented()) {
             continue;
         }
-        connect(account, qOverload<ReqId, QList<plugin::Coin>>(&IAccount::coins), this,
-                &ExternalSpendConsumer::onCoins, Qt::UniqueConnection);
+        connect(account,
+                qOverload<ReqId, QList<plugin::Coin>, std::optional<plugin::ChainTip>>(
+                    &IAccount::coins),
+                this, &ExternalSpendConsumer::onCoins, Qt::UniqueConnection);
         account->coins();
+        ++accounts;
     }
+    // Every account reports the tip the coordinator picks nLockTime from.
+    auto expectedTip = data.value(QStringLiteral("tip")).toObject();
     QElapsedTimer deadline;
     deadline.start();
-    while (m_request.inputs.size() != selections.size() && deadline.elapsed() < 60000) {
+    while ((m_request.inputs.size() != selections.size() ||
+            (!expectedTip.isEmpty() && !tipsMatch(expectedTip, accounts))) &&
+           deadline.elapsed() < 60000) {
         m_request.inputs.clear();
         for (auto value : selections) {
             auto selection = value.toObject();
@@ -156,6 +166,14 @@ void ExternalSpendConsumer::run(const QString &fixture) {
     }
     require(m_request.inputs.size() == selections.size(),
             "discover both funded accounts through public handles");
+    require(expectedTip.isEmpty() || tipsMatch(expectedTip, accounts),
+            "each account reports the node's tip height, hash and median-time-past");
+    for (const auto &input : m_request.inputs) {
+        require(expectedTip.isEmpty() ||
+                    (input.variant.maturity == plugin::SpendMaturity::Mature &&
+                     input.variant.availability == plugin::SpendAvailability::Available),
+                "unlocked confirmed path is mature and available at the tip");
+    }
     m_keys = m_host->keys(m_caller);
     m_transactions = m_host->transactions(m_caller);
     require(m_keys != nullptr && m_transactions != nullptr,
@@ -385,31 +403,34 @@ void ExternalSpendConsumer::accountLifecycle() {
         }
     }
     require(handle != nullptr, "discover deferred public account");
-    connect(handle, qOverload<ReqId, QList<plugin::Coin>>(&IAccount::coins), this,
-            &ExternalSpendConsumer::onAccountCoins, Qt::UniqueConnection);
+    connect(
+        handle,
+        qOverload<ReqId, QList<plugin::Coin>, std::optional<plugin::ChainTip>>(&IAccount::coins),
+        this, &ExternalSpendConsumer::onAccountCoins, Qt::UniqueConnection);
     connect(handle, &IAccount::cancelled, this, &ExternalSpendConsumer::onCancelled,
             Qt::UniqueConnection);
     m_pending = handle->coins();
     m_answered = false;
     handle->cancelRequest(m_pending);
     wait();
-    emit instance.backend.IAccount::coins(m_pending, {});
+    emit instance.backend.IAccount::coins(m_pending, {}, std::nullopt);
     require(m_account_answers == 0, "cancelled account reply is suppressed");
     auto current = handle->coins();
-    emit instance.backend.IAccount::coins(current, {});
-    emit instance.backend.IAccount::coins(current, {});
+    emit instance.backend.IAccount::coins(current, {}, std::nullopt);
+    emit instance.backend.IAccount::coins(current, {}, std::nullopt);
     require(m_account_answers == 1, "account reply is consumed once");
     m_pending = handle->coins();
     m_answered = false;
     m_host->removeInstance(instance.id(), m_caller);
     wait();
     require(handle.isNull(), "account removal invalidates its caller handle");
-    emit instance.backend.IAccount::coins(m_pending, {});
+    emit instance.backend.IAccount::coins(m_pending, {}, std::nullopt);
     require(m_account_answers == 1, "removed account cannot deliver a late reply");
 }
 
-void ExternalSpendConsumer::onAccountCoins([[maybe_unused]] ReqId req_id,
-                                           [[maybe_unused]] const QList<plugin::Coin> &coins) {
+void ExternalSpendConsumer::onAccountCoins(
+    [[maybe_unused]] ReqId req_id, [[maybe_unused]] const QList<plugin::Coin> &coins,
+    [[maybe_unused]] const std::optional<plugin::ChainTip> &tip) {
     ++m_account_answers;
 }
 
@@ -433,8 +454,24 @@ void ExternalSpendConsumer::sign(const QString &fingerprint, const QString &pass
     m_request.sessionId = m_result.sessionId;
 }
 
-void ExternalSpendConsumer::onCoins([[maybe_unused]] ReqId req_id,
-                                    const QList<plugin::Coin> &coins) {
+auto ExternalSpendConsumer::tipsMatch(const QJsonObject &expected, qsizetype accounts) const
+    -> bool {
+    if (m_tips.size() != accounts) {
+        return false;
+    }
+    return std::ranges::all_of(m_tips, [&expected](const std::optional<plugin::ChainTip> &tip) {
+        return tip.has_value() &&
+               std::cmp_equal(tip->height, expected.value(QStringLiteral("height")).toInteger()) &&
+               tip->hash == expected.value(QStringLiteral("hash")).toString() &&
+               tip->medianTimePast.has_value() &&
+               std::cmp_equal(*tip->medianTimePast,
+                              expected.value(QStringLiteral("medianTimePast")).toInteger());
+    });
+}
+
+void ExternalSpendConsumer::onCoins([[maybe_unused]] ReqId req_id, const QList<plugin::Coin> &coins,
+                                    const std::optional<plugin::ChainTip> &tip) {
+    m_tips.insert(sender(), tip);
     for (const auto &coin : coins) {
         for (qsizetype i = m_coins.size(); i > 0; --i) {
             if (m_coins[i - 1].outpoint == coin.outpoint) {

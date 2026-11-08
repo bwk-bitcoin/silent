@@ -591,22 +591,26 @@ impl MusigAccount {
         let Some(inner) = &self.inner else {
             return Err(NOT_INITIALIZED.to_string()).into();
         };
-        let history = inner.account.scanner().tx_history();
-        inner
-            .account
-            .scanner()
-            .coins()
-            .into_values()
+        let scanner = inner.account.scanner();
+        let entries = scanner.coins();
+        let history = scanner.tx_history();
+        let snapshot = inner.account.header_store().and_then(|headers| {
+            headers.chain_snapshot(crate::spending::funding_heights(
+                entries.values().map(|entry| &entry.coin),
+                &history,
+            ))
+        });
+        entries
+            .values()
             .map(|entry| {
-                let mut coin = crate::spending::descriptor_coin(&entry.coin, inner.config.network)?;
-                let coinbase = history
-                    .iter()
-                    .find(|tx| tx.txid() == entry.coin.outpoint.txid)
-                    .map(|tx| tx.tx().is_coinbase());
-                crate::spending::set_availability(&mut coin, coinbase);
-                Ok(coin)
+                let funding = crate::spending::Funding::new(
+                    snapshot.as_ref(),
+                    crate::spending::funding_tx(&entry.coin, &history),
+                );
+                crate::spending::descriptor_coin(&entry.coin, inner.config.network, &funding)
             })
             .collect::<Result<Vec<_>, _>>()
+            .map(|coins| crate::spending::SpendCoins { coins, snapshot })
             .into()
     }
 

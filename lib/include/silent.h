@@ -1008,6 +1008,7 @@ enum class SpendCoinStatus : ::std::uint8_t;
 struct RustSpendLock;
 struct RustSpendVariant;
 struct RustSpendCoin;
+struct RustChainTip;
 struct SpendCoinsResult;
 enum class SigningStage : ::std::uint8_t;
 enum class SigningProgress : ::std::uint8_t;
@@ -1692,12 +1693,28 @@ struct RustSpendCoin final {
 };
 #endif // CXXBRIDGE1_STRUCT_RustSpendCoin
 
+#ifndef CXXBRIDGE1_STRUCT_RustChainTip
+#define CXXBRIDGE1_STRUCT_RustChainTip
+// The validated chain tip a spending-coins export was computed against.
+struct RustChainTip final {
+  ::std::uint32_t height CXX_DEFAULT_VALUE(0);
+  ::rust::String hash;
+  // BIP113 median-time-past of the tip.
+  ::std::uint32_t median_time_past CXX_DEFAULT_VALUE(0);
+  bool has_median_time_past CXX_DEFAULT_VALUE(false);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_RustChainTip
+
 #ifndef CXXBRIDGE1_STRUCT_SpendCoinsResult
 #define CXXBRIDGE1_STRUCT_SpendCoinsResult
 struct SpendCoinsResult final {
   bool is_ok CXX_DEFAULT_VALUE(false);
   ::rust::String error;
   ::rust::Vec<::RustSpendCoin> coins;
+  ::RustChainTip tip;
+  bool has_tip CXX_DEFAULT_VALUE(false);
 
   using IsRelocatable = ::std::true_type;
 };

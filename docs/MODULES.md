@@ -130,7 +130,7 @@ built with Qt 6.8 and baseline x86-64 requirements:
     "kind": "native",
     "library": "payload/libmyplugin.so",
     "compatibility": {
-      "iid": "dev.silent.IPlugin/10.0",
+      "iid": "dev.silent.IPlugin/11.0",
       "target_os": "linux",
       "target_arch": "x86_64",
       "qt_major": 6,
@@ -196,12 +196,12 @@ cargo test --manifest-path silent/Cargo.toml --test storage_example -- --ignored
 The legacy installed-format gate has a separate driver:
 `SILENT_HOST_SMOKE=<absolute-host-smoke> cargo test --manifest-path silent/Cargo.toml
 --test plugin_legacy_abi -- --ignored`. It seeds encrypted version 1 bundles for
-ABIs 2 through 9 and future ABI 11, then verifies registry refusal, expected/found
+ABIs 2 through 10 and future ABI 12, then verifies registry refusal, expected/found
 diagnostics, retained metadata and absence of initializer/constructor side effects.
-The `--plugin-abi` host smoke uses ABI 10 as its accepted control and verifies that
-refused imports preserve its installed bytes. ABI 9 uses frozen declarations from
+The `--plugin-abi` host smoke uses ABI 11 as its accepted control and verifies that
+refused imports preserve its installed bytes. ABIs 2 through 10 use frozen declarations from
 `tests/host/legacy/ModuleV2.h`, not the current root header. The compiled-fixture Rust
-tests expect `SILENT_ABI_FIXTURE_PATH` to point to `libplugin_abi10_fixture.so`.
+tests expect `SILENT_ABI_FIXTURE_PATH` to point to `libplugin_abi11_fixture.so`.
 
 ### Out-of-tree Plugin Repo Pattern
 
@@ -711,7 +711,7 @@ using ReqId = quint64;   // correlates a request with its result signal
 **Signals live on the capability** that owns the request, not on the host. A request
 method and its result signal **share a name**, distinguished by signature: the method
 takes the inputs and returns a `ReqId`; the signal carries the `ReqId` plus the
-result (method `coins()` -> signal `coins(ReqId, QList<...>)`; connect with
+result (method `coins()` -> signal `coins(ReqId, QList<...>, tip)`; connect with
 `qOverload`). The consumer **connects its own named slot directly to the capability
 object** and matches emissions by `ReqId` (`if (req == mine)`). **The host does not
 route responses**: there is no `ReqId -> slot` table; correlation is the caller's,
@@ -798,7 +798,7 @@ public:
 signals:
     void name(ReqId, QString);
     void info(ReqId, QMap<QString,QString>);
-    void coins(ReqId, QList<plugin::Coin>);
+    void coins(ReqId, QList<plugin::Coin>, std::optional<plugin::ChainTip> tip);
     void balance(ReqId, plugin::Balance);
     void receiveAddress(ReqId, QString address);
     void changeAddress(ReqId, QString address);
@@ -1640,14 +1640,25 @@ It excludes the base input, transaction marker/flag and outputs. It allows a
 non-default sighash byte, not an annex. Alternative satisfactions within one
 script use that script's maximum, not a guessed minimum.
 
-`maturity` currently describes timelocks only. Without a coherent scanner
-tip/hash/MTP snapshot, locked variants report `Unknown`; unlocked variants report
-`Mature`. This does not assert coinbase maturity, unspent status or signer
-availability. `availability` is separate: spent/being-spent inputs are `Spent`,
-known non-coinbase inputs with mature locks are `Available`, immature locks are
-`Immature`, and otherwise it is `Unknown`. Coinbase maturity is not guessed from
-wall-clock time or a stale height. Spent and offline-signable variants remain in the export. The
-account's normal coin-update signal refreshes exports, including after reorgs.
+The `coins` signal carries the `ChainTip` the answer was computed against: height,
+block hash and BIP113 median-time-past, read from the account's validated header
+chain in one view. Maturity holds for the block after that tip. A coordinator picks
+nLockTime from it (a height lock at most `height`, a time lock below
+`medianTimePast`) without a chain connection of its own. `tip` is absent while the
+account has no validated chain; `medianTimePast` is absent when the chain does not
+hold the 11 blocks it is computed over (just above a sparse anchor).
+
+`maturity` describes timelocks only: CLTV against the tip height or MTP, CSV against
+the funding confirmation height or the MTP of the block before it. A confirmation on
+a block the tip's chain does not hold is not trusted. `Unknown` means the data is
+genuinely missing (no tip, no MTP, an unplaced confirmation), `Immature` a known
+unmet lock. Unlocked variants are `Mature`. `availability` adds the coin's state:
+spent/being-spent inputs are `Spent`; otherwise immature locks or a coinbase below
+100 confirmations are `Immature`, mature locks on a non-coinbase input or a coinbase
+with 100 confirmations are `Available`, and anything unknown is `Unknown`. SP
+outputs are never coinbase. Spent and offline-signable variants remain in the
+export. The account emits `coins` again with req_id 0 when its coins or its chain
+change, reorgs included.
 An export failure answers `error`, never a successful empty list.
 Legacy non-Segwit coins are unsupported when the full previous transaction is
 unavailable; a witness-UTXO-only template is not exported as a complete legacy
@@ -1784,18 +1795,19 @@ they are not evidence of a supported funded signing combination.
 
 ## ABI & Linking Rules (Plugin Authors Must Read)
 
-The current plugin IID is `dev.silent.IPlugin/10.0`, the module IID is
+The current plugin IID is `dev.silent.IPlugin/11.0`, the module IID is
 `dev.silent.IModule/3.0`, the signer IID is
 `dev.silent.ISigner/3.0`, the account IID is
-`dev.silent.IAccount/3.0`, the keys IID is `dev.silent.IKeys/3.0`, and the transaction
+`dev.silent.IAccount/4.0`, the keys IID is `dev.silent.IKeys/3.0`, and the transaction
 service IID is `dev.silent.ITransactions/2.0`. The feed IID remains
 `dev.silent.IFeed/3.0`. The account UI services carry their own IIDs (see Account UI
 Services) and change no existing one. Public Keys and spending enums are SDK-owned, not generated
-Rust types. Root ABI 10 changes `FeePreferences` to mode and one source, removing the
-global tier. The `IFeed` methods, signals and IID are unchanged. Rebuild plugins
+Rust types. Root ABI 10 changed `FeePreferences` to mode and one source, removing the
+global tier. Root ABI 11 adds the chain tip to `IAccount::coins` (IAccount/4.0).
+The `IFeed` methods, signals and IID are unchanged. Rebuild plugins
 against this checkout and use `SILENT_IPlugin_IID` in plugin metadata. Include both
 `src` only for public interfaces; generated `lib/include` and CXX headers are not needed.
-Only the exact root IID is accepted. Old 1.0 to 9.0 plugins and future 11.0 plugins
+Only the exact root IID is accepted. Old 1.0 to 10.0 plugins and future 12.0 plugins
 are refused rather than called through incompatible vtables.
 
 `interfaces/enums.h` defines the shared `plugin::Network`, `plugin::KeyRouteKind`
