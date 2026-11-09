@@ -8,12 +8,14 @@
 #include <QByteArray>
 #include <QEvent>
 #include <QHash>
+#include <QList>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <cstdint>
 #include <optional>
 
+class IKeys;
 class IModule;
 
 namespace backend {
@@ -48,7 +50,9 @@ namespace account::view {
 // asks for a key first, as Liana's decrypt modal does: each connected signing device is
 // listed and tried with its xpubs at the paths the backup names, and other options paste
 // or import an xpub, or take a mnemonic. The keys that open the backup are held from then
-// to the restore, never longer. `module` asks for the devices to be polled while they are
+// to the restore, never longer. A backup that a silent payment scan key opens also lists the
+// keys of Keys that can give one (a QR or hot route), each asked on a click. `module` asks
+// for the devices to be polled while they are
 // listed, none when null; `device_name` names each one, as the keys module does (the shared
 // account page reaches no module). The modal takes `target` as its child.
 class RestoreAccount final : public catalog::Modal {
@@ -71,6 +75,10 @@ public slots:
     void onInstanceChanged(const QString &id);
     void onDeviceXpub(ReqId req_id, const QString &xpub);
     void onDeviceError(std::optional<ReqId> req_id, const QString &message);
+    void onKeyRowClicked();
+    void onSpDescriptorReady(ReqId req_id, const QString &descriptor, const QString &fingerprint);
+    void onKeysError(std::optional<ReqId> req_id, const QString &message);
+    void onKeysCancelled(ReqId req_id);
     void onXpubEdited();
     void onPasteXpubClicked();
     void onImportXpubClicked();
@@ -80,8 +88,9 @@ public slots:
 
 protected:
     enum class View : std::uint8_t { File, Busy, Decrypt, Review, Restored };
-    // How a listed device's try goes.
-    enum class DeviceStatus : std::uint8_t { Trying, Failed };
+    // How a listed device's try goes. NoScanKey: the backup opens with a silent payment
+    // scan key, which no device gives here.
+    enum class DeviceStatus : std::uint8_t { Trying, Failed, NoScanKey };
 
     // A connected device the backup is tried with: its xpubs at each path, then one read.
     struct DeviceTry {
@@ -94,6 +103,24 @@ protected:
         QStringList xpubs;
         ReqId xpub_req = 0;
         backend::RequestId read_req = 0;
+    };
+
+    // How asking a key of Keys for its scan key goes.
+    enum class KeyStatus : std::uint8_t { Offered, Asking, Failed };
+
+    // A key of Keys asked for its silent payment account, whose scan secret may open the
+    // backup.
+    struct KeyTry {
+        QString fingerprint;
+        QString alias;
+        plugin::Network network = plugin::Network::Regtest;
+        KeyStatus status = KeyStatus::Offered;
+        // Why it gave no scan key, empty when it did or was not asked.
+        QString error;
+        ReqId req = 0;
+        backend::RequestId read_req = 0;
+        // Its answer, the sp() descriptor carrying its scan secret.
+        QString descriptor;
     };
 
     void init();
@@ -130,7 +157,14 @@ protected:
     // The device `signer` (the sender of its answer) whose request `req_id` is.
     auto deviceOf(const QObject *signer, ReqId req_id) -> DeviceTry *;
     auto deviceRead(backend::RequestId request_id) -> DeviceTry *;
+    // The backup opens with a silent payment scan key only: an xpub cannot open it.
+    [[nodiscard]] auto scanKeyOnly() const -> bool;
     void stopDevices();
+    // Lists the keys of Keys that can give a scan key at the backup's scan path.
+    void listKeys();
+    void refreshKeyRows();
+    auto keyAsked(ReqId req_id) -> KeyTry *;
+    auto keyRead(backend::RequestId request_id) -> KeyTry *;
     void readWithXpub(const QString &xpub);
     void opened(const QStringList &xpubs, const QString &opener);
 
@@ -165,10 +199,17 @@ private:
     backend::RequestId m_restore_req = 0;
     QByteArray m_backup;
     QString m_backup_path;
-    // The paths of the xpubs that may open the backup.
+    // The paths of the keys that may open the backup.
     QStringList m_paths;
+    // The ones a device is asked its xpub at: all but the BIP352 scan paths, whose scan key
+    // no device gives (ISigner has no such request).
+    QStringList m_xpub_paths;
     // The devices tried, by instance id.
     QHash<QString, DeviceTry> m_devices;
+    // The keys of Keys offered for a scan key.
+    QList<KeyTry> m_keys_tried;
+    // Null when the modal has no module to ask Keys through.
+    IKeys *m_keys = nullptr;
     // The keys that opened the backup, from then to the restore.
     QStringList m_xpubs;
     QByteArray m_mnemonic;
@@ -192,6 +233,8 @@ private:
     QWidget *m_decrypt_view = nullptr;
     catalog::Label *m_decrypt_text = nullptr;
     qontrol::Column *m_device_rows = nullptr;
+    catalog::Label *m_keys_text = nullptr;
+    qontrol::Column *m_key_rows = nullptr;
     catalog::FoldSection *m_options = nullptr;
     catalog::Label *m_airgap_text = nullptr;
     catalog::Label *m_paths_label = nullptr;

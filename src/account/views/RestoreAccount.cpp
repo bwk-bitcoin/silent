@@ -23,6 +23,7 @@
 #include "i18n/Tr.h"
 #include "interfaces/backend/account.h"
 #include "interfaces/host.h"
+#include "interfaces/keys.h"
 #include "interfaces/signer.h"
 #include "theme/Icon.h"
 #include "theme/Palette.h"
@@ -36,11 +37,21 @@
 #include <QFileInfo>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSet>
 #include <Qontrol>
 #include <common.h>
 
 namespace account::view {
+
+namespace {
+
+// A BIP352 scan path, `m/352'/coin'/account'/1'/0`, as a locked backup names it: its coin
+// captured.
+const QRegularExpression SCAN_PATH_RE(QStringLiteral(R"(^m/352'/(\d+)'/\d+'/1'/0$)"));
+const char *const K_FINGERPRINT = "fingerprint";
+
+} // namespace
 
 RestoreAccount::RestoreAccount(backend::IAccountBackend *target, IModule *module,
                                DeviceName device_name)
@@ -108,6 +119,7 @@ void RestoreAccount::retranslateUi() {
         m_file_label->setText(TR("restore-no-file"));
     }
     m_decrypt_text->setText(TR("restore-device-description"));
+    m_keys_text->setText(TR("restore-keys-text"));
     m_options->setTitle(TR("restore-other-options"));
     m_airgap_text->setText(TR("restore-airgap-help"));
     m_option_fields->setFieldLabel(m_xpub_row, TR("restore-xpub-field"));
@@ -207,6 +219,13 @@ void RestoreAccount::initDecrypt() {
     m_decrypt_text->setTone(catalog::LabelTone::Secondary);
     m_decrypt_text->setWordWrap(true);
     m_device_rows = new qontrol::Column;
+    m_keys_text = new catalog::Label(catalog::LabelRole::Body);
+    m_keys_text->setTone(catalog::LabelTone::Secondary);
+    m_keys_text->setWordWrap(true);
+    m_key_rows = new qontrol::Column;
+    if (m_module != nullptr) {
+        m_keys = Host::get()->keys(m_module);
+    }
     m_airgap_text = new catalog::Label(catalog::LabelRole::Body);
     m_airgap_text->setTone(catalog::LabelTone::Secondary);
     m_airgap_text->setWordWrap(true);
@@ -247,6 +266,12 @@ void RestoreAccount::connectDecrypt() {
             &RestoreAccount::onMnemonicEdited, qontrol::UNIQUE);
     connect(m_decrypt_actions, &catalog::ModalActions::backClicked, this,
             &RestoreAccount::onBackClicked, qontrol::UNIQUE);
+    if (m_keys != nullptr) {
+        connect(m_keys, &IKeys::spDescriptorReady, this, &RestoreAccount::onSpDescriptorReady,
+                qontrol::UNIQUE);
+        connect(m_keys, &IKeys::error, this, &RestoreAccount::onKeysError, qontrol::UNIQUE);
+        connect(m_keys, &IKeys::cancelled, this, &RestoreAccount::onKeysCancelled, qontrol::UNIQUE);
+    }
 }
 
 auto RestoreAccount::viewDecrypt() -> catalog::ScrollArea * {
@@ -273,6 +298,8 @@ auto RestoreAccount::viewDecrypt() -> catalog::ScrollArea * {
                           ->spacing(resolve(Spacing::M))
                           ->push(m_decrypt_text)
                           ->push(m_device_rows)
+                          ->push(m_keys_text)
+                          ->push(m_key_rows)
                           ->push(m_options));
     return scroll;
 }
@@ -280,11 +307,18 @@ auto RestoreAccount::viewDecrypt() -> catalog::ScrollArea * {
 void RestoreAccount::showDecrypt(const QStringList &derivation_paths) {
     m_view = View::Decrypt;
     m_paths = derivation_paths;
+    m_xpub_paths.clear();
+    for (const auto &path : m_paths) {
+        if (!SCAN_PATH_RE.match(path).hasMatch()) {
+            m_xpub_paths.append(path);
+        }
+    }
     m_paths_label->setText(m_paths.join(QStringLiteral("\n")));
     if (m_module != nullptr) {
         Host::get()->requestSignerPolling(m_module, true);
     }
     refreshDevices();
+    listKeys();
     setHeader(nullptr);
     setBody(m_decrypt_view);
     setFooter(m_decrypt_actions);
@@ -299,6 +333,8 @@ void RestoreAccount::hideDecrypt() {
 // Devices are polled only while they are listed.
 void RestoreAccount::leaveDecrypt() {
     stopDevices();
+    // Their answers carry scan secrets.
+    m_keys_tried.clear();
     if (m_module != nullptr) {
         Host::get()->requestSignerPolling(m_module, false);
     }
@@ -331,12 +367,19 @@ void RestoreAccount::refreshDevices() {
         }
         const auto &device = m_devices.value(entry.instanceId);
         row->setSub(QStringLiteral("#") + device.fingerprint);
-        if (device.status == DeviceStatus::Trying) {
+        switch (device.status) {
+        case DeviceStatus::Trying:
             row->setNote(TR("restore-device-trying"));
             trying.append(row);
-        } else {
+            break;
+        case DeviceStatus::Failed:
             row->setNote(TR("restore-device-failed"));
             failed.append(row);
+            break;
+        case DeviceStatus::NoScanKey:
+            row->setNote(TR("restore-device-no-scan-key"));
+            failed.append(row);
+            break;
         }
     }
     // A device gone is tried again when it comes back.
@@ -369,11 +412,15 @@ void RestoreAccount::fetchNext(DeviceTry &device) {
     if (device.signer.isNull()) {
         return;
     }
-    if (device.path < m_paths.size()) {
-        device.xpub_req = device.signer->getXpub(m_paths.at(device.path));
+    if (device.path < m_xpub_paths.size()) {
+        device.xpub_req = device.signer->getXpub(m_xpub_paths.at(device.path));
         return;
     }
     device.xpub_req = 0;
+    if (scanKeyOnly()) {
+        device.status = DeviceStatus::NoScanKey;
+        return;
+    }
     if (device.xpubs.isEmpty() || m_target == nullptr) {
         device.status = DeviceStatus::Failed;
         return;
@@ -398,6 +445,91 @@ auto RestoreAccount::deviceRead(backend::RequestId request_id) -> DeviceTry * {
         }
     }
     return nullptr;
+}
+
+void RestoreAccount::listKeys() {
+    m_keys_tried.clear();
+    QList<plugin::Network> networks;
+    for (const auto &path : m_paths) {
+        auto match = SCAN_PATH_RE.match(path);
+        if (!match.hasMatch()) {
+            continue;
+        }
+        // Coin 1 is every test network's: a key may be registered on any of them.
+        networks = match.captured(1) == QStringLiteral("0")
+                       ? QList<plugin::Network>{plugin::Network::Bitcoin}
+                       : QList<plugin::Network>{plugin::Network::Testnet, plugin::Network::Signet,
+                                                plugin::Network::Regtest};
+        break;
+    }
+    QSet<QString> listed;
+    for (auto network : networks) {
+        if (m_keys == nullptr) {
+            break;
+        }
+        for (const auto &entry : m_keys->keys(network).entries) {
+            if (entry.descriptor_route == plugin::KeyRouteKind::Unknown ||
+                listed.contains(entry.fingerprint)) {
+                continue;
+            }
+            listed.insert(entry.fingerprint);
+            m_keys_tried.append(
+                {.fingerprint = entry.fingerprint, .alias = entry.alias, .network = network});
+        }
+    }
+    refreshKeyRows();
+}
+
+void RestoreAccount::refreshKeyRows() {
+    catalog::clearRows(m_key_rows);
+    m_key_rows->spacing(resolve(Spacing::S));
+    m_keys_text->setVisible(!m_keys_tried.isEmpty());
+    for (const auto &key : m_keys_tried) {
+        auto *row = new catalog::SelectRow;
+        row->setIcon(icon::key);
+        row->setTitle(key.alias.isEmpty() ? key.fingerprint : key.alias);
+        row->setSub(QStringLiteral("#") + key.fingerprint);
+        row->setChevron(false);
+        row->setProperty(K_FINGERPRINT, key.fingerprint);
+        switch (key.status) {
+        case KeyStatus::Offered:
+            row->setNote(TR("restore-key-ask"));
+            break;
+        case KeyStatus::Asking:
+            row->setNote(TR("restore-device-trying"));
+            break;
+        case KeyStatus::Failed:
+            row->setNote(key.error.isEmpty() ? TR("restore-key-failed") : key.error);
+            break;
+        }
+        row->setClickable(key.status != KeyStatus::Asking);
+        connect(row, &catalog::SelectRow::clicked, this, &RestoreAccount::onKeyRowClicked,
+                qontrol::UNIQUE);
+        m_key_rows->push(row);
+    }
+    refit();
+}
+
+auto RestoreAccount::keyAsked(ReqId req_id) -> KeyTry * {
+    for (auto &key : m_keys_tried) {
+        if (key.req != 0 && key.req == req_id) {
+            return &key;
+        }
+    }
+    return nullptr;
+}
+
+auto RestoreAccount::keyRead(backend::RequestId request_id) -> KeyTry * {
+    for (auto &key : m_keys_tried) {
+        if (key.read_req != 0 && key.read_req == request_id) {
+            return &key;
+        }
+    }
+    return nullptr;
+}
+
+auto RestoreAccount::scanKeyOnly() const -> bool {
+    return !m_paths.isEmpty() && m_xpub_paths.isEmpty();
 }
 
 void RestoreAccount::stopDevices() {
@@ -667,6 +799,14 @@ void RestoreAccount::onBackupInspected(backend::RequestId request_id,
                           .arg(device->name, QStringLiteral("#") + device->fingerprint);
         opened(xpubs, opener);
         showReview(info);
+    } else if (auto *key = keyRead(request_id); key != nullptr) {
+        // Copied: opened() drops the keys asked.
+        QStringList given{key->descriptor};
+        auto opener = TR("restore-opened-device")
+                          .arg(key->alias.isEmpty() ? key->fingerprint : key->alias,
+                               QStringLiteral("#") + key->fingerprint);
+        opened(given, opener);
+        showReview(info);
     } else if (request_id == m_xpub_req) {
         opened({m_xpub_input->input()->text().trimmed()}, TR("restore-opened-xpub"));
         showReview(info);
@@ -694,10 +834,17 @@ void RestoreAccount::onBackupLocked(backend::RequestId request_id,
         device->read_req = 0;
         device->status = DeviceStatus::Failed;
         refreshDevices();
+    } else if (auto *key = keyRead(request_id); key != nullptr) {
+        key->read_req = 0;
+        key->descriptor.clear();
+        key->status = KeyStatus::Failed;
+        key->error.clear();
+        refreshKeyRows();
     } else if (request_id == m_xpub_req) {
         m_xpub_req = 0;
         m_xpub_input->setValid(false);
-        m_xpub_note->setText(TR("restore-xpub-cannot-decrypt"));
+        m_xpub_note->setText(scanKeyOnly() ? TR("restore-xpub-scan-key")
+                                           : TR("restore-xpub-cannot-decrypt"));
         m_xpub_note->setVisible(true);
         refit();
     } else if (request_id == m_mnemonic_req) {
@@ -740,6 +887,12 @@ void RestoreAccount::onServiceError(backend::RequestId request_id, const QString
         device->read_req = 0;
         device->status = DeviceStatus::Failed;
         refreshDevices();
+    } else if (auto *key = keyRead(request_id); key != nullptr) {
+        key->read_req = 0;
+        key->descriptor.clear();
+        key->status = KeyStatus::Failed;
+        key->error = message;
+        refreshKeyRows();
     } else if (request_id == m_xpub_req) {
         m_xpub_req = 0;
         m_xpub_input->setValid(false);
@@ -781,11 +934,66 @@ void RestoreAccount::onDeviceError(std::optional<ReqId> req_id, const QString &m
     if (device == nullptr) {
         return;
     }
-    qWarning() << "restore:" << device->name << "gave no xpub at" << m_paths.value(device->path)
-               << ":" << message;
+    qWarning() << "restore:" << device->name << "gave no xpub at"
+               << m_xpub_paths.value(device->path) << ":" << message;
     ++device->path;
     fetchNext(*device);
     refreshDevices();
+}
+
+void RestoreAccount::onKeyRowClicked() {
+    auto fingerprint = sender()->property(K_FINGERPRINT).toString();
+    if (m_keys == nullptr || m_view != View::Decrypt) {
+        return;
+    }
+    for (auto &key : m_keys_tried) {
+        if (key.fingerprint != fingerprint || key.status == KeyStatus::Asking) {
+            continue;
+        }
+        key.status = KeyStatus::Asking;
+        key.error.clear();
+        key.req = m_keys->newRequest();
+        // Runs the key's own flow (its QR exchange, its password) and answers once it closes.
+        m_keys->spDescriptor(key.req, key.network, key.fingerprint);
+        break;
+    }
+    refreshKeyRows();
+}
+
+void RestoreAccount::onSpDescriptorReady(ReqId req_id, const QString &descriptor,
+                                         [[maybe_unused]] const QString &fingerprint) {
+    auto *key = keyAsked(req_id);
+    if (key == nullptr || m_target == nullptr) {
+        return;
+    }
+    key->req = 0;
+    key->descriptor = descriptor;
+    key->read_req = nextRequestId();
+    m_target->inspectBackup(key->read_req, m_backup, {descriptor}, {});
+}
+
+void RestoreAccount::onKeysError(std::optional<ReqId> req_id, const QString &message) {
+    if (!req_id.has_value()) {
+        return;
+    }
+    auto *key = keyAsked(*req_id);
+    if (key == nullptr) {
+        return;
+    }
+    key->req = 0;
+    key->status = KeyStatus::Failed;
+    key->error = message;
+    refreshKeyRows();
+}
+
+void RestoreAccount::onKeysCancelled(ReqId req_id) {
+    auto *key = keyAsked(req_id);
+    if (key == nullptr) {
+        return;
+    }
+    key->req = 0;
+    key->status = KeyStatus::Offered;
+    refreshKeyRows();
 }
 
 void RestoreAccount::onXpubEdited() {

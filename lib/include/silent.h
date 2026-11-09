@@ -1905,7 +1905,8 @@ enum class BackupFailure : ::std::uint8_t {
 
 #ifndef CXXBRIDGE1_STRUCT_AccountBackup
 #define CXXBRIDGE1_STRUCT_AccountBackup
-// An account backup: its BIP139 document encrypted with BIP138 to the account's keys.
+// An account backup: its BIP139 document encrypted with BIP138 to the account's keys
+// (an SP account's scan secret).
 struct AccountBackup final {
   bool is_ok CXX_DEFAULT_VALUE(false);
   ::rust::String error;
@@ -3740,7 +3741,7 @@ struct Account final : public ::rust::Opaque {
   // Broadcasts consensus-encoded `transaction`, then records it locally.
   ::BroadcastReport broadcast_report(::rust::Slice<::std::uint8_t const> transaction) const noexcept;
 
-  // The account's backup, encrypted to its keys. Blocking.
+  // The account's backup, encrypted to its scan secret. Blocking.
   ::AccountBackup backup() const noexcept;
 
   ~Account() = delete;
@@ -4473,7 +4474,7 @@ struct MusigAccount final : public ::rust::Opaque {
 
   ::BroadcastReport broadcast_report(::rust::Slice<::std::uint8_t const> transaction) const noexcept;
 
-  // The account's backup, encrypted to its keys, its saved PSBTs left out.
+  // The account's backup, encrypted to its policy's keys, its saved PSBTs left out.
   // Blocking.
   ::AccountBackup backup() const noexcept;
 
@@ -4796,15 +4797,16 @@ void storage_request_forget(::std::uint64_t session, ::rust::String id) noexcept
 ::DescriptorBackupResult save_descriptor_backup(::rust::Str descriptor, ::rust::Str path, bool store_common_paths) noexcept;
 
 // What the account backup `backup` holds, an encrypted one opened with one of
-// `xpubs` or with `mnemonic` (empty for none): `Locked`, with the paths of the
-// xpubs that may open it, when none does. Blocking.
-::BackupContents inspect_account_backup(::rust::Slice<::std::uint8_t const> backup, ::rust::Vec<::rust::String> xpubs, ::rust::String mnemonic) noexcept;
+// `keys` (xpubs, or the sp() descriptor a key gives, whose scan secret opens an SP
+// backup) or with `mnemonic` (empty for none): `Locked`, with the paths of the keys
+// that may open it, when none does. Blocking.
+::BackupContents inspect_account_backup(::rust::Slice<::std::uint8_t const> backup, ::rust::Vec<::rust::String> keys, ::rust::String mnemonic) noexcept;
 
 // Restores the `plugin_id` account `backup` holds, opened as
 // inspect_account_backup() opens it, as the new account `name`, refused when
 // one exists; on `network` when the backup does not tell its own. Nothing stays
 // of a failed restore. Blocking.
-::BackupRestore restore_account_backup(::rust::Str plugin_id, ::rust::Slice<::std::uint8_t const> backup, ::rust::Vec<::rust::String> xpubs, ::rust::String mnemonic, ::rust::String name, ::Network network) noexcept;
+::BackupRestore restore_account_backup(::rust::Str plugin_id, ::rust::Slice<::std::uint8_t const> backup, ::rust::Vec<::rust::String> keys, ::rust::String mnemonic, ::rust::String name, ::Network network) noexcept;
 
 // Create a new config.
 ::AmountParseResult parse_btc_amount(::rust::Str text) noexcept;

@@ -97,13 +97,13 @@ impl Recipients {
         Ok(())
     }
 
-    /// A key that is no descriptor expression, the root of the xpub at `path`.
-    pub(crate) fn add_key(&mut self, key: PublicKey, path: Option<DerivationPath>) {
-        self.keys.push((key, path));
-    }
-
     pub(crate) fn excluded(&self) -> &[String] {
         &self.excluded
+    }
+
+    /// The 32-byte keys BIP138 encrypts with: each key's x-only form.
+    pub(crate) fn bip138_keys(&self) -> Vec<[u8; 32]> {
+        self.keys().iter().map(xonly).collect()
     }
 
     /// A key outside musig(): it encrypts only with a trailing derivation or a
@@ -151,7 +151,7 @@ impl Recipients {
         keys.into_iter().collect()
     }
 
-    fn derivation_paths(&self) -> Vec<DerivationPath> {
+    pub(crate) fn derivation_paths(&self) -> Vec<DerivationPath> {
         let paths: BTreeSet<_> = self
             .keys
             .iter()
@@ -193,24 +193,25 @@ pub fn write_descriptor_backup(
     Ok(WrittenBackup { excluded })
 }
 
-/// The BIP138 backup of `document`, a BIP139 wallet backup, encrypted to `recipients`. It
-/// keeps every derivation path in the clear part, which tells a restore where to look, and
-/// pads the payload, which changes with each backup (BIP138, Padding).
+/// The BIP138 backup of `document`, a BIP139 wallet backup, encrypted to `keys`, each the
+/// 32 bytes BIP138 takes as a key p_i. It keeps `paths` in the clear part, which tells a
+/// restore where to ask for a key, and pads the payload, which changes with each backup
+/// (BIP138, Padding). Built on the ll layer, which takes keys as bytes, not public keys.
 pub(crate) fn encrypt_document(
     document: &[u8],
-    recipients: &Recipients,
+    keys: Vec<[u8; 32]>,
+    paths: &[DerivationPath],
 ) -> Result<Vec<u8>, String> {
-    let encrypted = EncryptedBackup::new()
-        .set_payload(&document.to_vec())
-        .map_err(|e| format!("{e:?}"))?
-        .set_content_type(Content::Bip139)
-        .set_keys(recipients.keys())
-        .set_derivation_paths(recipients.derivation_paths())
-        .set_store_common_paths(true)
-        .set_padding(Padding::Geometric)
-        .encrypt()
-        .map_err(|e| format!("{e:?}"))?;
-    Ok(encrypted.bytes)
+    ll::encrypt_chacha20_poly1305_v1_items(
+        &ll::crypto::RustBitcoin,
+        &mut ll::crypto::OsRandom,
+        paths.iter().map(ll_path).collect(),
+        true,
+        &[(Content::Bip139, document)],
+        keys,
+        Padding::Geometric,
+    )
+    .map_err(|e| format!("{e:?}"))
 }
 
 fn derivation_path(path: &ll::DerivationPath) -> DerivationPath {
@@ -218,6 +219,13 @@ fn derivation_path(path: &ll::DerivationPath) -> DerivationPath {
         .iter()
         .map(|index| ChildNumber::from(*index))
         .collect()
+}
+
+fn ll_path(path: &DerivationPath) -> ll::DerivationPath {
+    path.into_iter()
+        .map(|child| u32::from(*child))
+        .collect::<Vec<_>>()
+        .into()
 }
 
 /// A decrypted content item of a BIP138 backup: its type and its bytes.
@@ -255,7 +263,7 @@ impl Encrypted {
         })
     }
 
-    /// The paths a restore fetches xpubs at: the ones its clear part names, else the
+    /// The paths a restore asks for a key at: the ones its clear part names, else the
     /// common paths BIP138 says to try.
     pub fn lookup_paths(&self) -> Vec<DerivationPath> {
         if !self.derivation_paths.is_empty() {
@@ -268,13 +276,14 @@ impl Encrypted {
             .collect()
     }
 
-    /// Its content items, opened with the first of `keys` that decrypts it: None when
-    /// none does, an error when the payload it decrypts is damaged.
-    pub fn open(&self, keys: &[PublicKey]) -> Result<Option<Vec<Item>>, String> {
+    /// Its content items, opened with the first of `keys`, each the 32 bytes of a BIP138
+    /// key, that decrypts it: None when none does, an error when the payload it decrypts
+    /// is damaged.
+    pub fn open(&self, keys: &[[u8; 32]]) -> Result<Option<Vec<Item>>, String> {
         for key in keys {
             match ll::decrypt_chacha20_poly1305_v1(
                 &ll::crypto::RustBitcoin,
-                xonly(key),
+                *key,
                 &self.individual_secrets,
                 self.ciphertext.clone(),
                 self.nonce,

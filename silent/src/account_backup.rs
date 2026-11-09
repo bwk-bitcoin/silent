@@ -1,5 +1,6 @@
 //! Backups of a built-in account (ws-plaude/silent#91): its BIP139 wallet backup document,
-//! encrypted with BIP138 to the account's keys, so that any one of them opens it.
+//! encrypted with BIP138 to a Multikey account's policy keys, any one of which opens it, or
+//! to an SP account's scan secret.
 //!
 //! The document holds the account's descriptors, the receive and change indexes each one
 //! handed out, the block SP scanning starts from and every label, and in its
@@ -17,7 +18,7 @@ use std::str::FromStr;
 
 use bip138::{descriptor::dpk_to_root_pk, Content};
 use bitcoin::{
-    bip32::DerivationPath,
+    bip32::{ChildNumber, DerivationPath},
     secp256k1::{PublicKey, Secp256k1},
     NetworkKind,
 };
@@ -31,7 +32,7 @@ use bwk_sp::{
         hot_signer::HotSigner,
         miniscript::{Descriptor, DescriptorPublicKey, ForEachKey},
     },
-    receiver::spend_path,
+    receiver::scan_path,
 };
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -97,7 +98,7 @@ pub enum Failure {
     Unknown(String),
     /// A backup in one of them, damaged.
     Malformed(String),
-    /// Encrypted, and none of the keys given opens it: the paths of the xpubs that may.
+    /// Encrypted, and none of the keys given opens it: the paths of the keys that may.
     Locked(Vec<DerivationPath>),
     InvalidXpub(String),
     InvalidMnemonic,
@@ -301,33 +302,56 @@ fn network_of_keys(descriptor: &str) -> Option<Network> {
 
 // ===== Backup =====
 
-/// The keys the backup of the account `config` describes is encrypted to, and the key
-/// expressions left out of them.
-fn recipients(config: &Config) -> Result<Recipients, String> {
+/// What the backup of an account is encrypted to: the 32-byte BIP138 keys, the paths a
+/// restore asks for them at, and the key expressions left out of them.
+struct Keying {
+    keys: Zeroizing<Vec<[u8; 32]>>,
+    paths: Vec<DerivationPath>,
+    excluded: Vec<String>,
+}
+
+/// A Multikey account's backup is encrypted to its policy's keys, as BIP138 picks them.
+fn policy_keying(descriptor: &str) -> Result<Keying, String> {
     let mut recipients = Recipients::default();
-    if config.plugin_id == MUSIG_PLUGIN_ID {
-        recipients.add_descriptor(&config.descriptor)?;
-    } else {
-        // The sp() descriptor carries the scan secret, which BIP138 says MUST be removed
-        // before encrypting: it is encrypted anyway, knowingly, so that the backup restores
-        // the account. The key is the spend key, the xpub at the BIP352 spend path.
-        let sp = SpDescriptor::from_str(&config.descriptor).map_err(|e| e.to_string())?;
-        let spend = sp
-            .spend_public_key(&Secp256k1::new())
-            .map_err(|e| e.to_string())?;
-        let path = sp.origin().and_then(|(_, origin)| {
-            let account = origin.into_iter().nth(2).copied()?;
-            Some(spend_path(config.network.into(), account))
-        });
-        recipients.add_key(spend, path);
-        for sub_account in [&config.segwit_descriptor, &config.taproot_descriptor] {
-            if !sub_account.is_empty() {
-                recipients.add_descriptor(sub_account)?;
-            }
-        }
-    }
+    recipients.add_descriptor(descriptor)?;
     recipients.drop_exposed();
-    Ok(recipients)
+    Ok(Keying {
+        keys: Zeroizing::new(recipients.bip138_keys()),
+        paths: recipients.derivation_paths(),
+        excluded: recipients.excluded().to_vec(),
+    })
+}
+
+/// An SP account's backup is encrypted to its scan secret alone, at the BIP352 scan path.
+/// The backup carries the scan secret (in the sp() descriptor) and is keyed by it: a
+/// knowing departure from BIP138, which asks to remove private material and to key by
+/// public keys. Unlike the spend key, which the SP address shows, and the sub-accounts'
+/// xpubs, shared more widely, the scan secret only opens it for whoever can already see
+/// the account's payments.
+fn scan_keying(config: &Config) -> Result<Keying, String> {
+    let sp = SpDescriptor::from_str(&config.descriptor).map_err(|e| e.to_string())?;
+    let scan = sp
+        .scan_secret_key(&Secp256k1::new())
+        .map_err(|e| e.to_string())?;
+    let paths = sp
+        .origin()
+        .and_then(|(_, origin)| origin.into_iter().nth(2).copied())
+        .map(|account| scan_path(config.network.into(), account))
+        .into_iter()
+        .collect();
+    Ok(Keying {
+        keys: Zeroizing::new(vec![scan.secret_bytes()]),
+        paths,
+        excluded: vec![],
+    })
+}
+
+fn keying(config: &Config) -> Result<Keying, String> {
+    if config.plugin_id == MUSIG_PLUGIN_ID {
+        policy_keying(&config.descriptor)
+    } else {
+        scan_keying(config)
+    }
 }
 
 fn settings_of(config: &Config) -> Settings {
@@ -412,9 +436,9 @@ pub(crate) fn backup(
 ) -> Result<(Vec<u8>, Vec<String>), String> {
     let document = document(config, scan_start, &tips, labels)?;
     let json = Zeroizing::new(serde_json::to_vec(&document).map_err(|e| e.to_string())?);
-    let recipients = recipients(config)?;
-    let bytes = encrypt_document(&json, &recipients)?;
-    Ok((bytes, recipients.excluded().to_vec()))
+    let keying = keying(config)?;
+    let bytes = encrypt_document(&json, keying.keys.to_vec(), &keying.paths)?;
+    Ok((bytes, keying.excluded))
 }
 
 pub(crate) fn backup_result(result: Result<(Vec<u8>, Vec<String>), String>) -> AccountBackup {
@@ -448,31 +472,66 @@ fn is_descriptor(text: &str) -> bool {
     SpDescriptor::from_str(text).is_ok() || parse_musig_descriptor(text).is_ok()
 }
 
-/// The keys `xpubs` encrypt with: each one's root, with or without origin and derivation.
-fn xpub_keys(xpubs: &[String]) -> Result<Vec<PublicKey>, Failure> {
-    xpubs
-        .iter()
-        .map(|xpub| {
-            DescriptorPublicKey::from_str(xpub.trim())
-                .ok()
-                .and_then(|key| dpk_to_root_pk(&key).ok())
-                .ok_or_else(|| Failure::InvalidXpub(xpub.clone()))
-        })
-        .collect()
+fn xonly(key: &PublicKey) -> [u8; 32] {
+    key.x_only_public_key().0.serialize()
 }
 
-/// The keys of `mnemonic` at `paths`, none for an empty mnemonic.
-fn mnemonic_keys(mnemonic: &str, paths: &[DerivationPath]) -> Result<Vec<PublicKey>, Failure> {
-    if mnemonic.trim().is_empty() {
-        return Ok(vec![]);
+/// The BIP138 key `key` gives: the scan secret of an sp() descriptor, a key's answer when
+/// asked for its silent payment account, or the root of an xpub, with or without origin
+/// and derivation.
+fn given_key(key: &str) -> Result<[u8; 32], Failure> {
+    if let Ok(sp) = SpDescriptor::from_str(key.trim()) {
+        return sp
+            .scan_secret_key(&Secp256k1::new())
+            .map(|scan| scan.secret_bytes())
+            .map_err(|e| Failure::InvalidDescriptor(e.to_string()));
     }
-    // A public key does not depend on the network the signer is made for.
+    DescriptorPublicKey::from_str(key.trim())
+        .ok()
+        .and_then(|key| dpk_to_root_pk(&key).ok())
+        .map(|key| xonly(&key))
+        .ok_or_else(|| Failure::InvalidXpub(key.into()))
+}
+
+/// Whether `path` is the BIP352 scan path of an account, `352'/coin'/account'/1'/0`.
+fn is_scan_path(path: &DerivationPath) -> bool {
+    let steps: Vec<ChildNumber> = path.into_iter().copied().collect();
+    let [purpose, coin, account, _, _] = steps.as_slice() else {
+        return false;
+    };
+    let network = match coin {
+        ChildNumber::Hardened { index: 0 } => bitcoin::Network::Bitcoin,
+        _ => bitcoin::Network::Testnet,
+    };
+    *purpose == ChildNumber::Hardened { index: 352 }
+        && coin.is_hardened()
+        && scan_path(network, *account) == *path
+}
+
+/// The BIP138 keys of `mnemonic` at `paths`, none for an empty mnemonic: its scan secret
+/// at a BIP352 scan path, its x-only public key elsewhere.
+fn mnemonic_keys(
+    mnemonic: &str,
+    paths: &[DerivationPath],
+) -> Result<Zeroizing<Vec<[u8; 32]>>, Failure> {
+    if mnemonic.trim().is_empty() {
+        return Ok(Zeroizing::new(vec![]));
+    }
+    // A key does not depend on the network the signer is made for.
     let signer = HotSigner::new_from_mnemonics(bitcoin::Network::Bitcoin, mnemonic.trim())
         .map_err(|_| Failure::InvalidMnemonic)?;
-    Ok(paths
-        .iter()
-        .map(|path| signer.public_key_at(path))
-        .collect())
+    Ok(Zeroizing::new(
+        paths
+            .iter()
+            .map(|path| {
+                if is_scan_path(path) {
+                    signer.private_key_at(path).secret_bytes()
+                } else {
+                    xonly(&signer.public_key_at(path))
+                }
+            })
+            .collect(),
+    ))
 }
 
 /// The BIP139 document or the descriptor the decrypted `items` hold, in that order.
@@ -503,12 +562,16 @@ fn decrypted(items: Vec<Item>) -> Result<Plaintext, Failure> {
 
 fn open_encrypted(
     encrypted: &Encrypted,
-    xpubs: &[String],
+    keys: &[String],
     mnemonic: &str,
 ) -> Result<Plaintext, Failure> {
     let paths = encrypted.lookup_paths();
-    let mut keys = xpub_keys(xpubs)?;
-    keys.extend(mnemonic_keys(mnemonic, &paths)?);
+    let mut keys = Zeroizing::new(
+        keys.iter()
+            .map(|key| given_key(key))
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    keys.extend(mnemonic_keys(mnemonic, &paths)?.iter());
     match encrypted.open(&keys).map_err(Failure::Malformed)? {
         Some(items) => decrypted(items),
         None => Err(Failure::Locked(paths)),
@@ -534,10 +597,10 @@ fn read_plain(bytes: &[u8]) -> Result<Plaintext, Failure> {
     }
 }
 
-/// What the backup `bytes` holds, an encrypted one opened with `xpubs` or `mnemonic`.
-fn open(bytes: &[u8], xpubs: &[String], mnemonic: &str) -> Result<Plaintext, Failure> {
+/// What the backup `bytes` holds, an encrypted one opened with `keys` or `mnemonic`.
+fn open(bytes: &[u8], keys: &[String], mnemonic: &str) -> Result<Plaintext, Failure> {
     match Encrypted::read(bytes) {
-        Some(encrypted) => open_encrypted(&encrypted.map_err(Failure::Malformed)?, xpubs, mnemonic),
+        Some(encrypted) => open_encrypted(&encrypted.map_err(Failure::Malformed)?, keys, mnemonic),
         None => read_plain(bytes),
     }
 }
@@ -832,15 +895,12 @@ fn contents_failed(failure: Failure) -> BackupContents {
     }
 }
 
-/// What the backup `bytes` holds, an encrypted one opened with `xpubs` or `mnemonic`, and
+/// What the backup `bytes` holds, an encrypted one opened with one of `keys` (xpubs, or
+/// the sp() descriptor a key gives) or `mnemonic`, and
 /// what restoring it needs. Refused as `Locked` when none of them opens it.
-pub fn inspect_account_backup(
-    bytes: &[u8],
-    xpubs: Vec<String>,
-    mnemonic: String,
-) -> BackupContents {
+pub fn inspect_account_backup(bytes: &[u8], keys: Vec<String>, mnemonic: String) -> BackupContents {
     let mnemonic = Zeroizing::new(mnemonic);
-    match open(bytes, &xpubs, &mnemonic).and_then(restorable) {
+    match open(bytes, &keys, &mnemonic).and_then(restorable) {
         Ok(restorable) => contents(&restorable),
         Err(failure) => contents_failed(failure),
     }
@@ -900,12 +960,12 @@ fn fill_endpoints(config: &mut Config) -> Result<(), Failure> {
 fn restore(
     plugin_id: &str,
     bytes: &[u8],
-    xpubs: &[String],
+    keys: &[String],
     mnemonic: &str,
     name: String,
     network: Network,
 ) -> Result<String, Failure> {
-    let restorable = restorable(open(bytes, xpubs, mnemonic)?)?;
+    let restorable = restorable(open(bytes, keys, mnemonic)?)?;
     if restorable.plugin_id != plugin_id {
         return Err(Failure::Unsupported(format!(
             "This backup is of a '{}' account, not a '{plugin_id}' one",
@@ -945,18 +1005,18 @@ fn restore(
 }
 
 /// Restores the `plugin_id` account the backup `bytes` holds, an encrypted one opened
-/// with `xpubs` or `mnemonic`, as the new account `name`: refused when one exists. On
+/// with `keys` or `mnemonic`, as the new account `name`: refused when one exists. On
 /// `network` when the backup does not tell its own.
 pub fn restore_account_backup(
     plugin_id: &str,
     bytes: &[u8],
-    xpubs: Vec<String>,
+    keys: Vec<String>,
     mnemonic: String,
     name: String,
     network: Network,
 ) -> BackupRestore {
     let mnemonic = Zeroizing::new(mnemonic);
-    match restore(plugin_id, bytes, &xpubs, &mnemonic, name, network) {
+    match restore(plugin_id, bytes, &keys, &mnemonic, name, network) {
         Ok(account) => BackupRestore {
             is_ok: true,
             error: String::new(),

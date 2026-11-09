@@ -1138,6 +1138,9 @@ restore-device-description
 restore-device-failed
 => "Failed to decrypt the file with this device"
 => "Failed to decrypt the file with this device";;
+restore-device-no-scan-key
+=> "Gives no silent payment scan key"
+=> "This device cannot give the silent payment scan key that opens this backup";;
 restore-device-trying
 => "Trying to decrypt with this device…"
 => "Trying to decrypt with this device…";;
@@ -1168,6 +1171,13 @@ restore-invalid-type
 => "The file has been decrypted but the content type is not supported."
 => "The file has been decrypted but the content type is not supported.";;
 restore-invalid-xpub => "Invalid xpub" => "Invalid xpub"
+restore-key-ask => "Ask for its scan key" => "Ask this key for its scan key"
+restore-key-failed
+=> "Its scan key cannot decrypt this file"
+=> "Its scan key cannot decrypt this file";;
+restore-keys-text
+=> "This backup opens with a silent payment scan key, which no connected device gives. Ask one of your keys for it:"
+=> "Or ask one of your keys for the silent payment scan key that opens this backup:";;
 restore-locked
 => "None of the keys given opens this backup."
 => "None of the keys given opens this backup.";;
@@ -1204,6 +1214,9 @@ restore-xpub-cannot-decrypt
 => "Xpub is valid but cannot decrypt this file";;
 restore-xpub-field => "Xpub:" => "Xpub:"
 restore-xpub-file-field => "Xpub file:" => "Xpub file:"
+restore-xpub-scan-key
+=> "This backup opens with a silent payment scan key, which no xpub gives: ask one of your keys for it, or enter its mnemonic"
+=> "This backup opens with a silent payment scan key, which no xpub gives: enter the mnemonic of the key instead";;
 route-primary-tooltip => "%1 · Primary" => "NONE"
 scan-progress-done => "All %1 parts received" => "NONE"
 scan-progress-parts => "%1 of %2 parts" => "NONE"

@@ -1558,10 +1558,18 @@ saved.
   liana `69657b0`):
   each connected signing device (`Host::signers()`) is listed, a ready one asked its xpub
   at each path the backup names (`ISigner::getXpub()`) and tried with them, a locked one
-  asked to be unlocked; the device that opens the backup is named in the review. Under
-  Other options: the paths, an xpub pasted or imported from a file, and a mnemonic, typed
-  once its risk is acknowledged. An invalid xpub or mnemonic, and one that cannot decrypt
-  the backup, are said under its field. Then the review, with the account's name (and its
+  asked to be unlocked; the device that opens the backup is named in the review. A BIP352
+  scan path asks for a silent payment scan key, which no connected device gives
+  (`ISigner` has no such request, and bwk-hwi reports silent payments for no USB device):
+  for a backup only a scan key opens, each device's row says so and it is asked nothing.
+  The keys of Keys that can give one (a QR or hot route, `KeyEntry::descriptor_route`) are
+  then listed too, on the scan path's network (any test network for coin 1), and a click
+  asks one for its silent payment account (`IKeys::spDescriptor()`, its QR exchange or its
+  password): the sp() descriptor it answers is tried, its scan secret the key. Under Other
+  options: the paths, an xpub pasted or imported from a file, and a mnemonic, typed once
+  its risk is acknowledged, which gives its scan secret at a scan path and its public key
+  elsewhere. An invalid xpub or mnemonic, and one that cannot decrypt the backup, are said
+  under its field; an xpub given for a backup only a scan key opens is told so. Then the review, with the account's name (and its
   network when the backup does not tell it), then `restore()`. The module that opens it
   asks for the devices to be polled while they are listed. It runs over a module's restore
   target: an `IAccountBackend` with no account behind it, so no account is opened nor
@@ -1575,11 +1583,15 @@ saved.
 
 The built-in backups (`silent/src/account_backup.rs`) are a BIP139 wallet backup document
 (`silent/src/bip139.rs`) encrypted with BIP138 (`silent/src/backup.rs`, the `bip138` crate)
-to the account's keys, its derivation paths in the clear part and its payload padded. A
-Multikey account is encrypted to its policy's keys as BIP138 picks them; an SP account to
-its spend key, the xpub at its BIP352 spend path, and to its sub-accounts' keys. The sp()
-descriptor it holds carries the scan secret, which BIP138 says must be removed: it is
-encrypted anyway, knowingly, so that the backup restores the account. The document holds:
+through its ll layer, its derivation paths in the clear part and its payload padded. A
+Multikey account is encrypted to its policy's keys as BIP138 picks them, any one of their
+xpubs opening it. An SP account is encrypted to its scan secret alone, the 32 bytes taken as
+the BIP138 key, the clear part naming the BIP352 scan path (`m/352'/coin'/account'/1'/0`):
+neither the spend key, which the SP address shows, nor the sub-accounts' xpubs, shared more
+widely, open it. The sp() descriptor it holds carries the scan secret, and BIP138 asks to
+remove private material and to key by public keys: the SP backup departs from both,
+knowingly, so that it restores the account and opens only for whoever can already see its
+payments. The document holds:
 
 | Covered                  | In the document                                                    |
 |--------------------------|--------------------------------------------------------------------|
@@ -1615,14 +1627,19 @@ the account (`Account::scan_start()`), and a restored SP account scans from it: 
 
 `host_smoke --account-shell` checks the shell over services of two providers and its
 retirement, the Backup modal and its refusal, and over the real SP and Multikey accounts a
-backup through the account service; the restore of each opened by a fake signing device
-(listed, asked its xpub at the backup's path, opening it, named in the review) while another
-fake device holding no key of the account fails, an invalid xpub, an xpub that cannot
-decrypt it and an invalid mnemonic refused, a pasted xpub opening it, another kind's restore
-target, an existing account, and a restore once the account is gone, which then opens.
+backup through the account service. The SP backup names the scan path alone; a fake
+connected device is listed as giving no scan key and asked nothing, the spend path's xpub is
+refused as no scan key, and of the keys of a fake Keys, one answering another key's sp()
+descriptor fails and the SP key's opens it, named in the review. The Multikey backup is
+opened by a fake signing device (listed, asked its xpub at the backup's path, named in the
+review) while another fake device holding no key of the account fails; an invalid xpub, an
+xpub that cannot decrypt it and an invalid mnemonic are refused. Each is then opened with
+its key (the SP one's mnemonic, a Multikey xpub pasted) through another kind's restore
+target, over an existing account, and once the account is gone, which then opens.
 `silent/tests/account_backup.rs` checks both kinds' round trips and the BIP139 fields they
-write, an SP backup opening with the xpub at the spend path and its mnemonic but no other
-key, a restore from each of the four formats, a file in none of them refused naming them,
+write, an SP backup opening with the scan secret (its key's mnemonic, its sp() descriptor)
+and never with the spend public key the SP address shows, the spend path's xpub, a
+sub-account xpub or another key, a restore from each of the four formats, a file in none of them refused naming them,
 existing accounts, another kind, and a restore failing once the account is created, which
 leaves no account. `silent/tests/account_services.rs` restores a Multikey backup made while
 a PSBT was saved and active: the restored account holds neither.

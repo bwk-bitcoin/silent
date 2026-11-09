@@ -16,7 +16,10 @@ use bitcoin::{
     secp256k1::Secp256k1,
     Txid,
 };
-use bwk_sp::{bwk_sign::hot_signer::HotSigner, receiver::spend_path};
+use bwk_sp::{
+    bwk_sign::{bwk_descriptor::sp_descriptor::SpDescriptor, hot_signer::HotSigner},
+    receiver::{scan_path, spend_path},
+};
 use silent::{
     app_set_last_endpoint,
     backup::{encrypt_descriptor, Encrypted},
@@ -35,6 +38,7 @@ const ELECTRUM: &str = "tcp://127.0.0.1:2";
 const OTHER_MNEMONIC: &str =
     "legal winner thank year wave sausage worth useful legal winner thank yellow";
 const SPEND_PATH: &str = "m/352'/1'/0'/0'/0";
+const SCAN_PATH: &str = "m/352'/1'/0'/1'/0";
 const SEGWIT_PATH: &str = "m/84'/1'/0'";
 const NOT_A_BACKUP: &str = "expected a BIP138 encrypted backup of a BIP139 wallet backup or of \
                             a descriptor, a BIP139 wallet backup or a descriptor";
@@ -52,11 +56,26 @@ fn key(seed: u8, path: &str) -> (String, Xpub) {
     )
 }
 
-/// The test mnemonic's xpub at the BIP352 spend path of account 0, the key an SP backup
-/// opens with.
+fn test_signer() -> HotSigner {
+    HotSigner::new_from_mnemonics(bitcoin::Network::Regtest, TEST_MNEMONIC).expect("signer")
+}
+
+/// The test mnemonic's 32-byte scan secret at the BIP352 scan path of account 0, the key
+/// an SP backup opens with.
+fn scan_secret() -> [u8; 32] {
+    let account = ChildNumber::from_hardened_idx(0).expect("account");
+    let path = scan_path(bitcoin::Network::Regtest, account);
+    assert_eq!(
+        path.to_string(),
+        SCAN_PATH.trim_start_matches("m/"),
+        "the scan path"
+    );
+    test_signer().private_key_at(&path).secret_bytes()
+}
+
+/// The test mnemonic's xpub at the BIP352 spend path of account 0: its root is the spend
+/// public key.
 fn spend_xpub() -> String {
-    let signer =
-        HotSigner::new_from_mnemonics(bitcoin::Network::Regtest, TEST_MNEMONIC).expect("signer");
     let account = ChildNumber::from_hardened_idx(0).expect("account");
     let path = spend_path(bitcoin::Network::Regtest, account);
     assert_eq!(
@@ -65,11 +84,21 @@ fn spend_xpub() -> String {
         "the spend path"
     );
     let secp = Secp256k1::new();
-    let child = signer
+    let child = test_signer()
         .master_xpriv()
         .derive_priv(&secp, &path)
         .expect("spend key");
     Xpub::from_priv(&secp, &child).to_string()
+}
+
+/// The x-only key BIP138 takes from `xpub`, its root.
+fn xpub_key(xpub: &str) -> [u8; 32] {
+    Xpub::from_str(xpub)
+        .expect("xpub")
+        .public_key
+        .x_only_public_key()
+        .0
+        .serialize()
 }
 
 /// The SP key's descriptor, with a segwit sub-account of another key, seed 7.
@@ -222,13 +251,16 @@ fn sp_backup(name: &str) -> Vec<u8> {
     backup.bytes.into_iter().collect()
 }
 
-/// The BIP139 document the backup `bytes` encrypts, opened with `xpub`.
-fn document_of(bytes: &[u8], xpub: &str) -> serde_json::Value {
-    let encrypted = Encrypted::read(bytes)
+/// The BIP138 backup `bytes` hold, its clear part read.
+fn encrypted(bytes: &[u8]) -> Encrypted {
+    Encrypted::read(bytes)
         .expect("a BIP138 backup")
-        .expect("its clear part reads");
-    let key = Xpub::from_str(xpub).expect("xpub").public_key;
-    let items = encrypted
+        .expect("its clear part reads")
+}
+
+/// The BIP139 document the backup `bytes` encrypts, opened with `key`.
+fn document_of(bytes: &[u8], key: [u8; 32]) -> serde_json::Value {
+    let items = encrypted(bytes)
         .open(&[key])
         .expect("not damaged")
         .expect("the key opens it");
@@ -250,7 +282,7 @@ fn an_sp_backup_is_a_bip138_bip139_document_and_restores_its_indexes_and_labels(
     let before = sp_state(&name);
     assert_eq!(before.addresses.len(), 2, "two segwit addresses handed out");
 
-    let document = document_of(&bytes, &spend_xpub());
+    let document = document_of(&bytes, scan_secret());
     let config = config_from_file(name.clone());
     assert_eq!(
         (
@@ -335,7 +367,7 @@ fn an_sp_backup_is_a_bip138_bip139_document_and_restores_its_indexes_and_labels(
         "the servers and settings only Silent reads"
     );
 
-    let contents = inspect_account_backup(&bytes, vec![spend_xpub()], String::new());
+    let contents = inspect_account_backup(&bytes, vec![], TEST_MNEMONIC.into());
     assert!(contents.is_ok, "inspect the backup: {}", contents.error);
     assert_eq!(
         (
@@ -376,8 +408,8 @@ fn an_sp_backup_is_a_bip138_bip139_document_and_restores_its_indexes_and_labels(
     let restored = restore_account_backup(
         "sp",
         &bytes,
-        vec![spend_xpub()],
-        String::new(),
+        vec![],
+        TEST_MNEMONIC.into(),
         name.clone(),
         Network::Signet,
     );
@@ -432,7 +464,7 @@ fn a_multikey_backup_restores_its_indexes_and_labels_without_saved_psbts() {
 
     // Any one key of the policy opens it, a musig() participant or a leaf key.
     let keys = multikey_keys();
-    let document = document_of(&bytes, keys[2].1.split(']').nth(1).expect("xpub"));
+    let document = document_of(&bytes, xpub_key(keys[2].1.split(']').nth(1).expect("xpub")));
     let accounts = document["accounts"].as_array().expect("accounts");
     assert_eq!(
         (
@@ -513,38 +545,75 @@ fn a_multikey_backup_restores_its_indexes_and_labels_without_saved_psbts() {
 // ===== Keys =====
 
 #[test]
-fn an_sp_backup_opens_with_the_xpub_at_the_spend_path_and_no_other_key() {
+fn an_sp_backup_opens_with_the_scan_secret_and_never_with_a_public_key() {
     let name = test_account_name();
     create_sp(&name);
     let bytes = sp_backup(&name);
+    let config = config_from_file(name.clone());
     cleanup_test_account(&name);
 
     let locked = inspect_account_backup(&bytes, vec![], String::new());
     assert_refused(&locked, BackupFailure::Locked, "no key");
     assert_eq!(
         locked.derivation_paths,
-        vec![SEGWIT_PATH.to_string(), SPEND_PATH.to_string()],
-        "a locked backup names the paths of the xpubs that open it, in BIP138 order"
+        vec![SCAN_PATH.to_string()],
+        "a locked SP backup names the BIP352 scan path alone"
     );
 
-    let opened = inspect_account_backup(&bytes, vec![spend_xpub()], String::new());
+    // The security property: the spend public key, which the account's SP address shows to
+    // whoever is paid there, cannot decrypt the backup, nor can any xpub of the account.
+    let sp = SpDescriptor::from_str(&config.descriptor).expect("sp() descriptor");
+    let spend = sp
+        .spend_public_key(&Secp256k1::new())
+        .expect("the spend public key the SP address shows");
+    let backup = encrypted(&bytes);
     assert!(
-        opened.is_ok,
-        "the spend path's xpub opens it: {}",
-        opened.error
+        backup
+            .open(&[spend.x_only_public_key().0.serialize()])
+            .expect("not damaged")
+            .is_none(),
+        "the spend public key of the SP address cannot decrypt the backup"
     );
+    assert!(
+        backup
+            .open(&[scan_secret()])
+            .expect("not damaged")
+            .is_some(),
+        "the scan secret decrypts it"
+    );
+    let (_, segwit) = key(7, SEGWIT_PATH);
+    for (what, xpub) in [
+        ("the spend path's xpub", spend_xpub()),
+        ("the segwit sub-account's xpub", segwit.to_string()),
+    ] {
+        assert_refused(
+            &inspect_account_backup(&bytes, vec![xpub], String::new()),
+            BackupFailure::Locked,
+            what,
+        );
+    }
+
     let opened = inspect_account_backup(&bytes, vec![], TEST_MNEMONIC.into());
     assert!(
         opened.is_ok,
-        "the SP key's mnemonic opens it: {}",
+        "the SP key's mnemonic opens it with its scan secret: {}",
         opened.error
     );
-
-    let (_, other) = key(8, SEGWIT_PATH);
+    // A key asked for its silent payment account answers its sp() descriptor.
+    let opened = inspect_account_backup(&bytes, vec![config.descriptor.clone()], String::new());
+    assert!(
+        opened.is_ok,
+        "the SP key's sp() descriptor opens it with its scan secret: {}",
+        opened.error
+    );
     assert_refused(
-        &inspect_account_backup(&bytes, vec![other.to_string()], String::new()),
+        &inspect_account_backup(
+            &bytes,
+            vec![descriptor_from_mnemonic(OTHER_MNEMONIC, Network::Regtest)],
+            String::new(),
+        ),
         BackupFailure::Locked,
-        "another key's xpub",
+        "another key's sp() descriptor",
     );
     assert_refused(
         &inspect_account_backup(&bytes, vec![], OTHER_MNEMONIC.into()),
@@ -564,7 +633,7 @@ fn an_sp_backup_opens_with_the_xpub_at_the_spend_path_and_no_other_key() {
     let restored = restore_account_backup(
         "sp",
         &bytes,
-        vec![other.to_string()],
+        vec![spend_xpub()],
         String::new(),
         name.clone(),
         Network::Regtest,
@@ -572,7 +641,7 @@ fn an_sp_backup_opens_with_the_xpub_at_the_spend_path_and_no_other_key() {
     assert_restore_refused(
         &restored,
         BackupFailure::Locked,
-        "another key restores nothing",
+        "the spend path's xpub restores nothing",
     );
     assert!(
         !config_from_file(name).is_ok(),
@@ -711,7 +780,7 @@ fn a_plain_bip139_document_restores_what_it_carries() {
         )],
         "the transaction label"
     );
-    let contents = inspect_account_backup(&sp_backup(&name), vec![spend_xpub()], String::new());
+    let contents = inspect_account_backup(&sp_backup(&name), vec![], TEST_MNEMONIC.into());
     assert!(contents.is_ok, "inspect its backup: {}", contents.error);
     assert_eq!(
         contents.scan_start, 500,
@@ -830,8 +899,8 @@ fn a_restore_never_replaces_an_account_or_takes_another_kind() {
     let restored = restore_account_backup(
         "sp",
         &bytes,
-        vec![spend_xpub()],
-        String::new(),
+        vec![],
+        TEST_MNEMONIC.into(),
         name.clone(),
         Network::Regtest,
     );
@@ -846,8 +915,8 @@ fn a_restore_never_replaces_an_account_or_takes_another_kind() {
     let restored = restore_account_backup(
         MUSIG_PLUGIN_ID,
         &bytes,
-        vec![spend_xpub()],
-        String::new(),
+        vec![],
+        TEST_MNEMONIC.into(),
         name.clone(),
         Network::Regtest,
     );
@@ -900,7 +969,7 @@ fn an_sp_backup_records_the_scan_start_bwk_persisted() {
     config.scan_start = Some(700);
     assert_eq!(config.save(), "", "save the config");
 
-    let document = document_of(&sp_backup(&name), &spend_xpub());
+    let document = document_of(&sp_backup(&name), scan_secret());
     assert_eq!(
         document["accounts"][0]["block_height"],
         serde_json::json!(1),

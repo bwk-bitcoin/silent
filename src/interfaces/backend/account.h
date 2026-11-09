@@ -38,9 +38,9 @@ public slots:
     // The account's backup, its own format, answered by backupCreated().
     virtual void backup(backend::RequestId request_id) = 0;
 
-    // What `backup` holds, an encrypted one opened with one of `xpubs` or with `mnemonic`
-    // (empty for none): answered by backupInspected(), or by backupLocked() when none opens
-    // it.
+    // What `backup` holds, an encrypted one opened with one of `xpubs` (an xpub, or the sp()
+    // descriptor a key gives, whose scan secret opens an SP backup) or with `mnemonic` (empty
+    // for none): answered by backupInspected(), or by backupLocked() when none opens it.
     virtual void inspectBackup(backend::RequestId request_id, QByteArray backup, QStringList xpubs,
                                QByteArray mnemonic) = 0;
 

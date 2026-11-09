@@ -605,7 +605,8 @@ mod ffi {
         Other,
     }
 
-    /// An account backup: its BIP139 document encrypted with BIP138 to the account's keys.
+    /// An account backup: its BIP139 document encrypted with BIP138 to the account's keys
+    /// (an SP account's scan secret).
     #[derive(Debug, Clone)]
     pub struct AccountBackup {
         pub is_ok: bool,
@@ -2239,11 +2240,12 @@ mod ffi {
         ) -> DescriptorBackupResult;
 
         /// What the account backup `backup` holds, an encrypted one opened with one of
-        /// `xpubs` or with `mnemonic` (empty for none): `Locked`, with the paths of the
-        /// xpubs that may open it, when none does. Blocking.
+        /// `keys` (xpubs, or the sp() descriptor a key gives, whose scan secret opens an SP
+        /// backup) or with `mnemonic` (empty for none): `Locked`, with the paths of the keys
+        /// that may open it, when none does. Blocking.
         fn inspect_account_backup(
             backup: &[u8],
-            xpubs: Vec<String>,
+            keys: Vec<String>,
             mnemonic: String,
         ) -> BackupContents;
         /// Restores the `plugin_id` account `backup` holds, opened as
@@ -2253,7 +2255,7 @@ mod ffi {
         fn restore_account_backup(
             plugin_id: &str,
             backup: &[u8],
-            xpubs: Vec<String>,
+            keys: Vec<String>,
             mnemonic: String,
             name: String,
             network: Network,
@@ -2516,7 +2518,7 @@ mod ffi {
         fn finalize_transaction(self: &Account, tx_template: TransactionTemplate) -> UnsignedPsbt;
         /// Broadcasts consensus-encoded `transaction`, then records it locally.
         fn broadcast_report(self: &Account, transaction: &[u8]) -> BroadcastReport;
-        /// The account's backup, encrypted to its keys. Blocking.
+        /// The account's backup, encrypted to its scan secret. Blocking.
         fn backup(self: &Account) -> AccountBackup;
     }
 
@@ -3175,7 +3177,7 @@ mod ffi {
             psbt: &[u8],
         ) -> Box<PsbtResult>;
         fn broadcast_report(self: &MusigAccount, transaction: &[u8]) -> BroadcastReport;
-        /// The account's backup, encrypted to its keys, its saved PSBTs left out.
+        /// The account's backup, encrypted to its policy's keys, its saved PSBTs left out.
         /// Blocking.
         fn backup(self: &MusigAccount) -> AccountBackup;
     }
