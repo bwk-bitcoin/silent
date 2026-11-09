@@ -6,6 +6,7 @@
 #include "i18n/Tr.h"
 #include "interfaces/backend/account.h"
 #include "interfaces/host.h"
+#include "modules/keys/DeviceName.h"
 #include "modules/musig/MusigModule.h"
 #include "modules/musig/creator/CreatePolicy.h"
 
@@ -65,7 +66,8 @@ void MusigCreatorModule::startInstance(const QString &id) {
         auto *target = account::restoreTarget(QString::fromLatin1(MUSIG_PLUGIN_ID), nullptr);
         connect(target, &backend::IAccountBackend::restored, this,
                 &MusigCreatorModule::onAccountRestored, qontrol::UNIQUE);
-        AppController::execModal(new account::view::RestoreAccount(target));
+        AppController::execModal(
+            new account::view::RestoreAccount(target, this, &keys::deviceName));
         return;
     }
     emit error(std::nullopt, TR("musig-creator-unknown-instance").arg(id));

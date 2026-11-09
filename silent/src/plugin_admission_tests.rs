@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 fn host(os: &str) -> Compatibility {
     Compatibility {
-        iid: "dev.silent.IPlugin/11.0".into(),
+        iid: "dev.silent.IPlugin/12.0".into(),
         target_os: os.into(),
         target_arch: "x86_64".into(),
         qt_major: 6,
@@ -751,7 +751,7 @@ fn tagged_root_or_iid_and_excessive_depth_are_not_qt_metadata() {
 }
 
 #[test]
-#[ignore = "requires SILENT_ABI_FIXTURE_PATH pointing to the compiled ABI 11 fixture"]
+#[ignore = "requires SILENT_ABI_FIXTURE_PATH pointing to the compiled ABI 12 fixture"]
 fn compiled_manifest_mismatch_does_not_execute() {
     let path = std::env::var("SILENT_ABI_FIXTURE_PATH").expect("compiled fixture path is required");
     let bytes = std::fs::read(path).expect("read compiled native fixture");
@@ -761,9 +761,9 @@ fn compiled_manifest_mismatch_does_not_execute() {
     std::env::set_var("SILENT_ABI_SENTINEL", &sentinel);
     let mut host = host(std::env::consts::OS);
     host.target_arch = std::env::consts::ARCH.into();
-    let found = inspect(&bytes, &host, None).expect("compiled ABI 11 fixture admission");
+    let found = inspect(&bytes, &host, None).expect("compiled ABI 12 fixture admission");
     let mut manifest = found.clone();
-    manifest.iid = "dev.silent.IPlugin/12.0".into();
+    manifest.iid = "dev.silent.IPlugin/13.0".into();
     let rejected = inspect(&bytes, &host, Some(&manifest));
     let executed = sentinel.exists();
     match previous {

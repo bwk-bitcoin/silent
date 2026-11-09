@@ -459,7 +459,8 @@ void commonServices(const host::ServiceAssembly &assembly, Answers &answers,
 
     assembly.blockchain()->rescan(15, std::nullopt);
     // An open account is never restored over.
-    assembly.accountBackend()->restore(16, QByteArrayLiteral("backup"), QByteArrayLiteral("pw"));
+    assembly.accountBackend()->restore(16, QByteArrayLiteral("backup"), {}, {},
+                                       QStringLiteral("restored"), backend::Network::Regtest);
     assembly.settings()->value(17, QStringLiteral("anything"), QJsonValue());
     assembly.blockchain()->raw(18, QStringLiteral("anything"), QByteArrayLiteral("bytes"));
     require(answers.errors.size() >= 4 && answers.errors.sliced(answers.errors.size() - 4) ==

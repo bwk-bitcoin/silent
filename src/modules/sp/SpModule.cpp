@@ -9,6 +9,7 @@
 #include "interfaces/backend/account.h"
 #include "interfaces/host.h"
 #include "modals/CreateAccount.h"
+#include "modules/keys/DeviceName.h"
 #include <QDebug>
 #include <QStringList>
 #include <common.h>
@@ -85,7 +86,8 @@ void SpModule::startInstance(const QString &id) {
         auto *target = account::restoreTarget(QString::fromLatin1(SP_PLUGIN_ID), nullptr);
         connect(target, &backend::IAccountBackend::restored, this, &SpModule::onAccountRestored,
                 qontrol::UNIQUE);
-        AppController::execModal(new account::view::RestoreAccount(target));
+        AppController::execModal(
+            new account::view::RestoreAccount(target, this, &keys::deviceName));
         return;
     }
 

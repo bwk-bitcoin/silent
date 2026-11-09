@@ -1927,25 +1927,24 @@ impl MusigAccount {
         BroadcastReport::accepted(txid, warnings)
     }
 
-    pub fn backup(&self, password: String) -> AccountBackup {
-        account_backup::backup_result(self.sealed_backup(password))
+    pub fn backup(&self) -> AccountBackup {
+        account_backup::backup_result(self.encrypted_backup())
     }
 
     /// The config, the indexes the account handed out and every label, RAM edits
     /// included. The saved PSBTs stay out: restoring them could not bring back the
     /// nonces their signers already used.
-    fn sealed_backup(&self, password: String) -> Result<Vec<u8>, String> {
+    fn encrypted_backup(&self) -> Result<(Vec<u8>, Vec<String>), String> {
         let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
         let labels = self.labels();
         if !labels.is_ok {
             return Err(labels.error);
         }
-        account_backup::seal(
+        account_backup::backup(
             &inner.config,
             None,
             vec![account_backup::scanner_tip(inner.account.scanner())],
             account_backup::labels_of(labels.labels),
-            password,
         )
     }
 

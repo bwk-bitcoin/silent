@@ -130,7 +130,7 @@ built with Qt 6.8 and baseline x86-64 requirements:
     "kind": "native",
     "library": "payload/libmyplugin.so",
     "compatibility": {
-      "iid": "dev.silent.IPlugin/11.0",
+      "iid": "dev.silent.IPlugin/12.0",
       "target_os": "linux",
       "target_arch": "x86_64",
       "qt_major": 6,
@@ -196,12 +196,12 @@ cargo test --manifest-path silent/Cargo.toml --test storage_example -- --ignored
 The legacy installed-format gate has a separate driver:
 `SILENT_HOST_SMOKE=<absolute-host-smoke> cargo test --manifest-path silent/Cargo.toml
 --test plugin_legacy_abi -- --ignored`. It seeds encrypted version 1 bundles for
-ABIs 2 through 10 and future ABI 12, then verifies registry refusal, expected/found
+ABIs 2 through 11 and future ABI 13, then verifies registry refusal, expected/found
 diagnostics, retained metadata and absence of initializer/constructor side effects.
-The `--plugin-abi` host smoke uses ABI 11 as its accepted control and verifies that
-refused imports preserve its installed bytes. ABIs 2 through 10 use frozen declarations from
+The `--plugin-abi` host smoke uses ABI 12 as its accepted control and verifies that
+refused imports preserve its installed bytes. ABIs 2 through 11 use frozen declarations from
 `tests/host/legacy/ModuleV2.h`, not the current root header. The compiled-fixture Rust
-tests expect `SILENT_ABI_FIXTURE_PATH` to point to `libplugin_abi11_fixture.so`.
+tests expect `SILENT_ABI_FIXTURE_PATH` to point to `libplugin_abi12_fixture.so`.
 
 ### Out-of-tree Plugin Repo Pattern
 
@@ -1230,7 +1230,7 @@ apart from the public `IAccount` other accounts use, which they leave unchanged:
 |-----------------|---------------------------------------------------------------------|-------------------------------------------|
 | `types.h`       | Payload structs, `backend::Network`, `backend::RequestId`           |                                           |
 | `service.h`     | `IService`: byte (`raw`) and Qt JSON (`value`) extensions, `error()` | none, base class only                     |
-| `account.h`     | `IAccountBackend`: identity, receiving, backup and restore          | `dev.silent.backend.IAccountBackend/1.0`  |
+| `account.h`     | `IAccountBackend`: identity, receiving, backup and restore          | `dev.silent.backend.IAccountBackend/2.0`  |
 | `blockchain.h`  | `IBlockchain`: scanning, coins, history, broadcast                  | `dev.silent.backend.IBlockchain/1.0`      |
 | `transaction.h` | `ITransaction`: crafting, unsigned PSBTs, coin selection            | `dev.silent.backend.ITransaction/1.0`     |
 | `labels.h`      | `ILabels`                                                           | `dev.silent.backend.ILabels/1.0`          |
@@ -1541,33 +1541,53 @@ shell nor the views use it, and `silent/tests/account_boundary.rs` keeps it that
 ### Backup and restore
 
 A backup is opaque bytes: the generic flows only hand them over. `IAccountBackend::backup()`
-seals one under a password, `inspectBackup()` answers what it holds (`BackupInfo`: the kind of
-account, its id and network, what it includes, what a restore needs, warnings) and
-`restore()` makes the account it holds. A password lives in the generic UI only from its entry
-to the request that takes it, never logged nor saved.
+makes one, answered with the keys it is not encrypted to; `inspectBackup()` answers what a
+file holds (`BackupInfo`: the kind of account, its id and network, what it includes, what a
+restore needs, warnings), or `backupLocked()` with the derivation paths of the xpubs that may
+open an encrypted one when none of the xpubs or the mnemonic given does; `restore()` makes
+the account it holds, under the name and on the network the restore picks when the backup
+names none. A mnemonic lives in the generic UI only from its entry to the request that
+takes it, the keys that opened a backup from then to the restore; neither is logged nor
+saved.
 
-- `account::view::BackupAccount` (from Settings): a password and its confirmation, then
-  `backup()`, then the file the user picks (`.silent-backup`).
-- `account::view::RestoreAccount`: the backup file and its password, then `inspectBackup()`,
-  reviewed, then `restore()`. It runs over a module's restore target: an `IAccountBackend`
-  with no account behind it, so no account is opened nor scanned to restore one. A restore
-  made through an open account's own service answers `error()`.
+- `account::view::BackupAccount` (from Settings): Save Backup, then `backup()`, then the
+  file the user picks (`.bip138`). Its saved view names the keys the backup is not
+  encrypted to, as BIP138 asks.
+- `account::view::RestoreAccount`: the backup file, then `inspectBackup()`; an encrypted one
+  asks for a key, as Liana's decrypt modal does (`liana-gui/src/installer/decrypt.rs` at
+  liana `69657b0`):
+  each connected signing device (`Host::signers()`) is listed, a ready one asked its xpub
+  at each path the backup names (`ISigner::getXpub()`) and tried with them, a locked one
+  asked to be unlocked; the device that opens the backup is named in the review. Under
+  Other options: the paths, an xpub pasted or imported from a file, and a mnemonic, typed
+  once its risk is acknowledged. An invalid xpub or mnemonic, and one that cannot decrypt
+  the backup, are said under its field. Then the review, with the account's name (and its
+  network when the backup does not tell it), then `restore()`. The module that opens it
+  asks for the devices to be polled while they are listed. It runs over a module's restore
+  target: an `IAccountBackend` with no account behind it, so no account is opened nor
+  scanned to restore one. A restore made through an open account's own service answers
+  `error()`.
 - The restore is the module's: each built-in module lists `<id>.restore` among its creators
   (`sp.restore` in the SP module, `musig.restore` in the Multikey creator), which the account
   type picker offers as Restore once its type is picked. `PluginRegistry::isCreatorInstanceId()` takes
   `.restore` ids as creators. Its restore target is `account::restoreTarget()`; once restored,
   the module refreshes the launcher, which lists the account.
 
-The built-in backups (`silent/src/account_backup.rs`) are `SILENT-ACCOUNT-BACKUP` then the
-JSON of a password envelope: Argon2id and XChaCha20-Poly1305, as hot keys seal their secret
-(`keys::crypto`), bound to this use. They hold:
+The built-in backups (`silent/src/account_backup.rs`) are a BIP139 wallet backup document
+(`silent/src/bip139.rs`) encrypted with BIP138 (`silent/src/backup.rs`, the `bip138` crate)
+to the account's keys, its derivation paths in the clear part and its payload padded. A
+Multikey account is encrypted to its policy's keys as BIP138 picks them; an SP account to
+its spend key, the xpub at its BIP352 spend path, and to its sub-accounts' keys. The sp()
+descriptor it holds carries the scan secret, which BIP138 says must be removed: it is
+encrypted anyway, knowingly, so that the backup restores the account. The document holds:
 
-| Covered                  | In the backup                                                     |
-|--------------------------|-------------------------------------------------------------------|
-| Config                   | the descriptors (an SP one with its scan key), servers, dust limit |
-| Derivation state         | the receive and change indexes each descriptor handed out          |
-| SP scan start            | the block the account scans from                                   |
-| Labels                   | every label, RAM edits included                                    |
+| Covered                  | In the document                                                    |
+|--------------------------|--------------------------------------------------------------------|
+| Descriptors              | `accounts`: the sp() one (`bip_392`), its sub-accounts or the policy (`bip_380`) |
+| Derivation state         | each sub-account's or policy's `receive_index` and `change_index`  |
+| SP scan start            | the SP account's `block_height`                                    |
+| Labels                   | `bip329_labels` of the first account, RAM edits included           |
+| Servers and settings     | `proprietary.silent`: module, BlindBit and Electrum servers, certificate check, dust limit |
 
 and leave out, as `BackupInfo` says:
 
@@ -1577,9 +1597,16 @@ and leave out, as `BackupInfo` says:
 - a Multikey account's saved PSBTs and signing sessions (`warnings`): restoring them could
   bring back a signing round whose nonces a signer already used.
 
-A wrong password and a damaged ciphertext are refused alike (`BackupFailure::WrongPassword`:
-the authentication cannot tell them apart), a file that is no backup as `Malformed`, a newer
-backup version or another kind of account as `Unsupported`. A restore never replaces an
+A restore reads, from the file's contents and in this order: BIP138(BIP139),
+BIP138(descriptor), a plain BIP139 document, a plain descriptor, and restores what each
+carries: a descriptor alone restores the account scanning from the network's default start,
+on the servers the network's last account used; a BIP139 document from another wallet keeps
+the BIP329 labels Silent has (`addr`, `output`, `tx`). Anything else is refused as `Unknown`,
+the error naming the formats read. An encrypted backup none of the keys given opens is
+`Locked`; a damaged one `Malformed`; an invalid xpub or mnemonic `InvalidXpub` or
+`InvalidMnemonic`; a decrypted one holding neither a document nor a descriptor
+`UnsupportedContent`, a descriptor no Silent account takes `InvalidDescriptor`; another
+kind of account or a network Silent has not `Unsupported`. A restore never replaces an
 account: one of the same name refuses it (`Exists`). It creates the account as account
 creation does, then puts the indexes and labels in it; when that fails, the account it created
 is removed, so nothing partial is listed. A backup records the scan start bwk persisted for
@@ -1587,14 +1614,18 @@ the account (`Account::scan_start()`), and a restored SP account scans from it: 
 `scan_start` seeds its fresh store.
 
 `host_smoke --account-shell` checks the shell over services of two providers and its
-retirement, the Backup modal's password rules and refusal, and over the real SP and Multikey
-accounts a backup through the account service, a wrong password, another kind's restore
+retirement, the Backup modal and its refusal, and over the real SP and Multikey accounts a
+backup through the account service; the restore of each opened by a fake signing device
+(listed, asked its xpub at the backup's path, opening it, named in the review) while another
+fake device holding no key of the account fails, an invalid xpub, an xpub that cannot
+decrypt it and an invalid mnemonic refused, a pasted xpub opening it, another kind's restore
 target, an existing account, and a restore once the account is gone, which then opens.
-`silent/tests/account_backup.rs` checks both kinds' roundtrips, malformed backups, wrong
-passwords, a newer backup version, existing accounts, another kind, an SP backup scanning
-from another block, which restores scanning from it, and a restore failing once the account is created, which leaves no
-account. `silent/tests/account_services.rs` restores a Multikey backup made while a PSBT was
-saved and active: the restored account holds neither.
+`silent/tests/account_backup.rs` checks both kinds' round trips and the BIP139 fields they
+write, an SP backup opening with the xpub at the spend path and its mnemonic but no other
+key, a restore from each of the four formats, a file in none of them refused naming them,
+existing accounts, another kind, and a restore failing once the account is created, which
+leaves no account. `silent/tests/account_services.rs` restores a Multikey backup made while
+a PSBT was saved and active: the restored account holds neither.
 
 ## Inter-Account Operation: Send To / Spend From Siblings
 
@@ -1804,7 +1835,7 @@ they are not evidence of a supported funded signing combination.
 
 ## ABI & Linking Rules (Plugin Authors Must Read)
 
-The current plugin IID is `dev.silent.IPlugin/11.0`, the module IID is
+The current plugin IID is `dev.silent.IPlugin/12.0`, the module IID is
 `dev.silent.IModule/3.0`, the signer IID is
 `dev.silent.ISigner/3.0`, the account IID is
 `dev.silent.IAccount/4.0`, the keys IID is `dev.silent.IKeys/4.0`, the transaction
@@ -1816,6 +1847,9 @@ Rust types. Root ABI 10 changed `FeePreferences` to mode and one source, removin
 global tier. Root ABI 11 adds the chain tip to `IAccount::coins` (IAccount/4.0), the
 `IKeys::prepareNonces` request and its `noncesPrepared` signal (IKeys/4.0), and the
 `theme::Palette` fields added since 1.0 to the `palette` signal (IThemeProvider/2.0).
+Root ABI 12 replaces the password of the account backups with the keys that open them:
+`IAccountBackend::backup()`, `inspectBackup()`, `restore()`, `backupCreated()` and the new
+`backupLocked()` (IAccountBackend/2.0, see Backup and restore).
 The `IFeed` methods, signals and IID are unchanged. Rebuild plugins
 against this checkout and use `SILENT_IPlugin_IID` in plugin metadata. Include both
 `src` only for public interfaces; generated `lib/include` and CXX headers are not needed.

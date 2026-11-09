@@ -166,10 +166,11 @@ public:
     // Publishes the next fresh address, then answers addressCreated().
     void newAddress(backend::RequestId request_id, QString kind) override;
     // Recorded, answered error(): the views do not back up.
-    void backup(backend::RequestId request_id, QByteArray password) override;
-    void inspectBackup(backend::RequestId request_id, QByteArray backup,
-                       QByteArray password) override;
-    void restore(backend::RequestId request_id, QByteArray backup, QByteArray password) override;
+    void backup(backend::RequestId request_id) override;
+    void inspectBackup(backend::RequestId request_id, QByteArray backup, QStringList xpubs,
+                       QByteArray mnemonic) override;
+    void restore(backend::RequestId request_id, QByteArray backup, QStringList xpubs,
+                 QByteArray mnemonic, QString name, backend::Network network) override;
 
     Model model;
 };

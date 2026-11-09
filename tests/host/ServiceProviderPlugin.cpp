@@ -109,17 +109,20 @@ public:
         emit error(request_id, refusal());
     }
 
-    void backup(backend::RequestId request_id, [[maybe_unused]] QByteArray password) override {
+    void backup(backend::RequestId request_id) override {
         emit error(request_id, refusal());
     }
 
     void inspectBackup(backend::RequestId request_id, [[maybe_unused]] QByteArray backup,
-                       [[maybe_unused]] QByteArray password) override {
+                       [[maybe_unused]] QStringList xpubs,
+                       [[maybe_unused]] QByteArray mnemonic) override {
         emit error(request_id, refusal());
     }
 
     void restore(backend::RequestId request_id, [[maybe_unused]] QByteArray backup,
-                 [[maybe_unused]] QByteArray password) override {
+                 [[maybe_unused]] QStringList xpubs, [[maybe_unused]] QByteArray mnemonic,
+                 [[maybe_unused]] QString name,
+                 [[maybe_unused]] backend::Network network) override {
         emit error(request_id, refusal());
     }
 

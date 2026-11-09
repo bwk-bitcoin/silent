@@ -22,3 +22,5 @@ interfaces/theme.h dev.silent.IThemeProvider/2.0 dev.silent.IPlugin/11.0 e50f0fa
 interfaces/tr.h - dev.silent.IPlugin/11.0 8389a9d3f9e1f04829d78c79edecfa3980e7e48215ef8a0188ca72f08688643c
 interfaces/transactions.h dev.silent.ITransactions/2.0 dev.silent.IPlugin/11.0 e13fea54a7b9d671bdbd3816b241a805cb6c23b10bcaa7769906eab2fd85219f
 interfaces/types.h - dev.silent.IPlugin/11.0 88a6f2caed932824cc15b40b7eca2bdcec4cdcb4406a107991b8bea514e40060
+interfaces/module.h dev.silent.IModule/3.0,dev.silent.IPlugin/12.0 dev.silent.IPlugin/12.0 ade15dad44029439989feb33314677ccf8c921c1c334e56cab5699111de30573
+interfaces/backend/account.h dev.silent.backend.IAccountBackend/2.0 dev.silent.IPlugin/12.0 d8d8c0250ebb0dcb989b1d5bf6375b6b579f1b57aa53a544d60c3a097a160ac4

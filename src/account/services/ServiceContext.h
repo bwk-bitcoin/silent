@@ -86,12 +86,13 @@ public:
     // answers valueAnswered().
     virtual void endpointCapabilities(backend::RequestId token, QString endpoint) = 0;
     virtual void broadcast(backend::RequestId token, QByteArray transaction) = 0;
-    // The account's backup, sealed under `password`: answers backupCreated(). An account
+    // The account's backup, encrypted to its keys: answers backupCreated(). An account
     // with none to give answers failed().
-    virtual void backup(backend::RequestId token, const QByteArray &password);
-    // What the backup `backup` holds, opened with `password`: answers backupInspected().
+    virtual void backup(backend::RequestId token);
+    // What the backup `backup` holds, an encrypted one opened with one of `xpubs` or with
+    // `mnemonic`: answers backupInspected(), or backupLocked() when none opens it.
     virtual void inspectBackup(backend::RequestId token, const QByteArray &backup,
-                               const QByteArray &password);
+                               const QStringList &xpubs, const QByteArray &mnemonic);
 
 signals:
     void coinsChanged();
@@ -113,8 +114,9 @@ signals:
     void endpointTested(backend::RequestId token);
     void broadcastFinished(backend::RequestId token, backend::BroadcastResult result);
     void valueAnswered(backend::RequestId token, QJsonValue payload);
-    void backupCreated(backend::RequestId token, QByteArray backup);
+    void backupCreated(backend::RequestId token, QByteArray backup, QStringList excluded);
     void backupInspected(backend::RequestId token, backend::BackupInfo info);
+    void backupLocked(backend::RequestId token, QStringList derivation_paths);
     // finalize() built nothing, for `reason`.
     void finalizeFailed(QString reason);
     // The first funds read answered, failed or could not start: the views open on it.

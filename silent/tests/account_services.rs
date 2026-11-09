@@ -36,7 +36,6 @@ const FUNDING: u64 = 100_000;
 const SENT: u64 = 40_000;
 const FEE: u64 = 1000;
 const CHANGE: u64 = FUNDING - SENT - FEE;
-const BACKUP_PASSWORD: &str = "correct horse battery";
 
 fn role_keys() -> Vec<String> {
     let secp = Secp256k1::new();
@@ -545,12 +544,19 @@ fn a_restored_backup_brings_back_no_saved_psbt() {
         "the adopted PSBT is saved and active: {}",
         saved.error
     );
-    let backup = account.backup(BACKUP_PASSWORD.into());
+    let backup = account.backup();
     assert!(backup.is_ok, "back the account up: {}", backup.error);
     drop(account);
     cleanup_test_account(&name);
 
-    let restored = restore_account_backup(MUSIG_PLUGIN_ID, &backup.bytes, BACKUP_PASSWORD.into());
+    let restored = restore_account_backup(
+        MUSIG_PLUGIN_ID,
+        &backup.bytes,
+        vec![role_keys()[0].clone()],
+        String::new(),
+        name.clone(),
+        Network::Regtest,
+    );
     assert!(restored.is_ok, "restore: {}", restored.error);
     let account = new_musig_account(name.clone());
     assert!(

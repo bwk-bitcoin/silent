@@ -1620,13 +1620,13 @@ impl Account {
         BroadcastReport::accepted(txid, warnings)
     }
 
-    pub fn backup(&self, password: String) -> AccountBackup {
-        account_backup::backup_result(self.sealed_backup(password))
+    pub fn backup(&self) -> AccountBackup {
+        account_backup::backup_result(self.encrypted_backup())
     }
 
     /// The config as saved, the indexes of every sub-account, the scan start bwk persisted
     /// and every label, RAM edits included.
-    fn sealed_backup(&self, password: String) -> Result<Vec<u8>, String> {
+    fn encrypted_backup(&self) -> Result<(Vec<u8>, Vec<String>), String> {
         let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
         let config = Config::from_file(inner.name.clone()).map_err(|e| e.to_string())?;
         let tips = inner
@@ -1641,12 +1641,11 @@ impl Account {
         // bwk keeps the scan start it persisted to itself: the config's only seeded a
         // fresh store.
         let scan_start = Some(inner.account.scan_start());
-        account_backup::seal(
+        account_backup::backup(
             &config,
             scan_start,
             tips,
             account_backup::labels_of(labels.labels),
-            password,
         )
     }
 

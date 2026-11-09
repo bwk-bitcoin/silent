@@ -8,6 +8,7 @@ mod account_storage;
 pub mod app_state;
 pub mod backup;
 pub mod bbqr;
+pub mod bip139;
 pub mod camera;
 pub mod config;
 pub mod coordination;
@@ -585,22 +586,34 @@ mod ffi {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum BackupFailure {
         None,
-        /// Not a backup, or a damaged one.
+        /// None of the formats a restore reads.
+        Unknown,
+        /// A backup in one of them, damaged.
         Malformed,
-        WrongPassword,
-        /// Made by a newer Silent, or for another kind of account.
+        /// Encrypted, and none of the keys given opens it.
+        Locked,
+        InvalidXpub,
+        InvalidMnemonic,
+        /// Decrypted, but it holds neither a wallet backup nor a descriptor.
+        UnsupportedContent,
+        /// Its descriptor is none a Silent account takes.
+        InvalidDescriptor,
+        /// For another kind of account, or on a network Silent has not.
         Unsupported,
         /// An account of that name exists: a restore never replaces one.
         Exists,
         Other,
     }
 
-    /// An account backup, sealed under its password.
+    /// An account backup: its BIP139 document encrypted with BIP138 to the account's keys.
     #[derive(Debug, Clone)]
     pub struct AccountBackup {
         pub is_ok: bool,
         pub error: String,
         pub bytes: Vec<u8>,
+        /// The key expressions it is not encrypted to: their holders cannot open it with
+        /// them.
+        pub excluded: Vec<String>,
     }
 
     /// The receive and change indexes one descriptor of a backup handed out.
@@ -620,8 +633,12 @@ mod ffi {
         pub failure: BackupFailure,
         /// The account's module, "sp" or "musig".
         pub plugin_id: String,
+        /// Empty when the backup names no account.
         pub account: String,
         pub network: Network,
+        /// False when neither the backup nor its keys tell the network: `network` is then
+        /// no answer, the restore picks it.
+        pub network_known: bool,
         /// The servers the account syncs from.
         pub endpoints: Vec<String>,
         pub tips: Vec<BackupTip>,
@@ -633,6 +650,8 @@ mod ffi {
         pub signers: Vec<String>,
         /// The account keeps saved PSBTs and signing sessions, which it leaves out.
         pub saved_psbts_excluded: bool,
+        /// A `Locked` backup: the paths of the xpubs that may open it, written m/...
+        pub derivation_paths: Vec<String>,
     }
 
     /// An account restored from its backup.
@@ -2219,15 +2238,25 @@ mod ffi {
             store_common_paths: bool,
         ) -> DescriptorBackupResult;
 
-        /// What the account backup `backup` holds, opened with `password`. Blocking:
-        /// the password key takes a while to derive.
-        fn inspect_account_backup(backup: &[u8], password: String) -> BackupContents;
-        /// Restores the `plugin_id` account `backup` holds as a new account of the same
-        /// name, refused when one exists. Nothing stays of a failed restore. Blocking.
+        /// What the account backup `backup` holds, an encrypted one opened with one of
+        /// `xpubs` or with `mnemonic` (empty for none): `Locked`, with the paths of the
+        /// xpubs that may open it, when none does. Blocking.
+        fn inspect_account_backup(
+            backup: &[u8],
+            xpubs: Vec<String>,
+            mnemonic: String,
+        ) -> BackupContents;
+        /// Restores the `plugin_id` account `backup` holds, opened as
+        /// inspect_account_backup() opens it, as the new account `name`, refused when
+        /// one exists; on `network` when the backup does not tell its own. Nothing stays
+        /// of a failed restore. Blocking.
         fn restore_account_backup(
             plugin_id: &str,
             backup: &[u8],
-            password: String,
+            xpubs: Vec<String>,
+            mnemonic: String,
+            name: String,
+            network: Network,
         ) -> BackupRestore;
     }
 
@@ -2487,8 +2516,8 @@ mod ffi {
         fn finalize_transaction(self: &Account, tx_template: TransactionTemplate) -> UnsignedPsbt;
         /// Broadcasts consensus-encoded `transaction`, then records it locally.
         fn broadcast_report(self: &Account, transaction: &[u8]) -> BroadcastReport;
-        /// The account's backup, sealed under `password`. Blocking.
-        fn backup(self: &Account, password: String) -> AccountBackup;
+        /// The account's backup, encrypted to its keys. Blocking.
+        fn backup(self: &Account) -> AccountBackup;
     }
 
     // ===== Poll Methods =====
@@ -3146,9 +3175,9 @@ mod ffi {
             psbt: &[u8],
         ) -> Box<PsbtResult>;
         fn broadcast_report(self: &MusigAccount, transaction: &[u8]) -> BroadcastReport;
-        /// The account's backup, sealed under `password`, its saved PSBTs left out.
+        /// The account's backup, encrypted to its keys, its saved PSBTs left out.
         /// Blocking.
-        fn backup(self: &MusigAccount, password: String) -> AccountBackup;
+        fn backup(self: &MusigAccount) -> AccountBackup;
     }
 }
 

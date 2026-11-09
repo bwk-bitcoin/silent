@@ -30,13 +30,14 @@ ServiceContext::ServiceContext(QString account, QObject *parent)
             &ServiceContext::onReceivingChanged, qontrol::UNIQUE);
 }
 
-void ServiceContext::backup(backend::RequestId token, [[maybe_unused]] const QByteArray &password) {
+void ServiceContext::backup(backend::RequestId token) {
     emit failed(token, QStringLiteral("This account has no backup"));
 }
 
 void ServiceContext::inspectBackup(backend::RequestId token,
                                    [[maybe_unused]] const QByteArray &backup,
-                                   [[maybe_unused]] const QByteArray &password) {
+                                   [[maybe_unused]] const QStringList &xpubs,
+                                   [[maybe_unused]] const QByteArray &mnemonic) {
     emit failed(token, QStringLiteral("This account reads no backup"));
 }
 

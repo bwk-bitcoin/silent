@@ -7,9 +7,6 @@
 #include "catalog/display/Label.h"
 #include "catalog/feedback/ModalStatus.h"
 #include "catalog/feedback/Notice.h"
-#include "catalog/form/FieldGroup.h"
-#include "catalog/form/FieldNote.h"
-#include "catalog/inputs/Input.h"
 #include "i18n/Tr.h"
 #include "interfaces/backend/account.h"
 #include "theme/Palette.h"
@@ -19,7 +16,6 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QLineEdit>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <Qontrol>
@@ -29,8 +25,7 @@ namespace account::view {
 
 namespace {
 
-const char *const BACKUP_SUFFIX = ".silent-backup";
-constexpr int MIN_PASSWORD_LENGTH = 8;
+const char *const BACKUP_SUFFIX = ".bip138";
 
 } // namespace
 
@@ -59,18 +54,14 @@ BackupAccount::BackupAccount(backend::IAccountBackend *account) : m_account(acco
     view();
 }
 
-BackupAccount::~BackupAccount() {
-    clearPassword();
-}
-
 void BackupAccount::init() {
-    initPassword();
+    initSave();
     initBusy();
     initSaved();
 }
 
 void BackupAccount::doConnect() {
-    connectPassword();
+    connectSave();
     connectSaved();
     connect(m_account, &backend::IAccountBackend::backupCreated, this,
             &BackupAccount::onBackupCreated, qontrol::UNIQUE);
@@ -79,13 +70,13 @@ void BackupAccount::doConnect() {
 }
 
 void BackupAccount::view() {
-    m_password = viewPassword();
+    m_save_view = viewSave();
     viewBusy();
     m_saved = viewSaved();
     hideBusy();
     hideSaved();
     retranslateUi();
-    showPassword();
+    showSave();
 }
 
 void BackupAccount::changeEvent(QEvent *event) {
@@ -97,92 +88,56 @@ void BackupAccount::changeEvent(QEvent *event) {
 
 void BackupAccount::retranslateUi() {
     setWindowTitle(TR("backup-title"));
-    m_password_text->setText(TR("backup-password-text"));
-    m_password_fields->setFieldLabel(m_password_input, TR("keys-password-field"));
-    m_password_fields->setFieldLabel(m_confirm_input, TR("keys-password-confirm-field"));
-    m_password_short->setText(TR("keys-password-short"));
-    m_password_mismatch->setText(TR("keys-password-no-match"));
-    m_busy->setTitle(TR("backup-sealing"));
-    m_busy->setSubtitle(TR("backup-sealing-sub"));
+    m_save_text->setText(TR("backup-text"));
+    m_busy->setTitle(TR("backup-encrypting"));
+    m_busy->setSubtitle(TR("backup-encrypting-sub"));
 }
 
-// ===== Password view =====
+// ===== Save view =====
 
-void BackupAccount::initPassword() {
-    m_password_text = new catalog::Label(catalog::LabelRole::Body);
-    m_password_text->setTone(catalog::LabelTone::Secondary);
-    m_password_text->setWordWrap(true);
-    m_password_input = new catalog::Input;
-    m_password_input->setEchoMode(QLineEdit::Password);
-    m_password_input->setFixedWidth(metric::PASSWORD_INPUT_WIDTH);
-    m_confirm_input = new catalog::Input;
-    m_confirm_input->setEchoMode(QLineEdit::Password);
-    m_confirm_input->setFixedWidth(metric::PASSWORD_INPUT_WIDTH);
-    m_password_short =
-        new catalog::FieldNote(TR("keys-password-short"), catalog::FieldNote::Tone::Error);
-    m_password_mismatch =
-        new catalog::FieldNote(TR("keys-password-no-match"), catalog::FieldNote::Tone::Error);
-    m_password_error = new catalog::Notice(catalog::Notice::Tone::Error);
-    m_password_error->setVisible(false);
+void BackupAccount::initSave() {
+    m_save_text = new catalog::Label(catalog::LabelRole::Body);
+    m_save_text->setTone(catalog::LabelTone::Secondary);
+    m_save_text->setWordWrap(true);
+    m_save_error = new catalog::Notice(catalog::Notice::Tone::Error);
+    m_save_error->setVisible(false);
     m_save = catalog::btnSaveBackup();
-    m_password_actions = new catalog::ModalActions;
-    m_password_actions->addAction(m_save);
-    m_password_fields = new catalog::FieldGroup;
+    m_save_actions = new catalog::ModalActions;
+    m_save_actions->addAction(m_save);
 }
 
-void BackupAccount::connectPassword() {
-    for (auto *input : {m_password_input, m_confirm_input}) {
-        connect(input, &QLineEdit::textEdited, this, &BackupAccount::onPasswordEdited,
-                qontrol::UNIQUE);
-    }
-    connect(m_confirm_input, &QLineEdit::returnPressed, this, &BackupAccount::onNextClicked,
-            qontrol::UNIQUE);
+void BackupAccount::connectSave() {
     connect(m_save, &QPushButton::clicked, this, &BackupAccount::onNextClicked, qontrol::UNIQUE);
 }
 
-auto BackupAccount::viewPassword() -> QWidget * {
-    m_password_fields->addField(TR("keys-password-field"), m_password_input)
-        ->addNote(m_password_short)
-        ->addField(TR("keys-password-confirm-field"), m_confirm_input)
-        ->addNote(m_password_mismatch);
+auto BackupAccount::viewSave() -> QWidget * {
     return (new qontrol::Column)
         ->spacing(resolve(Spacing::M))
-        ->push(m_password_text)
-        ->push(m_password_fields)
-        ->push(m_password_error);
+        ->push(m_save_text)
+        ->push(m_save_error);
 }
 
-void BackupAccount::showPassword() {
-    m_view = View::Password;
-    onPasswordEdited();
+void BackupAccount::showSave() {
+    m_view = View::Save;
     setHeader(nullptr);
-    setBody(m_password);
-    setFooter(m_password_actions);
+    setBody(m_save_view);
+    setFooter(m_save_actions);
     setWidth(ModalWidth::M);
-    m_password_input->setFocus();
 }
 
-void BackupAccount::hidePassword() {
-    keep(m_password);
-    keep(m_password_actions);
+void BackupAccount::hideSave() {
+    keep(m_save_view);
+    keep(m_save_actions);
 }
 
-void BackupAccount::sealBackup() {
-    if (!m_save->isEnabled() || m_account == nullptr) {
+void BackupAccount::makeBackup() {
+    if (m_account == nullptr) {
         return;
     }
-    auto password = m_password_input->text().toUtf8();
-    clearPassword();
-    m_password_error->setVisible(false);
+    m_save_error->setVisible(false);
     showBusy();
     m_backup_req = nextRequestId();
-    m_account->backup(m_backup_req, password);
-    password.fill('\0');
-}
-
-void BackupAccount::clearPassword() {
-    m_password_input->clear();
-    m_confirm_input->clear();
+    m_account->backup(m_backup_req);
 }
 
 // ===== Busy view =====
@@ -213,6 +168,8 @@ void BackupAccount::hideBusy() {
 
 void BackupAccount::initSaved() {
     m_saved_notice = new catalog::Notice(catalog::Notice::Tone::Success);
+    m_excluded_notice = new catalog::Notice(catalog::Notice::Tone::Warning);
+    m_excluded_notice->setVisible(false);
     m_done = catalog::btnDone();
     m_saved_actions = new catalog::ModalActions;
     m_saved_actions->addAction(m_done);
@@ -223,12 +180,18 @@ void BackupAccount::connectSaved() {
 }
 
 auto BackupAccount::viewSaved() -> QWidget * {
-    return (new qontrol::Column)->spacing(resolve(Spacing::M))->push(m_saved_notice);
+    return (new qontrol::Column)
+        ->spacing(resolve(Spacing::M))
+        ->push(m_saved_notice)
+        ->push(m_excluded_notice);
 }
 
-void BackupAccount::showSaved(const QString &path) {
+void BackupAccount::showSaved(const QString &path, const QStringList &excluded) {
     m_view = View::Saved;
     m_saved_notice->setText(TR("backup-saved").arg(QDir::toNativeSeparators(path)));
+    // BIP138 asks that the user knows which key cannot open the backup.
+    m_excluded_notice->setText(TR("backup-excluded").arg(excluded.join(QStringLiteral(", "))));
+    m_excluded_notice->setVisible(!excluded.isEmpty());
     setHeader(nullptr);
     setBody(m_saved);
     setFooter(m_saved_actions);
@@ -244,8 +207,8 @@ void BackupAccount::hideSaved() {
 
 void BackupAccount::onNextClicked() {
     switch (m_view) {
-    case View::Password:
-        sealBackup();
+    case View::Save:
+        makeBackup();
         break;
     case View::Busy:
         break;
@@ -255,25 +218,8 @@ void BackupAccount::onNextClicked() {
     }
 }
 
-void BackupAccount::onPasswordEdited() {
-    QString password = m_password_input->text();
-    bool tooShort = !password.isEmpty() && password.size() < MIN_PASSWORD_LENGTH;
-    bool mismatch = !m_confirm_input->text().isEmpty() && m_confirm_input->text() != password;
-    m_password_short->setVisible(tooShort);
-    m_password_mismatch->setVisible(mismatch);
-    QString reason;
-    if (password.isEmpty()) {
-        reason = TR("keys-password-choose");
-    } else if (password.size() < MIN_PASSWORD_LENGTH) {
-        reason = TR("keys-password-short");
-    } else if (m_confirm_input->text() != password) {
-        reason = TR("keys-password-must-match");
-    }
-    m_save->setEnabled(reason.isEmpty());
-    m_password_actions->setReason(reason);
-}
-
-void BackupAccount::onBackupCreated(backend::RequestId request_id, const QByteArray &backup) {
+void BackupAccount::onBackupCreated(backend::RequestId request_id, const QByteArray &backup,
+                                    const QStringList &excluded) {
     if (request_id != m_backup_req) {
         return;
     }
@@ -283,7 +229,7 @@ void BackupAccount::onBackupCreated(backend::RequestId request_id, const QByteAr
                                              QDir::home().filePath(backupFileName(name)),
                                              TR("backup-file-filter"));
     if (path.isEmpty()) {
-        showPassword();
+        showSave();
         return;
     }
     if (QFileInfo(path).suffix().isEmpty()) {
@@ -291,12 +237,12 @@ void BackupAccount::onBackupCreated(backend::RequestId request_id, const QByteAr
     }
     auto error = writeBackupFile(path, backup);
     if (!error.isEmpty()) {
-        m_password_error->setText(TR("backup-save-failed").arg(error));
-        m_password_error->setVisible(true);
-        showPassword();
+        m_save_error->setText(TR("backup-save-failed").arg(error));
+        m_save_error->setVisible(true);
+        showSave();
         return;
     }
-    showSaved(path);
+    showSaved(path, excluded);
 }
 
 void BackupAccount::onServiceError(backend::RequestId request_id, const QString &message) {
@@ -304,9 +250,9 @@ void BackupAccount::onServiceError(backend::RequestId request_id, const QString 
         return;
     }
     m_backup_req = 0;
-    m_password_error->setText(TR("backup-failed").arg(message));
-    m_password_error->setVisible(true);
-    showPassword();
+    m_save_error->setText(TR("backup-failed").arg(message));
+    m_save_error->setVisible(true);
+    showSave();
 }
 
 } // namespace account::view

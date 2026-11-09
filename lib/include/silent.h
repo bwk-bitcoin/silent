@@ -1883,24 +1883,36 @@ struct LabelSnapshot final {
 // Why an account backup was not made, read or restored.
 enum class BackupFailure : ::std::uint8_t {
   None = 0,
-  // Not a backup, or a damaged one.
-  Malformed = 1,
-  WrongPassword = 2,
-  // Made by a newer Silent, or for another kind of account.
-  Unsupported = 3,
+  // None of the formats a restore reads.
+  Unknown = 1,
+  // A backup in one of them, damaged.
+  Malformed = 2,
+  // Encrypted, and none of the keys given opens it.
+  Locked = 3,
+  InvalidXpub = 4,
+  InvalidMnemonic = 5,
+  // Decrypted, but it holds neither a wallet backup nor a descriptor.
+  UnsupportedContent = 6,
+  // Its descriptor is none a Silent account takes.
+  InvalidDescriptor = 7,
+  // For another kind of account, or on a network Silent has not.
+  Unsupported = 8,
   // An account of that name exists: a restore never replaces one.
-  Exists = 4,
-  Other = 5,
+  Exists = 9,
+  Other = 10,
 };
 #endif // CXXBRIDGE1_ENUM_BackupFailure
 
 #ifndef CXXBRIDGE1_STRUCT_AccountBackup
 #define CXXBRIDGE1_STRUCT_AccountBackup
-// An account backup, sealed under its password.
+// An account backup: its BIP139 document encrypted with BIP138 to the account's keys.
 struct AccountBackup final {
   bool is_ok CXX_DEFAULT_VALUE(false);
   ::rust::String error;
   ::rust::Vec<::std::uint8_t> bytes;
+  // The key expressions it is not encrypted to: their holders cannot open it with
+  // them.
+  ::rust::Vec<::rust::String> excluded;
 
   using IsRelocatable = ::std::true_type;
 };
@@ -1928,8 +1940,12 @@ struct BackupContents final {
   ::BackupFailure failure;
   // The account's module, "sp" or "musig".
   ::rust::String plugin_id;
+  // Empty when the backup names no account.
   ::rust::String account;
   ::Network network;
+  // False when neither the backup nor its keys tell the network: `network` is then
+  // no answer, the restore picks it.
+  bool network_known CXX_DEFAULT_VALUE(false);
   // The servers the account syncs from.
   ::rust::Vec<::rust::String> endpoints;
   ::rust::Vec<::BackupTip> tips;
@@ -1941,6 +1957,8 @@ struct BackupContents final {
   ::rust::Vec<::rust::String> signers;
   // The account keeps saved PSBTs and signing sessions, which it leaves out.
   bool saved_psbts_excluded CXX_DEFAULT_VALUE(false);
+  // A `Locked` backup: the paths of the xpubs that may open it, written m/...
+  ::rust::Vec<::rust::String> derivation_paths;
 
   using IsRelocatable = ::std::true_type;
 };
@@ -3722,8 +3740,8 @@ struct Account final : public ::rust::Opaque {
   // Broadcasts consensus-encoded `transaction`, then records it locally.
   ::BroadcastReport broadcast_report(::rust::Slice<::std::uint8_t const> transaction) const noexcept;
 
-  // The account's backup, sealed under `password`. Blocking.
-  ::AccountBackup backup(::rust::String password) const noexcept;
+  // The account's backup, encrypted to its keys. Blocking.
+  ::AccountBackup backup() const noexcept;
 
   ~Account() = delete;
 
@@ -4455,9 +4473,9 @@ struct MusigAccount final : public ::rust::Opaque {
 
   ::BroadcastReport broadcast_report(::rust::Slice<::std::uint8_t const> transaction) const noexcept;
 
-  // The account's backup, sealed under `password`, its saved PSBTs left out.
+  // The account's backup, encrypted to its keys, its saved PSBTs left out.
   // Blocking.
-  ::AccountBackup backup(::rust::String password) const noexcept;
+  ::AccountBackup backup() const noexcept;
 
   ~MusigAccount() = delete;
 
@@ -4777,13 +4795,16 @@ void storage_request_forget(::std::uint64_t session, ::rust::String id) noexcept
 // derivation paths stay out of the clear part.
 ::DescriptorBackupResult save_descriptor_backup(::rust::Str descriptor, ::rust::Str path, bool store_common_paths) noexcept;
 
-// What the account backup `backup` holds, opened with `password`. Blocking:
-// the password key takes a while to derive.
-::BackupContents inspect_account_backup(::rust::Slice<::std::uint8_t const> backup, ::rust::String password) noexcept;
+// What the account backup `backup` holds, an encrypted one opened with one of
+// `xpubs` or with `mnemonic` (empty for none): `Locked`, with the paths of the
+// xpubs that may open it, when none does. Blocking.
+::BackupContents inspect_account_backup(::rust::Slice<::std::uint8_t const> backup, ::rust::Vec<::rust::String> xpubs, ::rust::String mnemonic) noexcept;
 
-// Restores the `plugin_id` account `backup` holds as a new account of the same
-// name, refused when one exists. Nothing stays of a failed restore. Blocking.
-::BackupRestore restore_account_backup(::rust::Str plugin_id, ::rust::Slice<::std::uint8_t const> backup, ::rust::String password) noexcept;
+// Restores the `plugin_id` account `backup` holds, opened as
+// inspect_account_backup() opens it, as the new account `name`, refused when
+// one exists; on `network` when the backup does not tell its own. Nothing stays
+// of a failed restore. Blocking.
+::BackupRestore restore_account_backup(::rust::Str plugin_id, ::rust::Slice<::std::uint8_t const> backup, ::rust::Vec<::rust::String> xpubs, ::rust::String mnemonic, ::rust::String name, ::Network network) noexcept;
 
 // Create a new config.
 ::AmountParseResult parse_btc_amount(::rust::Str text) noexcept;

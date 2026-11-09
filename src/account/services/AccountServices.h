@@ -7,6 +7,7 @@
 #include <QDebug>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QThread>
 #include <common.h>
 #include <optional>
@@ -123,29 +124,33 @@ public:
                   }));
     }
 
-    // On a worker: deriving the password key takes a while.
-    void backup(backend::RequestId token, const QByteArray &password) override {
+    // On a worker: it reads the account's stores.
+    void backup(backend::RequestId token) override {
         auto *wallet = rustAccount();
         if (wallet == nullptr) {
             emit failed(token, busy());
             return;
         }
-        startWork(token, QThread::create([this, wallet, token, password] {
-                      auto result = wallet->backup(services::toRustString(password));
+        startWork(token, QThread::create([this, wallet, token] {
+                      auto result = wallet->backup();
                       if (result.is_ok) {
-                          emit backupCreated(token, services::toBytes(result.bytes));
+                          emit backupCreated(token, services::toBytes(result.bytes),
+                                             services::toQStrings(result.excluded));
                       } else {
                           emit failed(token, services::toQString(result.error));
                       }
                   }));
     }
 
-    void inspectBackup(backend::RequestId token, const QByteArray &backup,
-                       const QByteArray &password) override {
-        startWork(token, QThread::create([this, token, backup, password] {
+    void inspectBackup(backend::RequestId token, const QByteArray &backup, const QStringList &xpubs,
+                       const QByteArray &mnemonic) override {
+        startWork(token, QThread::create([this, token, backup, xpubs, mnemonic] {
                       auto contents = ::inspect_account_backup(services::toSlice(backup),
-                                                               services::toRustString(password));
-                      if (contents.is_ok) {
+                                                               services::toRustStrings(xpubs),
+                                                               services::toRustString(mnemonic));
+                      if (contents.failure == BackupFailure::Locked) {
+                          emit backupLocked(token, services::toQStrings(contents.derivation_paths));
+                      } else if (contents.is_ok) {
                           emit backupInspected(token, services::toBackupInfo(contents));
                       } else {
                           emit failed(token,

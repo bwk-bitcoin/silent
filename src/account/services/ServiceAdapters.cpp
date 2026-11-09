@@ -111,6 +111,8 @@ public:
                 qontrol::UNIQUE);
         connect(context, &ServiceContext::backupInspected, this, &AccountService::onBackupInspected,
                 qontrol::UNIQUE);
+        connect(context, &ServiceContext::backupLocked, this, &AccountService::onBackupLocked,
+                qontrol::UNIQUE);
         connect(context, &ServiceContext::failed, this, &AccountService::onFailed, qontrol::UNIQUE);
         connect(context, &QObject::destroyed, this, &AccountService::onContextDestroyed,
                 qontrol::UNIQUE);
@@ -162,27 +164,29 @@ public:
         emit valueResult(request_id, services::addressKindTitles());
     }
 
-    void backup(backend::RequestId request_id, QByteArray password) override {
+    void backup(backend::RequestId request_id) override {
         if (context() == nullptr) {
             emit error(request_id, closed());
             return;
         }
-        context()->backup(track(request_id), password);
+        context()->backup(track(request_id));
     }
 
-    void inspectBackup(backend::RequestId request_id, QByteArray backup,
-                       QByteArray password) override {
+    void inspectBackup(backend::RequestId request_id, QByteArray backup, QStringList xpubs,
+                       QByteArray mnemonic) override {
         if (context() == nullptr) {
             emit error(request_id, closed());
             return;
         }
-        context()->inspectBackup(track(request_id), backup, password);
+        context()->inspectBackup(track(request_id), backup, xpubs, mnemonic);
     }
 
     // An open account is never restored over: a restore makes a new account, through
     // its module's restore target.
     void restore(backend::RequestId request_id, [[maybe_unused]] QByteArray backup,
-                 [[maybe_unused]] QByteArray password) override {
+                 [[maybe_unused]] QStringList xpubs, [[maybe_unused]] QByteArray mnemonic,
+                 [[maybe_unused]] QString name,
+                 [[maybe_unused]] backend::Network network) override {
         emit error(request_id, QStringLiteral("An open account is not restored over: restore "
                                               "the backup from the account list"));
     }
@@ -195,15 +199,22 @@ public slots:
         }
     }
 
-    void onBackupCreated(backend::RequestId token, const QByteArray &backup) {
+    void onBackupCreated(backend::RequestId token, const QByteArray &backup,
+                         const QStringList &excluded) {
         if (auto request = take(token); request.has_value()) {
-            emit backupCreated(*request, backup);
+            emit backupCreated(*request, backup, excluded);
         }
     }
 
     void onBackupInspected(backend::RequestId token, const backend::BackupInfo &info) {
         if (auto request = take(token); request.has_value()) {
             emit backupInspected(*request, info);
+        }
+    }
+
+    void onBackupLocked(backend::RequestId token, const QStringList &derivation_paths) {
+        if (auto request = take(token); request.has_value()) {
+            emit backupLocked(*request, derivation_paths);
         }
     }
 
@@ -273,28 +284,36 @@ public:
         emit error(request_id, noAccount(kind));
     }
 
-    void backup(backend::RequestId request_id, [[maybe_unused]] QByteArray password) override {
+    void backup(backend::RequestId request_id) override {
         emit error(request_id, noAccount(QStringLiteral("backup")));
     }
 
-    void inspectBackup(backend::RequestId request_id, QByteArray backup,
-                       QByteArray password) override {
+    void inspectBackup(backend::RequestId request_id, QByteArray backup, QStringList xpubs,
+                       QByteArray mnemonic) override {
         auto contents = std::make_shared<BackupContents>();
-        auto *worker = QThread::create([contents, backup, password] {
-            *contents = ::inspect_account_backup(services::toSlice(backup),
-                                                 services::toRustString(password));
+        auto *worker = QThread::create([contents, backup, xpubs, mnemonic] {
+            *contents =
+                ::inspect_account_backup(services::toSlice(backup), services::toRustStrings(xpubs),
+                                         services::toRustString(mnemonic));
         });
         m_inspections.insert(worker, {.request = request_id, .contents = contents});
         start(worker, &RestoreService::onInspected);
     }
 
-    void restore(backend::RequestId request_id, QByteArray backup, QByteArray password) override {
+    void restore(backend::RequestId request_id, QByteArray backup, QStringList xpubs,
+                 QByteArray mnemonic, QString name, backend::Network network) override {
+        auto rustNetwork = services::toRustNetwork(network);
+        if (!rustNetwork.has_value()) {
+            emit error(request_id, QStringLiteral("No account is made on that network"));
+            return;
+        }
         auto restored = std::make_shared<BackupRestore>();
-        auto *worker =
-            QThread::create([restored, plugin = m_plugin_id.toStdString(), backup, password] {
-                *restored = ::restore_account_backup(rust::Str(plugin), services::toSlice(backup),
-                                                     services::toRustString(password));
-            });
+        auto *worker = QThread::create([restored, plugin = m_plugin_id.toStdString(), backup, xpubs,
+                                        mnemonic, name, network = *rustNetwork] {
+            *restored = ::restore_account_backup(
+                rust::Str(plugin), services::toSlice(backup), services::toRustStrings(xpubs),
+                services::toRustString(mnemonic), rust::String(name.toStdString()), network);
+        });
         m_restores.insert(worker, {.request = request_id, .restored = restored});
         start(worker, &RestoreService::onRestored);
     }
@@ -307,6 +326,10 @@ public slots:
             return;
         }
         const auto &contents = *inspection.contents;
+        if (contents.failure == BackupFailure::Locked) {
+            emit backupLocked(inspection.request, services::toQStrings(contents.derivation_paths));
+            return;
+        }
         if (!contents.is_ok) {
             emit error(inspection.request, services::backupError(contents.failure, contents.error));
             return;

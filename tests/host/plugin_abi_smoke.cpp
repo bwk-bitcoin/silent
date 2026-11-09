@@ -72,7 +72,7 @@ auto sectionHeaderOffset(const QByteArray &bytes, const QByteArray &name) -> qsi
 
 // Rewrite the compiled image in place so record regressions also pass native admission.
 auto metadataContainer(const QByteArray &record) -> QByteArray {
-    auto bytes = fixtureBytes(SILENT_ABI11_FIXTURE_PATH);
+    auto bytes = fixtureBytes(SILENT_ABI12_FIXTURE_PATH);
     auto header = readNative<Elf64_Ehdr>(bytes, 0);
     auto offset = sectionHeaderOffset(bytes, ".note.qt.metadata");
     auto section = readNative<Elf64_Shdr>(bytes, offset);
@@ -140,7 +140,7 @@ void rejectWithoutExecution(const QByteArray &bytes, const QString &sentinel_pat
 
 void redirectedSectionRejectionSmoke(const QByteArray &bytes, const QString &sentinel_path) {
     QCborMap root;
-    root.insert(2, QStringLiteral("dev.silent.IPlugin/11.0"));
+    root.insert(2, QStringLiteral("dev.silent.IPlugin/12.0"));
     auto replacement = elfMetadataBytes(root);
     auto offset = sectionHeaderOffset(bytes, ".note.qt.metadata");
     auto section = readNative<Elf64_Shdr>(bytes, offset);
@@ -205,7 +205,7 @@ void metadataMappingRejectionSmoke(const QByteArray &bytes, const QString &senti
     rejectWithoutExecution(wrongNote, sentinel_path, QStringLiteral("PT_NOTE location"));
 
     QCborMap innerRoot;
-    innerRoot.insert(2, QStringLiteral("dev.silent.IPlugin/11.0"));
+    innerRoot.insert(2, QStringLiteral("dev.silent.IPlugin/12.0"));
     auto innerNote = elfMetadataBytes(innerRoot);
     for (int padding = 0; padding < 8; ++padding) {
         QCborMap outerRoot;
@@ -413,7 +413,7 @@ void entryExportRejectionSmoke(const QByteArray &bytes, const QString &sentinel_
 
 void duplicateKeysRejectionSmoke(const QString &sentinel_path) {
     auto iid =
-        QByteArray::fromHex("02") + QCborValue(QStringLiteral("dev.silent.IPlugin/11.0")).toCbor();
+        QByteArray::fromHex("02") + QCborValue(QStringLiteral("dev.silent.IPlugin/12.0")).toCbor();
     for (const auto &payload :
          {QByteArray::fromHex("a3") + iid + QByteArray::fromHex("04a004a0"),
           QByteArray::fromHex("a3") + iid + QByteArray::fromHex("036161036162"),
@@ -436,7 +436,7 @@ void duplicateKeysRejectionSmoke(const QString &sentinel_path) {
 }
 
 void metadataCandidateSmoke() {
-    auto expected = QStringLiteral("dev.silent.IPlugin/11.0");
+    auto expected = QStringLiteral("dev.silent.IPlugin/12.0");
     QCborMap root;
     root.insert(2, expected);
     auto regular = metadataBytes(root);
@@ -501,7 +501,7 @@ void metadataCandidateSmoke() {
     }
     oldRoot.insert(4, regular);
     if (recordMetadataError(metadataBytes(oldRoot), expected).isEmpty()) {
-        qFatal("nested ABI 11 metadata must not override the ABI 4 root IID");
+        qFatal("nested ABI 12 metadata must not override the ABI 4 root IID");
     }
     QPluginMetaData::MagicHeader header;
     header.header.qt_minor_version = 6;
@@ -519,9 +519,9 @@ void metadataCandidateSmoke() {
 }
 
 void metadataRejectionSmoke(const QByteArray &bytes, const QString &sentinel_path) {
-    auto expected = QStringLiteral("dev.silent.IPlugin/11.0");
+    auto expected = QStringLiteral("dev.silent.IPlugin/12.0");
     if (pluginMetadataError(bytes, QStringLiteral("dev.silent.IPlugin/4.0")).isEmpty()) {
-        qFatal("ABI 4 expectation must reject an ABI 11 library");
+        qFatal("ABI 4 expectation must reject an ABI 12 library");
     }
     QCborMap nested;
     nested.insert(QStringLiteral("IID"), expected);
@@ -589,7 +589,7 @@ void metadataRejectionSmoke(const QByteArray &bytes, const QString &sentinel_pat
          {missing, malformed, invalidCbor, orphan, prefixed, wrongMachine, invalidSections,
           incompatibleQt, incompatibleCpu, malformed + valid, invalidCbor + valid}) {
         rejectWithoutExecution(invalid, sentinel_path,
-                               QStringLiteral("expected dev.silent.IPlugin/11.0"));
+                               QStringLiteral("expected dev.silent.IPlugin/12.0"));
     }
     for (const auto &invalid : {malformed, invalidCbor}) {
         if (pluginMetadataError(invalid + valid, expected).isEmpty() ||
@@ -599,7 +599,7 @@ void metadataRejectionSmoke(const QByteArray &bytes, const QString &sentinel_pat
     }
 }
 
-const QString ABI11_ID = QStringLiteral("abi11");
+const QString ABI12_ID = QStringLiteral("abi12");
 
 auto abiFixture(int version) -> QByteArray {
     switch (version) {
@@ -621,8 +621,10 @@ auto abiFixture(int version) -> QByteArray {
         return fixtureBytes(SILENT_ABI9_FIXTURE_PATH);
     case 10:
         return fixtureBytes(SILENT_ABI10_FIXTURE_PATH);
-    case 12:
-        return fixtureBytes(SILENT_ABI12_FIXTURE_PATH);
+    case 11:
+        return fixtureBytes(SILENT_ABI11_FIXTURE_PATH);
+    case 13:
+        return fixtureBytes(SILENT_ABI13_FIXTURE_PATH);
     default:
         qFatal("no ABI %d fixture", version);
     }
@@ -637,26 +639,26 @@ auto installedLibrary(const QString &plugin_id) -> QByteArray {
             static_cast<qsizetype>(opened.library.size())};
 }
 
-// Refusal by both the loader and importer must preserve the installed ABI 11 bytes.
+// Refusal by both the loader and importer must preserve the installed ABI 12 bytes.
 void incompatibleImportSmoke(int version, const QByteArray &installed,
                              const QString &sentinel_path) {
     auto bytes = abiFixture(version);
     auto found = QStringLiteral("found dev.silent.IPlugin/%1.0").arg(version);
     rejectWithoutExecution(bytes, sentinel_path,
-                           QStringLiteral("expected dev.silent.IPlugin/11.0"));
+                           QStringLiteral("expected dev.silent.IPlugin/12.0"));
     rejectWithoutExecution(bytes, sentinel_path, found);
-    auto declared = installBundle(ABI11_ID, QStringLiteral("ABI fixture"), bytes);
+    auto declared = installBundle(ABI12_ID, QStringLiteral("ABI fixture"), bytes);
     if (declared.is_ok || declared.error.empty()) {
         qFatal("the import must refuse an ABI %d library declaring its own IID", version);
     }
     auto claimed =
-        installBundle(ABI11_ID, QStringLiteral("ABI fixture"), bytes, hostCompatibility());
+        installBundle(ABI12_ID, QStringLiteral("ABI fixture"), bytes, hostCompatibility());
     if (claimed.is_ok ||
         !QString::fromUtf8(claimed.error.data(), claimed.error.size()).contains(found)) {
         qFatal("the import must refuse an ABI %d library claiming this host, found: %s", version,
                claimed.error.c_str());
     }
-    if (installedLibrary(ABI11_ID) != installed) {
+    if (installedLibrary(ABI12_ID) != installed) {
         qFatal("a refused ABI %d import must leave the installed plugin as it was", version);
     }
     if (QFile::exists(sentinel_path)) {
@@ -710,7 +712,7 @@ void legacyPluginAbiSmoke(const QString &plugin_id) {
         qFatal("registry must refuse an incompatible ABI library sealed by an earlier Silent");
     }
     auto error = registry.pluginLoadError(plugin_id);
-    if (!error.contains(QStringLiteral("expected dev.silent.IPlugin/11.0")) ||
+    if (!error.contains(QStringLiteral("expected dev.silent.IPlugin/12.0")) ||
         !error.contains(QStringLiteral("found dev.silent.IPlugin/"))) {
         qFatal("incompatible legacy library must fail at the metadata admission gate: %s",
                qPrintable(error));
@@ -739,7 +741,7 @@ void pluginAbiSmoke() {
     auto previousSentinel = qgetenv("SILENT_ABI_SENTINEL");
     auto hadSentinel = qEnvironmentVariableIsSet("SILENT_ABI_SENTINEL");
     qputenv("SILENT_ABI_SENTINEL", QFile::encodeName(sentinelPath));
-    auto bytes = fixtureBytes(SILENT_ABI11_FIXTURE_PATH);
+    auto bytes = fixtureBytes(SILENT_ABI12_FIXTURE_PATH);
     metadataRejectionSmoke(bytes, sentinelPath);
     metadataMappingRejectionSmoke(bytes, sentinelPath);
     entryExportRejectionSmoke(bytes, sentinelPath);
@@ -749,25 +751,25 @@ void pluginAbiSmoke() {
     if (QFile::exists(sentinelPath)) {
         qFatal("rejected metadata must run neither initializer nor constructor");
     }
-    auto installed = installBundle(ABI11_ID, QStringLiteral("ABI fixture"), bytes);
+    auto installed = installBundle(ABI12_ID, QStringLiteral("ABI fixture"), bytes);
     if (!installed.is_ok) {
         qFatal("ABI fixture install failed: %s", installed.error.c_str());
     }
     if (QFile::exists(sentinelPath)) {
-        qFatal("importing an ABI 11 library must run neither initializer nor constructor");
+        qFatal("importing an ABI 12 library must run neither initializer nor constructor");
     }
-    if (installedLibrary(ABI11_ID) != bytes) {
-        qFatal("the import must seal the ABI 11 library bytes as they are");
+    if (installedLibrary(ABI12_ID) != bytes) {
+        qFatal("the import must seal the ABI 12 library bytes as they are");
     }
-    for (auto version : {2, 3, 4, 5, 6, 7, 8, 9, 10, 12}) {
+    for (auto version : {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13}) {
         incompatibleImportSmoke(version, bytes, sentinelPath);
     }
     {
         PluginRegistry registry;
         rescanPluginsAndWait(&registry);
-        if (!enablePluginAndWait(&registry, ABI11_ID) || !registry.isPluginEnabled(ABI11_ID)) {
-            qFatal("registry must accept the installed ABI 11 library: %s",
-                   qPrintable(registry.pluginLoadError(ABI11_ID)));
+        if (!enablePluginAndWait(&registry, ABI12_ID) || !registry.isPluginEnabled(ABI12_ID)) {
+            qFatal("registry must accept the installed ABI 12 library: %s",
+                   qPrintable(registry.pluginLoadError(ABI12_ID)));
         }
         if (!registry.enabledModulesForLauncher().empty()) {
             qFatal("ABI fixture must register no modules or feed instances");
@@ -776,18 +778,18 @@ void pluginAbiSmoke() {
     QFile sentinel(sentinelPath);
     if (!sentinel.open(QIODevice::ReadOnly) ||
         sentinel.readAll() != QByteArray("initializer\nconstructor\n")) {
-        qFatal("ABI 11 admission must run the library initializer and root constructor once");
+        qFatal("ABI 12 admission must run the library initializer and root constructor once");
     }
     if (hadSentinel) {
         qputenv("SILENT_ABI_SENTINEL", previousSentinel);
     } else {
         qunsetenv("SILENT_ABI_SENTINEL");
     }
-    auto prepared = ::app_begin_plugin_removal(rust::String(ABI11_ID.toStdString()));
+    auto prepared = ::app_begin_plugin_removal(rust::String(ABI12_ID.toStdString()));
     if (!prepared.empty()) {
         qFatal("ABI fixture removal preparation failed: %s", prepared.c_str());
     }
-    auto error = ::plugin_remove(rust::String(ABI11_ID.toStdString()));
+    auto error = ::plugin_remove(rust::String(ABI12_ID.toStdString()));
     if (!error.empty()) {
         qFatal("ABI fixture removal failed: %s", error.c_str());
     }

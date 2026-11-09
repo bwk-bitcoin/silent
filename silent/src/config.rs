@@ -134,7 +134,7 @@ pub(crate) fn certificate_check(verify_certificate: bool) -> CertificateCheck {
 /// and bwk's taproot-activation floor never applies: it only lives in
 /// Config::sanitize, which the sp crate never calls.
 const MAINNET_BIRTHDAY_HEIGHT: u32 = 899_300;
-const DEFAULT_DUST_LIMIT: u64 = 546;
+pub(crate) const DEFAULT_DUST_LIMIT: u64 = 546;
 
 /// Serde serialization helpers for Network.
 pub(crate) mod network_serde {

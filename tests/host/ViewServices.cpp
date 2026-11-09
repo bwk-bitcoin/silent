@@ -125,21 +125,24 @@ void FakeAccount::newAddress(backend::RequestId request_id, QString kind) {
             });
 }
 
-void FakeAccount::backup(backend::RequestId request_id, QByteArray password) {
-    request(
-        {.id = request_id, .kind = QStringLiteral("backup"), .payload = password},
-        [this, request_id] { emit error(request_id, QStringLiteral("backup is not supported")); });
+void FakeAccount::backup(backend::RequestId request_id) {
+    request({.id = request_id, .kind = QStringLiteral("backup")}, [this, request_id] {
+        emit error(request_id, QStringLiteral("backup is not supported"));
+    });
 }
 
 void FakeAccount::inspectBackup(backend::RequestId request_id, QByteArray backup,
-                                [[maybe_unused]] QByteArray password) {
+                                [[maybe_unused]] QStringList xpubs,
+                                [[maybe_unused]] QByteArray mnemonic) {
     request(
         {.id = request_id, .kind = QStringLiteral("inspectBackup"), .payload = backup},
         [this, request_id] { emit error(request_id, QStringLiteral("backup is not supported")); });
 }
 
 void FakeAccount::restore(backend::RequestId request_id, QByteArray backup,
-                          [[maybe_unused]] QByteArray password) {
+                          [[maybe_unused]] QStringList xpubs, [[maybe_unused]] QByteArray mnemonic,
+                          [[maybe_unused]] QString name,
+                          [[maybe_unused]] backend::Network network) {
     request(
         {.id = request_id, .kind = QStringLiteral("restore"), .payload = backup},
         [this, request_id] { emit error(request_id, QStringLiteral("backup is not supported")); });

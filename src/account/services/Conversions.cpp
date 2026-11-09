@@ -49,6 +49,38 @@ auto toNetwork(Network network) -> backend::Network {
     qFatal("Unknown Rust network");
 }
 
+auto toRustNetwork(backend::Network network) -> std::optional<Network> {
+    switch (network) {
+    case backend::Network::Bitcoin:
+        return Network::Bitcoin;
+    case backend::Network::Testnet:
+        return Network::Testnet;
+    case backend::Network::Signet:
+        return Network::Signet;
+    case backend::Network::Regtest:
+        return Network::Regtest;
+    case backend::Network::Testnet4:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+auto toQStrings(const rust::Vec<rust::String> &values) -> QStringList {
+    QStringList strings;
+    for (const auto &value : values) {
+        strings.append(toQString(value));
+    }
+    return strings;
+}
+
+auto toRustStrings(const QStringList &values) -> rust::Vec<rust::String> {
+    rust::Vec<rust::String> strings;
+    for (const auto &value : values) {
+        strings.push_back(rust::String(value.toStdString()));
+    }
+    return strings;
+}
+
 auto toCoin(const RustCoin &coin, bool spendable) -> backend::Coin {
     return {.outpoint = toQString(coin.outpoint),
             .amount = coin.value,
@@ -261,8 +293,10 @@ auto toRustString(const QByteArray &bytes) -> rust::String {
 auto toBackupInfo(const BackupContents &contents) -> backend::BackupInfo {
     bool multikey = toQString(contents.plugin_id) == QStringLiteral("musig");
     backend::BackupInfo info{.backend = multikey ? TR("musig-account-type") : TR("sp-account-type"),
-                             .account = toQString(contents.account),
-                             .network = toNetwork(contents.network)};
+                             .account = toQString(contents.account)};
+    if (contents.network_known) {
+        info.network = toNetwork(contents.network);
+    }
     info.includes.append(multikey ? TR("backup-includes-policy")
                                   : TR("backup-includes-sp-descriptor"));
     for (const auto &endpoint : contents.endpoints) {
@@ -287,6 +321,9 @@ auto toBackupInfo(const BackupContents &contents) -> backend::BackupInfo {
     info.requirements.append(contents.scan_start != 0
                                  ? TR("backup-requires-sp-scan").arg(contents.scan_start)
                                  : TR("backup-requires-scan"));
+    if (contents.endpoints.empty()) {
+        info.requirements.append(TR("backup-requires-servers"));
+    }
     if (contents.saved_psbts_excluded) {
         info.warnings.append(TR("backup-warning-saved-psbts"));
     }
@@ -295,10 +332,20 @@ auto toBackupInfo(const BackupContents &contents) -> backend::BackupInfo {
 
 auto backupError(BackupFailure failure, const rust::String &error) -> QString {
     switch (failure) {
-    case BackupFailure::WrongPassword:
-        return TR("backup-wrong-password");
+    case BackupFailure::Unknown:
+        return TR("restore-unknown-format");
     case BackupFailure::Malformed:
         return TR("backup-malformed").arg(toQString(error));
+    case BackupFailure::Locked:
+        return TR("restore-locked");
+    case BackupFailure::InvalidXpub:
+        return TR("restore-invalid-xpub");
+    case BackupFailure::InvalidMnemonic:
+        return TR("restore-invalid-mnemonic");
+    case BackupFailure::UnsupportedContent:
+        return TR("restore-invalid-type");
+    case BackupFailure::InvalidDescriptor:
+        return TR("restore-invalid-descriptor");
     case BackupFailure::None:
     case BackupFailure::Unsupported:
     case BackupFailure::Exists:

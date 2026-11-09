@@ -5,6 +5,8 @@
 #include <QByteArray>
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
+#include <optional>
 #include <silent.h>
 
 // Conversions between the Rust bridge types and the account UI service types. Unknown
@@ -13,6 +15,10 @@ namespace account::services {
 
 auto toQString(const rust::String &value) -> QString;
 auto toNetwork(Network network) -> backend::Network;
+// The bridge network of `network`, none for a network Silent accounts are not on.
+auto toRustNetwork(backend::Network network) -> std::optional<Network>;
+auto toQStrings(const rust::Vec<rust::String> &values) -> QStringList;
+auto toRustStrings(const QStringList &values) -> rust::Vec<rust::String>;
 // `spendable`: a spend path can spend the coin now (its timelock, if any, is met).
 auto toCoin(const RustCoin &coin, bool spendable) -> backend::Coin;
 auto toBalance(const CoinState &state) -> backend::Balance;
@@ -37,7 +43,7 @@ auto toCraftResult(const CraftOutcome &outcome) -> backend::CraftResult;
 auto toBroadcastResult(const BroadcastReport &report) -> backend::BroadcastResult;
 auto toBytes(const rust::Vec<std::uint8_t> &bytes) -> QByteArray;
 auto toSlice(const QByteArray &bytes) -> rust::Slice<const std::uint8_t>;
-// `bytes` as UTF-8 text, a password.
+// `bytes` as UTF-8 text, a secret.
 auto toRustString(const QByteArray &bytes) -> rust::String;
 // What a backup holds and needs, said in the current language.
 auto toBackupInfo(const BackupContents &contents) -> backend::BackupInfo;

@@ -1,9 +1,11 @@
 // The generic backup and restore flows (the shell over two plugins is in
 // account_services_smoke). The real SP and Multikey accounts back up through their account
 // service, from their shell; the restore modal reads a backup through the module's
-// restore target, refuses a wrong password, another kind of account and an existing
-// account, and restores one that is gone, which the module then lists. The launcher's
-// Account Type picker lists the account types only, and offers Create or Restore for SP
+// restore target, asks for a key to open it: it lists a fake signing device, fetches its
+// xpubs at the backup's paths and opens the backup with them, and its other options take
+// a pasted xpub and refuse an invalid xpub or mnemonic. It refuses another kind of account
+// and an existing account, and restores one that is gone, which the module then lists. The
+// launcher's Account Type picker lists the account types only, and offers Create or Restore for SP
 // and Multikey, each opening that type's flow; a type with a create entry only starts it.
 
 #include <QApplication>
@@ -46,12 +48,19 @@
 #include "catalog/SelectRow.h"
 #include "catalog/containers/ModalActions.h"
 #include "catalog/display/Label.h"
+#include "catalog/feedback/EmptyState.h"
 #include "catalog/feedback/Notice.h"
+#include "catalog/form/FieldGroup.h"
+#include "catalog/form/FieldNote.h"
+#include "catalog/form/ValidatedInput.h"
+#include "catalog/inputs/Checkbox.h"
+#include "catalog/inputs/ComboBox.h"
 #include "catalog/inputs/Input.h"
 #include "host/Host.h"
 #include "host/PluginRegistry.h"
 #include "i18n/Tr.h"
 #include "interfaces/backend/account.h"
+#include "modules/keys/DeviceName.h"
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigPlugin.h"
 #include "modules/musig/creator/CreatePolicy.h"
@@ -70,7 +79,6 @@ namespace smoke {
 namespace {
 
 constexpr int TIMEOUT_MS = 30000;
-const QString PASSWORD = QStringLiteral("correct horse battery");
 const QString SP_ACCOUNT = QStringLiteral("shell-sp");
 const QString MULTIKEY_ACCOUNT = QStringLiteral("shell-multikey");
 const QString PLUGIN_TYPE = QStringLiteral("Plugin Wallet");
@@ -83,6 +91,16 @@ const char *const MULTIKEY_DESCRIPTOR =
     "CA37ePK189L12ML8fZCuuG9EZtwybxBx2jrVRLrWwsXvRHvXuCS5Q6sRyLB92TsidhBVbwWoeTAxDsDC2w5vQmPVnL2v"
     "KB)/<0;1>/*,pk([56c4fac3/87'/1'/0'/2]tpubDE1s5mmJDMZQ9uwi2KHe99ioqqEpwwZbAmAWP1UK6Y6zHLTKQw"
     "hkGLeSsQi38VaBwzfWtUrSL7v4tD1DPmHKjSfXBRbXVYUVboM7idebk7T/<2;3>/*))";
+// The SP key's xpub at its BIP352 spend path, which opens an SP backup.
+const QString SP_SPEND_PATH = QStringLiteral("m/352'/1'/0'/0'/0");
+const QString SP_XPUB = QStringLiteral("tpubDFx6p4d9GVuNiNrxXR4MRPDFB3JSnm43ptWkAghygFYu73tXBZ5wnjX"
+                                       "gzgDWqYd4m9giKQcnNwitc2etQm9ppxuDKvz"
+                                       "3KkiK7rZFAdqWmwu");
+// The first musig() participant of the Multikey policy, its xpub at its origin path.
+const QString MULTIKEY_PATH = QStringLiteral("m/87'/1'/0'/2");
+const QString MULTIKEY_XPUB = QStringLiteral("tpubDFGmrfdE8Bya4CPLde4Q54gxkY4KKJzzs6y5tGWxVEcrfmzZb"
+                                             "17aCamvX9k1UwKPPHtd7u5WqyS5SiRwxBZvHhbCJum"
+                                             "qwECQQycuAmYtfzZ");
 
 void require(bool condition, const char *message) {
     if (!condition) {
@@ -112,7 +130,8 @@ public:
 
 public slots:
 
-    void onBackupCreated(backend::RequestId request_id, const QByteArray &bytes) {
+    void onBackupCreated(backend::RequestId request_id, const QByteArray &bytes,
+                         [[maybe_unused]] const QStringList &excluded) {
         created = request_id;
         backup = bytes;
     }
@@ -171,37 +190,186 @@ public:
     mutable CreateOnlyModule m_module;
 };
 
-// Backup refuses a short or unconfirmed password, and shows the account's refusal.
+// A connected signing device that answers its xpub at each path of `xpubs` a turn of the
+// event loop later, as a real one does, and refuses any other path.
+class FakeDevice final : public ISigner {
+    Q_OBJECT
+
+public:
+    FakeDevice(QString fingerprint, QMap<QString, QString> xpubs, QObject *parent)
+        : ISigner(parent),
+          m_fingerprint(std::move(fingerprint)),
+          m_xpubs(std::move(xpubs)) {
+    }
+
+    [[nodiscard]] auto implemented() const -> bool override {
+        return true;
+    }
+
+    [[nodiscard]] auto id() const -> QString override {
+        return QStringLiteral("fake-device");
+    }
+
+    [[nodiscard]] auto fingerprint() const -> QString override {
+        return m_fingerprint;
+    }
+
+    [[nodiscard]] auto walletName() const -> QString override {
+        return {};
+    }
+
+    [[nodiscard]] auto brand() const -> QString override {
+        return QStringLiteral("jade");
+    }
+
+    [[nodiscard]] auto model() const -> QString override {
+        return {};
+    }
+
+    [[nodiscard]] auto serial() const -> QString override {
+        return {};
+    }
+
+    [[nodiscard]] auto state() const -> plugin::SignerState override {
+        return plugin::SignerState::Ready;
+    }
+
+    [[nodiscard]] auto stateDetail() const -> QString override {
+        return {};
+    }
+
+    [[nodiscard]] auto capabilities() const -> plugin::SignerCapabilities override {
+        return {};
+    }
+
+    [[nodiscard]] auto asked() const -> const QStringList & {
+        return m_asked;
+    }
+
+    auto init() -> ReqId override {
+        return 0;
+    }
+
+    auto info() -> ReqId override {
+        return 0;
+    }
+
+    auto getXpub(const QString &path) -> ReqId override {
+        m_asked.append(path);
+        m_pending.append({++m_req, path});
+        QTimer::singleShot(0, this, &FakeDevice::onAnswer);
+        return m_req;
+    }
+
+    auto isDescriptorRegistered([[maybe_unused]] const QString &descriptor) -> ReqId override {
+        return 0;
+    }
+
+    auto registerDescriptor([[maybe_unused]] const QString &descriptor) -> ReqId override {
+        return 0;
+    }
+
+    auto signWithDescriptor([[maybe_unused]] const QString &psbt_base64,
+                            [[maybe_unused]] const QString &descriptor) -> ReqId override {
+        return 0;
+    }
+
+    auto displayAddress([[maybe_unused]] const QString &descriptor,
+                        [[maybe_unused]] const QString &path,
+                        [[maybe_unused]] const QString &address) -> ReqId override {
+        return 0;
+    }
+
+    auto raw([[maybe_unused]] const QByteArray &request) -> ReqId override {
+        return 0;
+    }
+
+public slots:
+
+    void onAnswer() {
+        auto [req, path] = m_pending.takeFirst();
+        if (m_xpubs.contains(path)) {
+            emit xpub(req, m_xpubs.value(path));
+        } else {
+            emit error(req, QStringLiteral("no xpub at %1").arg(path));
+        }
+    }
+
+private:
+    QString m_fingerprint;
+    QMap<QString, QString> m_xpubs;
+    QList<QPair<ReqId, QString>> m_pending;
+    QStringList m_asked;
+    ReqId m_req = 0;
+};
+
+// The instance a fake device is listed under.
+class FakeDeviceInstance final : public QObject, public IInstance {
+    Q_OBJECT
+    Q_INTERFACES(IInstance)
+
+public:
+    FakeDeviceInstance(QString id, const QString &fingerprint, QMap<QString, QString> xpubs)
+        : m_id(std::move(id)),
+          m_device(new FakeDevice(fingerprint, std::move(xpubs), this)) {
+    }
+
+    [[nodiscard]] auto id() const -> QString override {
+        return m_id;
+    }
+
+    void stop() override {
+    }
+
+    auto account() -> IAccount * override {
+        return nullptr;
+    }
+
+    auto feed() -> IFeed * override {
+        return nullptr;
+    }
+
+    auto signer() -> ISigner * override {
+        return m_device;
+    }
+
+    auto theme() -> IThemeProvider * override {
+        return nullptr;
+    }
+
+    [[nodiscard]] auto device() const -> FakeDevice * {
+        return m_device;
+    }
+
+private:
+    QString m_id;
+    FakeDevice *m_device = nullptr;
+};
+
+// Backup asks the account for its backup, and shows the account's refusal.
 void backupModal() {
     ViewServices fakes;
     fakes.account.script(QStringLiteral("backup")).error = QStringLiteral("disk full");
     account::view::BackupAccount modal(&fakes.account);
-    modal.m_password_input->setText(QStringLiteral("short"));
-    modal.onPasswordEdited();
-    require(!modal.m_save->isEnabled(), "a short password saves nothing");
-    modal.m_password_input->setText(PASSWORD);
-    modal.m_confirm_input->setText(PASSWORD + QStringLiteral("!"));
-    modal.onPasswordEdited();
-    require(!modal.m_save->isEnabled(), "an unconfirmed password saves nothing");
-    modal.m_confirm_input->setText(PASSWORD);
-    modal.onPasswordEdited();
-    require(modal.m_save->isEnabled(), "a confirmed password can seal the backup");
+    require(modal.m_view == account::view::BackupAccount::View::Save && modal.m_save->isEnabled(),
+            "the backup is saved with no password");
     modal.onNextClicked();
-    auto requests = fakes.account.requestsOf(QStringLiteral("backup"));
-    require(requests.size() == 1 && requests.first().payload.toByteArray() == PASSWORD.toUtf8(),
-            "the backup is sealed under the password typed");
-    require(modal.m_view == account::view::BackupAccount::View::Password &&
-                !modal.m_password_error->isHidden() && modal.m_password_input->text().isEmpty(),
-            "a refused backup says why, the password cleared");
+    require(fakes.account.requestsOf(QStringLiteral("backup")).size() == 1,
+            "Save Backup asks the account for its backup");
+    waitFor([&modal] { return modal.m_view == account::view::BackupAccount::View::Save; },
+            "the account answers");
+    require(!modal.m_save_error->isHidden() &&
+                modal.m_save_error->m_text->text() == TR("backup-failed").arg("disk full"),
+            "a refused backup says why");
     require(account::view::backupFileName(QStringLiteral("my wallet")).startsWith("my_wallet-") &&
-                account::view::backupFileName(QStringLiteral("x")).endsWith(".silent-backup"),
-            "a backup file is named after its account");
+                account::view::backupFileName(QStringLiteral("x")).endsWith(".bip138"),
+            "a backup file is named after its account, as a BIP138 file");
     QTemporaryDir dir;
-    auto path = dir.filePath(QStringLiteral("backup.silent-backup"));
-    require(account::view::writeBackupFile(path, QByteArray("sealed")).isEmpty(),
+    auto path = dir.filePath(QStringLiteral("backup.bip138"));
+    require(account::view::writeBackupFile(path, QByteArray("encrypted")).isEmpty(),
             "a backup file is written");
     QFile written(path);
-    require(written.open(QIODevice::ReadOnly) && written.readAll() == "sealed",
+    require(written.open(QIODevice::ReadOnly) && written.readAll() == "encrypted",
             "the file holds the backup as it is");
 }
 
@@ -240,14 +408,15 @@ auto backupOf(backend::IAccountBackend *account) -> QByteArray {
                      &Backups::onBackupCreated, qontrol::UNIQUE);
     QObject::connect(account, &backend::IService::error, &backups, &Backups::onError,
                      qontrol::UNIQUE);
-    account->backup(41, PASSWORD.toUtf8());
+    account->backup(41);
     waitFor([&backups] { return backups.created == 41 || backups.failed == 41; },
             "the account answers its backup");
     require(backups.created == 41 && !backups.backup.isEmpty(), qPrintable(backups.error));
     Backups refused;
     QObject::connect(account, &backend::IService::error, &refused, &Backups::onError,
                      qontrol::UNIQUE);
-    account->restore(42, backups.backup, PASSWORD.toUtf8());
+    account->restore(42, backups.backup, {}, {}, QStringLiteral("restored"),
+                     backend::Network::Regtest);
     require(refused.failed == 42, "an open account is never restored over");
     return backups.backup;
 }
@@ -262,45 +431,124 @@ void closeAccount(account::AccountModule *module, const QString &id) {
 // The restore modal over `plugin_id`'s restore target, `backup` chosen.
 auto restoreModal(const QString &plugin_id, const QByteArray &backup)
     -> std::unique_ptr<account::view::RestoreAccount> {
-    auto modal =
-        std::make_unique<account::view::RestoreAccount>(account::restoreTarget(plugin_id, nullptr));
+    auto modal = std::make_unique<account::view::RestoreAccount>(
+        account::restoreTarget(plugin_id, nullptr), nullptr,
+        static_cast<account::view::RestoreAccount::DeviceName>(&keys::deviceName));
     modal->m_backup = backup;
-    modal->m_backup_path = QStringLiteral("/backups/account.silent-backup");
+    modal->m_backup_path = QStringLiteral("/backups/account.bip138");
+    modal->showFile();
     return modal;
 }
 
-void readBackup(account::view::RestoreAccount &modal, const QString &password) {
-    modal.m_password_input->setText(password);
-    modal.onPasswordEdited();
-    require(modal.m_read->isEnabled(), "a chosen file and a password read the backup");
+// Reads the chosen backup: an encrypted one asks for a key.
+void readBackup(account::view::RestoreAccount &modal) {
+    require(modal.m_read->isEnabled(), "a chosen file reads the backup");
     modal.onNextClicked();
     require(modal.m_view == account::view::RestoreAccount::View::Busy, "the backup is read");
     waitFor([&modal] { return modal.m_view != account::view::RestoreAccount::View::Busy; },
             "the backup read answers");
+    require(modal.m_view == account::view::RestoreAccount::View::Decrypt,
+            "an encrypted backup asks for a key to open it");
 }
 
-// The restore of `backup`, the account `id`: refused with a wrong password, as another
+// Pastes `xpub` in the Decrypt view and waits for its answer.
+void pasteXpub(account::view::RestoreAccount &modal, const QString &xpub) {
+    modal.m_xpub_input->input()->setText(xpub);
+    modal.onXpubEdited();
+    waitFor(
+        [&modal] {
+            return modal.m_view != account::view::RestoreAccount::View::Decrypt ||
+                   !modal.m_xpub_note->isHidden();
+        },
+        "the pasted xpub is tried");
+}
+
+// The texts of the device rows the Decrypt view lists: name, sub and note.
+auto deviceRows(account::view::RestoreAccount &modal) -> QStringList {
+    QStringList rows;
+    for (auto *row : modal.m_device_rows->findChildren<catalog::SelectRow *>()) {
+        rows.append(row->m_title->text() + QStringLiteral(" ") + row->m_sub->text() +
+                    QStringLiteral(" ") + row->m_note->text());
+    }
+    return rows;
+}
+
+// The Decrypt view of `backup`: no device listed, an invalid xpub, an xpub that does not
+// open it and an invalid mnemonic refused under their field. Then a fake device that holds
+// no key of the account is listed and fails, and one holding `xpub` at `path` is listed,
+// asked its xpub at the backup's path and opens it: the review says which device did.
+void decryptWithDevice(const QString &plugin_id, const QByteArray &backup, const QString &path,
+                       const QString &xpub, const QString &other_xpub, IModule *owner) {
+    auto modal = restoreModal(plugin_id, backup);
+    readBackup(*modal);
+    require(modal->m_paths.contains(path), "the backup names the path of its key");
+    require(deviceRows(*modal).isEmpty() &&
+                !modal->m_device_rows->findChildren<catalog::EmptyState *>().isEmpty(),
+            "no device connected says so");
+
+    pasteXpub(*modal, QStringLiteral("tpubnotanxpub"));
+    require(modal->m_xpub_note->m_text->text() == TR("restore-invalid-xpub"),
+            "an invalid xpub is refused as such");
+    pasteXpub(*modal, other_xpub);
+    require(modal->m_xpub_note->m_text->text() == TR("restore-xpub-cannot-decrypt"),
+            "an xpub of no key of the account cannot decrypt the backup");
+    modal->m_mnemonic_ack->setChecked(true);
+    require(modal->m_mnemonic_input->isEnabled(), "the mnemonic is typed once its risk is acked");
+    modal->m_mnemonic_input->input()->setText(QStringLiteral("abandon abandon abandon"));
+    modal->onMnemonicEdited();
+    waitFor([&modal] { return !modal->m_mnemonic_note->isHidden(); }, "the mnemonic is tried");
+    require(modal->m_mnemonic_note->m_text->text() == TR("restore-invalid-mnemonic"),
+            "an invalid mnemonic is refused as such");
+
+    FakeDeviceInstance stranger(QStringLiteral("fake.stranger"), QStringLiteral("deadbeef"),
+                                {{path, other_xpub}});
+    Host::get()->registerInstance(stranger.id(), &stranger, owner);
+    waitFor(
+        [&modal] {
+            return deviceRows(*modal).contains(QStringLiteral("Jade #deadbeef ") +
+                                               TR("restore-device-failed"));
+        },
+        "a device holding no key of the account is listed and fails to decrypt");
+    require(stranger.device()->asked().contains(path), "the device is asked the backup's paths");
+
+    FakeDeviceInstance holder(QStringLiteral("fake.holder"), QStringLiteral("73c5da0a"),
+                              {{path, xpub}});
+    Host::get()->registerInstance(holder.id(), &holder, owner);
+    waitFor([&modal] { return modal->m_view == account::view::RestoreAccount::View::Review; },
+            "the device holding the key opens the backup");
+    require(holder.device()->asked() == modal->m_paths, "it is asked each path of the backup");
+    require(!modal->m_review_opened->isHidden() &&
+                modal->m_review_opened->m_text->text() ==
+                    TR("restore-opened-device")
+                        .arg(QStringLiteral("Jade"), QStringLiteral("#73c5da0a")),
+            "the review says the device opened the backup");
+    require(modal->m_xpubs == QStringList{xpub}, "its xpub is held for the restore");
+    Host::get()->removeInstance(stranger.id(), owner);
+    Host::get()->removeInstance(holder.id(), owner);
+    QCoreApplication::processEvents();
+}
+
+// The restore of `backup`, the account `id`, opened by pasting `xpub`: refused as another
 // kind of account and while the account exists; restored once it is gone.
 void restoreFlow(account::AccountModule *module, QWidget &window, const QString &plugin_id,
-                 const QString &other_plugin, const QString &id, const QByteArray &backup) {
-    auto wrong = restoreModal(plugin_id, backup);
-    readBackup(*wrong, QStringLiteral("another password"));
-    require(wrong->m_view == account::view::RestoreAccount::View::Password &&
-                wrong->m_password_error->m_text->text() == TR("backup-wrong-password") &&
-                wrong->m_password.isEmpty(),
-            "a wrong password is refused, nothing held");
-
+                 const QString &other_plugin, const QString &id, const QByteArray &backup,
+                 const QString &xpub) {
     auto other = restoreModal(other_plugin, backup);
-    readBackup(*other, PASSWORD);
-    require(other->m_view == account::view::RestoreAccount::View::Password &&
-                !other->m_password_error->isHidden(),
+    readBackup(*other);
+    pasteXpub(*other, xpub);
+    require(other->m_view == account::view::RestoreAccount::View::Decrypt &&
+                !other->m_xpub_note->isHidden(),
             "another module's restore target refuses the backup");
 
     auto existing = restoreModal(plugin_id, backup);
-    readBackup(*existing, PASSWORD);
+    readBackup(*existing);
+    pasteXpub(*existing, xpub);
     require(existing->m_view == account::view::RestoreAccount::View::Review &&
-                existing->m_account == id,
-            "the backup's account is reviewed before it is restored");
+                existing->m_name_input->text() == id &&
+                existing->m_review_opened->m_text->text() == TR("restore-opened-xpub") &&
+                existing->m_network_combo->isHidden(),
+            "the backup opened with a pasted xpub is reviewed, named after its account, on "
+            "its own network");
     existing->onNextClicked();
     waitFor([&] { return existing->m_view != account::view::RestoreAccount::View::Busy; },
             "the restore answers");
@@ -313,13 +561,14 @@ void restoreFlow(account::AccountModule *module, QWidget &window, const QString 
     require(removed.empty(), "the account's storage is removed");
     require(!::config_from_file(rust::String(id.toStdString()))->is_ok(), "the account is gone");
     auto restore = restoreModal(plugin_id, backup);
-    readBackup(*restore, PASSWORD);
+    readBackup(*restore);
+    pasteXpub(*restore, xpub);
     restore->onNextClicked();
     waitFor([&] { return restore->m_view != account::view::RestoreAccount::View::Busy; },
             "the restore answers");
     require(restore->m_view == account::view::RestoreAccount::View::Restored &&
-                restore->m_password.isEmpty(),
-            "the account is restored, the password dropped");
+                restore->m_xpubs.isEmpty(),
+            "the account is restored, the key dropped");
     require(::config_from_file(rust::String(id.toStdString()))->is_ok(),
             "the restored account is saved");
     auto *shell = openAccount(module, window, id);
@@ -389,18 +638,24 @@ void pickEntry(modal::AccountType &picker, const QString &type, const QString &e
 }
 
 // The restore `modal` opened from the picker reads a backup of its own kind, `own` of the
-// account `id`, and refuses `other`, a backup of another kind.
-void restoresKind(account::view::RestoreAccount &modal, const QByteArray &own,
-                  const QByteArray &other, const QString &id) {
-    modal.m_backup_path = QStringLiteral("/backups/account.silent-backup");
+// account `id`, opened with `xpub`, and refuses `other`, a backup of another kind opened
+// with `other_xpub`.
+void restoresKind(account::view::RestoreAccount &modal, const QByteArray &own, const QString &xpub,
+                  const QByteArray &other, const QString &other_xpub, const QString &id) {
+    modal.m_backup_path = QStringLiteral("/backups/account.bip138");
     modal.m_backup = other;
-    readBackup(modal, PASSWORD);
-    require(modal.m_view == account::view::RestoreAccount::View::Password &&
-                !modal.m_password_error->isHidden(),
+    modal.showFile();
+    readBackup(modal);
+    pasteXpub(modal, other_xpub);
+    require(modal.m_view == account::view::RestoreAccount::View::Decrypt &&
+                !modal.m_xpub_note->isHidden(),
             "the restore opened from the picker refuses another kind's backup");
+    modal.onBackClicked();
     modal.m_backup = own;
-    readBackup(modal, PASSWORD);
-    require(modal.m_view == account::view::RestoreAccount::View::Review && modal.m_account == id,
+    readBackup(modal);
+    pasteXpub(modal, xpub);
+    require(modal.m_view == account::view::RestoreAccount::View::Review &&
+                modal.m_name_input->text() == id,
             "the restore opened from the picker reads its own kind's backup");
 }
 
@@ -433,7 +688,7 @@ void accountTypePicker(MenuTab &menu, CreateOnlyModule &plugin, const QByteArray
         pickEntry<account::view::RestoreAccount>(
             picker, TR("sp-account-type"), TR("account-type-restore"),
             [&sp_backup, &multikey_backup](account::view::RestoreAccount &modal) {
-                restoresKind(modal, sp_backup, multikey_backup, SP_ACCOUNT);
+                restoresKind(modal, sp_backup, SP_XPUB, multikey_backup, MULTIKEY_XPUB, SP_ACCOUNT);
             },
             "SP's Restore opens the restore");
     });
@@ -446,7 +701,8 @@ void accountTypePicker(MenuTab &menu, CreateOnlyModule &plugin, const QByteArray
         pickEntry<account::view::RestoreAccount>(
             picker, TR("musig-account-type"), TR("account-type-restore"),
             [&sp_backup, &multikey_backup](account::view::RestoreAccount &modal) {
-                restoresKind(modal, multikey_backup, sp_backup, MULTIKEY_ACCOUNT);
+                restoresKind(modal, multikey_backup, MULTIKEY_XPUB, sp_backup, SP_XPUB,
+                             MULTIKEY_ACCOUNT);
             },
             "Multikey's Restore opens the restore");
     });
@@ -503,10 +759,14 @@ void builtinBackups() {
         "the launcher lists every module's entries");
     accountTypePicker(*qobject_cast<MenuTab *>(window.m_menu_tab), *createOnlyModule, spBackup,
                       multikeyBackup);
+    decryptWithDevice(QStringLiteral("sp"), spBackup, SP_SPEND_PATH, SP_XPUB, MULTIKEY_XPUB,
+                      createOnlyModule);
+    decryptWithDevice(QStringLiteral("musig"), multikeyBackup, MULTIKEY_PATH, MULTIKEY_XPUB,
+                      SP_XPUB, createOnlyModule);
     restoreFlow(spModule, window, QStringLiteral("sp"), QStringLiteral("musig"), SP_ACCOUNT,
-                spBackup);
+                spBackup, SP_XPUB);
     restoreFlow(multikeyModule, window, QStringLiteral("musig"), QStringLiteral("sp"),
-                MULTIKEY_ACCOUNT, multikeyBackup);
+                MULTIKEY_ACCOUNT, multikeyBackup, MULTIKEY_XPUB);
     controller->start(nullptr);
 }
 
