@@ -19,7 +19,7 @@ use bwk::{
         set_musig_input_pub_nonce, MusigPartialSig,
     },
 };
-use bwk_qr_protocol::{request, response, MAX_MUSIG_DERIVATIONS};
+use bwk_qr_protocol::{request, response, MAX_VEC};
 
 use crate::{
     hwi,
@@ -35,6 +35,11 @@ use crate::{
 /// The addresses per policy path a preparation asks public nonces for. A session
 /// never covers more, and allocation refuses transactions beyond the coverage.
 pub(crate) const QR_ADDRESS_COVERAGE: u32 = 8;
+
+/// The derivations a preparation asks for at most: at `MAX_INPUT` inputs each, the
+/// signer's nonces stay within the codec's `MAX_VEC` for up to 16 MuSig expressions
+/// per policy path.
+pub(crate) const QR_MAX_DERIVATIONS: usize = MAX_VEC / (MAX_INPUT * 16);
 
 fn lost(message: &str) -> SigningError {
     SigningError::SessionLost(message.to_owned())
@@ -128,11 +133,11 @@ pub(crate) fn coverage(
             derivations.push(QrDerivation { keychain, index });
         }
     }
-    if derivations.len() > MAX_MUSIG_DERIVATIONS {
+    if derivations.len() > QR_MAX_DERIVATIONS {
         return Err(format!(
             "policy has {} paths, the QR cache covers at most {} derivations",
             paths.len(),
-            MAX_MUSIG_DERIVATIONS / QR_ADDRESS_COVERAGE as usize
+            QR_MAX_DERIVATIONS / QR_ADDRESS_COVERAGE as usize
         ));
     }
     Ok(derivations)
@@ -693,14 +698,14 @@ mod tests {
             musig::{expression_slots, MusigSessionId},
         },
     };
-    use bwk_qr_protocol::{request, response, MAX_MUSIG_DERIVATIONS};
+    use bwk_qr_protocol::{request, response};
     use temp_dir::TempDir;
 
     use crate::keys::musig_sessions::{
         descriptor,
         qr_provider::{
             accept_prepared_at, accept_signed_at, allocate_at, coverage, pin_transcript_at,
-            prepare_material_at, qr_ready,
+            prepare_material_at, qr_ready, QR_MAX_DERIVATIONS,
         },
         AllocationState, LockedCache, SigningError, MAX_INPUT,
     };
@@ -856,7 +861,7 @@ mod tests {
         assert_eq!(preparation.max_inputs, MAX_INPUT as u8, "input coverage");
         assert!(
             !preparation.derivations.is_empty()
-                && preparation.derivations.len() <= MAX_MUSIG_DERIVATIONS,
+                && preparation.derivations.len() <= QR_MAX_DERIVATIONS,
             "coverage inside the codec bound"
         );
         assert_eq!(

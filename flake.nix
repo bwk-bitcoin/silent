@@ -20,7 +20,7 @@
     };
 
     bwk = {
-      url = "github:bwk-bitcoin/bwk/5d6e276bfd54df3a4bef3b07ff43dfc6b66caae6";
+      url = "github:bwk-bitcoin/bwk/79563c6fb0c56617ef21594b63d402f7ba90ecf1";
       flake = false;
     };
 
@@ -87,7 +87,7 @@
         lockFile = ./silent/Cargo.lock;
         outputHashes = {
           "blindbitd-0.0.1" = "sha256-XfO7P9uVLbw8mpiqLZbUoKw8XsxqM1MyeBuq6TKeZ24=";
-          "bwk-sp-0.1.0" = "sha256-F55oZVDUc/bZl+l0Hg/W0or06rWKsEIQ7rLDTdoPfYg=";
+          "bwk-sp-0.1.0" = "sha256-auNfaQ9GD+pUsrDaG7E23HxFwcIazck8u09GyyjD3qQ=";
           "electrsd-0.29.0" = "sha256-kpma4FwkvZxjvVlN/9TnpmWpABkN3iNgQZUtFNp65IM=";
         };
       };
@@ -121,9 +121,9 @@
 [source.crates-io]
 replace-with = "vendored-sources"
 
-[source."git+https://github.com/bwk-bitcoin/bwk.git?rev=5d6e276bfd54df3a4bef3b07ff43dfc6b66caae6"]
+[source."git+https://github.com/bwk-bitcoin/bwk.git?rev=79563c6fb0c56617ef21594b63d402f7ba90ecf1"]
 git = "https://github.com/bwk-bitcoin/bwk.git"
-rev = "5d6e276bfd54df3a4bef3b07ff43dfc6b66caae6"
+rev = "79563c6fb0c56617ef21594b63d402f7ba90ecf1"
 replace-with = "vendored-sources"
 
 [source."git+https://github.com/pythcoiner/blindbitd.git"]
