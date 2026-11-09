@@ -1579,10 +1579,9 @@ the authentication cannot tell them apart), a file that is no backup as `Malform
 backup version or another kind of account as `Unsupported`. A restore never replaces an
 account: one of the same name refuses it (`Exists`). It creates the account as account
 creation does, then puts the indexes and labels in it; when that fails, the account it created
-is removed, so nothing partial is listed. A restored SP account scans from the block every new
-one does: a backup recording another start is refused rather than scanned from the wrong
-block. bwk does not expose the scan start it persisted, so a backup records the one the
-account's config opened with.
+is removed, so nothing partial is listed. A backup records the scan start bwk persisted for
+the account (`Account::scan_start()`), and a restored SP account scans from it: the config's
+`scan_start` seeds its fresh store.
 
 `host_smoke --account-shell` checks the shell over services of two providers and its
 retirement, the Backup modal's password rules and refusal, and over the real SP and Multikey
@@ -1590,7 +1589,7 @@ accounts a backup through the account service, a wrong password, another kind's 
 target, an existing account, and a restore once the account is gone, which then opens.
 `silent/tests/account_backup.rs` checks both kinds' roundtrips, malformed backups, wrong
 passwords, a newer backup version, existing accounts, another kind, an SP backup scanning
-from another block, and a restore failing once the account is created, which leaves no
+from another block, which restores scanning from it, and a restore failing once the account is created, which leaves no
 account. `silent/tests/account_services.rs` restores a Multikey backup made while a PSBT was
 saved and active: the restored account holds neither.
 

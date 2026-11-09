@@ -1,7 +1,6 @@
 //! Account backups of the built-in accounts: a backup restores the account it was made
 //! of, with its address indexes and labels; a malformed backup, a wrong password, an
-//! existing account, another kind of account or another SP scan start are refused, leaving
-//! nothing behind.
+//! existing account or another kind of account are refused, leaving nothing behind.
 
 mod common;
 
@@ -465,46 +464,48 @@ fn a_restore_failing_after_creation_leaves_no_account() {
 }
 
 #[test]
-fn an_sp_backup_scanning_from_another_block_is_refused() {
+fn an_sp_backup_restores_its_scan_start() {
     let name = test_account_name();
     create_sp(&name);
     let config = removed_config(&name);
-    let backup = |scan_start: u32| {
-        sealed(serde_json::json!({
-            "version": account_backup::VERSION,
-            "config": config,
-            "scan_start": scan_start,
-            "tips": [],
-            "labels": [],
-        }))
-    };
+    let bytes = sealed(serde_json::json!({
+        "version": account_backup::VERSION,
+        "config": config,
+        "scan_start": 500,
+        "tips": [],
+        "labels": [],
+    }));
 
-    let refused = restore_account_backup("sp", &backup(500), PASSWORD.into());
-    assert_eq!(
-        (refused.is_ok, refused.failure),
-        (false, BackupFailure::Unsupported),
-        "a backup scanning from another block is refused: {}",
-        refused.error
-    );
-    assert!(
-        refused.error.contains("scans from block Some(500)"),
-        "the refusal names the block: {}",
-        refused.error
-    );
-    assert!(
-        !config_from_file(name.clone()).is_ok(),
-        "nothing is created for a refused scan start"
-    );
-
-    let restored = restore_account_backup("sp", &backup(1), PASSWORD.into());
+    let restored = restore_account_backup("sp", &bytes, PASSWORD.into());
     assert!(
         restored.is_ok,
-        "the block every new account scans from restores: {}",
+        "a backup scanning from another block restores: {}",
         restored.error
     );
-    assert!(
-        config_from_file(name.clone()).is_ok(),
-        "the restored account is saved"
+    let contents = inspect_account_backup(&sp_backup(&name), PASSWORD.into());
+    assert!(contents.is_ok, "inspect its backup: {}", contents.error);
+    assert_eq!(
+        contents.scan_start, 500,
+        "the restored account scans from the backup's block"
+    );
+    cleanup_test_account(&name);
+}
+
+#[test]
+fn an_sp_backup_records_the_scan_start_bwk_persisted() {
+    let name = test_account_name();
+    create_sp(&name);
+    // The store is seeded at block 1: a scan start the config gains later seeds nothing.
+    sp_backup(&name);
+    let mut config = config_from_file(name.clone());
+    config.scan_start = Some(700);
+    assert_eq!(config.save(), "", "save the config");
+
+    let contents = inspect_account_backup(&sp_backup(&name), PASSWORD.into());
+    assert!(contents.is_ok, "inspect the backup: {}", contents.error);
+    assert_eq!(
+        contents.scan_start, 1,
+        "the backup records the persisted start"
     );
     cleanup_test_account(&name);
 }

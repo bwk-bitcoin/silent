@@ -1624,8 +1624,8 @@ impl Account {
         account_backup::backup_result(self.sealed_backup(password))
     }
 
-    /// The config as saved, the indexes of every sub-account, the scan start the account
-    /// opened with and every label, RAM edits included.
+    /// The config as saved, the indexes of every sub-account, the scan start bwk persisted
+    /// and every label, RAM edits included.
     fn sealed_backup(&self, password: String) -> Result<Vec<u8>, String> {
         let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
         let config = Config::from_file(inner.name.clone()).map_err(|e| e.to_string())?;
@@ -1638,9 +1638,9 @@ impl Account {
         if !labels.is_ok {
             return Err(labels.error);
         }
-        // bwk keeps the scan start it persisted to itself: the config's is the one the
-        // account was created with.
-        let scan_start = inner.account.get_config().birthday_height;
+        // bwk keeps the scan start it persisted to itself: the config's only seeded a
+        // fresh store.
+        let scan_start = Some(inner.account.scan_start());
         account_backup::seal(
             &config,
             scan_start,

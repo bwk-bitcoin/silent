@@ -374,7 +374,12 @@ pub(crate) fn restore_labels(
 }
 
 fn restore(plugin_id: &str, bytes: &[u8], password: String) -> Result<String, Failure> {
-    let payload = open(bytes, password)?;
+    let mut payload = open(bytes, password)?;
+    // The restored account scans from where the backed up one did: its fresh store is
+    // seeded with the backup's scan start.
+    if payload.config.plugin_id == SP_PLUGIN_ID {
+        payload.config.scan_start = payload.scan_start;
+    }
     let config = &payload.config;
     if config.plugin_id != plugin_id {
         return Err(Failure::Unsupported(format!(
@@ -387,19 +392,8 @@ fn restore(plugin_id: &str, bytes: &[u8], password: String) -> Result<String, Fa
             "No '{plugin_id}' accounts here"
         )));
     }
-    // The restored account scans from the block every new account does: a backup that
-    // starts elsewhere is refused, not scanned from the wrong block.
     if plugin_id == SP_PLUGIN_ID {
-        let seeded = config
-            .to_sp_config()
-            .map_err(Failure::Malformed)?
-            .birthday_height;
-        if payload.scan_start != seeded {
-            return Err(Failure::Unsupported(format!(
-                "This backup scans from block {:?}, a restore here from {seeded:?}",
-                payload.scan_start
-            )));
-        }
+        config.to_sp_config().map_err(Failure::Malformed)?;
     }
     let created = crate::config::persist_creation(config.clone());
     if !created.is_ok {

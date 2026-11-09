@@ -98,6 +98,10 @@ pub struct Config {
     pub verify_certificate: bool,
     /// Optional dust limit in satoshis
     pub dust_limit: Option<u64>,
+    /// The block SP scanning starts from, a restored backup's: None for the network's
+    /// default. Only seeds a fresh store, bwk keeps the scan start it persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_start: Option<u32>,
     /// Plugin/module identifier that owns this account
     #[serde(default = "default_plugin_id")]
     pub plugin_id: String,
@@ -173,6 +177,7 @@ impl Config {
             electrum_url,
             verify_certificate: default_verify_certificate(),
             dust_limit,
+            scan_start: None,
             plugin_id: default_plugin_id(),
             data_dir,
             load_error: None,
@@ -275,10 +280,10 @@ impl Config {
         );
         config.set_dust_limit(self.dust_limit);
         // Only seeds a fresh store: bwk keeps the persisted birthday once scanned.
-        let birthday = match self.network {
+        let birthday = self.scan_start.unwrap_or(match self.network {
             Network::Bitcoin => MAINNET_BIRTHDAY_HEIGHT,
             _ => 1,
-        };
+        });
         config.set_birthday_height(Some(birthday));
 
         if !self.electrum_url.is_empty() {
