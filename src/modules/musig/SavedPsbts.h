@@ -117,7 +117,8 @@ private:
     SavedPsbtList m_list{};
     // The transaction a click on a row shows, by saved PSBT id: empty for a draft.
     QHash<QString, QString> m_open_txids;
-    // The warning and conflicts of each row, shown with its transaction.
+    // The warning and conflicts of each row shown on its own transaction; none for a
+    // deprecated draft, which opens the transaction that replaced it.
     QHash<QString, QStringList> m_open_notes;
     QHash<QString, QPointer<catalog::LabelCell>> m_label_cells;
     QStringList m_shown_rows;

@@ -44,6 +44,7 @@
 #include "account/views/Receive.h"
 #include "account/views/Send.h"
 #include "account/views/Settings.h"
+#include "account/views/TransactionDetails.h"
 #include "catalog/Button.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/FoldSection.h"
@@ -407,6 +408,28 @@ public slots:
         }
         texts.append(shown.join(QLatin1Char('\n')));
         dialog->done(QDialog::Accepted);
+    }
+};
+
+// Closes the transaction details a row opens, keeping its transaction and notes.
+class DetailsCatcher final : public QObject {
+    Q_OBJECT
+
+public:
+    QStringList txids;
+    QList<QStringList> notes;
+
+public slots:
+
+    void onTimeout() {
+        auto *details =
+            qobject_cast<account::TransactionDetails *>(QApplication::activeModalWidget());
+        if (details == nullptr) {
+            return;
+        }
+        txids.append(details->m_txid);
+        notes.append(details->m_notes);
+        details->done(QDialog::Accepted);
     }
 };
 
@@ -1042,6 +1065,43 @@ void dashboardFit(const char *locale) {
     }
 }
 
+// A deprecated draft opens the transaction that replaced it, without the draft's warning
+// and conflicts; a broadcast entry opens its own transaction with its notes.
+void replacingOpensWithoutDraftNotes() {
+    ViewContext context;
+    ViewServices view(&context);
+    MusigAccountController controller(QStringLiteral("missing-replacing-account"), nullptr);
+    waitFor([&controller] { return !controller.accountLoading(); },
+            "the missing account opening finishes");
+    musig::SavedPsbts psbts(&controller, view.services);
+    auto draft = replacedDraft();
+    draft.warning = "Inputs are spent by another transaction.";
+    SavedPsbtEntry sent;
+    sent.record.id = "sent";
+    sent.record.label = "Sent";
+    sent.record.broadcast = true;
+    sent.txid = rust::String(TX_B.toStdString());
+    sent.warning = "Not seen by the server yet.";
+    SavedPsbtList list{.is_ok = true};
+    list.entries.push_back(draft);
+    list.entries.push_back(sent);
+    psbts.onListed(list);
+
+    DetailsCatcher catcher;
+    QTimer timer;
+    QObject::connect(&timer, &QTimer::timeout, &catcher, &DetailsCatcher::onTimeout,
+                     qontrol::UNIQUE);
+    timer.start(20);
+    psbts.onRowClicked(QStringLiteral("draft"));
+    psbts.onRowClicked(QStringLiteral("sent"));
+    timer.stop();
+    require(catcher.txids == QStringList{TX_C, TX_B}, "each row opens its transaction");
+    require(catcher.notes.first().isEmpty(),
+            "the replacing transaction opens without the draft's notes");
+    require(catcher.notes.last() == QStringList{QStringLiteral("Not seen by the server yet.")},
+            "a broadcast entry keeps its notes");
+}
+
 } // namespace
 
 void accountViewsSmoke() {
@@ -1057,6 +1117,7 @@ void accountViewsSmoke() {
     finalizeReasonShown();
     feeRow();
     finalizedBroadcast();
+    replacingOpensWithoutDraftNotes();
 }
 
 void dashboardFitSmoke() {

@@ -299,7 +299,8 @@ void SavedPsbts::renderRows() {
 void SavedPsbts::addRow(const SavedPsbtEntry &entry) {
     auto id = text(entry.record.id);
     m_open_txids.insert(id, openTxid(entry));
-    m_open_notes.insert(id, notesOf(entry));
+    // The transaction that replaced a deprecated draft opens without the draft's notes.
+    m_open_notes.insert(id, entry.conflicting_txids.empty() ? notesOf(entry) : QStringList{});
 
     auto *signatures = new catalog::Label(signedText(entry), catalog::LabelRole::Mono);
     signatures->setProperty("tblmono", "secondary");
