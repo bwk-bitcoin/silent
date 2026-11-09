@@ -13,10 +13,8 @@ use bitcoin::{
     Network,
 };
 use bwk_qr_protocol::{
-    request::{self, KeyKind},
-    response,
-    types::{self, SpKeys},
-    Message, MessageType, Request, RequestId, Response, SignResponseKind,
+    request::{self, KeyKind, SpKeys},
+    response, types, Message, MessageType, Request, RequestId, Response, SignResponseKind,
 };
 use bwk_sp::{
     bwk_sign::bwk_descriptor::{
@@ -183,7 +181,7 @@ impl QrSession {
         address: String,
     ) -> Result<QrRequest, Error> {
         let body = match SpDescriptor::from_str(descriptor) {
-            Ok(sp) => request::DescriptorBody::from(&sp_keys(&sp)?),
+            Ok(sp) => request::DescriptorBody::SpKeys(sp_keys(&sp)?),
             Err(_) => request::DescriptorBody::Bip380(descriptor.to_string()),
         };
         let body = request::Body::VerifyAddress(request::VerifyAddress {
@@ -370,6 +368,13 @@ impl QrSession {
                 signed,
                 &musig.expect("a MusigSigning request always records its session"),
             )?,
+            // Never asked for: Get Info answers no request this session sends.
+            response::Body::Info(_) => {
+                return Err(Error::ResponseKindMismatch {
+                    expected: expected_type,
+                    got: got_type,
+                })
+            }
             response::Body::Error(_) => unreachable!("error responses are handled above"),
         };
 
@@ -598,9 +603,9 @@ fn sp_keys(descriptor: &SpDescriptor) -> Result<SpKeys, Error> {
         _ => Network::Testnet,
     };
     Ok(SpKeys {
-        fingerprint,
-        spend_path: spend_path(network, account),
-        scan_path: scan_path(network, account),
+        fingerprint: (&fingerprint).into(),
+        spend_path: (&spend_path(network, account)).into(),
+        scan_path: (&scan_path(network, account)).into(),
     })
 }
 

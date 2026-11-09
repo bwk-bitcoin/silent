@@ -789,9 +789,13 @@ fn test_sp_verify_request_carries_the_account_keys_not_the_descriptor() {
     let (_, body) = sp_verify_request(&mut QrSession::new());
     assert_eq!(
         body.descriptor,
-        Some(bwk_qr_protocol::request::DescriptorBody::SpKeys(format!(
-            "{fp}|m/352'/1'/0'/0'/0|m/352'/1'/0'/1'/0"
-        )))
+        Some(bwk_qr_protocol::request::DescriptorBody::SpKeys(
+            bwk_qr_protocol::request::SpKeys {
+                fingerprint: (&bitcoin::bip32::Fingerprint::from_str(&fp).unwrap()).into(),
+                spend_path: (&DerivationPath::from_str("m/352'/1'/0'/0'/0").unwrap()).into(),
+                scan_path: (&DerivationPath::from_str("m/352'/1'/0'/1'/0").unwrap()).into(),
+            }
+        ))
     );
     // No label: the account's own address.
     assert!(body.derivation_path.0.is_empty());
