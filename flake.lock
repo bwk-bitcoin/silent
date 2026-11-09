@@ -3,17 +3,17 @@
     "bwk": {
       "flake": false,
       "locked": {
-        "lastModified": 1794203217,
-        "narHash": "sha256-6er8bjHP7ShA0gkrWZoapJqgVEvIlsSc99eOmDk1AeI=",
+        "lastModified": 1794206760,
+        "narHash": "sha256-ftPix1bdtOVBxd+Wk8cAInH3CHdVM/+Kfm2XVv5secc=",
         "owner": "bwk-bitcoin",
         "repo": "bwk",
-        "rev": "ae04e54e6ab08f74af09cc100f4ea619320eb1b1",
+        "rev": "5d6e276bfd54df3a4bef3b07ff43dfc6b66caae6",
         "type": "github"
       },
       "original": {
         "owner": "bwk-bitcoin",
         "repo": "bwk",
-        "rev": "ae04e54e6ab08f74af09cc100f4ea619320eb1b1",
+        "rev": "5d6e276bfd54df3a4bef3b07ff43dfc6b66caae6",
         "type": "github"
       }
     },

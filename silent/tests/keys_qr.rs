@@ -793,7 +793,9 @@ fn test_sp_verify_request_carries_the_account_keys_not_the_descriptor() {
             bwk_qr_protocol::request::SpKeys {
                 fingerprint: (&bitcoin::bip32::Fingerprint::from_str(&fp).unwrap()).into(),
                 spend_path: (&DerivationPath::from_str("m/352'/1'/0'/0'/0").unwrap()).into(),
-                scan_path: (&DerivationPath::from_str("m/352'/1'/0'/1'/0").unwrap()).into(),
+                scan: bwk_qr_protocol::request::Scan::Path(
+                    (&DerivationPath::from_str("m/352'/1'/0'/1'/0").unwrap()).into(),
+                ),
             }
         ))
     );

@@ -13,7 +13,7 @@ use bitcoin::{
     Network,
 };
 use bwk_qr_protocol::{
-    request::{self, KeyKind, SpKeys},
+    request::{self, KeyKind, Scan, SpKeys},
     response, types, Message, MessageType, Request, RequestId, Response, SignResponseKind,
 };
 use bwk_sp::{
@@ -605,7 +605,7 @@ fn sp_keys(descriptor: &SpDescriptor) -> Result<SpKeys, Error> {
     Ok(SpKeys {
         fingerprint: (&fingerprint).into(),
         spend_path: (&spend_path(network, account)).into(),
-        scan_path: (&scan_path(network, account)).into(),
+        scan: Scan::Path((&scan_path(network, account)).into()),
     })
 }
 
