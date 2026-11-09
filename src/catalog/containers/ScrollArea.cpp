@@ -42,8 +42,7 @@ auto ScrollArea::sizeHint() const -> QSize {
         // does not change with it.
         int frame = 2 * frameWidth();
         QSize content = contentSize();
-        return {content.width() + (2 * insetH()) + frame,
-                content.height() + (2 * insetV()) + frame};
+        return {widthAround(content.width()) + frame, content.height() + (2 * insetV()) + frame};
     }
     return QScrollArea::sizeHint();
 }
@@ -54,8 +53,8 @@ auto ScrollArea::minimumSizeHint() const -> QSize {
     if (m_fit && widget() != nullptr) {
         minimum.setHeight(std::min(minimum.height(), sizeHint().height()));
         // A width set on the content holds.
-        minimum.setWidth(std::max(minimum.width(),
-                                  widget()->minimumWidth() + (2 * insetH()) + (2 * frameWidth())));
+        minimum.setWidth(
+            std::max(minimum.width(), widthAround(widget()->minimumWidth()) + (2 * frameWidth())));
     }
     return minimum;
 }

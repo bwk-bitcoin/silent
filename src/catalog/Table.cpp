@@ -280,6 +280,11 @@ auto Table::buildHeader() -> QWidget * {
         label->setAlignment(column.headerAlignment | Qt::AlignVCenter);
         if (column.width != width::NONE) {
             label->setFixedWidth(column.width);
+        } else if (column.grow) {
+            // Shrinks with its column as the body's cells do: the role's width, or a long
+            // title, would hold the header wider than the rows.
+            label->setMinimumWidth(0);
+            label->setSizePolicy(QSizePolicy::Ignored, label->sizePolicy().verticalPolicy());
         }
         cell->push(label, 0, column.headerAlignment | Qt::AlignVCenter);
         header->push(cell, column.grow ? 1 : 0);

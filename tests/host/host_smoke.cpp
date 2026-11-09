@@ -209,6 +209,7 @@ void offlineSelectionSmoke(const QString &account, const QString &outpoint);
 void psbtTransferSmoke(const QString &account, const QString &psbt_file, const QString &txid,
                        const QString &outpoint);
 void accountViewsSmoke();
+void dashboardFitSmoke();
 void accountShellSmoke();
 void windowIconSmoke();
 } // namespace smoke
@@ -317,6 +318,13 @@ auto main(int argc, char *argv[]) -> int {
         Theme::get()->apply();
         smoke::accountViewsSmoke();
         std::fprintf(stdout, "Account views smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.contains(QStringLiteral("--dashboard-fit"))) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::dashboardFitSmoke();
+        std::fprintf(stdout, "Dashboard fit smoke: OK\n");
         return gOk ? 0 : 1;
     }
     if (arguments.contains(QStringLiteral("--account-shell"))) {

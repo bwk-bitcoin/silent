@@ -20,11 +20,10 @@
 
 MainWindow::MainWindow(QWidget *parent) : Window(parent) {
     resize(1024, 768);
-    // Never shrink below the sidebar plus the dashboard's minimum content width
-    // (with its horizontal padding), so screens never clip horizontally.
-    setMinimumWidth(metric::SIDEBAR_WIDTH + DashboardLayout::MIN_CONTENT_WIDTH +
-                    2 * resolve(Spacing::S));
     initWindow();
+    // Never shrink below an account's sidebar beside its dashboard at its minimum width,
+    // in the tabs' frame, so screens never clip horizontally.
+    setMinimumWidth(m_tab->widthAround(metric::SIDEBAR_WIDTH + DashboardLayout::minimumWidth()));
     retranslateUi();
 }
 

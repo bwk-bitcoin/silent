@@ -16,9 +16,15 @@ class DashboardLayout : public catalog::ScrollArea {
     Q_OBJECT
 
 public:
-    // Minimum single-column content width (the block min). Shared so the main
-    // window can size itself to the sidebar plus this content minimum.
+    // Minimum single-column content width (the block min).
     static constexpr int MIN_CONTENT_WIDTH = 760;
+
+    // The narrowest the dashboard shows its block whole: the block at its minimum, its
+    // padding on both sides, and the scroll area's gutters and bar around them. The main
+    // window sizes itself to the sidebar plus this.
+    static constexpr auto minimumWidth() -> int {
+        return catalog::ScrollArea::widthAround(MIN_CONTENT_WIDTH + (2 * resolve(Spacing::S)));
+    }
 
     DashboardLayout(const QString &title, QWidget *content, bool two_column = false,
                     QWidget *parent = nullptr, QWidget *title_right = nullptr);

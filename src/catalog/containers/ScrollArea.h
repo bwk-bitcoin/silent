@@ -45,6 +45,12 @@ public:
         return EDGE_LINE;
     }
 
+    // The area's width, frame aside, around content `content_width` wide: the gutter and
+    // padding on each side, the right gutter being the bar's whether it shows or not.
+    static constexpr auto widthAround(int content_width) -> int {
+        return insetH() + content_width + insetH();
+    }
+
 public slots:
     // Edge lines show only while the content overflows.
     void onRangeChanged(int minimum, int maximum);

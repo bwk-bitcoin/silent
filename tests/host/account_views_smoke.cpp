@@ -4,7 +4,8 @@
 // independent templates of two Send views, a label kept in RAM when its save fails, a label
 // being edited kept through a funds change, the broadcast outcomes the SP signing step
 // shows, Send's fee row at the narrowest column and the Multikey step of a finalized
-// transaction.
+// transaction. The dashboard fit mode hosts the account pages in the real window at its
+// narrowest and checks that nothing clips on the right.
 
 #include <QApplication>
 #include <QByteArray>
@@ -32,6 +33,8 @@
 
 #define private public
 #define protected public
+#include "MainWindow.h"
+#include "account/AccountShell.h"
 #include "account/SendSigning.h"
 #include "account/Services.h"
 #include "account/services/ServiceAdapters.h"
@@ -57,6 +60,8 @@
 #include "catalog/panels/home/CoinsTable.h"
 #include "catalog/panels/home/HistoryTable.h"
 #include "catalog/panels/send/TxFlow.h"
+#include "host/Host.h"
+#include "host/PluginRegistry.h"
 #include "i18n/I18nManager.h"
 #include "i18n/Tr.h"
 #include "interfaces/backend/account.h"
@@ -66,11 +71,15 @@
 #include "interfaces/backend/transaction.h"
 #include "interfaces/host.h"
 #include "modules/musig/MusigAccountController.h"
+#include "modules/musig/SavedPsbts.h"
 #include "modules/musig/SigningSection.h"
 #include "modules/sp/AccountController.h"
 #include "modules/sp/SpSigning.h"
+#include "views/DashboardLayout.h"
 #undef private
 #undef protected
+
+#include "PriceProbe.h"
 
 namespace smoke {
 namespace {
@@ -863,6 +872,176 @@ void finalizedBroadcast() {
     actions->hide();
 }
 
+// A saved PSBT row of the Multikey PSBT list: a draft in two attempts that another
+// transaction replaced, so it folds and its status has an info tip.
+auto replacedDraft() -> SavedPsbtEntry {
+    SavedPsbtEntry entry;
+    entry.record.id = "draft";
+    entry.record.label = "Old draft";
+    entry.record.updated_at = 1700000000;
+    entry.txid = rust::String(TX_A.toStdString());
+    entry.frozen_template.outputs.push_back(
+        Output{.address = rust::String(RECIPIENT.toStdString()), .amount = COIN_A});
+    entry.conflicting_txids.push_back(rust::String(TX_C.toStdString()));
+    entry.signatures_required = 2;
+    entry.signatures_known = true;
+    entry.attempts.push_back(SavedPsbtAttemptState{.attempt_id = 1, .active = true});
+    entry.attempts.push_back(SavedPsbtAttemptState{.attempt_id = 0});
+    return entry;
+}
+
+// Whatever `screen` shows ends within its dashboard's viewport, and each widget within its
+// parent: nothing is cut on the right, nor squeezed out of a narrower parent.
+void requireWithinDashboard(QWidget *screen, const QString &page) {
+    auto *dashboard = screen->findChild<DashboardLayout *>();
+    require(dashboard != nullptr && dashboard->isVisible(), "the page shows in a dashboard");
+    auto *viewport = dashboard->viewport();
+    for (auto *child : dashboard->widget()->findChildren<QWidget *>()) {
+        if (!child->isVisibleTo(viewport)) {
+            continue;
+        }
+        int right = child->mapTo(viewport, QPoint(child->width(), 0)).x();
+        auto *parent = child->parentWidget();
+        bool inParent = child->x() >= 0 && child->x() + child->width() <= parent->width();
+        if (right > viewport->width() || !inParent) {
+            qWarning() << page << child->metaObject()->className() << child->geometry() << "ends at"
+                       << right << "in a viewport" << viewport->width() << "wide, its parent"
+                       << parent->metaObject()->className() << parent->width() << "wide";
+        }
+        require(right <= viewport->width(), "nothing in a dashboard is cut on the right");
+        require(inParent, "each widget in a dashboard is within its parent");
+    }
+}
+
+// Each of `widgets` shown has its full width: its text is not cut.
+void requireWhole(const QList<QWidget *> &widgets, const QString &page) {
+    for (auto *widget : widgets) {
+        if (!widget->isVisible()) {
+            continue;
+        }
+        if (widget->width() < widget->sizeHint().width()) {
+            qWarning() << page << widget->metaObject()->className() << widget->width() << "wide for"
+                       << widget->sizeHint().width();
+        }
+        require(widget->width() >= widget->sizeHint().width(), "the text reads whole");
+    }
+}
+
+// The table headers' titles in `screen`.
+auto headerTitles(QWidget *screen) -> QList<QWidget *> {
+    QList<QWidget *> titles;
+    for (auto *header : screen->findChildren<QWidget *>()) {
+        if (header->property("class") != QStringLiteral("table-header")) {
+            continue;
+        }
+        for (auto *title : header->findChildren<catalog::Label *>()) {
+            if (!title->text().isEmpty()) {
+                titles.append(title);
+            }
+        }
+    }
+    return titles;
+}
+
+// An account's pages in the real window, in `locale`, at the window's minimum width and at
+// 980px, a price selected: the Multikey Send with its summary in BTC and fiat, the coin
+// selection row and Sign, the SP Send, the saved PSBTs with their rows and Import, History
+// and Coins. On each nothing is cut on the right nor squeezed out of its parent; in English
+// the amounts, the coin selection, the buttons and the table headers read whole.
+void dashboardFit(const char *locale) {
+    require(i18n::I18nManager::get()->applyLocale(QString::fromLatin1(locale), false),
+            "the locale loads");
+    ViewContext context;
+    ViewServices view(&context);
+    context.onFundsChanged();
+    MusigAccountController controller(QStringLiteral("missing-dashboard-fit-account"), nullptr);
+    waitFor([&controller] { return !controller.accountLoading(); },
+            "the missing account opening finishes");
+    IdleController spController;
+
+    MainWindow window;
+    auto entries = account::accountMenuEntries();
+    entries.insert(entries.size() - 1,
+                   {.name = QStringLiteral("psbt"), .label = TR("musig-menu-psbt")});
+    account::AccountShell multikey(entries, new QWidget, nullptr);
+    account::AccountShell sp(account::accountMenuEntries(), new QWidget, nullptr);
+    window.addTab(multikey.widget(), QStringLiteral("Multikey"));
+    window.addTab(sp.widget(), QStringLiteral("SP"));
+    auto *multikeySend = new account::view::Send(
+        view.services, new musig::SigningSection(&controller, view.services));
+    multikey.insertPanel(new qontrol::Panel(multikeySend, "send"));
+    auto *psbts = new musig::SavedPsbts(&controller, view.services);
+    multikey.insertPanel(new qontrol::Panel(psbts, "psbt"));
+    multikey.insertPanel(new qontrol::Panel(new account::view::History(view.services), "history"));
+    multikey.insertPanel(new qontrol::Panel(new account::view::Coins(view.services), "coins"));
+    auto *spSend =
+        new account::view::Send(view.services, new SpSigning(&spController, view.services));
+    sp.insertPanel(new qontrol::Panel(spSend, "send"));
+    pay(*multikeySend, QStringLiteral("0.0001"));
+    pay(*spSend, QStringLiteral("0.0001"));
+    require(multikeySend->m_preview.has_value() && spSend->m_preview.has_value(),
+            "both transactions are built");
+    SavedPsbtList list{.is_ok = true};
+    list.entries.push_back(replacedDraft());
+    psbts->m_unfolded.insert(QStringLiteral("draft"));
+    window.show();
+
+    struct Page {
+        account::AccountShell *shell;
+        const char *panel;
+    };
+
+    QList<Page> pages{{.shell = &multikey, .panel = "send"},
+                      {.shell = &multikey, .panel = "psbt"},
+                      {.shell = &multikey, .panel = "history"},
+                      {.shell = &multikey, .panel = "coins"},
+                      {.shell = &sp, .panel = "send"}};
+    bool english = QString::fromLatin1(locale) == QStringLiteral("en");
+    for (int width : {window.minimumWidth(), 980}) {
+        for (auto [shell, panel] : pages) {
+            window.showTab(shell->widget());
+            shell->showPanel(QString::fromLatin1(panel));
+            window.resize(width, 900);
+            auto *screen = shell->screen(QString::fromLatin1(panel)).value();
+            if (screen == psbts) {
+                // The rows the missing account's listing would not give.
+                psbts->onListed(list);
+            }
+            // No narrower than its minimum: 980 is below it.
+            waitFor([&window,
+                     width] { return window.width() == std::max(width, window.minimumWidth()); },
+                    "the window takes its width");
+            QApplication::processEvents();
+            auto page = QStringLiteral("%1 %2 %3 at %4")
+                            .arg(QString::fromLatin1(locale), shell == &sp ? "SP" : "Multikey",
+                                 QString::fromLatin1(panel))
+                            .arg(window.width());
+            requireWithinDashboard(screen, page);
+            if (!english) {
+                continue;
+            }
+            requireWhole(headerTitles(screen), page);
+            if (screen == psbts) {
+                require(psbts->m_table->m_rows.size() == 3, "the draft shows with its attempts");
+                requireWhole({psbts->m_import_btn, psbts->m_confirmed}, page);
+            }
+            if (auto *send = qobject_cast<account::view::Send *>(screen); send != nullptr) {
+                require(!send->m_sending_btc->text().startsWith(QStringLiteral("--")) &&
+                            send->m_sending_fiat->isVisible(),
+                        "the summary shows the amount in BTC and fiat");
+                QList<QWidget *> whole{
+                    send->m_sending_btc,         send->m_sending_fiat,     send->m_fee_btc,
+                    send->m_change_btc,          send->m_change_fiat,      send->m_total_btc,
+                    send->m_auto_coin_selection, send->m_clear_outputs_btn};
+                for (auto *button : send->m_signing->actions()->findChildren<catalog::Button *>()) {
+                    whole.append(button);
+                }
+                requireWhole(whole, page);
+            }
+        }
+    }
+}
+
 } // namespace
 
 void accountViewsSmoke() {
@@ -878,6 +1057,25 @@ void accountViewsSmoke() {
     finalizeReasonShown();
     feeRow();
     finalizedBroadcast();
+}
+
+void dashboardFitSmoke() {
+    auto *host = Host::get();
+    PricePlugin plugin;
+    PluginRegistry registry;
+    registry.registerBuiltin(&plugin);
+    PriceFeed feed;
+    PriceInstance instance;
+    instance.instanceId = QStringLiteral("dashboard-fit-price");
+    instance.provider = &feed;
+    host->registerInstance(instance.id(), &instance, &plugin.module);
+    host->selectPrice(host->priceSources().first().id, QStringLiteral("USD"));
+    for (const char *locale : {"en", "de", "es", "fr", "it", "pt"}) {
+        dashboardFit(locale);
+    }
+    // Once the windows are gone: their launcher follows the instances.
+    host->removeInstance(instance.id(), &plugin.module);
+    require(i18n::I18nManager::get()->applyLocale(QStringLiteral("en"), false), "English is back");
 }
 
 } // namespace smoke

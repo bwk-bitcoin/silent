@@ -1495,7 +1495,9 @@ titles, endpoints and their presentation), and the amount and fee rules from
 account: reads by polling and by notification around a funds read answered later, coin
 selection answered inline, later and stale, two Send views with their own templates, a
 label kept in RAM when its save fails, a label edit kept through a funds change, and the
-broadcast outcomes the SP signing step shows.
+broadcast outcomes the SP signing step shows. `host_smoke --dashboard-fit` hosts the
+Multikey and SP pages in the real window, in every language, at its minimum width and at
+980px: nothing is cut on the right of a dashboard.
 
 ### The account shell
 
