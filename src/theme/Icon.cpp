@@ -35,13 +35,16 @@
 #include "resources/icon/usb.h"
 #include "resources/icon/users.h"
 #include "resources/icon/x.h"
+#include <QGuiApplication>
 #include <QIconEngine>
 #include <QImage>
+#include <QLibraryInfo>
 #include <QPainter>
 #include <QPixmap>
 #include <QRectF>
 #include <QString>
 #include <QSvgRenderer>
+#include <QVersionNumber>
 
 namespace {
 
@@ -295,6 +298,31 @@ auto puzzle(IconColor color) -> QIcon {
 
 auto users(IconColor color) -> QIcon {
     return renderIcon(embedded_icon::USERS, defaultStroke(), color);
+}
+
+auto windowIcon(bool premultiply) -> QIcon {
+    QIcon window;
+    for (int size : {16, 24, 32, 48, 64, 128, 256}) {
+        // At a device pixel ratio of 1: the platform takes each image at its own size.
+        QImage image(size, size, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        {
+            QPainter painter(&image);
+            silentMark(IconColor::Accent).paint(&painter, image.rect());
+        }
+        if (premultiply) {
+            // Read back as straight alpha, the premultiplied colours survive the copy
+            // into the buffer as they are.
+            image.reinterpretAsFormat(QImage::Format_ARGB32);
+        }
+        window.addPixmap(QPixmap::fromImage(image));
+    }
+    return window;
+}
+
+auto windowIconPremultiplied() -> bool {
+    return QGuiApplication::platformName().startsWith(QStringLiteral("wayland")) &&
+           QLibraryInfo::version() >= QVersionNumber(6, 9);
 }
 
 } // namespace icon

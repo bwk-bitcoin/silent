@@ -75,12 +75,7 @@ auto main(int argc, char *argv[]) -> int {
     Theme::init();
     Theme::get()->apply();
     // The Silent mark, in the accent colour so it reads on light and dark title bars.
-    // Baked into pixmaps: a window manager takes the window icon once, as images.
-    QIcon windowIcon;
-    for (int size : {16, 24, 32, 48, 64, 128, 256}) {
-        windowIcon.addPixmap(icon::silentMark(IconColor::Accent).pixmap(size, size));
-    }
-    QApplication::setWindowIcon(windowIcon);
+    QApplication::setWindowIcon(icon::windowIcon(icon::windowIconPremultiplied()));
 
     // Initialize i18n before creating UI widgets
     i18n::I18nManager::get()->init(&app);

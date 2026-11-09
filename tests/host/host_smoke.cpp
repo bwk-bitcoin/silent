@@ -210,6 +210,7 @@ void psbtTransferSmoke(const QString &account, const QString &psbt_file, const Q
                        const QString &outpoint);
 void accountViewsSmoke();
 void accountShellSmoke();
+void windowIconSmoke();
 } // namespace smoke
 
 auto main(int argc, char *argv[]) -> int {
@@ -302,6 +303,13 @@ auto main(int argc, char *argv[]) -> int {
         Theme::get()->apply();
         smoke::txFlowHoverSmoke();
         std::fprintf(stdout, "TxFlow hover smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.contains(QStringLiteral("--window-icon"))) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::windowIconSmoke();
+        std::fprintf(stdout, "Window icon smoke: OK\n");
         return gOk ? 0 : 1;
     }
     if (arguments.contains(QStringLiteral("--account-views"))) {

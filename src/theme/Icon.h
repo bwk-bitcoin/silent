@@ -55,4 +55,15 @@ auto circleX(IconColor color = IconColor::Default) -> QIcon;
 auto puzzle(IconColor color = IconColor::Default) -> QIcon;
 auto users(IconColor color = IconColor::Default) -> QIcon;
 
+// The Silent mark in the accent colour, as the window icon: baked into images at fixed
+// sizes, since a window manager takes the window icon once, as images. With
+// `premultiply`, each image keeps its premultiplied colours under a straight alpha
+// format, for a platform that hands them on as premultiplied (windowIconPremultiplied()).
+auto windowIcon(bool premultiply) -> QIcon;
+// Qt 6.9 and later pass the window icon to a Wayland compositor through
+// xdg-toplevel-icon, copying each image into a straight alpha buffer that they announce
+// as premultiplied ARGB8888 (QWaylandXdgToplevelIconV1::addPixmap): the compositor then
+// draws every partly transparent pixel too bright, the edges look aliased. True there.
+auto windowIconPremultiplied() -> bool;
+
 } // namespace icon

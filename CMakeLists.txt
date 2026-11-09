@@ -745,6 +745,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         tests/host/fee_persistence_smoke.cpp
         tests/host/fee_persistence_smoke.h
         tests/host/validated_input_geometry.cpp
+        tests/host/window_icon_smoke.cpp
         tests/host/sp_signing_smoke.cpp
         tests/host/musig_reset_smoke.cpp
         tests/host/boundary_smoke.cpp
