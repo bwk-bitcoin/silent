@@ -65,6 +65,10 @@ public slots:
     void onSent();
     void onCancelClicked();
     void onExportClicked();
+    // Shows the export of `psbt`, a PSBTv2: the session's, or the built transaction's
+    // that exportTransaction() restricted to its spend path.
+    void onTransactionExported(const QByteArray &psbt);
+    void onExportFailed(const QString &message);
     void onSavedPsbtRestored(const SavedPsbtEntry &entry);
     void onSessionCleared();
     void onSaveWarningChanged(const QString &message);
@@ -101,6 +105,8 @@ private:
     bool m_loading = false;
     // The Sign modal broadcast the transaction.
     bool m_sent = false;
+    // exportTransaction() runs: another export would take the same change index.
+    bool m_exporting = false;
     // The spend path's keys whose signature is in, lowercased: a finalized PSBT no longer
     // carries its rounds, so the Sign modal shows these.
 

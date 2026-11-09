@@ -589,6 +589,35 @@ void MusigAccountController::adoptTransaction(const backend::TransactionTemplate
         });
 }
 
+void MusigAccountController::exportTransaction(const backend::TransactionTemplate &tx,
+                                               const MusigSpendLeaf &spend,
+                                               const QByteArray &psbt) {
+    if (!m_account.has_value() || m_endpoint_busy || endpointsStopping() ||
+        accountDeletionPending()) {
+        emit exportFailed(TR("send-no-account-loaded"));
+        return;
+    }
+    auto result = std::make_shared<std::optional<rust::Box<PsbtResult>>>();
+    auto *account = &*m_account.value();
+    enqueueStorage(
+        [account, result, tx = account::services::toTemplate(tx), spend, psbt] {
+            result->emplace(
+                account->export_transaction(tx, spend, account::services::toSlice(psbt)));
+        },
+        [this, result] {
+            auto &psbt = result->value();
+            if (!psbt->is_ok()) {
+                // A reused change index says to craft again.
+                emit exportFailed(mapBackendErrorSummary(psbt->get_error_kind()) +
+                                  QStringLiteral("\n\n") +
+                                  formatBackendErrorDetails(toQString(psbt->get_psbt_error())));
+                return;
+            }
+            emit transactionExported(
+                QByteArray::fromHex(toQString(psbt->bytes_v2_hex()).toLatin1()));
+        });
+}
+
 auto MusigAccountController::beginSignRequest(const QString &fingerprint)
     -> std::pair<IKeys *, ReqId> {
     if (m_restart_pending || m_endpoint_busy) {

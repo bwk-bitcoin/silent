@@ -3122,15 +3122,24 @@ mod ffi {
             tx_template: TransactionTemplate,
         ) -> CraftOutcome;
         /// The change goes to the next unused change index, which stays unused:
-        /// adopt_transaction registers it.
+        /// adopt_transaction or export_transaction registers it.
         fn finalize_transaction(
             self: &MusigAccount,
             tx_template: TransactionTemplate,
         ) -> UnsignedPsbt;
         /// Takes `psbt`, a finalize_transaction answer, as the transaction in flight:
-        /// registers its change index durably, refusing one another adoption took,
-        /// restricts it to `spend` and saves it.
+        /// registers its change index durably, refusing one an adoption or export
+        /// took, restricts it to `spend` and saves it.
         fn adopt_transaction(
+            self: &MusigAccount,
+            tx_template: TransactionTemplate,
+            spend: MusigSpendLeaf,
+            psbt: &[u8],
+        ) -> Box<PsbtResult>;
+        /// Hands `psbt`, a finalize_transaction answer, out without a signing session:
+        /// registers its change index durably, refusing one an adoption or export took,
+        /// and restricts it to `spend`. Saves no PSBT.
+        fn export_transaction(
             self: &MusigAccount,
             tx_template: TransactionTemplate,
             spend: MusigSpendLeaf,

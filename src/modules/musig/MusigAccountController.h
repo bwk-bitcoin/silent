@@ -119,6 +119,10 @@ signals:
     void prepared(QString psbt_v2_hex, QString txid);
     void sessionLoading();
     void prepareFailed(QString message);
+    // exportTransaction() answered: the PSBTv2 restricted to its spend path, its change
+    // registered.
+    void transactionExported(QByteArray psbt);
+    void exportFailed(QString message);
     void roundChanged(MusigRoundStatus status);
     void signingReset();
     void signingFailed(QString message, plugin::SignError kind);
@@ -156,6 +160,11 @@ public slots:
     // A change index another adoption took refuses it: `tx` is to be crafted again.
     void adoptTransaction(const backend::TransactionTemplate &tx, const MusigSpendLeaf &spend,
                           const QByteArray &psbt);
+    // Hands `psbt`, ITransaction::finalize() of the crafted `tx`, out with no signing
+    // session: registers its change and restricts it to `spend`, saving nothing. A change
+    // index another adoption or export took refuses it: `tx` is to be crafted again.
+    void exportTransaction(const backend::TransactionTemplate &tx, const MusigSpendLeaf &spend,
+                           const QByteArray &psbt);
     // keys()->sign() with the key `fingerprint` alone, for the current round of the PSBT
     // in flight.
     void signRound(const QString &fingerprint);

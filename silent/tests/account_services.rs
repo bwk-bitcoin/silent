@@ -18,6 +18,7 @@ use bitcoin::{
     consensus::encode::serialize,
     hashes::Hash,
     secp256k1::Secp256k1,
+    taproot::TapLeafHash,
     transaction::Version,
     Amount, NetworkKind, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid,
 };
@@ -65,6 +66,15 @@ fn musig_descriptor() -> String {
     format!(
         "tr(musig({},{})/<0;1>/*,pk({}/<2;3>/*))",
         keys[0], keys[1], keys[2]
+    )
+}
+
+/// The MuSig key path and two leaves: restricted to one leaf, a PSBT drops the other.
+fn two_leaf_descriptor() -> String {
+    let keys = role_keys();
+    format!(
+        "tr(musig({},{})/<0;1>/*,{{pk({}/<2;3>/*),pk({}/<4;5>/*)}})",
+        keys[0], keys[1], keys[2], keys[2]
     )
 }
 
@@ -364,6 +374,109 @@ fn multikey_crafting_selects_nothing_and_adoption_registers_change_once() {
         adopted.get_psbt_error()
     );
     drop(reopened);
+    cleanup_test_account(&config.account_name);
+}
+
+/// The leaf hashes the inputs of an unsigned PSBTv2 carry tap scripts for, sorted.
+fn tap_leaves(psbt: &[u8]) -> Vec<TapLeafHash> {
+    let mut leaves: Vec<_> = PsbtV2::deserialize(psbt)
+        .expect("PSBTv2")
+        .into_bitcoin_psbt()
+        .expect("bitcoin PSBT")
+        .inputs
+        .iter()
+        .flat_map(|input| input.tap_scripts.values())
+        .map(|(script, version)| TapLeafHash::from_script(script, *version))
+        .collect();
+    leaves.sort();
+    leaves.dedup();
+    leaves
+}
+
+#[test]
+fn multikey_export_restricts_to_the_spend_path_and_registers_change() {
+    let (config, outpoint) = funded_with(two_leaf_descriptor(), "");
+    let account = new_musig_account(config.account_name.clone());
+    assert!(account.is_ok(), "open Multikey: {}", account.get_error());
+    let tx = template(recipient(), vec![outpoint.clone()]);
+    let leaves = account.spend_leaves(vec![outpoint]);
+    assert!(leaves.is_ok, "spend leaves: {}", leaves.error);
+    let leaf = leaves
+        .leaves
+        .iter()
+        .find(|leaf| !leaf.key_path)
+        .expect("a script leaf")
+        .clone();
+    let leaf_hash = TapLeafHash::from_str(&leaf.leaf_hash).expect("leaf hash");
+
+    let finalized_psbt = finalized(&account, &tx);
+    assert_eq!(
+        tap_leaves(&finalized_psbt).len(),
+        2,
+        "finalize leaves every script leaf in the PSBT"
+    );
+    let change = change_script(&finalized_psbt);
+    let exported = account.export_transaction(tx.clone(), leaf.clone(), &finalized_psbt);
+    assert!(exported.is_ok(), "export: {}", exported.get_psbt_error());
+    let exported = hex::decode(exported.bytes_v2_hex()).expect("exported PSBTv2 hex");
+    assert_eq!(
+        tap_leaves(&exported),
+        vec![leaf_hash],
+        "the exported PSBT is restricted to the chosen leaf"
+    );
+
+    assert_ne!(
+        change_script(&finalized(&account, &tx)),
+        change,
+        "exporting registered the change index"
+    );
+    let refused = account.export_transaction(tx.clone(), leaf.clone(), &finalized_psbt);
+    assert!(
+        !refused.is_ok()
+            && refused
+                .get_psbt_error()
+                .contains("already used by another transaction"),
+        "a second export of the same change index is refused: {}",
+        refused.get_psbt_error()
+    );
+    let attempt = account.active_attempt();
+    assert!(
+        attempt.record_id.is_empty() && attempt.psbt_v2_hex.is_empty(),
+        "exporting starts no signing session"
+    );
+    let saved = account.saved_psbts(true);
+    assert!(
+        saved.is_ok && saved.entries.is_empty(),
+        "exporting saves no PSBT: {} saved, {}",
+        saved.entries.len(),
+        saved.error
+    );
+
+    let imported = account.import_psbt(&exported);
+    assert!(
+        imported.is_ok && !imported.merged && !imported.record_id.is_empty(),
+        "the exported PSBT imports as a new saved PSBT: {}",
+        imported.error
+    );
+    let saved = account.saved_psbts(true);
+    assert!(saved.is_ok, "list saved PSBTs: {}", saved.error);
+    assert_eq!(saved.entries.len(), 1, "one saved PSBT");
+    let record = &saved.entries[0].record;
+    assert_eq!(
+        (
+            record.id.as_str(),
+            record.spend.key_path,
+            record.spend.leaf_hash.as_str()
+        ),
+        (imported.record_id.as_str(), false, leaf.leaf_hash.as_str()),
+        "the saved PSBT spends with the exported leaf"
+    );
+    assert_eq!(
+        record.current_psbt_v2_hex,
+        hex::encode(&exported),
+        "the saved PSBT is the exported one"
+    );
+    drop(account);
     cleanup_test_account(&config.account_name);
 }
 

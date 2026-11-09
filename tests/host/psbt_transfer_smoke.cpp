@@ -86,6 +86,23 @@ template <typename T> void onModal(const std::function<void(T &)> &step, bool *r
     });
 }
 
+// The same for a modal a background answer shows later: it waits for the modal to run.
+template <typename T> void onLaterModal(const std::function<void(T &)> &step, bool *ran) {
+    auto *timer = new QTimer;
+    QObject::connect(timer, &QTimer::timeout, [timer, step, ran] {
+        auto *modal = qobject_cast<T *>(QApplication::activeModalWidget());
+        if (modal == nullptr) {
+            return;
+        }
+        timer->stop();
+        timer->deleteLater();
+        step(*modal);
+        *ran = true;
+        modal->reject();
+    });
+    timer->start(10);
+}
+
 void exportModal() {
     auto base64 = QStringLiteral("cHNidP8BAAoCAAAAAAAAAAAAAA==");
     account::ExportPsbt modal(base64, QStringLiteral("a label/with spaces"));
@@ -191,12 +208,14 @@ void psbtTransferSmoke(const QString &account, const QString &psbt_file, const Q
             "Send shows Export as soon as a transaction is built");
     bool sendRan = false;
     QApplication::clipboard()->clear();
-    onModal<account::ExportPsbt>(
+    // The export answers from the storage worker, once its change is registered.
+    onLaterModal<account::ExportPsbt>(
         [](account::ExportPsbt &modal) { button(modal, TR("btn-copy-to-clipboard"))->click(); },
         &sendRan);
     sendExport->click();
-    require(sendRan, "the export modal ran from Send");
-    require(QApplication::clipboard()->text().startsWith(QStringLiteral("cHNidP8")),
+    waitFor([&sendRan] { return sendRan; }, "the export modal ran from Send");
+    auto sendBase64 = QApplication::clipboard()->text();
+    require(sendBase64.startsWith(QStringLiteral("cHNidP8")),
             "Send exports the built transaction as a base64 PSBT");
     require(controller->psbtInFlight().isEmpty(), "exporting starts no signing session");
 
@@ -238,6 +257,11 @@ void psbtTransferSmoke(const QString &account, const QString &psbt_file, const Q
     require(ran, "the export modal ran");
     require(QApplication::clipboard()->text() == base64,
             "the row exports the saved PSBT as base64");
+
+    // Send's export is restricted to its spend path: it imports back ready to sign.
+    importOnTab(*tab, sendBase64, TR("psbt-import-saved"));
+    list();
+    require(listed.entries.size() == 2, "Send's export is saved beside the cosigner's");
 
     Host::get()->removeInstance(account, module);
     waitFor([module, &account] { return !module->accountUnavailable(account); },

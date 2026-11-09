@@ -4440,13 +4440,18 @@ struct MusigAccount final : public ::rust::Opaque {
   ::CraftOutcome select_transaction_coins(::TransactionTemplate tx_template) const noexcept;
 
   // The change goes to the next unused change index, which stays unused:
-  // adopt_transaction registers it.
+  // adopt_transaction or export_transaction registers it.
   ::UnsignedPsbt finalize_transaction(::TransactionTemplate tx_template) const noexcept;
 
   // Takes `psbt`, a finalize_transaction answer, as the transaction in flight:
-  // registers its change index durably, refusing one another adoption took,
-  // restricts it to `spend` and saves it.
+  // registers its change index durably, refusing one an adoption or export
+  // took, restricts it to `spend` and saves it.
   ::rust::Box<::PsbtResult> adopt_transaction(::TransactionTemplate tx_template, ::MusigSpendLeaf spend, ::rust::Slice<::std::uint8_t const> psbt) const noexcept;
+
+  // Hands `psbt`, a finalize_transaction answer, out without a signing session:
+  // registers its change index durably, refusing one an adoption or export took,
+  // and restricts it to `spend`. Saves no PSBT.
+  ::rust::Box<::PsbtResult> export_transaction(::TransactionTemplate tx_template, ::MusigSpendLeaf spend, ::rust::Slice<::std::uint8_t const> psbt) const noexcept;
 
   ::BroadcastReport broadcast_report(::rust::Slice<::std::uint8_t const> transaction) const noexcept;
 

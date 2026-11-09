@@ -885,20 +885,98 @@ impl MusigAccount {
         spend: MusigSpendLeaf,
         psbt: &[u8],
     ) -> Box<PsbtResult> {
-        let psbt = match crate::keys::psbt::parse_v2(psbt)
-            .map_err(|e| format!("Invalid PSBT: {e}"))
-            .and_then(|v2| {
-                v2.into_bitcoin_psbt()
-                    .map_err(|e| format!("Invalid PSBT: {e:?}"))
-            }) {
-            Ok(psbt) => psbt,
-            Err(error) => return Box::new(PsbtResult::failed(error)),
-        };
-        self.adopt(tx_template, spend, psbt)
+        match parse_unsigned_psbt(psbt) {
+            Ok(psbt) => self.adopt(tx_template, spend, psbt),
+            Err(error) => Box::new(PsbtResult::failed(error)),
+        }
     }
 
-    /// Registers the change of `psbt`, restricts it to `spend`, saves it and makes it the
-    /// active attempt.
+    /// Hands `psbt` out as it would be adopted: registers its change index durably,
+    /// refusing one an adoption or export took, and restricts it to `spend`. Starts no
+    /// signing session and saves no PSBT.
+    pub fn export_transaction(
+        &self,
+        tx_template: TransactionTemplate,
+        spend: MusigSpendLeaf,
+        psbt: &[u8],
+    ) -> Box<PsbtResult> {
+        let failed = |error: String| {
+            log::error!("export_transaction: {error}");
+            Box::new(PsbtResult::failed(error))
+        };
+        let mut psbt = match parse_unsigned_psbt(psbt) {
+            Ok(psbt) => psbt,
+            Err(error) => return failed(error),
+        };
+        // Held so the change registration serializes with adopt.
+        let _active = match self.active.lock() {
+            Ok(active) => active,
+            Err(error) => return failed(format!("Active attempt lock failed: {error}")),
+        };
+        let Some(inner) = &self.inner else {
+            return Box::new(PsbtResult::failed_kind(
+                crate::ffi::BackendErrorKind::Other,
+                NOT_INITIALIZED.to_string(),
+            ));
+        };
+        if let Err(error) = Self::claim(inner, &tx_template, &spend, &mut psbt) {
+            return failed(error);
+        }
+        match prepared_psbt(&psbt) {
+            Ok(result) => Box::new(result),
+            Err(error) => failed(error),
+        }
+    }
+
+    /// Ties `psbt` to `spend`: refuses it unless that spend path is available for its
+    /// inputs and it pays `tx_template`, registers its change index durably, refusing
+    /// one another transaction took, and restricts it to that path. Returns the spend
+    /// path as resolved for its inputs.
+    fn claim(
+        inner: &MusigAccountInner,
+        tx_template: &TransactionTemplate,
+        spend: &MusigSpendLeaf,
+        psbt: &mut bitcoin::Psbt,
+    ) -> Result<MusigSpendLeaf, String> {
+        let path = if spend.key_path {
+            SpendPath::KeyPath
+        } else {
+            let leaf_hash = TapLeafHash::from_str(&spend.leaf_hash)
+                .map_err(|e| format!("Invalid leaf hash '{}': {e}", spend.leaf_hash))?;
+            SpendPath::Leaf(leaf_hash)
+        };
+        let outpoints: Vec<_> = psbt
+            .unsigned_tx
+            .input
+            .iter()
+            .map(|input| input.previous_output)
+            .collect();
+        let spend = inner
+            .account
+            .spend_leaves(&outpoints)
+            .map_err(|error| format!("Cannot resolve selected spend path: {error}"))?
+            .into_iter()
+            .find(|leaf| leaf.path == path)
+            .map(spend_leaf)
+            .ok_or("Selected spend path is not available for these inputs")?;
+        let network = inner.config.network.into();
+        pays_template(inner.account.scanner(), psbt, tx_template, network)?;
+        // A recipient on one of the account's change addresses is no change.
+        let recipients: BTreeSet<_> = tx_template
+            .outputs
+            .iter()
+            .filter_map(|output| parse_recipient(&output.address, network).ok())
+            .map(|address| address.script_pubkey())
+            .collect();
+        register_change(inner.account.scanner(), psbt, &recipients)?;
+        inner
+            .account
+            .restrict_spend_path(psbt, path)
+            .map_err(|e| format!("Failed to restrict the spend path: {e}"))?;
+        Ok(spend)
+    }
+
+    /// Claims `psbt` for `spend`, saves it and makes it the active attempt.
     fn adopt(
         &self,
         tx_template: TransactionTemplate,
@@ -921,61 +999,24 @@ impl MusigAccount {
             ));
         };
 
-        let path = if spend.key_path {
-            SpendPath::KeyPath
-        } else {
-            match TapLeafHash::from_str(&spend.leaf_hash) {
-                Ok(leaf_hash) => SpendPath::Leaf(leaf_hash),
-                Err(e) => return failed(format!("Invalid leaf hash '{}': {e}", spend.leaf_hash)),
-            }
+        let spend = match Self::claim(inner, &tx_template, &spend, &mut psbt) {
+            Ok(spend) => spend,
+            Err(error) => return failed(error),
         };
-        let outpoints: Vec<_> = psbt
-            .unsigned_tx
-            .input
-            .iter()
-            .map(|input| input.previous_output)
-            .collect();
-        let spend = match inner.account.spend_leaves(&outpoints) {
-            Ok(leaves) => match leaves.into_iter().find(|leaf| leaf.path == path) {
-                Some(leaf) => spend_leaf(leaf),
-                None => {
-                    return failed("Selected spend path is not available for these inputs".into())
-                }
-            },
-            Err(error) => return failed(format!("Cannot resolve selected spend path: {error}")),
-        };
-        let network = inner.config.network.into();
-        if let Err(error) = pays_template(inner.account.scanner(), &psbt, &tx_template, network) {
-            return failed(error);
-        }
-        // A recipient on one of the account's change addresses is no change.
-        let recipients: BTreeSet<_> = tx_template
-            .outputs
-            .iter()
-            .filter_map(|output| parse_recipient(&output.address, network).ok())
-            .map(|address| address.script_pubkey())
-            .collect();
-        if let Err(error) = register_change(inner.account.scanner(), &psbt, &recipients) {
-            return failed(error);
-        }
-        if let Err(e) = inner.account.restrict_spend_path(&mut psbt, path) {
-            return failed(format!("Failed to restrict the spend path: {e}"));
-        }
 
         if let Err(error) = crate::keys::ledger_nonces::start_attempt(&mut psbt) {
             return failed(error);
         }
 
-        let bytes_v2 = match PsbtV2::from_bitcoin_psbt(psbt.clone()).and_then(|v2| v2.serialize()) {
-            Ok(bytes) => bytes,
-            Err(e) => return failed(format!("{e:?}")),
+        let mut result = match prepared_psbt(&psbt) {
+            Ok(result) => result,
+            Err(error) => return failed(error),
         };
-        let txid = psbt.unsigned_tx.compute_txid().to_string();
-        let mut result = PsbtResult::prepared(psbt.serialize(), bytes_v2.clone(), txid);
+        let psbt_v2_hex = result.bytes_v2_hex();
         let signers = spend.fingerprints.clone();
         match self
             .saved_store()
-            .and_then(|mut store| store.create(tx_template, spend, hex::encode(&bytes_v2)))
+            .and_then(|mut store| store.create(tx_template, spend, psbt_v2_hex.clone()))
         {
             Ok(saved) => {
                 result.saved_record_id = saved.record_id;
@@ -987,7 +1028,7 @@ impl MusigAccount {
         }
         let snapshot = MusigAttemptSnapshot {
             is_ok: true,
-            psbt_v2_hex: hex::encode(bytes_v2),
+            psbt_v2_hex,
             signers,
             record_id: result.saved_record_id.clone(),
             save_error: result.save_error.clone(),
@@ -1962,6 +2003,23 @@ fn change_index(
         return Err("The transaction pays change to two addresses".into());
     }
     Ok(found)
+}
+
+/// The PSBT of `bytes`, a PSBTv2 serialization.
+fn parse_unsigned_psbt(bytes: &[u8]) -> Result<bitcoin::Psbt, String> {
+    crate::keys::psbt::parse_v2(bytes)
+        .map_err(|e| format!("Invalid PSBT: {e}"))?
+        .into_bitcoin_psbt()
+        .map_err(|e| format!("Invalid PSBT: {e:?}"))
+}
+
+/// `psbt` as a prepared PsbtResult: its v0 and v2 serializations and its txid.
+fn prepared_psbt(psbt: &bitcoin::Psbt) -> Result<PsbtResult, String> {
+    let bytes_v2 = PsbtV2::from_bitcoin_psbt(psbt.clone())
+        .and_then(|v2| v2.serialize())
+        .map_err(|e| format!("{e:?}"))?;
+    let txid = psbt.unsigned_tx.compute_txid().to_string();
+    Ok(PsbtResult::prepared(psbt.serialize(), bytes_v2, txid))
 }
 
 /// Refuses a PSBT that does not pay `tx_template`: each output pays one of its recipients
