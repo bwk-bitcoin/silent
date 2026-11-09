@@ -910,14 +910,23 @@ fn funded_sp_output(
         .parse()
         .expect("tip hash");
     node.invalidate_block(tip).expect("real chain reorg");
+    // Electrum servers only announce a chain that outgrows their tip: a tip that just goes
+    // back keeps the spend confirmed until the next block. Mine a longer branch without it.
+    let miner = node.new_address().expect("miner address").to_string();
+    for _ in 0..2 {
+        node.generate_block(&miner, &[], true)
+            .expect("replacement block without the spend");
+    }
+    let replacement = node.best_block_hash().expect("replacement tip").to_string();
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let coins = account.spending_coins();
         assert!(coins.is_ok, "fresh export after reorg: {}", coins.error);
+        let on_replacement = coins.has_tip && coins.tip.hash == replacement;
         if let Some(coin) = coins
             .coins
             .iter()
-            .find(|coin| coin.outpoint == confirmed.outpoint && !coin.has_height)
+            .find(|coin| on_replacement && coin.outpoint == confirmed.outpoint && !coin.has_height)
         {
             assert_eq!(
                 coin.status,
@@ -936,7 +945,7 @@ fn funded_sp_output(
         );
         thread::sleep(Duration::from_millis(50));
     }
-    chain::generate_blocks(node, 2);
+    chain::generate_blocks(node, 1);
     let restored = wait_coin(|| account.spending_coins(), txid);
     // The replacement branch outgrows the invalidated tip: the export follows it.
     let reorged = wait_tip(|| account.spending_coins(), node);
