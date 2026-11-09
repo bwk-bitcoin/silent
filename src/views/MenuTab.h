@@ -49,15 +49,13 @@ private:
         IModule *module = nullptr;
         QString id;
         QString name;
-        bool canDelete = false;
     };
 
     catalog::Button *m_create_btn = nullptr;
     qontrol::Column *m_accounts_column = nullptr;
     QList<QWidget *> m_rows;
     QList<LauncherEntry> m_entries;
-    // The built-in creators, then the external plugins' ones, as the account type modal
-    // lists them.
+    // The account types, as the Account Type modal lists them.
     QList<PluginRegistry::CreatorLauncher> m_creators;
     QPointer<IModule> m_pending_delete_module;
     QString m_pending_delete_id;

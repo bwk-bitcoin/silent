@@ -194,18 +194,13 @@ void MenuTab::rebuildRows() {
     auto *controller = AppController::get();
     auto *registry = controller != nullptr ? controller->pluginRegistry() : nullptr;
 
-    QList<LauncherEntry> openEntries;
-    m_creators.clear();
-
-    // Launcher module order, so the built-in creators keep the plugin order (sp first).
     const auto modules =
         registry != nullptr ? registry->enabledModulesForLauncher() : QList<IModule *>{};
     for (auto *module : modules) {
         for (const auto &item : registry->launcherInstancesForModule(module)) {
             QString id = item.first.trimmed();
-            bool isCreator = PluginRegistry::isCreatorInstanceId(id);
-            // External-plugin creators are listed after the built-in ones, below.
-            if (isCreator && registry != nullptr && !registry->isBuiltinModule(module)) {
+            // The account types are listed by the Account Type modal.
+            if (PluginRegistry::isCreatorInstanceId(id)) {
                 continue;
             }
 
@@ -216,17 +211,10 @@ void MenuTab::rebuildRows() {
             if (entry.name.isEmpty()) {
                 entry.name = entry.id;
             }
-            entry.canDelete = !isCreator;
-
-            if (isCreator) {
-                m_creators.append({.module = module, .id = entry.id, .name = entry.name});
-            } else {
-                openEntries.append(entry);
-            }
+            m_entries.append(entry);
         }
     }
 
-    m_entries = openEntries;
     for (const auto &entry : m_entries) {
         auto *btn = catalog::btnOpenWallet(entry.name);
         connect(btn, &QPushButton::clicked, this, &MenuTab::onItemClicked, qontrol::UNIQUE);
@@ -235,17 +223,17 @@ void MenuTab::rebuildRows() {
         launcher->setProperty("modulePtr",
                               QVariant::fromValue(reinterpret_cast<qulonglong>(entry.module)));
 
-        auto *row = (new qontrol::Row)->pushSpacer()->push(launcher);
-        if (entry.canDelete) {
-            auto *trashBtn = catalog::btnDeleteWallet();
-            trashBtn->setProperty("accountName", entry.id);
-            trashBtn->setProperty("modulePtr",
-                                  QVariant::fromValue(reinterpret_cast<qulonglong>(entry.module)));
-            connect(trashBtn, &QPushButton::clicked, this, &MenuTab::onTrashClicked,
-                    qontrol::UNIQUE);
-            row->pushSpacer(resolve(Spacing::XS))->push(trashBtn);
-        }
-        row->pushSpacer();
+        auto *trashBtn = catalog::btnDeleteWallet();
+        trashBtn->setProperty("accountName", entry.id);
+        trashBtn->setProperty("modulePtr",
+                              QVariant::fromValue(reinterpret_cast<qulonglong>(entry.module)));
+        connect(trashBtn, &QPushButton::clicked, this, &MenuTab::onTrashClicked, qontrol::UNIQUE);
+        auto *row = (new qontrol::Row)
+                        ->pushSpacer()
+                        ->push(launcher)
+                        ->pushSpacer(resolve(Spacing::XS))
+                        ->push(trashBtn)
+                        ->pushSpacer();
 
         if (AppController::get()->isAccountOpen(entry.id)) {
             row->setEnabled(false);
@@ -262,8 +250,7 @@ void MenuTab::rebuildRows() {
         m_rows.append(row);
     }
 
-    if (registry != nullptr) {
-        m_creators.append(registry->externalCreatorLaunchers());
-    }
+    m_creators = registry != nullptr ? registry->creatorLaunchers()
+                                     : QList<PluginRegistry::CreatorLauncher>{};
     m_create_btn->setVisible(!m_creators.isEmpty());
 }

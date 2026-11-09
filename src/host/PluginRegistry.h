@@ -27,10 +27,14 @@ public:
     explicit PluginRegistry(QObject *parent = nullptr);
     ~PluginRegistry() override;
 
+    // An account type of the Account Type picker, from its module's creator entries:
+    // "<type>.create" and "<type>.restore" (a lone "create" has no restore). Named after its
+    // create entry; an id is empty when the module lists no such entry.
     struct CreatorLauncher {
         IModule *module = nullptr;
-        QString id;
         QString name;
+        QString createId;
+        QString restoreId;
     };
 
     void registerBuiltin(IPlugin *plugin);
@@ -63,7 +67,9 @@ public:
     [[nodiscard]] QList<QPair<QString, QString>>
     launcherInstancesForModule(const IModule *module) const;
     [[nodiscard]] QString instanceOwnerPluginId(const QString &id) const;
-    [[nodiscard]] QList<CreatorLauncher> externalCreatorLaunchers() const;
+    // The account types of the enabled modules: the built-in ones, then the external
+    // plugins' ones, each in launcher module order.
+    [[nodiscard]] auto creatorLaunchers() const -> QList<CreatorLauncher>;
     bool startLauncherInstance(IModule *module, const QString &instance_id);
     void deleteInstance(IModule *module, const QString &instance_id);
     [[nodiscard]] auto accountDeletionPending(const QString &id) const -> bool;

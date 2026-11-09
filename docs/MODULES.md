@@ -392,9 +392,12 @@ An instance is brought up by one of:
   Once the new instance is on disk the wizard calls `Host::get()->refreshLauncher()`:
   the host asks every enabled module to `list()` again and the launcher shows the new
   entry. The new instance is not started; the user opens it from the launcher.
-  The launcher lists every "create" entry in its Account Type picker, one row each with
+  The launcher lists the account types in its Account Type picker, one row each with
   the icon its module names in `meta()` under `icon` (`silent`, `users`), a puzzle
-  piece when it names none.
+  piece when it names none. A type is a module's "<type>.create" entry and its
+  "<type>.restore" one, named after the create entry (`PluginRegistry::creatorLaunchers()`).
+  Picking a type that has both offers Create or Restore, each starting its entry; a type
+  with one entry starts it at once.
 - **Another instance**: an instance may ask a module to start further instances.
 
 Because instances appear and disappear at runtime, **discovery is dynamic**:
@@ -1551,7 +1554,7 @@ to the request that takes it, never logged nor saved.
   made through an open account's own service answers `error()`.
 - The restore is the module's: each built-in module lists `<id>.restore` among its creators
   (`sp.restore` in the SP module, `musig.restore` in the Multikey creator), which the account
-  type picker shows with the create entries. `PluginRegistry::isCreatorInstanceId()` takes
+  type picker offers as Restore once its type is picked. `PluginRegistry::isCreatorInstanceId()` takes
   `.restore` ids as creators. Its restore target is `account::restoreTarget()`; once restored,
   the module refreshes the launcher, which lists the account.
 

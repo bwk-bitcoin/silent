@@ -69,6 +69,37 @@ QMap<QString, QString> sidecarMeta(const PluginMetadata &bundle) {
     return meta;
 }
 
+// The account types among the `instances` of `module`, in their order.
+auto moduleCreatorLaunchers(IModule *module, const QList<QPair<QString, QString>> &instances)
+    -> QList<PluginRegistry::CreatorLauncher> {
+    QList<PluginRegistry::CreatorLauncher> launchers;
+    QStringList types;
+    for (const auto &instance : instances) {
+        auto id = instance.first.trimmed();
+        if (!PluginRegistry::isCreatorInstanceId(id)) {
+            continue;
+        }
+        auto name = instance.second.trimmed();
+        if (name.isEmpty()) {
+            name = id;
+        }
+        // "<type>.create" and "<type>.restore" share "<type>".
+        auto type = id.left(id.lastIndexOf(QLatin1Char('.')));
+        if (!types.contains(type)) {
+            types.append(type);
+            launchers.append({.module = module, .name = name});
+        }
+        auto &launcher = launchers[types.indexOf(type)];
+        if (id.endsWith(QStringLiteral(".restore"))) {
+            launcher.restoreId = id;
+        } else {
+            launcher.createId = id;
+            launcher.name = name;
+        }
+    }
+    return launchers;
+}
+
 } // namespace
 
 PluginRegistry::PluginRegistry(QObject *parent) : QObject(parent) {
@@ -488,21 +519,17 @@ auto PluginRegistry::caller(IModule *module) const -> std::optional<plugin::Call
     };
 }
 
-QList<PluginRegistry::CreatorLauncher> PluginRegistry::externalCreatorLaunchers() const {
-    QList<CreatorLauncher> creators;
+auto PluginRegistry::creatorLaunchers() const -> QList<CreatorLauncher> {
+    QList<CreatorLauncher> builtin;
+    QList<CreatorLauncher> external;
     for (auto *module : enabledModulesForLauncher()) {
-        if (module == nullptr || isBuiltinModule(module)) {
+        if (module == nullptr) {
             continue;
         }
-        for (const auto &instance : launcherInstancesForModule(module)) {
-            if (isCreatorInstanceId(instance.first)) {
-                creators.append({.module = module,
-                                 .id = instance.first.trimmed(),
-                                 .name = instance.second.trimmed()});
-            }
-        }
+        auto &launchers = isBuiltinModule(module) ? builtin : external;
+        launchers.append(moduleCreatorLaunchers(module, launcherInstancesForModule(module)));
     }
-    return creators;
+    return builtin + external;
 }
 
 bool PluginRegistry::startLauncherInstance(IModule *module, const QString &instance_id) {

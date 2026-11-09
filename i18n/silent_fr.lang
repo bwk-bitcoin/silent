@@ -2,6 +2,15 @@
 # Format: id => "English" => "Translation"
 # Use \n for line breaks
 
+account-type-choice-title => "Account Type · %1" => "Account Type · %1"
+account-type-create => "Create" => "Create"
+account-type-create-sub
+=> "Make a new account from your keys."
+=> "Make a new account from your keys.";;
+account-type-restore => "Restore" => "Restore"
+account-type-restore-sub
+=> "Bring back an account from its backup file."
+=> "Bring back an account from its backup file.";;
 account-type-title => "Account Type" => "Account Type"
 amount-cycle => "Show as BTC / %1 / hidden" => "Afficher en BTC / %1 / masqué"
 amount-cycle-no-fiat => "Show as BTC / hidden" => "Afficher en BTC / masqué"

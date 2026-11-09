@@ -1101,13 +1101,23 @@ void addSteps() {
         "account type", [] { return visible<modal::AccountType>() != nullptr; },
         [] {
             auto *m = visible<modal::AccountType>();
-            for (int i = 0; i < m->m_creators.size(); ++i) {
-                if (m->m_creators.at(i).name == TR("musig-account-type")) {
-                    later([row = m->m_rows.at(i)] { emit row->clicked(); });
+            for (int i = 0; i < m->m_types.size(); ++i) {
+                if (m->m_types.at(i).name == TR("musig-account-type")) {
+                    later([row = m->m_type_rows.at(i)] { emit row->clicked(); });
                     return;
                 }
             }
             check(false, "the account type modal lists the shared wallet");
+        });
+    step(
+        "create or restore",
+        [] {
+            auto *m = visible<modal::AccountType>();
+            return m != nullptr && m->m_view == modal::AccountType::View::Choice;
+        },
+        [] {
+            auto *m = visible<modal::AccountType>();
+            later([row = m->m_create_row] { emit row->clicked(); });
         });
     // The first path is the default one: every key of the network, any 2 signing.
     step(

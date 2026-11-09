@@ -2,7 +2,9 @@
 // account_services_smoke). The real SP and Multikey accounts back up through their account
 // service, from their shell; the restore modal reads a backup through the module's
 // restore target, refuses a wrong password, another kind of account and an existing
-// account, and restores one that is gone, which the module then lists.
+// account, and restores one that is gone, which the module then lists. The launcher's
+// Account Type picker lists the account types only, and offers Create or Restore for SP
+// and Multikey, each opening that type's flow; a type with a create entry only starts it.
 
 #include <QApplication>
 #include <QByteArray>
@@ -11,6 +13,7 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QList>
+#include <QMap>
 #include <QObject>
 #include <QPair>
 #include <QPointer>
@@ -18,9 +21,11 @@
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
 #include <QWidget>
 #include <Qontrol>
 #include <common.h>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <silent.h>
@@ -38,6 +43,8 @@
 #include "account/views/BackupAccount.h"
 #include "account/views/RestoreAccount.h"
 #include "catalog/Button.h"
+#include "catalog/SelectRow.h"
+#include "catalog/containers/ModalActions.h"
 #include "catalog/display/Label.h"
 #include "catalog/feedback/Notice.h"
 #include "catalog/inputs/Input.h"
@@ -47,11 +54,15 @@
 #include "interfaces/backend/account.h"
 #include "modules/musig/MusigAccountWidget.h"
 #include "modules/musig/MusigPlugin.h"
+#include "modules/musig/creator/CreatePolicy.h"
 #include "modules/musig/creator/MusigCreatorModule.h"
 #include "modules/shared/AccountLifecycle.h"
 #include "modules/sp/AccountWidget.h"
 #include "modules/sp/SpModule.h"
 #include "modules/sp/SpPlugin.h"
+#include "modules/sp/modals/CreateAccount.h"
+#include "views/MenuTab.h"
+#include "views/modals/AccountType.h"
 #undef private
 #undef protected
 
@@ -62,6 +73,7 @@ constexpr int TIMEOUT_MS = 30000;
 const QString PASSWORD = QStringLiteral("correct horse battery");
 const QString SP_ACCOUNT = QStringLiteral("shell-sp");
 const QString MULTIKEY_ACCOUNT = QStringLiteral("shell-multikey");
+const QString PLUGIN_TYPE = QStringLiteral("Plugin Wallet");
 const char *const SP_DESCRIPTOR =
     "sp([73c5da0a/352'/1'/0']tspscan1q8pjcdy7qzlzxl44chw2tsanvzg7dtwhkqf3nsvzmdavls2ekl8qq9qe"
     "sshy6w9knddr825kqp442302zuwddh6vtqk7zqvgszace9aczgnuqn3)#ke33wu3h";
@@ -109,6 +121,54 @@ public slots:
         failed = request_id;
         error = message;
     }
+};
+
+// A plugin's creator that lists a create entry only, "plugin.create", and records the
+// entries started.
+class CreateOnlyModule final : public IModule {
+    Q_OBJECT
+
+public:
+    [[nodiscard]] auto started() const -> const QStringList & {
+        return m_started;
+    }
+
+    [[nodiscard]] auto meta() const -> QMap<QString, QString> override {
+        return {{QStringLiteral("id"), QStringLiteral("create-only.creator")},
+                {QStringLiteral("name"), QStringLiteral("Create Only Creator")}};
+    }
+
+    auto list() -> ReqId override {
+        emit IModule::instances(++m_req, {{QStringLiteral("plugin.create"), PLUGIN_TYPE}});
+        return m_req;
+    }
+
+    auto autoStart() -> ReqId override {
+        emit IModule::autoStart(++m_req, QStringList{});
+        return m_req;
+    }
+
+    void startInstance(const QString &id) override {
+        m_started.append(id);
+    }
+
+private:
+    QStringList m_started;
+    ReqId m_req = 0;
+};
+
+class CreateOnlyPlugin final : public IPlugin {
+public:
+    [[nodiscard]] auto meta() const -> QMap<QString, QString> override {
+        return {{QStringLiteral("id"), QStringLiteral("create-only")},
+                {QStringLiteral("name"), QStringLiteral("Create Only")}};
+    }
+
+    [[nodiscard]] auto modules() const -> QList<IModule *> override {
+        return {&m_module};
+    }
+
+    mutable CreateOnlyModule m_module;
 };
 
 // Backup refuses a short or unconfirmed password, and shows the account's refusal.
@@ -267,6 +327,137 @@ void restoreFlow(account::AccountModule *module, QWidget &window, const QString 
     closeAccount(module, id);
 }
 
+// Runs `step` on the modal exec() shows next, a T, then closes it.
+template <typename T>
+void onNextModal(const std::function<void(T &)> &step, bool *ran, const char *message) {
+    QTimer::singleShot(0, [step, ran, message] {
+        auto *modal = qobject_cast<T *>(QApplication::activeModalWidget());
+        require(modal != nullptr, message);
+        step(*modal);
+        *ran = true;
+        if (modal->isVisible()) {
+            modal->reject();
+        }
+    });
+}
+
+// The titles of the rows `modal` shows, in their order.
+auto rowTitles(QWidget &modal) -> QStringList {
+    QStringList titles;
+    for (auto *row : modal.findChildren<catalog::SelectRow *>()) {
+        if (row->isVisibleTo(&modal)) {
+            titles.append(row->m_title->text());
+        }
+    }
+    return titles;
+}
+
+// Clicks the row of `modal` titled `title`.
+void pick(QWidget &modal, const QString &title) {
+    for (auto *row : modal.findChildren<catalog::SelectRow *>()) {
+        if (row->isVisibleTo(&modal) && row->m_title->text() == title) {
+            emit row->clicked();
+            return;
+        }
+    }
+    qFatal("account shell: no row %s", qPrintable(title));
+}
+
+// Opens the launcher's Account Type picker and runs `step` on it.
+void onPicker(MenuTab &menu, const std::function<void(modal::AccountType &)> &step) {
+    bool ran = false;
+    onNextModal<modal::AccountType>(step, &ran, "the launcher opens the Account Type picker");
+    menu.onCreateClicked();
+    require(ran, "the Account Type picker ran");
+}
+
+// Picks `type` in `picker`, which offers Create and Restore for it, then `entry` of the two,
+// which opens the T modal: `step` runs on it.
+template <typename T>
+void pickEntry(modal::AccountType &picker, const QString &type, const QString &entry,
+               const std::function<void(T &)> &step, const char *message) {
+    pick(picker, type);
+    require(rowTitles(picker) == QStringList{TR("account-type-create"), TR("account-type-restore")},
+            "picking SP or Multikey offers Create and Restore");
+    require(picker.windowTitle() == TR("account-type-choice-title").arg(type),
+            "the choice names the type picked");
+    bool ran = false;
+    onNextModal<T>(step, &ran, message);
+    pick(picker, entry);
+    require(ran, message);
+    require(!picker.isVisible(), "a started entry closes the picker");
+}
+
+// The restore `modal` opened from the picker reads a backup of its own kind, `own` of the
+// account `id`, and refuses `other`, a backup of another kind.
+void restoresKind(account::view::RestoreAccount &modal, const QByteArray &own,
+                  const QByteArray &other, const QString &id) {
+    modal.m_backup_path = QStringLiteral("/backups/account.silent-backup");
+    modal.m_backup = other;
+    readBackup(modal, PASSWORD);
+    require(modal.m_view == account::view::RestoreAccount::View::Password &&
+                !modal.m_password_error->isHidden(),
+            "the restore opened from the picker refuses another kind's backup");
+    modal.m_backup = own;
+    readBackup(modal, PASSWORD);
+    require(modal.m_view == account::view::RestoreAccount::View::Review && modal.m_account == id,
+            "the restore opened from the picker reads its own kind's backup");
+}
+
+// The picker lists the account types only. SP and Multikey each offer Create, opening their
+// create wizard, and Restore, opening the restore over their own restore target; Back
+// returns to the types. The plugin's type, a create entry only, starts it at once.
+void accountTypePicker(MenuTab &menu, CreateOnlyModule &plugin, const QByteArray &sp_backup,
+                       const QByteArray &multikey_backup) {
+    auto types = QStringList{TR("sp-account-type"), TR("musig-account-type"), PLUGIN_TYPE};
+    onPicker(menu, [&types](modal::AccountType &picker) {
+        require(rowTitles(picker) == types,
+                "the Account Type picker lists the account types only, no restore entry");
+        require(picker.windowTitle() == TR("account-type-title"), "the picker is Account Type");
+        pick(picker, TR("sp-account-type"));
+        require(rowTitles(picker) ==
+                    QStringList{TR("account-type-create"), TR("account-type-restore")},
+                "picking SP offers Create and Restore");
+        auto *back = picker.findChild<catalog::ModalActions *>();
+        require(back != nullptr && back->isVisibleTo(&picker), "the choice has a Back");
+        emit back->backClicked();
+        require(rowTitles(picker) == types && picker.windowTitle() == TR("account-type-title"),
+                "Back returns to the account types");
+    });
+    onPicker(menu, [](modal::AccountType &picker) {
+        pickEntry<modal::CreateAccount>(
+            picker, TR("sp-account-type"), TR("account-type-create"), [](modal::CreateAccount &) {},
+            "SP's Create opens the SP create wizard");
+    });
+    onPicker(menu, [&sp_backup, &multikey_backup](modal::AccountType &picker) {
+        pickEntry<account::view::RestoreAccount>(
+            picker, TR("sp-account-type"), TR("account-type-restore"),
+            [&sp_backup, &multikey_backup](account::view::RestoreAccount &modal) {
+                restoresKind(modal, sp_backup, multikey_backup, SP_ACCOUNT);
+            },
+            "SP's Restore opens the restore");
+    });
+    onPicker(menu, [](modal::AccountType &picker) {
+        pickEntry<musig::modal::CreatePolicy>(
+            picker, TR("musig-account-type"), TR("account-type-create"),
+            [](musig::modal::CreatePolicy &) {}, "Multikey's Create opens the Multikey wizard");
+    });
+    onPicker(menu, [&sp_backup, &multikey_backup](modal::AccountType &picker) {
+        pickEntry<account::view::RestoreAccount>(
+            picker, TR("musig-account-type"), TR("account-type-restore"),
+            [&sp_backup, &multikey_backup](account::view::RestoreAccount &modal) {
+                restoresKind(modal, multikey_backup, sp_backup, MULTIKEY_ACCOUNT);
+            },
+            "Multikey's Restore opens the restore");
+    });
+    onPicker(menu, [&plugin](modal::AccountType &picker) {
+        pick(picker, PLUGIN_TYPE);
+        require(!picker.isVisible() &&
+                    plugin.started() == QStringList{QStringLiteral("plugin.create")},
+                "a type with a create entry only starts it at once");
+    });
+}
+
 void builtinBackups() {
     for (const auto &[name, descriptor, plugin] :
          {std::tuple{SP_ACCOUNT, SP_DESCRIPTOR, "sp"},
@@ -278,11 +469,15 @@ void builtinBackups() {
     }
     auto sp = std::make_unique<SpPlugin>();
     auto multikey = std::make_unique<MusigPlugin>();
+    auto createOnly = std::make_unique<CreateOnlyPlugin>();
     auto *spModule = qobject_cast<account::AccountModule *>(sp->modules().first());
     auto *multikeyModule = qobject_cast<account::AccountModule *>(multikey->modules().first());
+    auto *multikeyCreator = multikey->modules().last();
+    auto *createOnlyModule = &createOnly->m_module;
     auto *controller = AppController::get();
     controller->registerBuiltinPlugin(std::move(sp));
     controller->registerBuiltinPlugin(std::move(multikey));
+    controller->registerBuiltinPlugin(std::move(createOnly));
     auto *registry = controller->pluginRegistry();
     waitFor([registry] { return !registry->pluginStateLoading(); }, "the plugin state loads");
     MainWindow window;
@@ -299,6 +494,15 @@ void builtinBackups() {
     auto spBackup = backupOf(spShell->services().account);
     auto *multikeyShell = openAccount(multikeyModule, window, MULTIKEY_ACCOUNT);
     auto multikeyBackup = backupOf(multikeyShell->services().account);
+    waitFor(
+        [registry, spModule, multikeyCreator, createOnlyModule] {
+            return !registry->launcherInstancesForModule(spModule).isEmpty() &&
+                   !registry->launcherInstancesForModule(multikeyCreator).isEmpty() &&
+                   !registry->launcherInstancesForModule(createOnlyModule).isEmpty();
+        },
+        "the launcher lists every module's entries");
+    accountTypePicker(*qobject_cast<MenuTab *>(window.m_menu_tab), *createOnlyModule, spBackup,
+                      multikeyBackup);
     restoreFlow(spModule, window, QStringLiteral("sp"), QStringLiteral("musig"), SP_ACCOUNT,
                 spBackup);
     restoreFlow(multikeyModule, window, QStringLiteral("musig"), QStringLiteral("sp"),
