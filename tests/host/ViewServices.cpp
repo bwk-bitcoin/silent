@@ -125,6 +125,10 @@ void FakeAccount::newAddress(backend::RequestId request_id, QString kind) {
             });
 }
 
+auto FakeAccount::backupDescription() const -> backend::BackupDescription {
+    return model.backup;
+}
+
 void FakeAccount::backup(backend::RequestId request_id) {
     request({.id = request_id, .kind = QStringLiteral("backup")}, [this, request_id] {
         emit error(request_id, QStringLiteral("backup is not supported"));

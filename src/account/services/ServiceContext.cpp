@@ -30,6 +30,10 @@ ServiceContext::ServiceContext(QString account, QObject *parent)
             &ServiceContext::onReceivingChanged, qontrol::UNIQUE);
 }
 
+auto ServiceContext::backupDescription() const -> backend::BackupDescription {
+    return {};
+}
+
 void ServiceContext::backup(backend::RequestId token) {
     emit failed(token, QStringLiteral("This account has no backup"));
 }

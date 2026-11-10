@@ -45,6 +45,10 @@ auto toBytes(const rust::Vec<std::uint8_t> &bytes) -> QByteArray;
 auto toSlice(const QByteArray &bytes) -> rust::Slice<const std::uint8_t>;
 // `bytes` as UTF-8 text, a secret.
 auto toRustString(const QByteArray &bytes) -> rust::String;
+// What an SP account's backup holds and what opens it, said in the current language.
+auto spBackupDescription() -> backend::BackupDescription;
+// The same for a Multikey account.
+auto multikeyBackupDescription() -> backend::BackupDescription;
 // What a backup holds and needs, said in the current language.
 auto toBackupInfo(const BackupContents &contents) -> backend::BackupInfo;
 // Why a backup was not made, read or restored, said in the current language.

@@ -88,7 +88,7 @@ void BackupAccount::changeEvent(QEvent *event) {
 
 void BackupAccount::retranslateUi() {
     setWindowTitle(TR("backup-title"));
-    m_save_text->setText(TR("backup-text"));
+    m_save_text->setText(m_account == nullptr ? QString() : m_account->backupDescription().details);
     m_busy->setTitle(TR("backup-encrypting"));
     m_busy->setSubtitle(TR("backup-encrypting-sub"));
 }

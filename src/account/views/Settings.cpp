@@ -15,6 +15,7 @@
 #include "catalog/inputs/Input.h"
 #include "catalog/inputs/Toggle.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/account.h"
 #include "interfaces/backend/blockchain.h"
 #include "interfaces/backend/settings.h"
 #include "theme/Palette.h"
@@ -103,7 +104,7 @@ void Settings::init() {
     m_backup_text = new catalog::Label(catalog::LabelRole::Body);
     m_backup_text->setTone(catalog::LabelTone::Secondary);
     m_backup_text->setWordWrap(true);
-    m_backup_text->setText(TR("settings-backup-text"));
+    m_backup_text->setText(backupSummary());
     m_backup = catalog::btnBackupAccount();
     m_height_timer = new QTimer(this);
     m_height_timer->setInterval(HEIGHT_REFRESH_MS);
@@ -206,9 +207,14 @@ void Settings::hideEvent(QHideEvent *event) {
     qontrol::Screen::hideEvent(event);
 }
 
+auto Settings::backupSummary() const -> QString {
+    return m_services.account == nullptr ? QString()
+                                         : m_services.account->backupDescription().summary;
+}
+
 // The provider says the texts in the language now in use.
 void Settings::retranslateUi() {
-    m_backup_text->setText(TR("settings-backup-text"));
+    m_backup_text->setText(backupSummary());
     m_presentation_req = nextRequestId();
     m_services.settings->value(m_presentation_req, extension::ENDPOINT_PRESENTATION, QJsonValue());
     showPresentation();

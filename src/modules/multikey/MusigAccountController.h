@@ -55,6 +55,8 @@ public:
     // A new taproot address, the only kind it receives on. Empty on failure.
     auto newAddress() -> QString;
     auto getDescriptor() -> rust::String;
+    // What a Multikey account's backup holds and what opens it.
+    [[nodiscard]] static auto backupDescription() -> backend::BackupDescription;
     auto cosignerFingerprints() -> QStringList;
     // Electrum only.
     auto endpoints() -> QList<Endpoint> override;

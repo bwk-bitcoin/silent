@@ -72,6 +72,10 @@ public:
         return std::nullopt;
     }
 
+    [[nodiscard]] auto backupDescription() const -> backend::BackupDescription override {
+        return {};
+    }
+
     void newAddress(backend::RequestId request_id, [[maybe_unused]] QString kind) override {
         emit error(request_id, unsupportedMessage());
     }

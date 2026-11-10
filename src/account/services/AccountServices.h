@@ -124,6 +124,11 @@ public:
                   }));
     }
 
+    // The module's controller says what its kind of backup holds.
+    [[nodiscard]] auto backupDescription() const -> backend::BackupDescription override {
+        return Controller::backupDescription();
+    }
+
     // On a worker: it reads the account's stores.
     void backup(backend::RequestId token) override {
         auto *wallet = rustAccount();

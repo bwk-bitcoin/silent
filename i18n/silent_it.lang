@@ -64,9 +64,12 @@ backup-requires-sp-scan
 backup-save-failed => "The backup is not saved: %1" => "The backup is not saved: %1"
 backup-save-title => "Save Account Backup" => "Save Account Backup"
 backup-saved => "The backup is saved to %1" => "The backup is saved to %1"
-backup-text
-=> "The backup is a BIP139 wallet backup encrypted with BIP138. It holds the account's descriptors, servers, address indexes and labels. A Multikey backup is encrypted to the policy's keys: any one of them opens it, from its signing device, its xpub or its mnemonic, and it holds no signing secret. A silent payment backup holds the account's scan key and is encrypted to it: only that key opens it, from its key in Keys or its mnemonic, and whoever opens it sees the account's payments. The spending keys are never in a backup."
-=> "The backup is a BIP139 wallet backup encrypted with BIP138. It holds the account's descriptors, servers, address indexes and labels. A Multikey backup is encrypted to the policy's keys: any one of them opens it, from its signing device, its xpub or its mnemonic, and it holds no signing secret. A silent payment backup holds the account's scan key and is encrypted to it: only that key opens it, from its key in Keys or its mnemonic, and whoever opens it sees the account's payments. The spending keys are never in a backup.";;
+backup-text-multikey
+=> "The backup is a BIP139 wallet backup encrypted with BIP138. It holds the account's descriptors, servers, address indexes and labels. It is encrypted to the policy's keys: any one of them opens it, from its signing device, its xpub or its mnemonic, and it holds no signing secret. The spending keys are never in a backup."
+=> "The backup is a BIP139 wallet backup encrypted with BIP138. It holds the account's descriptors, servers, address indexes and labels. It is encrypted to the policy's keys: any one of them opens it, from its signing device, its xpub or its mnemonic, and it holds no signing secret. The spending keys are never in a backup.";;
+backup-text-sp
+=> "The backup is a BIP139 wallet backup encrypted with BIP138. It holds the account's descriptors, servers, address indexes and labels, and the account's scan key, to which it is encrypted: only that key opens it, from its key in Keys or its mnemonic, and whoever opens it sees the account's payments. The spending keys are never in a backup."
+=> "The backup is a BIP139 wallet backup encrypted with BIP138. It holds the account's descriptors, servers, address indexes and labels, and the account's scan key, to which it is encrypted: only that key opens it, from its key in Keys or its mnemonic, and whoever opens it sees the account's payments. The spending keys are never in a backup.";;
 backup-title => "Backup Account" => "Backup Account"
 backup-warning-saved-psbts
 => "Saved PSBTs and signing sessions are not in the backup: a transaction being signed is prepared again."
@@ -1221,9 +1224,6 @@ restore-xpub-cannot-decrypt
 => "Xpub is valid but cannot decrypt this file";;
 restore-xpub-field => "Xpub:" => "Xpub:"
 restore-xpub-file-field => "Xpub file:" => "Xpub file:"
-restore-xpub-scan-key
-=> "This backup opens with a silent payment scan key, which no xpub gives: ask one of your keys for it, or enter its mnemonic"
-=> "This backup opens with a silent payment scan key, which no xpub gives: enter the mnemonic of the key instead";;
 route-primary-tooltip => "%1 · Primary" => "NONE"
 scan-progress-done => "All %1 parts received" => "NONE"
 scan-progress-parts => "%1 of %2 parts" => "NONE"
@@ -1280,9 +1280,12 @@ send-transaction-title => "Transaction" => "Transazione"
 send-validation-error => "Validation Error" => "Errore di validazione"
 settings-backend-info => "Backend Info:" => "Info backend:"
 settings-backup => "Backup" => "Backup"
-settings-backup-text
-=> "Saves this account to a file encrypted with BIP138: its descriptors, servers, address indexes and labels. A Multikey backup opens with any one of its keys and holds no signing secret. A silent payment backup holds the account's scan key and opens only with it, from its key in Keys or its mnemonic. The spending keys are never in it: they stay in Keys."
-=> "Saves this account to a file encrypted with BIP138: its descriptors, servers, address indexes and labels. A Multikey backup opens with any one of its keys and holds no signing secret. A silent payment backup holds the account's scan key and opens only with it, from its key in Keys or its mnemonic. The spending keys are never in it: they stay in Keys.";;
+settings-backup-text-multikey
+=> "Saves this account to a file encrypted with BIP138: its descriptors, servers, address indexes and labels. It opens with any one of the policy's keys and holds no signing secret. The spending keys are never in it: they stay in Keys."
+=> "Saves this account to a file encrypted with BIP138: its descriptors, servers, address indexes and labels. It opens with any one of the policy's keys and holds no signing secret. The spending keys are never in it: they stay in Keys.";;
+settings-backup-text-sp
+=> "Saves this account to a file encrypted with BIP138: its descriptors, servers, address indexes and labels. It holds the account's scan key and opens only with it, from its key in Keys or its mnemonic. The spending keys are never in it: they stay in Keys."
+=> "Saves this account to a file encrypted with BIP138: its descriptors, servers, address indexes and labels. It holds the account's scan key and opens only with it, from its key in Keys or its mnemonic. The spending keys are never in it: they stay in Keys.";;
 settings-blindbit-address => "BlindBit URL" => "URL BlindBit"
 settings-blindbit-url => "BlindBit URL:" => "URL BlindBit:"
 settings-block-height => "Block Height:" => "Altezza blocco:"

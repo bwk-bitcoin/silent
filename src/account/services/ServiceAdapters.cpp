@@ -147,6 +147,10 @@ public:
         return context()->addressVerification(address);
     }
 
+    [[nodiscard]] auto backupDescription() const -> backend::BackupDescription override {
+        return context() == nullptr ? backend::BackupDescription{} : context()->backupDescription();
+    }
+
     void newAddress(backend::RequestId request_id, QString kind) override {
         if (context() == nullptr) {
             emit error(request_id, closed());
@@ -278,6 +282,11 @@ public:
     [[nodiscard]] auto addressVerification([[maybe_unused]] const QString &address) const
         -> std::optional<backend::AddressVerification> override {
         return std::nullopt;
+    }
+
+    // No account to back up.
+    [[nodiscard]] auto backupDescription() const -> backend::BackupDescription override {
+        return {};
     }
 
     void newAddress(backend::RequestId request_id, QString kind) override {

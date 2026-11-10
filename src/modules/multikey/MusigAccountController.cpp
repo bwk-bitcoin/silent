@@ -184,6 +184,10 @@ auto MusigAccountController::network() -> Network {
     return accountConfig().get_network();
 }
 
+auto MusigAccountController::backupDescription() -> backend::BackupDescription {
+    return account::services::multikeyBackupDescription();
+}
+
 auto MusigAccountController::getDescriptor() -> rust::String {
     return accountDescriptor();
 }

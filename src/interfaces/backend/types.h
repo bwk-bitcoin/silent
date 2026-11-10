@@ -170,6 +170,15 @@ struct Settings {
     QList<Endpoint> endpoints;
 };
 
+// What a backup of an account holds and what opens it, in the current language: empty when
+// the account makes none.
+struct BackupDescription {
+    // Under the Backup section of the account's Settings.
+    QString summary;
+    // In the Backup Account modal.
+    QString details;
+};
+
 struct BackupInfo {
     QString backend;
     QString account;

@@ -45,6 +45,7 @@
 #include "account/services/ServiceAdapters.h"
 #include "account/views/BackupAccount.h"
 #include "account/views/RestoreAccount.h"
+#include "account/views/Settings.h"
 #include "catalog/Button.h"
 #include "catalog/SelectRow.h"
 #include "catalog/containers/ModalActions.h"
@@ -431,6 +432,17 @@ auto backupOf(backend::IAccountBackend *account) -> QByteArray {
     return backups.backup;
 }
 
+// The Backup modal and the Settings backup section of the account `services` serve say
+// its own kind's texts, `details` and `summary`.
+void backupTexts(const account::Services &services, const QString &details,
+                 const QString &summary) {
+    account::view::BackupAccount modal(services.account);
+    require(modal.m_save_text->text() == details, "the Backup modal says its kind's backup");
+    account::view::Settings settings(services, nullptr);
+    require(settings.m_backup_text->text() == summary,
+            "the Settings backup section says its kind's backup");
+}
+
 // Closed, its page deleted.
 void closeAccount(account::AccountModule *module, const QString &id) {
     Host::get()->removeInstance(id, module);
@@ -535,6 +547,9 @@ void decryptWithDevice(const QString &plugin_id, const QByteArray &backup, const
     auto modal = restoreModal(plugin_id, backup);
     readBackup(*modal);
     require(modal->m_paths.contains(path), "the backup names the path of its key");
+    require(!modal->m_option_fields->isHidden() &&
+                modal->m_airgap_text->text() == TR("restore-airgap-help"),
+            "an xpub may open it: its xpub field and file are offered");
     require(deviceRows(*modal).isEmpty() &&
                 !modal->m_device_rows->findChildren<catalog::EmptyState *>().isEmpty(),
             "no device connected says so");
@@ -648,9 +663,9 @@ void decryptWithScanKey(const QByteArray &backup, IModule *owner) {
         },
         "a connected device is listed as giving no scan key");
     require(usb.device()->asked().isEmpty(), "the device is asked no xpub for a scan key");
-    pasteXpub(*modal, SP_XPUB);
-    require(modal->m_xpub_note->m_text->text() == TR("restore-xpub-scan-key"),
-            "the spend path's xpub is refused as no scan key");
+    require(modal->m_option_fields->isHidden() && !modal->m_mnemonic_fields->isHidden() &&
+                modal->m_airgap_text->text() == TR("restore-scan-key-help"),
+            "no xpub opens it: its xpub field and file are left out, the mnemonic kept");
 
     require(rowTexts(modal->m_key_rows) ==
                 QStringList{QStringLiteral("key 73c5da0a #73c5da0a ") + TR("restore-key-ask"),
@@ -917,6 +932,9 @@ void builtinBackups() {
     auto spBackup = backupOf(spShell->services().account);
     auto *multikeyShell = openAccount(multikeyModule, window, MULTIKEY_ACCOUNT);
     auto multikeyBackup = backupOf(multikeyShell->services().account);
+    backupTexts(spShell->services(), TR("backup-text-sp"), TR("settings-backup-text-sp"));
+    backupTexts(multikeyShell->services(), TR("backup-text-multikey"),
+                TR("settings-backup-text-multikey"));
     waitFor(
         [registry, spModule, multikeyCreator, createOnlyModule] {
             return !registry->launcherInstancesForModule(spModule).isEmpty() &&

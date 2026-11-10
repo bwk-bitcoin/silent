@@ -151,6 +151,7 @@ public:
         QHash<QString, backend::AddressVerification> verification;
         // What newAddress() hands out, first one first; none left answers error().
         QList<backend::Address> fresh;
+        backend::BackupDescription backup;
     };
 
     [[nodiscard]] auto id() const -> QString override;
@@ -160,6 +161,7 @@ public:
     [[nodiscard]] auto addresses() const -> QList<backend::Address> override;
     [[nodiscard]] auto addressVerification(const QString &address) const
         -> std::optional<backend::AddressVerification> override;
+    [[nodiscard]] auto backupDescription() const -> backend::BackupDescription override;
 
     void setAddresses(const QList<backend::Address> &addresses);
 

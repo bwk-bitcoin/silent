@@ -290,6 +290,14 @@ auto toRustString(const QByteArray &bytes) -> rust::String {
     return {bytes.constData(), static_cast<std::size_t>(bytes.size())};
 }
 
+auto spBackupDescription() -> backend::BackupDescription {
+    return {.summary = TR("settings-backup-text-sp"), .details = TR("backup-text-sp")};
+}
+
+auto multikeyBackupDescription() -> backend::BackupDescription {
+    return {.summary = TR("settings-backup-text-multikey"), .details = TR("backup-text-multikey")};
+}
+
 auto toBackupInfo(const BackupContents &contents) -> backend::BackupInfo {
     bool multikey = toQString(contents.plugin_id) == QStringLiteral("musig");
     backend::BackupInfo info{.backend = multikey ? TR("musig-account-type") : TR("sp-account-type"),

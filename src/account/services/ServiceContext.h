@@ -86,6 +86,8 @@ public:
     // answers valueAnswered().
     virtual void endpointCapabilities(backend::RequestId token, QString endpoint) = 0;
     virtual void broadcast(backend::RequestId token, QByteArray transaction) = 0;
+    // What the account's backup holds and what opens it: empty for an account with none.
+    [[nodiscard]] virtual auto backupDescription() const -> backend::BackupDescription;
     // The account's backup, encrypted to its keys: answers backupCreated(). An account
     // with none to give answers failed().
     virtual void backup(backend::RequestId token);

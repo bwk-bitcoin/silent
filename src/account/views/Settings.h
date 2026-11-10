@@ -111,6 +111,8 @@ protected:
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
     void retranslateUi();
+    // What the account's backup holds and what opens it, its account's own kind.
+    [[nodiscard]] auto backupSummary() const -> QString;
     void connectServices() const;
     [[nodiscard]] auto presentationOf(const backend::Endpoint &endpoint) const -> Presentation;
     // Puts the provider's texts on the rows.

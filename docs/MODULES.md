@@ -1542,8 +1542,11 @@ shell nor the views use it, and `silent/tests/account_boundary.rs` keeps it that
 
 ### Backup and restore
 
-A backup is opaque bytes: the generic flows only hand them over. `IAccountBackend::backup()`
-makes one, answered with the keys it is not encrypted to; `inspectBackup()` answers what a
+A backup is opaque bytes: the generic flows only hand them over.
+`IAccountBackend::backupDescription()` says what the account's backup holds and what opens
+it, for its own kind (`BackupDescription`: a summary for the Settings backup section, details
+for the Backup modal; a built-in account's controller gives its kind's). `backup()` makes
+one, answered with the keys it is not encrypted to; `inspectBackup()` answers what a
 file holds (`BackupInfo`: the kind of account, its id and network, what it includes, what a
 restore needs, warnings), or `backupLocked()` with the derivation paths of the xpubs that may
 open an encrypted one when none of the xpubs or the mnemonic given does; `restore()` makes
@@ -1571,7 +1574,7 @@ saved.
   options: the paths, an xpub pasted or imported from a file, and a mnemonic, typed once
   its risk is acknowledged, which gives its scan secret at a scan path and its public key
   elsewhere. An invalid xpub or mnemonic, and one that cannot decrypt the backup, are said
-  under its field; an xpub given for a backup only a scan key opens is told so. Then the review, with the account's name (and its
+  under its field; for a backup only a scan key opens, the xpub field and file are left out, the scan-key help, the paths and the mnemonic kept. Then the review, with the account's name (and its
   network when the backup does not tell it), then `restore()`. The module that opens it
   asks for the devices to be polled while they are listed. It runs over a module's restore
   target: an `IAccountBackend` with no account behind it, so no account is opened nor

@@ -314,8 +314,10 @@ void RestoreAccount::showDecrypt(const QStringList &derivation_paths) {
         }
     }
     m_paths_label->setText(m_paths.join(QStringLiteral("\n")));
-    // No xpub opens a backup keyed by a scan key: the help points to the key or its mnemonic.
+    // No xpub opens a backup keyed by a scan key: the help points to the key or its mnemonic,
+    // and the xpub field and file are left out.
     m_airgap_text->setText(scanKeyOnly() ? TR("restore-scan-key-help") : TR("restore-airgap-help"));
+    m_option_fields->setVisible(!scanKeyOnly());
     if (m_module != nullptr) {
         Host::get()->requestSignerPolling(m_module, true);
     }
@@ -845,8 +847,7 @@ void RestoreAccount::onBackupLocked(backend::RequestId request_id,
     } else if (request_id == m_xpub_req) {
         m_xpub_req = 0;
         m_xpub_input->setValid(false);
-        m_xpub_note->setText(scanKeyOnly() ? TR("restore-xpub-scan-key")
-                                           : TR("restore-xpub-cannot-decrypt"));
+        m_xpub_note->setText(TR("restore-xpub-cannot-decrypt"));
         m_xpub_note->setVisible(true);
         refit();
     } else if (request_id == m_mnemonic_req) {

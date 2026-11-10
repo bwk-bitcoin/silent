@@ -1,6 +1,7 @@
 #pragma once
 
 #include "account/ElectrumReconnect.h"
+#include "interfaces/backend/types.h"
 #include "modules/shared/AccountLifecycle.h"
 
 #include <QList>
@@ -36,6 +37,8 @@ public:
     virtual auto hasSegwit() -> bool;
     virtual auto hasTaproot() -> bool;
     virtual auto getDescriptor() -> rust::String;
+    // What an SP account's backup holds and what opens it.
+    [[nodiscard]] static auto backupDescription() -> backend::BackupDescription;
     // BlindBit, then Electrum.
     auto endpoints() -> QList<Endpoint> override;
     auto endpointUrl(Endpoint endpoint) -> QString override;

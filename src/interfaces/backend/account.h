@@ -32,6 +32,8 @@ public:
     [[nodiscard]] virtual auto addressVerification(const QString &address) const
         -> std::optional<AddressVerification> = 0;
 
+    [[nodiscard]] virtual auto backupDescription() const -> BackupDescription = 0;
+
 public slots:
     virtual void newAddress(backend::RequestId request_id, QString kind) = 0;
 

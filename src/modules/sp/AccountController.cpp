@@ -6,6 +6,7 @@
 #include "account/AccountShell.h"
 #include "account/Services.h"
 #include "account/services/AccountServices.h"
+#include "account/services/Conversions.h"
 #include "account/services/ServiceContext.h"
 #include "catalog/feedback/MessageModal.h"
 #include "i18n/Tr.h"
@@ -392,6 +393,10 @@ auto AccountController::hasSegwit() -> bool {
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 auto AccountController::hasTaproot() -> bool {
     return hasAccountMetadata() && !accountConfig().get_taproot_descriptor().empty();
+}
+
+auto AccountController::backupDescription() -> backend::BackupDescription {
+    return account::services::spBackupDescription();
 }
 
 auto AccountController::getDescriptor() -> rust::String {
