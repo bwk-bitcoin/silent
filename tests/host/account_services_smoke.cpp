@@ -13,6 +13,7 @@
 #include "PluginBundleFixture.h"
 #include "account/AccountModule.h"
 #include "account/AccountShell.h"
+#include "account/RequestId.h"
 #include "account/SendSigning.h"
 #include "catalog/display/Label.h"
 #include "catalog/form/LabelCell.h"
@@ -42,6 +43,8 @@
 #include <QPointer>
 #include <QStringList>
 #include <QThread>
+#include <QVariantList>
+#include <QVariantMap>
 #include <QWidget>
 #include <Qontrol>
 #include <algorithm>
@@ -52,6 +55,8 @@
 #include <utility>
 
 #define private public
+#include "catalog/StatusBarItem.h"
+#include "modules/multikey/MusigStatusBar.h"
 #include "modules/multikey/SettingsExtras.h"
 #undef private
 
@@ -808,7 +813,220 @@ void deleteDeferred() {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
+// How long a probe of a server nothing listens on takes at most.
+constexpr int PROBE_MS = 2000;
+// A regtest address of no test account (BIP-173).
+const QString EXTERNAL = QStringLiteral("bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
+// What the backend's coin pays, in satoshis.
+constexpr quint64 CHAIN_COIN_SATS = 100000;
+// The backend's tip, and the height confirming its coin.
+constexpr quint64 CHAIN_TIP = 200;
+constexpr quint64 CHAIN_COIN_HEIGHT = 150;
+// Receive index 1, the first receive address, is the backend's used one: with the default
+// gap limit of 20 it watches up to index 21, and 22 needs a reveal.
+constexpr quint32 FIRST_UNWATCHED = 22;
+const QString CHAIN_COIN =
+    QStringLiteral("1111111111111111111111111111111111111111111111111111111111111111:0");
+
+// The scriptPubKey of the segwit address `address`: its witness version then its program,
+// read from the bech32 data part without checking the checksum.
+auto segwitScript(const QString &address) -> QByteArray {
+    const QString charset = QStringLiteral("qpzry9x8gf2tvdw0s3jn54khce6mua7l");
+    auto data = address.mid(address.lastIndexOf(QLatin1Char('1')) + 1).chopped(6);
+    auto version = charset.indexOf(data.front());
+    QByteArray program;
+    int accumulator = 0;
+    int bits = 0;
+    for (auto character : data.mid(1)) {
+        accumulator = (accumulator << 5) | static_cast<int>(charset.indexOf(character));
+        bits += 5;
+        if (bits >= 8) {
+            bits -= 8;
+            program.append(static_cast<char>((accumulator >> bits) & 0xff));
+        }
+    }
+    QByteArray script;
+    script.append(static_cast<char>(version == 0 ? 0 : 0x50 + version));
+    script.append(static_cast<char>(program.size()));
+    script.append(program);
+    return script;
+}
+
+// The answers of the Multikey account's transaction and account services.
+class ChainReplies final : public QObject {
+    Q_OBJECT
+
+public:
+    std::optional<backend::CraftResult> selected;
+    QList<backend::Address> addresses;
+    QString failure;
+
+public slots:
+
+    void onCoinsSelected([[maybe_unused]] backend::RequestId request_id,
+                         const backend::CraftResult &result) {
+        selected = result;
+    }
+
+    void onAddressCreated([[maybe_unused]] backend::RequestId request_id,
+                          const backend::Address &address) {
+        addresses.append(address);
+    }
+
+    void onError([[maybe_unused]] backend::RequestId request_id, const QString &message) {
+        failure = message;
+    }
+};
+
+// The label the account's status bar item shows.
+auto statusLabel(MusigAccountWidget *widget) -> QString {
+    auto *bar = widget->findChild<MusigStatusBar *>();
+    require(bar != nullptr, "the Multikey account has its status bar");
+    return bar->m_electrum_item->m_label->text();
+}
+
+// The backend reports one coin at receive index 1, the account's first receive address,
+// that index used and its tip.
+void reportChainCoin(backend::IBlockchain *chain) {
+    auto first = ::musig_first_receive_address(rust::String(MULTIKEY_DESCRIPTOR), Network::Regtest);
+    require(first.is_ok && std::string(first.path) == "0/1", "the first receive address derives");
+    chain->setProperty(
+        "fixtureOutputs",
+        QVariantList{QVariantMap{{QStringLiteral("outpoint"), CHAIN_COIN},
+                                 {QStringLiteral("amount"), CHAIN_COIN_SATS},
+                                 {QStringLiteral("script"),
+                                  segwitScript(QString::fromStdString(std::string(first.address)))},
+                                 {QStringLiteral("keychain"), 0},
+                                 {QStringLiteral("index"), 1},
+                                 {QStringLiteral("height"), CHAIN_COIN_HEIGHT}}});
+    chain->setProperty("fixtureUsed", QVariantList{QVariantMap{{QStringLiteral("keychain"), 0},
+                                                               {QStringLiteral("last"), 1}}});
+    chain->setProperty("fixtureTip", CHAIN_TIP);
+    emit chain->coinsChanged();
+}
+
+auto payment(const QStringList &inputs) -> backend::TransactionTemplate {
+    return {.outputs = {backend::Output{.address = EXTERNAL, .amount = 40000}},
+            .inputs = inputs,
+            .feeRate = 2.0};
+}
+
+// Hands out receive addresses until the one at FIRST_UNWATCHED: the backend reveals that
+// one alone, before it is handed out.
+void receiveThroughReveal(backend::IAccountBackend *account, backend::IBlockchain *chain,
+                          ChainReplies &replies) {
+    for (quint32 index = 2; index <= FIRST_UNWATCHED; ++index) {
+        require(!chain->property("revealed").isValid(), "no index the backend watches is revealed");
+        auto count = replies.addresses.size();
+        account->newAddress(account::nextRequestId(), QStringLiteral("taproot"));
+        waitFor([&replies,
+                 count] { return replies.addresses.size() > count || !replies.failure.isEmpty(); },
+                "the receive address is handed out");
+        require(replies.failure.isEmpty(), "the receive address is handed out without error");
+    }
+    require(chain->property("revealed").toString() == QStringLiteral("0/0/%1").arg(FIRST_UNWATCHED),
+            "the first index past the backend's window is revealed before it is handed out");
+    auto verification = account->addressVerification(replies.addresses.last().address);
+    require(verification.has_value() &&
+                verification->path == QStringLiteral("0/%1").arg(FIRST_UNWATCHED),
+            "the revealed index is the address handed out");
+}
+
 } // namespace
+
+// A Multikey account on the chain fixture, an Electrum server saved: it opens no Electrum
+// connection, its status bar shows the backend, and it crafts and finalizes a spend from the
+// coin the backend reports, hands out receive addresses past what the backend used, revealing
+// the one past its window first, and keeps its labels in Multikey.
+void chainSpendSmoke() {
+    auto *controller = AppController::get();
+    auto multikey = std::make_unique<MusigPlugin>();
+    auto *multikeyModule = qobject_cast<account::AccountModule *>(multikey->modules().first());
+    controller->registerBuiltinPlugin(std::move(multikey));
+    auto *registry = controller->pluginRegistry();
+    waitFor([registry] { return !registry->pluginStateLoading(); }, "the plugin state loads");
+    enableFixture(registry, CHAIN, SILENT_SERVICE_CHAIN_FIXTURE);
+    auto *chainModule = fixtureModule(registry, CHAIN);
+    // Nothing listens there: a probe would fail, never connect.
+    auto config = ::new_config(rust::String(MULTIKEY.toStdString()), Network::Regtest,
+                               rust::String(MULTIKEY_DESCRIPTOR), rust::String(""),
+                               rust::String("127.0.0.1:1"), 0, rust::String("musig"));
+    require(config->save().empty(), "the Multikey account saves");
+    require(::save_blockchain_backend(rust::String(MULTIKEY.toStdString()),
+                                      rust::String(CHAIN_MODULE.toStdString())),
+            "the account chooses the chain plugin as its blockchain backend");
+    MainWindow window;
+    controller->start(&window);
+    multikeyModule->startInstance(MULTIKEY);
+    auto *widget = window.findChild<MusigAccountWidget *>();
+    require(widget != nullptr, "the Multikey account opens in a tab");
+    waitFor(
+        [widget, chainModule] {
+            return assembledBlockchain(widget) != nullptr &&
+                   assembledBlockchain(widget)->parent() == chainModule &&
+                   widget->shell()->fundsOpen();
+        },
+        "the account opens over the chain plugin's blockchain");
+    auto *account = widget->controller();
+    auto services = widget->shell()->services();
+    // A probe of that server would fail within this wait and report it.
+    spin(PROBE_MS);
+    require(account->electrumState() == MusigAccountController::ElectrumState::Disconnected &&
+                !account->endpointOperationsBusy() &&
+                account->endpointError(Endpoint::Electrum).isEmpty(),
+            "an Electrum server saved, the account probes and connects none");
+    require(statusLabel(widget) == TR("status-backend").arg(CHAIN),
+            "the status bar shows the chain plugin, not Electrum");
+    account->setEndpointConnected(account::nextRequestId(), Endpoint::Electrum, true);
+    require(account->electrumState() == MusigAccountController::ElectrumState::Disconnected &&
+                !account->endpointOperationsBusy(),
+            "a request to connect Electrum is refused");
+    require(services.labels != nullptr && services.labels->parent() != chainModule,
+            "the labels stay Multikey's");
+
+    reportChainCoin(services.blockchain);
+    ChainReplies replies;
+    QObject::connect(services.transaction, &backend::ITransaction::coinsSelected, &replies,
+                     &ChainReplies::onCoinsSelected, qontrol::UNIQUE);
+    services.transaction->selectCoins(account::nextRequestId(), payment({}));
+    waitFor([&replies] { return replies.selected.has_value(); }, "coin selection answers");
+    require(replies.selected->completion.complete &&
+                replies.selected->transaction.inputs == QStringList{CHAIN_COIN},
+            "coin selection picks the coin the backend reports");
+    auto crafted = services.transaction->craft(replies.selected->transaction);
+    require(crafted.completion.complete && crafted.transaction.fee > 0,
+            "the backend's coin crafts the spend");
+    auto psbt = services.transaction->finalize(crafted.transaction);
+    require(psbt.has_value(), "the spend finalizes");
+    auto signers = ::psbt_required_fingerprints(rust::Str(psbt->toHex().toStdString()));
+    require(signers.is_ok && signers.fingerprints.size() == 3,
+            "the input carries the derivation of the policy's three keys");
+    require(psbt->contains(segwitScript(QString::fromStdString(std::string(
+                ::musig_first_receive_address(rust::String(MULTIKEY_DESCRIPTOR), Network::Regtest)
+                    .address)))),
+            "the input's witness UTXO is the backend's script");
+
+    QObject::connect(services.account, &backend::IAccountBackend::addressCreated, &replies,
+                     &ChainReplies::onAddressCreated, qontrol::UNIQUE);
+    QObject::connect(services.account, &backend::IService::error, &replies, &ChainReplies::onError,
+                     qontrol::UNIQUE);
+    receiveThroughReveal(services.account, services.blockchain, replies);
+
+    chooseBackend(widget, QString());
+    auto electrum = widget->shell()->services().transaction->craft(payment({CHAIN_COIN}));
+    require(!electrum.completion.complete,
+            "Electrum chosen again, the backend's coin is no longer the account's");
+
+    Host::get()->removeInstance(MULTIKEY, multikeyModule);
+    waitFor(
+        [multikeyModule] {
+            deleteDeferred();
+            return !multikeyModule->accountUnavailable(MULTIKEY);
+        },
+        "the Multikey account closes");
+    require(::delete_musig_account(rust::String(MULTIKEY.toStdString())).empty(),
+            "the Multikey account is deleted");
+}
 
 void accountServicesSmoke() {
     auto *controller = AppController::get();

@@ -45,9 +45,12 @@ struct SpendVariant {
 // the block after it. Height, hash and MTP come from one view of the chain.
 struct ChainTip {
     quint32 height{};
-    QString hash; // block hash, hex in display order
+    // Block hash, hex in display order; empty when the account's blockchain backend plugin
+    // reports the height alone.
+    QString hash;
     // BIP113 median-time-past of the tip; absent when the account's header chain
-    // does not hold the 11 blocks it is computed over.
+    // does not hold the 11 blocks it is computed over, or its blockchain backend plugin
+    // does not report it.
     std::optional<quint32> medianTimePast;
 };
 

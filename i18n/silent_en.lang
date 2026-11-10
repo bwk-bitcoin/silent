@@ -197,6 +197,10 @@ status-disconnected => "Disconnected"
 status-disconnecting => "Disconnecting..."
 status-electrum-disconnected => "Electrum disconnected"
 status-not-configured => "Not configured"
+status-backend => "Blockchain from %1"
+status-backend-connected => "Connected to %1"
+status-backend-disconnected => "%1 disconnected"
+status-backend-missing => "%1 not installed"
 
 status-electrum-unused => "Not used: no segwit or taproot address"
 status-scanning => "Scanning..."
@@ -1289,6 +1293,8 @@ musig-backend-missing => "The blockchain backend %1 is not installed. Install it
 musig-backend-busy => "The blockchain backend cannot change while the account signs, broadcasts or changes its server."
 
 musig-backend-save-failed => "Could not save the blockchain backend"
+
+musig-backend-no-electrum => "The account syncs from its blockchain backend plugin: it opens no Electrum connection."
 
 musig-settings-cosigners => "Cosigners"
 

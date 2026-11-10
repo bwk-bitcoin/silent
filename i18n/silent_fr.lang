@@ -719,6 +719,9 @@ musig-backend-electrum => "Electrum (built-in)" => "Electrum (built-in)"
 musig-backend-missing
 => "The blockchain backend %1 is not installed. Install it, or choose another backend."
 => "The blockchain backend %1 is not installed. Install it, or choose another backend.";;
+musig-backend-no-electrum
+=> "The account syncs from its blockchain backend plugin: it opens no Electrum connection."
+=> "The account syncs from its blockchain backend plugin: it opens no Electrum connection.";;
 musig-backend-save-failed
 => "Could not save the blockchain backend"
 => "Could not save the blockchain backend";;
@@ -1477,6 +1480,10 @@ state-unlocking-sub
 => "Opening the key with the password. This takes a few seconds."
 => "NONE";;
 state-unreadable-title => "Silent Cannot Start" => "NONE"
+status-backend => "Blockchain from %1" => "Blockchain from %1"
+status-backend-connected => "Connected to %1" => "Connected to %1"
+status-backend-disconnected => "%1 disconnected" => "%1 disconnected"
+status-backend-missing => "%1 not installed" => "%1 not installed"
 status-connected-blindbit
 => "Connected to blindbit-oracle at %1"
 => "Connecte a blindbit-oracle sur %1";;

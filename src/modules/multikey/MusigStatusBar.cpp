@@ -3,6 +3,7 @@
 #include "account/RequestId.h"
 #include "catalog/StatusBarItem.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/blockchain.h"
 #include "modules/multikey/MusigAccountController.h"
 #include "views/BackendErrors.h"
 #include "views/utils.h"
@@ -32,6 +33,8 @@ void MusigStatusBar::doConnect() {
             &MusigStatusBar::onReloadUrl, qontrol::UNIQUE);
     connect(m_controller, &AccountLifecycle::endpointRequestFinished, this,
             &MusigStatusBar::onEndpointRequestFinished, qontrol::UNIQUE);
+    connect(m_controller, &MusigAccountController::blockchainBackendChanged, this,
+            &MusigStatusBar::onBackendChanged, qontrol::UNIQUE);
 }
 
 void MusigStatusBar::view() {
@@ -44,7 +47,7 @@ void MusigStatusBar::view() {
 // ===== Slots =====
 
 void MusigStatusBar::onEndpointStateChanged(Endpoint endpoint) {
-    if (endpoint != Endpoint::Electrum) {
+    if (endpoint != Endpoint::Electrum || !m_controller->blockchainBackend().isEmpty()) {
         return;
     }
     auto state = m_controller->electrumState();
@@ -87,6 +90,47 @@ void MusigStatusBar::onElectrumToggled(bool checked) {
 
 void MusigStatusBar::onReloadUrl() {
     onEndpointStateChanged(Endpoint::Electrum);
+}
+
+void MusigStatusBar::onBackendChanged() {
+    if (m_backend != nullptr) {
+        disconnect(m_backend.data(), nullptr, this, nullptr);
+    }
+    m_backend = m_controller->blockchainBackendService();
+    if (m_backend != nullptr) {
+        connect(m_backend.data(), &backend::IBlockchain::stateChanged, this,
+                &MusigStatusBar::onBackendStateChanged, qontrol::UNIQUE);
+    }
+    if (m_controller->blockchainBackend().isEmpty()) {
+        onEndpointStateChanged(Endpoint::Electrum);
+    } else {
+        onBackendStateChanged();
+    }
+}
+
+// The plugin's first connection, as the status bar shows Electrum's; it is toggled from
+// the plugin's own settings.
+void MusigStatusBar::onBackendStateChanged() {
+    m_electrum_item->setToggleEnabled(false);
+    m_electrum_item->setOn(false);
+    m_electrum_item->setToolTip({});
+    auto name = m_controller->blockchainBackendName();
+    if (m_backend == nullptr) {
+        m_electrum_item->setLabel(TR("status-backend-missing").arg(name));
+        return;
+    }
+    auto state = m_backend->state();
+    if (state.connections.isEmpty()) {
+        m_electrum_item->setLabel(TR("status-backend").arg(name));
+        m_electrum_item->setToolTip(state.error);
+        return;
+    }
+    auto connection = state.connections.first();
+    m_electrum_item->setOn(connection.connected);
+    m_electrum_item->setLabel(connection.connected
+                                  ? TR("status-backend-connected").arg(connection.name)
+                                  : TR("status-backend-disconnected").arg(connection.name));
+    m_electrum_item->setToolTip(state.error.isEmpty() ? connection.error : state.error);
 }
 
 void MusigStatusBar::onEndpointRequestFinished(uint64_t req_id, Endpoint endpoint,

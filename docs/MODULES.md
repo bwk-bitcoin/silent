@@ -1577,6 +1577,55 @@ name.
 fixture (which advertises watching descriptors, `services.full` does not) before it is
 installed, then installs it, switches to Electrum and back, and disables it.
 
+With a plugin chosen, the account syncs from that plugin's blockchain alone:
+
+- `musig::MusigServices::attachChain()` takes the assembled blockchain. On attach and on
+  every `coinsChanged()` and `stateChanged()` it hands the Rust account what the service
+  reports (`MusigAccount::set_chain_view()`, bridge type `ChainView`): `ownedOutputs()`,
+  `usedIndexes()`, `state().tip` and the watch's gap limit. Qt only forwards them; the
+  wallet rules are Rust's (`silent/src/chain_view.rs`). Electrum chosen again, the account
+  goes back to its scanner (`clear_chain_view()`).
+- Rust refuses the whole report when it names another descriptor than the account's, a
+  branch other than receive or change, an outpoint twice, or an output whose script is not
+  the one its branch and index derive: the account then crafts nothing until a report
+  passes.
+- `craft()`, `selectCoins()` and `finalize()` build from the reported outputs: each input's
+  `witness_utxo` is the reported amount and script, its derivation the reported branch and
+  index. Coin selection and an explicit input take an output only unspent, and a coinbase
+  only once mature at the reported tip. The change goes past both the change index the
+  service reports used and the last one the account registered.
+- The spending export (`IAccount::coins()`, `MusigAccount::spending_coins()`) and balance
+  read the same outputs, their maturity read at the reported tip: its `ChainTip` holds that
+  height alone, no hash or median-time-past, which the service does not report.
+- A receive address goes past both the index the service reports used and the last one
+  the account handed out (`next_chain_receive()`). When the service does not watch it yet
+  (past the gap limit's unused indexes after the last used one), `reveal()` is asked
+  first, and the address is handed out (`take_chain_receive()`, saved) once it is
+  acknowledged; an `error()` fails the request. The Electrum `new_receive_address()` and
+  `new_addr()` refuse while the account syncs from a plugin.
+- A broadcast goes through the plugin's `broadcast()`: the Sign modal is given the
+  assembled blockchain. Once the service answers `Accepted`, the account marks the saved
+  transaction of that txid broadcast (`record_broadcast()`) and ends the signing session it
+  finalized. Its own Electrum broadcast refuses.
+- No Electrum connection opens: no probe at load, no reconnect, a connect request refused.
+  Choosing a plugin disconnects a running Electrum connection; choosing Electrum again
+  probes it as at load. The status bar shows the plugin's first `Connection` (name and
+  state, its error as tooltip, toggled from the plugin itself), the plugin's name when it
+  reports none, and that it is not installed when it is missing. The Electrum endpoint
+  stays in Settings, saved for when Electrum is chosen again.
+- The labels stay Multikey's `ILabels`.
+- Spend paths are not supported yet for the reported coins: bwk's account resolves a
+  coin's spend paths (`spend_leaves()`) and restricts a PSBT to one
+  (`restrict_spend_path()`) only for the coins of its Electrum scanner, at its header
+  chain's tip, so `spend_leaves()`, adoption and export refuse on a chain view. A PSBT
+  imported, signed and finalized still broadcasts through the plugin.
+
+`host_smoke --chain-spend` opens a Multikey account on the `services.chain` fixture with an
+Electrum server saved, checks that no Electrum connection opens and the status bar shows
+the plugin, crafts and finalizes a spend from the coin the fixture reports (its
+`fixtureOutputs`, `fixtureUsed` and `fixtureTip` properties), hands out receive addresses
+until the one the fixture reveals, then chooses Electrum again.
+
 The built-in SP and Multikey services (`account::AccountServices`) read and work on the
 controller's Rust account directly: funds, history, transaction details, labels, receive
 addresses, crafting and broadcast, notified by the controller's `updateCoins()`. Only the

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QPointer>
 #include <QString>
 #include <QWidget>
 #include <cstdint>
@@ -8,12 +9,17 @@
 class MusigAccountController;
 enum class Endpoint : std::uint8_t;
 
+namespace backend {
+class IBlockchain;
+} // namespace backend
+
 namespace catalog {
 class StatusBarItem;
 } // namespace catalog
 
 // The status details of a Multikey account in the shared status bar: the Electrum half
-// of sp's StatusBar, a musig account has no scanner.
+// of sp's StatusBar, a musig account has no scanner. With a blockchain backend plugin
+// chosen, the connection that plugin reports instead.
 class MusigStatusBar : public QWidget {
     Q_OBJECT
 
@@ -26,6 +32,9 @@ public slots:
     void onReloadUrl();
     void onEndpointRequestFinished(uint64_t req_id, Endpoint endpoint,
                                    const EndpointResult &result);
+    // The services were assembled again: the item follows the backend now chosen.
+    void onBackendChanged();
+    void onBackendStateChanged();
 
 protected:
     void init();
@@ -37,4 +46,5 @@ private:
     catalog::StatusBarItem *m_electrum_item = nullptr;
     QString m_electrum_url;
     uint64_t m_endpoint_req = 0;
+    QPointer<backend::IBlockchain> m_backend;
 };

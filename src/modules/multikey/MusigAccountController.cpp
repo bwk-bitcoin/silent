@@ -111,9 +111,8 @@ void MusigAccountController::onAccountLoaded() {
     if (!error.isEmpty()) {
         reportEndpointFailure(Endpoint::Electrum, rust::String(error.toStdString()),
                               BackendErrorKind::Other);
-    } else if (m_widget != nullptr && !endpointOperationsBusy() && !electrumUrl().isEmpty()) {
-        m_endpoint_connect = true;
-        probeElectrum(false);
+    } else {
+        probeChosenElectrum();
     }
 }
 
@@ -172,6 +171,10 @@ auto MusigAccountController::assembleServices() -> bool {
     }
     auto *const *chain = std::get_if<IModule *>(&request.blockchain);
     m_chain_module = chain != nullptr && *chain != module() ? *chain : nullptr;
+    // The account crafts from the plugin's blockchain, or from its Electrum scanner.
+    m_services->attachChain(blockchainBackendService(),
+                            request.watch.has_value() ? request.watch->gapLimit : 0);
+    emit blockchainBackendChanged();
     return true;
 }
 
@@ -217,6 +220,7 @@ auto MusigAccountController::accountWatch() const -> std::optional<backend::Acco
 }
 
 void MusigAccountController::reassemble() {
+    m_services->attachChain(nullptr, 0);
     shell()->release();
     loadPanels();
 }
@@ -368,7 +372,50 @@ void MusigAccountController::chooseBlockchainBackend(const QString &module_id) {
             }
             m_blockchain_backend = module_id;
             reassemble();
+            followBlockchainBackend();
         });
+}
+
+void MusigAccountController::followBlockchainBackend() {
+    if (!m_blockchain_backend.isEmpty()) {
+        m_reconnect->stopped();
+        m_reconnect_pending = false;
+        if (m_electrum_state != ElectrumState::Disconnected) {
+            changeEndpoint(0, Endpoint::Electrum, false);
+        }
+        return;
+    }
+    probeChosenElectrum();
+}
+
+void MusigAccountController::probeChosenElectrum() {
+    if (m_widget == nullptr || !m_blockchain_backend.isEmpty() ||
+        m_electrum_state != ElectrumState::Disconnected || endpointOperationsBusy() ||
+        electrumUrl().isEmpty()) {
+        return;
+    }
+    m_endpoint_connect = true;
+    probeElectrum(false);
+}
+
+auto MusigAccountController::blockchainBackendService() const -> backend::IBlockchain * {
+    if (m_chain_module == nullptr || shell() == nullptr) {
+        return nullptr;
+    }
+    return shell()->services().blockchain;
+}
+
+auto MusigAccountController::blockchainBackendName() const -> QString {
+    auto *registry = AppController::get()->pluginRegistry();
+    if (registry == nullptr) {
+        return m_blockchain_backend;
+    }
+    for (const auto &backend : registry->blockchainBackends()) {
+        if (backend.moduleId == m_blockchain_backend) {
+            return backend.name;
+        }
+    }
+    return m_blockchain_backend;
 }
 
 auto MusigAccountController::services() const -> account::ServiceContext * {
@@ -591,7 +638,8 @@ void MusigAccountController::handleNotification(Notification notif) {
 }
 
 void MusigAccountController::onElectrumReconnect() {
-    if (endpointsStopping()) {
+    // A blockchain backend plugin syncs the account: no Electrum connection opens.
+    if (endpointsStopping() || !m_blockchain_backend.isEmpty()) {
         return;
     }
     if (endpointOperationsBusy()) {
@@ -874,6 +922,24 @@ void MusigAccountController::clearSigning() {
 void MusigAccountController::cancelSigning() {
     clearSigning();
     emit sessionCleared();
+}
+
+void MusigAccountController::recordBroadcast(const QString &txid) {
+    if (!m_account.has_value() || m_stopping || m_stop_requested) {
+        return;
+    }
+    auto *account = &*m_account.value();
+    auto generation = m_signing_generation;
+    auto result = std::make_shared<BroadcastRecord>();
+    enqueueStorage(
+        [account, result, id = txid.toStdString()] { *result = account->record_broadcast(id); },
+        [this, result, generation] {
+            setSaveWarning(toQString(result->save_error));
+            emit savedPsbtsChanged();
+            if (result->active && generation == m_signing_generation) {
+                cancelSigning();
+            }
+        });
 }
 
 auto MusigAccountController::startBroadcast(
@@ -1169,6 +1235,14 @@ void MusigAccountController::changeEndpoint(uint64_t req_id, Endpoint endpoint, 
         emit endpointRequestFinished(req_id, endpoint, result);
         return;
     }
+    if (connected && !m_blockchain_backend.isEmpty()) {
+        EndpointResult result{};
+        result.kind = BackendErrorKind::Other;
+        result.is_ok = false;
+        result.error = rust::String(TR("musig-backend-no-electrum").toStdString());
+        emit endpointRequestFinished(req_id, endpoint, result);
+        return;
+    }
     m_endpoint_busy = true;
     m_endpoint_retry = retry;
     m_endpoint_notifications.clear();
@@ -1209,6 +1283,8 @@ void MusigAccountController::onEndpointFinished() {
     m_account = std::move(*m_endpoint_account);
     m_endpoint_account = nullptr;
     m_endpoint_busy = false;
+    // What the blockchain backend reported while the account was away.
+    m_services->feedChain();
     if (m_account.has_value() && m_account.value()->is_ok()) {
         setAccountDescriptor(m_account.value()->descriptor());
         setSavedEndpoint(Endpoint::Electrum, m_account.value()->electrum_url(),

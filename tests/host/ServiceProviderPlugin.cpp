@@ -4,8 +4,9 @@
 // later. Every getter answers this plugin's id so a consumer
 // can tell which provider served it. Payloads are heap copies: they outlive no unload.
 // The module records the last AccountWatch it was given in its properties, and its
-// blockchain reports one output per watched descriptor, paid at its birthday. The chain
-// one alone advertises that its blockchain watches descriptors.
+// blockchain reports one output per watched descriptor, paid at its birthday, unless a test
+// sets what it reports in its fixtureOutputs, fixtureUsed and fixtureTip properties. The
+// chain one alone advertises that its blockchain watches descriptors.
 
 #include "interfaces/backend/account.h"
 #include "interfaces/backend/blockchain.h"
@@ -24,6 +25,8 @@
 #include <QStringList>
 #include <QTimer>
 #include <QVariant>
+#include <QVariantList>
+#include <QVariantMap>
 #include <optional>
 #include <utility>
 
@@ -152,8 +155,13 @@ public:
           m_watch(std::move(watch)) {
     }
 
+    // The tip the "fixtureTip" property holds, none while it is unset.
     [[nodiscard]] auto state() const -> backend::BlockchainState override {
-        return {};
+        auto tip = property("fixtureTip");
+        if (!tip.isValid()) {
+            return {};
+        }
+        return {.tip = tip.toULongLong()};
     }
 
     [[nodiscard]] auto coins() const -> QList<backend::Coin> override {
@@ -174,9 +182,23 @@ public:
     }
 
     // One coinbase output per watched descriptor, at index 0 of its first branch, its
-    // script this plugin's id.
+    // script this plugin's id. Once a test sets "fixtureOutputs", a list of maps of
+    // outpoint, amount, script, keychain, index and height, those outputs of descriptor 0.
     [[nodiscard]] auto ownedOutputs() const -> QList<backend::OwnedOutput> override {
         QList<backend::OwnedOutput> outputs;
+        if (property("fixtureOutputs").isValid()) {
+            for (const auto &entry : property("fixtureOutputs").toList()) {
+                auto output = entry.toMap();
+                outputs.append(
+                    {.outpoint = output.value(QString::fromLatin1("outpoint")).toString(),
+                     .amount = output.value(QString::fromLatin1("amount")).toULongLong(),
+                     .scriptPubKey = output.value(QString::fromLatin1("script")).toByteArray(),
+                     .keychain = output.value(QString::fromLatin1("keychain")).toUInt(),
+                     .index = output.value(QString::fromLatin1("index")).toUInt(),
+                     .height = output.value(QString::fromLatin1("height")).toULongLong()});
+            }
+            return outputs;
+        }
         for (quint32 descriptor = 0; descriptor < watchedCount(); ++descriptor) {
             outputs.append(
                 {.outpoint = QString::fromLatin1("%1:%2").arg(pluginId()).arg(descriptor),
@@ -189,8 +211,18 @@ public:
         return outputs;
     }
 
+    // Index 0 of each watched descriptor's first branch, or once a test sets "fixtureUsed",
+    // a list of maps of keychain and last, those branches of descriptor 0.
     [[nodiscard]] auto usedIndexes() const -> QList<backend::UsedIndex> override {
         QList<backend::UsedIndex> used;
+        if (property("fixtureUsed").isValid()) {
+            for (const auto &entry : property("fixtureUsed").toList()) {
+                auto branch = entry.toMap();
+                used.append({.keychain = branch.value(QString::fromLatin1("keychain")).toUInt(),
+                             .last = branch.value(QString::fromLatin1("last")).toUInt()});
+            }
+            return used;
+        }
         for (quint32 descriptor = 0; descriptor < watchedCount(); ++descriptor) {
             used.append({.descriptor = descriptor, .last = 0});
         }

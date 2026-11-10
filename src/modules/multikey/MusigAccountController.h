@@ -29,6 +29,10 @@ class AccountShell;
 class ServiceContext;
 } // namespace account
 
+namespace backend {
+class IBlockchain;
+} // namespace backend
+
 namespace musig {
 class MusigServices;
 } // namespace musig
@@ -80,6 +84,11 @@ public:
     // services again over it, the old ones handed back. blockchainBackendFailed() answers a
     // refusal or a failed save.
     void chooseBlockchainBackend(const QString &module_id);
+    // The chosen blockchain backend plugin's service once assembled, null for Electrum or a
+    // missing plugin.
+    [[nodiscard]] auto blockchainBackendService() const -> backend::IBlockchain *;
+    // The name of the chosen backend's plugin, its module id when it is not installed.
+    [[nodiscard]] auto blockchainBackendName() const -> QString;
     [[nodiscard]] auto services() const -> account::ServiceContext *;
     auto module() -> IModule * override;
     // stop() waits for the worker before it drops the account.
@@ -157,6 +166,8 @@ signals:
     void sessionCleared();
     // chooseBlockchainBackend() was refused or could not save: the backend is unchanged.
     void blockchainBackendFailed(QString message);
+    // The services were assembled again: blockchainBackendService() may have changed.
+    void blockchainBackendChanged();
 
 public slots:
     void loadPanel(const QString &name);
@@ -222,6 +233,9 @@ protected:
     // endpoint change or another broadcast runs.
     auto startBroadcast(const QByteArray &transaction,
                         std::function<void(const backend::BroadcastResult &)> done) -> bool;
+    // The blockchain backend plugin accepted the transaction of hex txid `txid`: its saved
+    // transaction is marked broadcast, and the signing session it finalized ends.
+    void recordBroadcast(const QString &txid);
     void startAcceptedWorker(QThread *worker);
     // Listens to the keys module and allocates the request of a round's signature, null
     // when no round can be signed now.
@@ -255,6 +269,12 @@ protected:
     [[nodiscard]] auto accountWatch() const -> std::optional<backend::AccountWatch>;
     // Drops the panels and the services, then builds them again over the chosen backend.
     void reassemble();
+    // The backend changed: Electrum disconnects for a plugin, and connects again once it is
+    // chosen back.
+    void followBlockchainBackend();
+    // Probes the saved Electrum server, as the account opens, when Electrum is the chosen
+    // backend and no connection runs.
+    void probeChosenElectrum();
     void changeEndpoint(uint64_t req_id, Endpoint endpoint, bool connected, bool retry = false);
     void startEndpointChange();
     void connectElectrum(bool retry) override;
@@ -263,7 +283,7 @@ protected:
 private:
     MusigAccountWidget *m_widget = nullptr;
     QPointer<account::AccountShell> m_shell;
-    account::ServiceContext *m_services = nullptr;
+    musig::MusigServices *m_services = nullptr;
     std::optional<rust::Box<MusigAccount>> m_account = std::nullopt;
     QThread *m_notif_thread = nullptr;
     uint64_t m_notif_generation = 0;

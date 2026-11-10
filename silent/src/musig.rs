@@ -19,8 +19,8 @@ use bwk::{
         wallet::WalletDescriptorExt,
     },
     bwk_electrum::{
-        label_store::LabelKey, notification::Notification as BwkNotification,
-        scanner::ElectrumScanner,
+        address_store::AddressEntry, label_store::LabelKey,
+        notification::Notification as BwkNotification, scanner::ElectrumScanner,
     },
     bwk_sign::musig::MusigRound as BwkMusigRound,
     bwk_tx::{
@@ -39,16 +39,17 @@ use crate::{
     },
     account_backup,
     account_storage::{AccountStorage, Factory},
+    chain_view::{ChainView, ACCOUNT_DESCRIPTOR},
     config::{parse_electrum_url, Config},
     ffi::{
-        AccountBackup, AddressVerifyInfo, BroadcastReport, CoinState, CraftOutcome, FundsSnapshot,
-        LabelEditResult, LabelKind, LabelSnapshot, MusigAttemptSnapshot, MusigCosignerStatus,
-        MusigDescriptorResult, MusigElectrumUrlResult, MusigFinalizeResult, MusigReceiveAddress,
-        MusigRound, MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, Output,
-        ReceiveAddress, ReceiveAddressResult, ReceiveKind, RustCoin, RustTx, RustTxDetails,
-        SavedPsbtAttemptState, SavedPsbtEntry, SavedPsbtImport, SavedPsbtList, SavedPsbtMutation,
-        SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore, TransactionSimulation,
-        TransactionTemplate, UnsignedPsbt,
+        AccountBackup, AddressVerifyInfo, BroadcastRecord, BroadcastReport, ChainReceive,
+        CoinState, CraftOutcome, FundsSnapshot, LabelEditResult, LabelKind, LabelSnapshot,
+        MusigAttemptSnapshot, MusigCosignerStatus, MusigDescriptorResult, MusigElectrumUrlResult,
+        MusigFinalizeResult, MusigReceiveAddress, MusigRound, MusigRoundStatus, MusigSpendLeaf,
+        MusigSpendLeaves, Network, Output, ReceiveAddress, ReceiveAddressResult, ReceiveKind,
+        RustChainTip, RustCoin, RustTx, RustTxDetails, SavedPsbtAttemptState, SavedPsbtEntry,
+        SavedPsbtImport, SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset,
+        SavedPsbtRestore, TransactionSimulation, TransactionTemplate, UnsignedPsbt,
     },
     keys::{
         bridge::{merge_signed_psbt, musig_session_restart},
@@ -69,6 +70,9 @@ pub struct MusigAccount {
     closed_name: Option<String>,
     pending_flush_error: String,
     active: Mutex<Option<MusigAttemptSnapshot>>,
+    /// What the blockchain backend plugin reports, the account syncing from it instead of
+    /// its Electrum scanner while set. Outside `inner`: it outlives a backend reopen.
+    chain: Mutex<Option<Result<ChainView, String>>>,
 }
 
 struct MusigAccountInner {
@@ -82,6 +86,20 @@ struct MusigAccountInner {
 pub const MUSIG_PLUGIN_ID: &str = "musig";
 
 const NOT_INITIALIZED: &str = "Account not initialized";
+
+const NO_CHAIN_VIEW: &str = "The account does not sync from a blockchain backend plugin";
+
+/// bwk's account resolves spend paths only for the coins of its Electrum scanner.
+const CHAIN_SPEND_PATHS_UNSUPPORTED: &str =
+    "The spend paths of coins a blockchain backend plugin reports are not supported yet";
+
+const CHAIN_BROADCAST_ONLY: &str =
+    "The account syncs from a blockchain backend plugin: it broadcasts through it";
+
+/// A receive address handed out on a chain view goes through the backend first.
+const CHAIN_RECEIVE_ONLY: &str =
+    "The account syncs from a blockchain backend plugin: its receive addresses are handed \
+     out through it";
 
 /// bwk's plain tx builder has no silent payment updater to derive such an output.
 const SP_RECIPIENT_UNSUPPORTED: &str =
@@ -97,6 +115,7 @@ pub fn new_musig_account_offline(config: &Config) -> Box<MusigAccount> {
             closed_name: None,
             pending_flush_error: String::new(),
             active: Mutex::new(None),
+            chain: Mutex::new(None),
         }),
         Err(error) => {
             log::error!("Failed to open account offline: {error}");
@@ -107,6 +126,7 @@ pub fn new_musig_account_offline(config: &Config) -> Box<MusigAccount> {
                 closed_name: Some(config.account_name.clone()),
                 pending_flush_error: String::new(),
                 active: Mutex::new(None),
+                chain: Mutex::new(None),
             })
         }
     }
@@ -125,6 +145,7 @@ pub fn new_musig_account(account_name: String) -> Box<MusigAccount> {
                 closed_name: None,
                 pending_flush_error: String::new(),
                 active: Mutex::new(None),
+                chain: Mutex::new(None),
             });
         }
     };
@@ -136,6 +157,7 @@ pub fn new_musig_account(account_name: String) -> Box<MusigAccount> {
             closed_name: None,
             pending_flush_error: String::new(),
             active: Mutex::new(None),
+            chain: Mutex::new(None),
         }),
         Err(e) => {
             let error = format!("Failed to create account: {e}");
@@ -147,6 +169,7 @@ pub fn new_musig_account(account_name: String) -> Box<MusigAccount> {
                 closed_name: None,
                 pending_flush_error: String::new(),
                 active: Mutex::new(None),
+                chain: Mutex::new(None),
             })
         }
     }
@@ -552,7 +575,12 @@ impl MusigAccount {
         }
     }
 
+    /// Empty on a chain view: such an address goes through next_chain_receive().
     pub fn new_addr(&mut self) -> String {
+        if !matches!(self.chain_view(), Ok(None)) {
+            log::error!("new_addr: {CHAIN_RECEIVE_ONLY}");
+            return String::new();
+        }
         match &mut self.inner {
             Some(inner) => inner.account.scanner_mut().new_recv_addr().to_string(),
             None => String::new(),
@@ -591,6 +619,11 @@ impl MusigAccount {
         let Some(inner) = &self.inner else {
             return Err(NOT_INITIALIZED.to_string()).into();
         };
+        match self.chain_view() {
+            Ok(Some(chain)) => return chain_spending_coins(&chain, inner.config.network).into(),
+            Ok(None) => {}
+            Err(error) => return Err(error).into(),
+        }
         let scanner = inner.account.scanner();
         let entries = scanner.coins();
         let history = scanner.tx_history();
@@ -610,11 +643,17 @@ impl MusigAccount {
                 crate::spending::descriptor_coin(&entry.coin, inner.config.network, &funding)
             })
             .collect::<Result<Vec<_>, _>>()
-            .map(|coins| crate::spending::SpendCoins { coins, snapshot })
+            .map(|coins| crate::spending::SpendCoins {
+                coins,
+                tip: snapshot.as_ref().map(RustChainTip::from),
+            })
             .into()
     }
 
     pub fn spendable_coins(&self) -> CoinState {
+        if let Ok(Some(chain)) = self.chain_view() {
+            return chain.coin_state();
+        }
         match &self.inner {
             Some(inner) => {
                 let state = inner.account.scanner().spendable_coins();
@@ -740,6 +779,7 @@ impl MusigAccount {
     /// Build a configured TxBuilder from a TransactionTemplate.
     fn build_tx_builder(
         inner: &MusigAccountInner,
+        chain: Option<&ChainView>,
         tx_template: &TransactionTemplate,
         builder: TxBuilder,
     ) -> Result<TxBuilder, TemplateError> {
@@ -785,16 +825,8 @@ impl MusigAccount {
         }
 
         if !tx_template.input_outpoints.is_empty() {
-            let coins = inner.account.scanner().coins();
-            for outpoint_str in &tx_template.input_outpoints {
-                let outpoint = parse_outpoint(outpoint_str)?;
-                let Some(entry) = coins.get(&outpoint) else {
-                    return Err(TemplateError::CoinNotFound(outpoint_str.clone()));
-                };
-                if matches!(entry.status(), CoinStatus::Spent | CoinStatus::BeingSpend) {
-                    return Err(TemplateError::NotSpendable(outpoint_str.clone()));
-                }
-                builder.add_input(entry.coin.clone());
+            for coin in Self::template_inputs(inner, chain, tx_template)? {
+                builder.add_input(coin);
             }
         } else if has_max {
             builder.drain_inputs();
@@ -809,6 +841,35 @@ impl MusigAccount {
         }
 
         Ok(builder)
+    }
+
+    /// The coins `tx_template` names as its inputs, from `chain` when the account syncs from
+    /// a blockchain backend plugin, else from the scanner. Refused unless each can be spent.
+    fn template_inputs(
+        inner: &MusigAccountInner,
+        chain: Option<&ChainView>,
+        tx_template: &TransactionTemplate,
+    ) -> Result<Vec<bwk::bwk_coin::Coin>, TemplateError> {
+        if let Some(chain) = chain {
+            return tx_template
+                .input_outpoints
+                .iter()
+                .map(|outpoint| chain_input(chain, outpoint))
+                .collect();
+        }
+        let coins = inner.account.scanner().coins();
+        let mut inputs = Vec::new();
+        for outpoint_str in &tx_template.input_outpoints {
+            let outpoint = parse_outpoint(outpoint_str)?;
+            let Some(entry) = coins.get(&outpoint) else {
+                return Err(TemplateError::CoinNotFound(outpoint_str.clone()));
+            };
+            if matches!(entry.status(), CoinStatus::Spent | CoinStatus::BeingSpend) {
+                return Err(TemplateError::NotSpendable(outpoint_str.clone()));
+            }
+            inputs.push(entry.coin.clone());
+        }
+        Ok(inputs)
     }
 
     /// Simulate a transaction without actually creating it.
@@ -826,8 +887,15 @@ impl MusigAccount {
             );
         };
 
-        let builder = match Self::build_tx_builder(inner, &tx_template, inner.account.tx_builder())
-        {
+        let chain = match self.chain_view() {
+            Ok(chain) => chain,
+            Err(error) => return err_sim(crate::ffi::BackendErrorKind::Other, error),
+        };
+        let base = match &chain {
+            Some(chain) => chain_tx_builder(inner, chain),
+            None => inner.account.tx_builder(),
+        };
+        let builder = match Self::build_tx_builder(inner, chain.as_ref(), &tx_template, base) {
             Ok(b) => b,
             Err(e) => return err_sim(crate::ffi::BackendErrorKind::InvalidInput, e.to_string()),
         };
@@ -846,6 +914,11 @@ impl MusigAccount {
         let Some(inner) = &self.inner else {
             return error(NOT_INITIALIZED.to_string());
         };
+        match self.chain_view() {
+            Ok(None) => {}
+            Ok(Some(_)) => return error(CHAIN_SPEND_PATHS_UNSUPPORTED.to_string()),
+            Err(e) => return error(e),
+        }
         let outpoints = match outpoints
             .iter()
             .map(|outpoint| parse_outpoint(outpoint))
@@ -868,14 +941,20 @@ impl MusigAccount {
     /// registered tip, left unregistered: building changes no account state.
     fn unsigned_psbt(
         inner: &MusigAccountInner,
+        chain: Option<&ChainView>,
         tx_template: &TransactionTemplate,
     ) -> Result<bitcoin::Psbt, String> {
-        let scanner = inner.account.scanner();
-        let change = ChangeRecipientProvider::new(scanner.descriptor(), scanner.network())
-            .tip(change_tip(scanner));
-        let base = TxBuilder::new(Box::new(change)).coin_source(Box::new(scanner.coin_source()));
+        let base = match chain {
+            Some(chain) => chain_tx_builder(inner, chain),
+            None => {
+                let scanner = inner.account.scanner();
+                let change = ChangeRecipientProvider::new(scanner.descriptor(), scanner.network())
+                    .tip(change_tip(scanner));
+                TxBuilder::new(Box::new(change)).coin_source(Box::new(scanner.coin_source()))
+            }
+        };
         let mut builder =
-            Self::build_tx_builder(inner, tx_template, base).map_err(|e| e.to_string())?;
+            Self::build_tx_builder(inner, chain, tx_template, base).map_err(|e| e.to_string())?;
         builder.generate().map_err(|e| format!("{e:?}"))
     }
 
@@ -919,6 +998,9 @@ impl MusigAccount {
                 NOT_INITIALIZED.to_string(),
             ));
         };
+        if !matches!(self.chain_view(), Ok(None)) {
+            return failed(CHAIN_SPEND_PATHS_UNSUPPORTED.to_string());
+        }
         if let Err(error) = Self::claim(inner, &tx_template, &spend, &mut psbt) {
             return failed(error);
         }
@@ -999,6 +1081,9 @@ impl MusigAccount {
             ));
         };
 
+        if !matches!(self.chain_view(), Ok(None)) {
+            return failed(CHAIN_SPEND_PATHS_UNSUPPORTED.to_string());
+        }
         let spend = match Self::claim(inner, &tx_template, &spend, &mut psbt) {
             Ok(spend) => spend,
             Err(error) => return failed(error),
@@ -1840,6 +1925,9 @@ impl MusigAccount {
         let Some(inner) = &self.inner else {
             return services::address_failed(NOT_INITIALIZED.into());
         };
+        if !matches!(self.chain_view(), Ok(None)) {
+            return services::address_failed(CHAIN_RECEIVE_ONLY.into());
+        }
         let address = match services::next_receive_address(inner.account.scanner()) {
             Ok(address) => address,
             Err(error) => return services::address_failed(error),
@@ -1869,7 +1957,8 @@ impl MusigAccount {
         services::finalizable(&tx_template)
             .and_then(|()| {
                 let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
-                let psbt = Self::unsigned_psbt(inner, &tx_template)
+                let chain = self.chain_view()?;
+                let psbt = Self::unsigned_psbt(inner, chain.as_ref(), &tx_template)
                     .inspect_err(|error| log::error!("finalize_transaction: {error}"))?;
                 PsbtV2::from_bitcoin_psbt(psbt)
                     .and_then(|v2| v2.serialize())
@@ -1890,6 +1979,12 @@ impl MusigAccount {
                 Undelivered::not_sent(crate::ffi::BackendErrorKind::Other, NOT_INITIALIZED),
             );
         };
+        if !matches!(self.chain_view(), Ok(None)) {
+            return BroadcastReport::undelivered(
+                txid,
+                Undelivered::not_sent(crate::ffi::BackendErrorKind::Other, CHAIN_BROADCAST_ONLY),
+            );
+        }
         if let Err(undelivered) = broadcast_via_electrum(
             &inner.config.electrum_url,
             inner.config.verify_certificate,
@@ -1912,7 +2007,7 @@ impl MusigAccount {
             warnings.push(format!("The transaction is not saved locally: {error}"));
         }
         let saved = self.saved_store().and_then(|mut store| {
-            store.broadcast(&tx)?;
+            store.broadcast(tx.compute_txid())?;
             match store.error() {
                 error if error.is_empty() => Ok(()),
                 error => Err(error),
@@ -1925,6 +2020,146 @@ impl MusigAccount {
             ));
         }
         BroadcastReport::accepted(txid, warnings)
+    }
+
+    /// The chain view while the account syncs from its blockchain backend plugin, None
+    /// while it syncs from its Electrum scanner. A view the account refused is an error.
+    fn chain_view(&self) -> Result<Option<ChainView>, String> {
+        match &*self
+            .chain
+            .lock()
+            .map_err(|e| format!("Chain view lock failed: {e}"))?
+        {
+            None => Ok(None),
+            Some(Ok(view)) => Ok(Some(view.clone())),
+            Some(Err(error)) => Err(error.clone()),
+        }
+    }
+
+    pub fn set_chain_view(&self, view: crate::ffi::ChainView) -> bool {
+        let Some(inner) = &self.inner else {
+            log::error!("set_chain_view: {NOT_INITIALIZED}");
+            return false;
+        };
+        let parsed = ChainView::parse(view, &inner.account.scanner().descriptor());
+        let accepted = parsed.is_ok();
+        if let Err(error) = &parsed {
+            log::error!("set_chain_view: {error}");
+        }
+        match self.chain.lock() {
+            Ok(mut chain) => *chain = Some(parsed),
+            Err(error) => {
+                log::error!("set_chain_view: chain view lock failed: {error}");
+                return false;
+            }
+        }
+        accepted
+    }
+
+    pub fn clear_chain_view(&self) {
+        match self.chain.lock() {
+            Ok(mut chain) => *chain = None,
+            Err(error) => log::error!("clear_chain_view: chain view lock failed: {error}"),
+        }
+    }
+
+    pub fn next_chain_receive(&self, kind: &str) -> ChainReceive {
+        let failed = |error: String| ChainReceive {
+            is_ok: false,
+            error,
+            descriptor: 0,
+            keychain: 0,
+            index: 0,
+            reveal: false,
+        };
+        if kind != TAPROOT_KIND {
+            return failed(format!("Unknown address kind '{kind}'"));
+        }
+        let Some(inner) = &self.inner else {
+            return failed(NOT_INITIALIZED.into());
+        };
+        let chain = match self.chain_view() {
+            Ok(Some(chain)) => chain,
+            Ok(None) => return failed(NO_CHAIN_VIEW.into()),
+            Err(error) => return failed(error),
+        };
+        let handed_out = branch_tip(inner.account.scanner(), KeyChain::Receive);
+        let index = chain.branch_tip(KeyChain::Receive, handed_out) + 1;
+        ChainReceive {
+            is_ok: true,
+            error: String::new(),
+            descriptor: ACCOUNT_DESCRIPTOR,
+            keychain: crate::spending::keychain_branch(KeyChain::Receive),
+            index,
+            reveal: !chain.watches(KeyChain::Receive, index),
+        }
+    }
+
+    pub fn take_chain_receive(&self, index: u32) -> ReceiveAddressResult {
+        let Some(inner) = &self.inner else {
+            return services::address_failed(NOT_INITIALIZED.into());
+        };
+        let chain = match self.chain_view() {
+            Ok(Some(chain)) => chain,
+            Ok(None) => return services::address_failed(NO_CHAIN_VIEW.into()),
+            Err(error) => return services::address_failed(error),
+        };
+        let scanner = inner.account.scanner();
+        // The chain may have used it meanwhile.
+        if index <= chain.branch_tip(KeyChain::Receive, 0) {
+            return services::address_failed(format!(
+                "The receive address {index} is used already: ask for a new one"
+            ));
+        }
+        match advance_branch_tip(scanner, KeyChain::Receive, index) {
+            Ok(true) => {}
+            Ok(false) => {
+                return services::address_failed(format!(
+                    "The receive address {index} was handed out meanwhile: ask for a new one"
+                ))
+            }
+            Err(e) => {
+                return services::address_failed(format!("The receive address is not saved: {e}"))
+            }
+        }
+        let verify = verify_info(&inner.account.descriptor(), KeyChain::Receive, index);
+        ReceiveAddressResult {
+            is_ok: true,
+            error: String::new(),
+            address: ReceiveAddress {
+                kind: TAPROOT_KIND.into(),
+                address: scanner.recv_at(index).to_string(),
+                descriptor: verify.descriptor,
+                path: verify.path,
+            },
+        }
+    }
+
+    pub fn record_broadcast(&self, txid: &str) -> BroadcastRecord {
+        let parsed = match bitcoin::Txid::from_str(txid) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                return BroadcastRecord {
+                    save_error: format!("Invalid txid '{txid}': {e}"),
+                    active: false,
+                }
+            }
+        };
+        let saved = self.saved_store().and_then(|mut store| {
+            store.broadcast(parsed)?;
+            Ok(store.error())
+        });
+        let save_error = saved.unwrap_or_else(|error| {
+            log::error!("record_broadcast: {error}");
+            error
+        });
+        let active = self.active.lock().is_ok_and(|active| {
+            active
+                .as_ref()
+                .and_then(|snapshot| deserialize_hex::<bitcoin::Transaction>(&snapshot.tx_hex).ok())
+                .is_some_and(|tx| tx.compute_txid() == parsed)
+        });
+        BroadcastRecord { save_error, active }
     }
 
     pub fn backup(&self) -> AccountBackup {
@@ -1971,11 +2206,67 @@ fn wallet_history(history: Vec<RustTx>) -> Vec<RustTx> {
 
 /// The last change index registered: the next PSBT pays change to the one after.
 fn change_tip(scanner: &ElectrumScanner) -> u32 {
-    scanner
-        .generated_addresses()
-        .1
+    branch_tip(scanner, KeyChain::Change)
+}
+
+/// The last index of `keychain` the account handed out.
+fn branch_tip(scanner: &ElectrumScanner, keychain: KeyChain) -> u32 {
+    generated(scanner.generated_addresses(), keychain)
         .last()
         .map_or(0, |entry| entry.index)
+}
+
+/// The addresses of `keychain` among the generated receive and change ones: none on a
+/// custom branch, which the account does not have.
+fn generated(
+    (receive, change): (Vec<AddressEntry>, Vec<AddressEntry>),
+    keychain: KeyChain,
+) -> Vec<AddressEntry> {
+    match keychain {
+        KeyChain::Receive => receive,
+        KeyChain::Change => change,
+        KeyChain::Custom(_) => Vec::new(),
+    }
+}
+
+/// A TxBuilder over the coins of `chain`, its change past the index the chain used or the
+/// account registered last.
+fn chain_tx_builder(inner: &MusigAccountInner, chain: &ChainView) -> TxBuilder {
+    let scanner = inner.account.scanner();
+    let change = ChangeRecipientProvider::new(scanner.descriptor(), scanner.network())
+        .tip(chain.branch_tip(KeyChain::Change, change_tip(scanner)));
+    TxBuilder::new(Box::new(change)).coin_source(chain.coin_source())
+}
+
+/// The coin `outpoint` of `chain` a template spends, refused unless it can be spent.
+fn chain_input(chain: &ChainView, outpoint: &str) -> Result<bwk::bwk_coin::Coin, TemplateError> {
+    let parsed = parse_outpoint(outpoint)?;
+    let coin = chain
+        .coin(&parsed)
+        .ok_or_else(|| TemplateError::CoinNotFound(outpoint.to_string()))?;
+    if !chain.spendable(&parsed) {
+        return Err(TemplateError::NotSpendable(outpoint.to_string()));
+    }
+    Ok(coin.clone())
+}
+
+/// The spending export of the coins of `chain`, their maturity read at its tip.
+fn chain_spending_coins(
+    chain: &ChainView,
+    network: Network,
+) -> Result<crate::spending::SpendCoins, String> {
+    let coins = chain
+        .fundings()
+        .map(|(coin, funding)| crate::spending::descriptor_coin(coin, network, &funding))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(crate::spending::SpendCoins {
+        coins,
+        // The backend reports only the height.
+        tip: chain.tip().map(|height| RustChainTip {
+            height,
+            ..RustChainTip::default()
+        }),
+    })
 }
 
 /// The change index `psbt` pays to, found among the scanner's change addresses past the
@@ -2146,7 +2437,7 @@ fn register_change(
         return Ok(());
     };
     carries_change_derivation(scanner, psbt, recipients, index)?;
-    match advance_change_tip(scanner, index) {
+    match advance_branch_tip(scanner, KeyChain::Change, index) {
         Ok(true) => Ok(()),
         Ok(false) => Err(format!(
             "The change address {index} is already used by another transaction: craft this \
@@ -2167,27 +2458,33 @@ fn import_change(scanner: &ElectrumScanner, psbt: &bitcoin::Psbt) -> Result<(), 
         return Ok(());
     };
     carries_change_derivation(scanner, psbt, &recipients, index)?;
-    advance_change_tip(scanner, index)
+    advance_branch_tip(scanner, KeyChain::Change, index)
         .map(|_| ())
         .map_err(|e| format!("The change address is not saved: {e}"))
 }
 
-/// Registers change `index` durably when it is past the registered tip: false, nothing
-/// written, when it is not.
-fn advance_change_tip(scanner: &ElectrumScanner, index: u32) -> Result<bool, String> {
+/// Registers `index` of `keychain` durably when it is past the registered tip: false,
+/// nothing written, when it is not.
+fn advance_branch_tip(
+    scanner: &ElectrumScanner,
+    keychain: KeyChain,
+    index: u32,
+) -> Result<bool, String> {
     let mut coins = scanner.coin_store().lock().map_err(|e| e.to_string())?;
     let persisted = {
         let addresses = coins.address_store();
         let mut addresses = addresses.lock().map_err(|e| e.to_string())?;
-        let tip = addresses
-            .get_generated_addresses()
-            .1
+        let tip = generated(addresses.get_generated_addresses(), keychain)
             .last()
             .map_or(0, |entry| entry.index);
         if index <= tip {
             return Ok(false);
         }
-        addresses.update_change(index);
+        match keychain {
+            KeyChain::Receive => addresses.update_recv(index),
+            KeyChain::Change => addresses.update_change(index),
+            KeyChain::Custom(branch) => return Err(format!("The account has no branch {branch}")),
+        }
         addresses.try_persist()
     };
     // The coin view follows the new address entries, as bwk's own change tip does.
@@ -2213,14 +2510,9 @@ fn parse_recipient(
 
 /// What IKeys::verifyAddress needs for the address at `keychain`/`index` of `descriptor`.
 fn verify_info(descriptor: &Descriptor, keychain: KeyChain, index: u32) -> AddressVerifyInfo {
-    let branch: u32 = match keychain {
-        KeyChain::Receive => 0,
-        KeyChain::Change => 1,
-        KeyChain::Custom(c) => c,
-    };
     AddressVerifyInfo {
         descriptor: descriptor.to_string(),
-        path: format!("{branch}/{index}"),
+        path: format!("{}/{index}", crate::spending::keychain_branch(keychain)),
     }
 }
 
@@ -2271,10 +2563,18 @@ mod tests {
 
     use crate::{
         config::Config,
-        ffi::{MusigAttemptSnapshot, Network, Output, TransactionTemplate},
-        musig::MusigAccount,
+        ffi::{
+            ChainOutput, ChainUsedIndex, ChainView, MusigAttemptSnapshot, Network, Output,
+            SpendAvailability, TransactionTemplate,
+        },
+        musig::{MusigAccount, CHAIN_SPEND_PATHS_UNSUPPORTED},
         state_crypt,
     };
+
+    /// A regtest address of none of the test accounts (BIP-173).
+    const EXTERNAL: &str = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080";
+    /// The backend's tip: a coinbase confirmed at 120 is immature until 219.
+    const CHAIN_TIP: u64 = 200;
 
     struct UnsavedAttempt {
         _directory: TempDir,
@@ -2292,6 +2592,7 @@ mod tests {
             closed_name: None,
             pending_flush_error: String::new(),
             active: Mutex::new(None),
+            chain: Mutex::new(None),
         }
     }
 
@@ -2585,6 +2886,285 @@ mod tests {
         assert!(
             !finalized.input[0].script_sig.is_empty() && finalized.input[0].witness.is_empty(),
             "actual P2PKH scriptSig satisfaction"
+        );
+    }
+
+    /// A Multikey account of one fresh key, no coin in its Electrum scanner.
+    fn chain_account() -> (TempDir, MusigAccount) {
+        state_crypt::unlock_for_tests();
+        let directory = TempDir::new().expect("isolated chain account");
+        let secp = Secp256k1::new();
+        let master = Xpriv::new_master(bitcoin::Network::Regtest, &[91; 32]).expect("master");
+        let descriptor = format!(
+            "tr([{}]{}/<0;1>/*)",
+            master.fingerprint(&secp),
+            Xpub::from_priv(&secp, &master)
+        );
+        let mut config = Config::new(
+            format!("chain_view_{}", std::process::id()),
+            Network::Regtest,
+            descriptor,
+            String::new(),
+            String::new(),
+            None,
+        );
+        config.plugin_id = "musig".into();
+        config.data_dir = directory.path().to_path_buf();
+        let account = offline_account(config);
+        (directory, account)
+    }
+
+    /// An output paying `account` at `keychain`/`index`, confirmed at `height`.
+    fn chain_output(
+        account: &MusigAccount,
+        keychain: u32,
+        index: u32,
+        amount: u64,
+        height: u64,
+    ) -> ChainOutput {
+        let scanner = account.inner.as_ref().expect("account").account.scanner();
+        let address = if keychain == 0 {
+            scanner.recv_at(index)
+        } else {
+            scanner.change_at(index)
+        };
+        ChainOutput {
+            outpoint: OutPoint::new(
+                Txid::from_byte_array([keychain as u8 * 16 + index as u8; 32]),
+                1,
+            )
+            .to_string(),
+            amount,
+            script_pubkey: address.script_pubkey().to_bytes(),
+            descriptor: 0,
+            keychain,
+            index,
+            height,
+            coinbase: false,
+            spent_by: String::new(),
+        }
+    }
+
+    /// What the test backend reports: a spendable receive coin at index 3, an immature
+    /// coinbase at index 5 and a spent change coin at index 2.
+    fn chain_view(account: &MusigAccount, gap_limit: u32) -> ChainView {
+        let mut coinbase = chain_output(account, 0, 5, 50_000, 120);
+        coinbase.coinbase = true;
+        let mut spent = chain_output(account, 1, 2, 30_000, 110);
+        spent.spent_by = Txid::from_byte_array([99; 32]).to_string();
+        ChainView {
+            outputs: vec![chain_output(account, 0, 3, 60_000, 150), coinbase, spent],
+            used: vec![
+                ChainUsedIndex {
+                    descriptor: 0,
+                    keychain: 0,
+                    used: true,
+                    last: 5,
+                },
+                ChainUsedIndex {
+                    descriptor: 0,
+                    keychain: 1,
+                    used: true,
+                    last: 2,
+                },
+            ],
+            gap_limit,
+            tip: CHAIN_TIP,
+            has_tip: true,
+        }
+    }
+
+    fn payment(inputs: Vec<String>) -> TransactionTemplate {
+        TransactionTemplate {
+            outputs: vec![Output {
+                address: EXTERNAL.into(),
+                amount: 40_000,
+                max: false,
+                label: String::new(),
+            }],
+            fee: 0,
+            fee_rate: 2.0,
+            input_outpoints: inputs,
+        }
+    }
+
+    #[test]
+    fn chain_view_crafts_and_finalizes_from_the_backend_outputs() {
+        let (_directory, account) = chain_account();
+        let view = chain_view(&account, 20);
+        let spendable = view.outputs[0].clone();
+        let coinbase = view.outputs[1].outpoint.clone();
+        let spent = view.outputs[2].outpoint.clone();
+        assert!(
+            account.set_chain_view(view),
+            "the backend's report is taken"
+        );
+
+        let selected = account.select_transaction_coins(payment(Vec::new()));
+        assert!(selected.complete, "coin selection: {}", selected.error);
+        assert_eq!(
+            selected.transaction.input_outpoints,
+            vec![spendable.outpoint.clone()],
+            "selection picks the backend's spendable coin, neither the immature coinbase nor \
+             the spent one"
+        );
+        let crafted = account.craft_transaction(selected.transaction.clone());
+        assert!(crafted.complete, "craft: {}", crafted.error);
+        for refused in [coinbase, spent] {
+            let crafted = account.craft_transaction(payment(vec![refused.clone()]));
+            assert!(
+                !crafted.complete && crafted.error.contains(&refused),
+                "{refused} cannot be spent: {}",
+                crafted.error
+            );
+        }
+
+        let unsigned = account.finalize_transaction(crafted.transaction);
+        assert!(unsigned.is_ok, "finalize: {}", unsigned.error);
+        let psbt = PsbtV2::deserialize(&unsigned.psbt)
+            .expect("PSBTv2")
+            .into_bitcoin_psbt()
+            .expect("PSBT");
+        assert_eq!(
+            psbt.unsigned_tx.input[0].previous_output.to_string(),
+            spendable.outpoint,
+            "the input is the backend's outpoint"
+        );
+        assert_eq!(
+            psbt.inputs[0].witness_utxo,
+            Some(TxOut {
+                value: Amount::from_sat(spendable.amount),
+                script_pubkey: bitcoin::ScriptBuf::from_bytes(spendable.script_pubkey.clone()),
+            }),
+            "the witness UTXO is the backend's amount and script"
+        );
+        let origins: Vec<String> = psbt.inputs[0]
+            .tap_key_origins
+            .values()
+            .map(|(_, (_, path))| path.to_string())
+            .collect();
+        assert_eq!(
+            origins,
+            vec!["0/3".to_string()],
+            "the input derives from receive index 3"
+        );
+        let change = account
+            .inner
+            .as_ref()
+            .expect("account")
+            .account
+            .scanner()
+            .change_at(3)
+            .script_pubkey();
+        assert!(
+            psbt.unsigned_tx
+                .output
+                .iter()
+                .any(|output| output.script_pubkey == change),
+            "the change goes past the change index 2 the backend reports used"
+        );
+
+        let coins = account.spending_coins();
+        assert!(coins.is_ok, "spending export: {}", coins.error);
+        assert!(
+            coins.has_tip && coins.tip.height == CHAIN_TIP as u32 && coins.tip.hash.is_empty(),
+            "the export reads the backend's tip, which has no hash"
+        );
+        let availability: Vec<_> = coins
+            .coins
+            .iter()
+            .map(|coin| (coin.outpoint.clone(), coin.variants[0].availability))
+            .collect();
+        assert!(
+            availability.contains(&(spendable.outpoint.clone(), SpendAvailability::Available))
+                && availability.contains(&(
+                    chain_view(&account, 20).outputs[1].outpoint.clone(),
+                    SpendAvailability::Immature
+                )),
+            "the coinbase is immature at the backend's tip: {availability:?}"
+        );
+
+        let leaves = account.spend_leaves(vec![spendable.outpoint]);
+        assert_eq!(
+            leaves.error, CHAIN_SPEND_PATHS_UNSUPPORTED,
+            "spend paths of the backend's coins are refused, not guessed"
+        );
+
+        account.clear_chain_view();
+        let selected = account.select_transaction_coins(payment(Vec::new()));
+        assert!(
+            !selected.complete,
+            "back on the Electrum scanner, which holds no coin, nothing pays"
+        );
+    }
+
+    #[test]
+    fn chain_view_receive_addresses_go_past_the_used_index_and_ask_a_reveal_past_the_window() {
+        let (_directory, account) = chain_account();
+        assert!(
+            account.set_chain_view(chain_view(&account, 20)),
+            "report taken"
+        );
+        let next = account.next_chain_receive("taproot");
+        assert!(next.is_ok, "next receive: {}", next.error);
+        assert_eq!(
+            (next.descriptor, next.keychain, next.index, next.reveal),
+            (0, 0, 6, false),
+            "index 6 follows the used index 5, inside the 20 watched past it"
+        );
+        let taken = account.take_chain_receive(next.index);
+        assert!(taken.is_ok, "hand out: {}", taken.error);
+        let expected = account
+            .inner
+            .as_ref()
+            .expect("account")
+            .account
+            .scanner()
+            .recv_at(6)
+            .to_string();
+        assert_eq!(
+            (taken.address.address.as_str(), taken.address.path.as_str()),
+            (expected.as_str(), "0/6"),
+            "receive index 6 is handed out"
+        );
+        assert!(
+            !account.take_chain_receive(6).is_ok,
+            "an index handed out is not handed out again"
+        );
+
+        assert!(
+            account.set_chain_view(chain_view(&account, 1)),
+            "report taken"
+        );
+        let next = account.next_chain_receive("taproot");
+        assert_eq!(
+            (next.index, next.reveal),
+            (7, true),
+            "index 7 is past the used index 5 and its gap of 1: the backend reveals it first"
+        );
+        assert!(
+            !account.next_chain_receive("segwit").is_ok,
+            "a kind the account does not receive on is refused"
+        );
+        assert!(
+            account
+                .new_receive_address("taproot")
+                .error
+                .contains("blockchain backend plugin"),
+            "no address bypasses the reveal"
+        );
+
+        let mut forged = chain_view(&account, 20);
+        forged.outputs[0].index = 4;
+        assert!(
+            !account.set_chain_view(forged),
+            "an output whose script its index does not derive is refused"
+        );
+        let crafted = account.select_transaction_coins(payment(Vec::new()));
+        assert!(
+            !crafted.complete && crafted.error.contains("does not derive"),
+            "a refused report crafts nothing: {}",
+            crafted.error
         );
     }
 }

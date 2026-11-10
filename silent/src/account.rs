@@ -33,8 +33,8 @@ use crate::{
         AccountBackup, AddressVerifyInfo, BackendErrorKind, BroadcastReport, CoinState,
         CraftOutcome, FundsSnapshot, LabelEditResult, LabelKind, LabelSnapshot, Notification,
         NotificationFlag, Output, PsbtImport, ReceiveAddress, ReceiveAddressResult, ReceiveKind,
-        RustCoin, RustTx, RustTxDetails, TransactionSimulation, TransactionTemplate, TxResult,
-        UnsignedPsbt,
+        RustChainTip, RustCoin, RustTx, RustTxDetails, TransactionSimulation, TransactionTemplate,
+        TxResult, UnsignedPsbt,
     },
     psbt_transfer::decode_psbt_text,
     services::{self, Undelivered, FIRST_RECEIVE_INDEX, SEGWIT_KIND, SP_KIND, TAPROOT_KIND},
@@ -616,7 +616,10 @@ impl Account {
                 coins.push(crate::spending::descriptor_coin(&coin, network, &funding)?);
             }
         }
-        Ok(crate::spending::SpendCoins { coins, snapshot })
+        Ok(crate::spending::SpendCoins {
+            coins,
+            tip: snapshot.as_ref().map(RustChainTip::from),
+        })
     }
 
     /// Get spendable coins summary (SP + sub-accounts).

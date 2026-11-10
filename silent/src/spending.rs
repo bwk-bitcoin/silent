@@ -1,8 +1,8 @@
 //! Transaction-independent public coin exports. Envelopes contain one input, no outputs.
 
-use bitcoin::{absolute, relative, transaction, Psbt, Transaction};
+use bitcoin::{absolute, hashes::Hash, relative, transaction, BlockHash, Psbt, Transaction};
 use bwk::{
-    bwk_coin::{Coin, CoinSourceKind, CoinSpendInfo, CoinStatus},
+    bwk_coin::{Coin, CoinSourceKind, CoinSpendInfo, CoinStatus, KeyChain},
     bwk_descriptor::spend::{
         restrict_variant, spend_variants, ChainContext, Confirmation, Locks, Maturity, Preimage,
     },
@@ -78,25 +78,22 @@ impl From<Option<relative::LockTime>> for RustSpendLock {
     }
 }
 
-/// An account's spending coins and the chain snapshot their maturity was read
-/// against, `None` without a validated chain.
+/// An account's spending coins and the tip their maturity was read against, `None`
+/// without a validated chain.
 pub(crate) struct SpendCoins {
     pub coins: Vec<RustSpendCoin>,
-    pub snapshot: Option<ChainSnapshot>,
+    pub tip: Option<RustChainTip>,
 }
 
 impl From<Result<SpendCoins, String>> for SpendCoinsResult {
     fn from(result: Result<SpendCoins, String>) -> Self {
         match result {
-            Ok(SpendCoins { coins, snapshot }) => Self {
+            Ok(SpendCoins { coins, tip }) => Self {
                 is_ok: true,
                 error: String::new(),
                 coins,
-                has_tip: snapshot.is_some(),
-                tip: snapshot
-                    .as_ref()
-                    .map(RustChainTip::from)
-                    .unwrap_or_default(),
+                has_tip: tip.is_some(),
+                tip: tip.unwrap_or_default(),
             },
             Err(error) => Self {
                 is_ok: false,
@@ -140,7 +137,28 @@ impl Funding {
         }
     }
 
-    fn coinbase_maturity(&self) -> Maturity {
+    /// Where a coin confirmed at `height` (unset while unconfirmed) sits below a
+    /// blockchain backend's tip at height `tip`, unset when unknown. Such a backend
+    /// reports neither the tip hash nor its median-time-past: the maturity read from it
+    /// uses heights only, and the hash it is given stands for none.
+    pub(crate) fn at_height(tip: Option<u32>, height: Option<u32>, coinbase: bool) -> Self {
+        Self {
+            context: tip.map(|tip| ChainContext {
+                tip: BlockHash::all_zeros(),
+                height: tip,
+                median_time_past: None,
+                confirmation: height.map_or(Confirmation::Unconfirmed, |height| {
+                    Confirmation::Confirmed {
+                        height,
+                        previous_mtp: None,
+                    }
+                }),
+            }),
+            coinbase: Some(coinbase),
+        }
+    }
+
+    pub(crate) fn coinbase_maturity(&self) -> Maturity {
         match (self.coinbase, &self.context) {
             (Some(false), _) => Maturity::Mature,
             (Some(true), Some(context)) => context.coinbase_maturity(),
@@ -213,6 +231,16 @@ pub(crate) fn preimage_requirement(preimage: &Preimage) -> String {
     }
 }
 
+/// The multipath branch `keychain` stands for: 0 receive, 1 change. Not bwk's
+/// `u32::from(KeyChain)`, which gives 0 for change too.
+pub(crate) fn keychain_branch(keychain: KeyChain) -> u32 {
+    match keychain {
+        KeyChain::Receive => 0,
+        KeyChain::Change => 1,
+        KeyChain::Custom(branch) => branch,
+    }
+}
+
 pub(crate) fn descriptor_coin(
     coin: &Coin,
     network: Network,
@@ -225,7 +253,7 @@ pub(crate) fn descriptor_coin(
     else {
         return Err("descriptor export requires a BIP32 coin".into());
     };
-    let keychain = u32::from(*keychain) as usize;
+    let keychain = keychain_branch(*keychain) as usize;
     let exported = spend_variants(descriptor, keychain, *index).map_err(|e| e.to_string())?;
     let template = envelope(coin)?;
     let status = coin.status.into();

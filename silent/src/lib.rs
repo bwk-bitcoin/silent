@@ -10,6 +10,7 @@ pub mod backup;
 pub mod bbqr;
 pub mod bip139;
 pub mod camera;
+mod chain_view;
 pub mod config;
 pub mod coordination;
 pub mod endpoint;
@@ -1673,6 +1674,87 @@ mod ffi {
         pub path: String,
     }
 
+    /// One output a Multikey account's blockchain backend plugin reports paying the
+    /// account, its IBlockchain::ownedOutputs() entry.
+    #[derive(Debug, Clone)]
+    pub struct ChainOutput {
+        /// Canonical txid:vout identifier.
+        pub outpoint: String,
+        /// In satoshis.
+        pub amount: u64,
+        /// The serialized output script.
+        pub script_pubkey: Vec<u8>,
+        /// Index in the AccountWatch descriptors: 0, the account watches one.
+        pub descriptor: u32,
+        /// The multipath branch: 0 receive, 1 change.
+        pub keychain: u32,
+        /// The derivation index of the script in that branch.
+        pub index: u32,
+        /// Height of the block confirming the output, 0 while unconfirmed.
+        pub height: u64,
+        /// The output is from a coinbase transaction.
+        pub coinbase: bool,
+        /// Hex txid of the transaction spending the output, empty while unspent.
+        pub spent_by: String,
+    }
+
+    /// How far one branch of the account's descriptor is used, an
+    /// IBlockchain::usedIndexes() entry.
+    #[derive(Debug, Clone)]
+    pub struct ChainUsedIndex {
+        /// Index in the AccountWatch descriptors, as ChainOutput::descriptor.
+        pub descriptor: u32,
+        /// The multipath branch, as ChainOutput::keychain.
+        pub keychain: u32,
+        /// Some index of the branch has a transaction.
+        pub used: bool,
+        /// The highest derivation index with a transaction, read while `used`.
+        pub last: u32,
+    }
+
+    /// What a Multikey account's blockchain backend plugin reports: what
+    /// MusigAccount::set_chain_view() takes.
+    #[derive(Debug, Clone)]
+    pub struct ChainView {
+        /// Every output paying the account, spent ones included.
+        pub outputs: Vec<ChainOutput>,
+        /// One entry per branch.
+        pub used: Vec<ChainUsedIndex>,
+        /// AccountWatch::gapLimit: unused indexes the backend watches past the last used
+        /// one of each branch.
+        pub gap_limit: u32,
+        /// The chain height the backend syncs up to, BlockchainState::tip.
+        pub tip: u64,
+        /// `tip` is known.
+        pub has_tip: bool,
+    }
+
+    /// The receive address a Multikey account on a blockchain backend plugin hands out
+    /// next, not yet handed out.
+    #[derive(Debug, Clone)]
+    pub struct ChainReceive {
+        pub is_ok: bool,
+        pub error: String,
+        /// Index in the AccountWatch descriptors of the account's descriptor: 0.
+        pub descriptor: u32,
+        /// The multipath branch of the address: 0, receive.
+        pub keychain: u32,
+        /// Its derivation index.
+        pub index: u32,
+        /// The backend does not watch `index` yet: IBlockchain::reveal() it before
+        /// take_chain_receive() hands it out.
+        pub reveal: bool,
+    }
+
+    /// What recording a broadcast its blockchain backend plugin accepted did.
+    #[derive(Debug, Clone)]
+    pub struct BroadcastRecord {
+        /// Why the saved transaction is not marked broadcast on disk, empty when it is.
+        pub save_error: String,
+        /// The transaction is the finalized one of the active signing attempt.
+        pub active: bool,
+    }
+
     // ===== Policy =====
 
     /// Role of a key (bwk-bup `KeyType`), stored in its origin's last step R.
@@ -3185,6 +3267,25 @@ mod ffi {
             psbt: &[u8],
         ) -> Box<PsbtResult>;
         fn broadcast_report(self: &MusigAccount, transaction: &[u8]) -> BroadcastReport;
+
+        /// Syncs the account from what its blockchain backend plugin reports, in place of
+        /// its Electrum scanner: transactions are crafted from `view`'s outputs, its used
+        /// indexes and tip. False, the account left on no chain data, when `view` names a
+        /// descriptor or branch the account does not have or a script its index does not
+        /// derive. No I/O.
+        fn set_chain_view(self: &MusigAccount, view: ChainView) -> bool;
+        /// Back to the Electrum scanner. No I/O.
+        fn clear_chain_view(self: &MusigAccount);
+        /// On a chain view: the receive address of kind `kind` handed out next, past every
+        /// index the chain used or the account handed out. No I/O.
+        fn next_chain_receive(self: &MusigAccount, kind: &str) -> ChainReceive;
+        /// On a chain view: hands out receive index `index`, a next_chain_receive()
+        /// answer, and saves it. Refused when an address at or past it was handed out
+        /// meanwhile. Disk I/O.
+        fn take_chain_receive(self: &MusigAccount, index: u32) -> ReceiveAddressResult;
+        /// Marks the saved transaction of hex txid `txid` broadcast, once its blockchain
+        /// backend plugin accepted it. Disk I/O.
+        fn record_broadcast(self: &MusigAccount, txid: &str) -> BroadcastRecord;
         /// The account's backup, encrypted to its policy's keys, its saved PSBTs left out.
         /// Blocking.
         fn backup(self: &MusigAccount) -> AccountBackup;

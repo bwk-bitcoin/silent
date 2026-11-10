@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use bitcoin::{consensus::encode::deserialize_hex, Psbt, Transaction};
+use bitcoin::{consensus::encode::deserialize_hex, Psbt, Transaction, Txid};
 use bwk::bwk_electrum::tx_store::TxEntry;
 use serde::{Deserialize, Serialize};
 
@@ -349,9 +349,9 @@ impl SavedPsbtStore {
         Ok(())
     }
 
-    pub(crate) fn broadcast(&mut self, tx: &Transaction) -> Result<(), String> {
+    /// Marks the saved transaction of `txid` broadcast.
+    pub(crate) fn broadcast(&mut self, txid: Txid) -> Result<(), String> {
         let now = timestamp()?;
-        let txid = tx.compute_txid();
         for record in &mut self.records {
             if record.finalized_tx_hex.is_empty() {
                 continue;
@@ -1572,7 +1572,9 @@ mod tests {
             "transaction survives restart before broadcast"
         );
         assert!(!record.broadcast, "finalization is not broadcast");
-        store.broadcast(&tx).expect("persist broadcast");
+        store
+            .broadcast(tx.compute_txid())
+            .expect("persist broadcast");
         let broadcast = SavedPsbtStore::load(path);
         assert!(
             broadcast
