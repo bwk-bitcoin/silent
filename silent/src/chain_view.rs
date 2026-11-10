@@ -160,12 +160,19 @@ impl ChainView {
             .map_or(handed_out, |used| used.max(handed_out))
     }
 
-    /// Whether the backend watches `index` of `keychain` already: the gap limit's unused
-    /// indexes past the last used one, the first ones while none is used.
+    /// Whether the backend watches `index` of `keychain` already.
     pub(crate) fn watches(&self, keychain: KeyChain, index: u32) -> bool {
+        self.last_watched(keychain)
+            .is_some_and(|last| index <= last)
+    }
+
+    /// The last index of `keychain` the backend watches: the gap limit's unused indexes
+    /// past the last used one, the first ones while none is used. None when it watches
+    /// none.
+    pub(crate) fn last_watched(&self, keychain: KeyChain) -> Option<u32> {
         match self.last_used(keychain) {
-            Some(last) => u64::from(index) <= u64::from(last) + u64::from(self.gap_limit),
-            None => index < self.gap_limit,
+            Some(last) => Some(last.saturating_add(self.gap_limit)),
+            None => self.gap_limit.checked_sub(1),
         }
     }
 

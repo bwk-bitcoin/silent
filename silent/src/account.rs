@@ -9,13 +9,10 @@ use std::{
 
 use bwk_sp::{
     account::{recipient::SpRecipientAddress, Account as SpAccount, ScanMode},
-    bwk::{
-        bwk_coin::KeyChain,
-        bwk_electrum::{
-            coin_store::{Payment, PaymentType},
-            label_store::LabelKey,
-            notification::{Notification as BwkNotification, SpNotification, TxListenerNotif},
-        },
+    bwk::bwk_electrum::{
+        coin_store::{Payment, PaymentType},
+        label_store::LabelKey,
+        notification::{Notification as BwkNotification, SpNotification, TxListenerNotif},
     },
     bwk_sign::{
         bwk_descriptor::wallet::WalletDescriptor, miniscript::Descriptor as MiniscriptDescriptor,
@@ -767,11 +764,7 @@ impl Account {
                 if entry.address.clone().assume_checked().to_string() != address {
                     continue;
                 }
-                let branch: u32 = match entry.account {
-                    KeyChain::Receive => 0,
-                    KeyChain::Change => 1,
-                    KeyChain::Custom(c) => c,
-                };
+                let branch = u32::from(entry.account);
                 return AddressVerifyInfo {
                     descriptor: scanner.descriptor_str(),
                     path: format!("{branch}/{}", entry.index),

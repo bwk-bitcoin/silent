@@ -2,7 +2,7 @@
 
 use bitcoin::{absolute, hashes::Hash, relative, transaction, BlockHash, Psbt, Transaction};
 use bwk::{
-    bwk_coin::{Coin, CoinSourceKind, CoinSpendInfo, CoinStatus, KeyChain},
+    bwk_coin::{Coin, CoinSourceKind, CoinSpendInfo, CoinStatus},
     bwk_descriptor::spend::{
         restrict_variant, spend_variants, ChainContext, Confirmation, Locks, Maturity, Preimage,
     },
@@ -231,16 +231,6 @@ pub(crate) fn preimage_requirement(preimage: &Preimage) -> String {
     }
 }
 
-/// The multipath branch `keychain` stands for: 0 receive, 1 change. Not bwk's
-/// `u32::from(KeyChain)`, which gives 0 for change too.
-pub(crate) fn keychain_branch(keychain: KeyChain) -> u32 {
-    match keychain {
-        KeyChain::Receive => 0,
-        KeyChain::Change => 1,
-        KeyChain::Custom(branch) => branch,
-    }
-}
-
 pub(crate) fn descriptor_coin(
     coin: &Coin,
     network: Network,
@@ -253,7 +243,7 @@ pub(crate) fn descriptor_coin(
     else {
         return Err("descriptor export requires a BIP32 coin".into());
     };
-    let keychain = keychain_branch(*keychain) as usize;
+    let keychain = u32::from(*keychain) as usize;
     let exported = spend_variants(descriptor, keychain, *index).map_err(|e| e.to_string())?;
     let template = envelope(coin)?;
     let status = coin.status.into();

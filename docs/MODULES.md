@@ -1626,17 +1626,23 @@ With a plugin chosen, the account syncs from that plugin's blockchain alone:
   reports none, and that it is not installed when it is missing. The Electrum endpoint
   stays in Settings, saved for when Electrum is chosen again.
 - The labels stay Multikey's `ILabels`.
-- Spend paths are not supported yet for the reported coins: bwk's account resolves a
-  coin's spend paths (`spend_leaves()`) and restricts a PSBT to one
-  (`restrict_spend_path()`) only for the coins of its Electrum scanner, at its header
-  chain's tip, so `spend_leaves()`, adoption and export refuse on a chain view. A PSBT
-  imported, signed and finalized still broadcasts through the plugin.
+- `spend_leaves()`, adoption, export and `import_psbt()` resolve the spend paths of the
+  reported coins and restrict a PSBT to one through bwk's `spend_leaves_for()` and
+  `restrict_spend_path_for()`, given those coins and the reported tip: a timelocked path
+  is spendable only once met at that tip, and with no tip reported it is not. The funds
+  snapshot lists the reported coins, spendable now when unspent, mature and on a path
+  spendable at that tip.
+- Adoption, export and import take as change every change index up to the last one the
+  service watches (its gap limit past the change index it reports used) or the next one
+  the account would pay, not only the scanner's look-ahead, and register it.
 
 `host_smoke --chain-spend` opens a Multikey account on the `services.chain` fixture with an
 Electrum server saved, checks that no Electrum connection opens and the status bar shows
 the plugin, crafts and finalizes a spend from the coin the fixture reports (its
-`fixtureOutputs`, `fixtureUsed` and `fixtureTip` properties), hands out receive addresses
-until the one the fixture reveals, then chooses Electrum again.
+`fixtureOutputs`, `fixtureUsed` and `fixtureTip` properties, its used change index past
+the scanner's look-ahead), adopts it on the leaf of a hot key of the policy, signs it with
+that key and imports the answer until the account finalizes it, hands out receive addresses until the one the fixture reveals, then chooses
+Electrum again.
 
 The built-in SP and Multikey services (`account::AccountServices`) read and work on the
 controller's Rust account directly: funds, history, transaction details, labels, receive

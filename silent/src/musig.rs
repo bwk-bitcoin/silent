@@ -9,7 +9,7 @@ use std::{
 use bitcoin::{
     consensus::encode::{deserialize_hex, serialize_hex},
     taproot::TapLeafHash,
-    ScriptBuf,
+    OutPoint, ScriptBuf,
 };
 use bwk::{
     account::{Account as BwkAccount, SpendLeaf, SpendPath},
@@ -88,10 +88,6 @@ pub const MUSIG_PLUGIN_ID: &str = "musig";
 const NOT_INITIALIZED: &str = "Account not initialized";
 
 const NO_CHAIN_VIEW: &str = "The account does not sync from a blockchain backend plugin";
-
-/// bwk's account resolves spend paths only for the coins of its Electrum scanner.
-const CHAIN_SPEND_PATHS_UNSUPPORTED: &str =
-    "The spend paths of coins a blockchain backend plugin reports are not supported yet";
 
 const CHAIN_BROADCAST_ONLY: &str =
     "The account syncs from a blockchain backend plugin: it broadcasts through it";
@@ -914,11 +910,10 @@ impl MusigAccount {
         let Some(inner) = &self.inner else {
             return error(NOT_INITIALIZED.to_string());
         };
-        match self.chain_view() {
-            Ok(None) => {}
-            Ok(Some(_)) => return error(CHAIN_SPEND_PATHS_UNSUPPORTED.to_string()),
+        let chain = match self.chain_view() {
+            Ok(chain) => chain,
             Err(e) => return error(e),
-        }
+        };
         let outpoints = match outpoints
             .iter()
             .map(|outpoint| parse_outpoint(outpoint))
@@ -927,7 +922,7 @@ impl MusigAccount {
             Ok(outpoints) => outpoints,
             Err(e) => return error(e.to_string()),
         };
-        match inner.account.spend_leaves(&outpoints) {
+        match spend_leaves(&inner.account, chain.as_ref(), &outpoints) {
             Ok(leaves) => MusigSpendLeaves {
                 is_ok: true,
                 error: String::new(),
@@ -998,10 +993,11 @@ impl MusigAccount {
                 NOT_INITIALIZED.to_string(),
             ));
         };
-        if !matches!(self.chain_view(), Ok(None)) {
-            return failed(CHAIN_SPEND_PATHS_UNSUPPORTED.to_string());
-        }
-        if let Err(error) = Self::claim(inner, &tx_template, &spend, &mut psbt) {
+        let chain = match self.chain_view() {
+            Ok(chain) => chain,
+            Err(error) => return failed(error),
+        };
+        if let Err(error) = Self::claim(inner, chain.as_ref(), &tx_template, &spend, &mut psbt) {
             return failed(error);
         }
         match prepared_psbt(&psbt) {
@@ -1013,9 +1009,11 @@ impl MusigAccount {
     /// Ties `psbt` to `spend`: refuses it unless that spend path is available for its
     /// inputs and it pays `tx_template`, registers its change index durably, refusing
     /// one another transaction took, and restricts it to that path. Returns the spend
-    /// path as resolved for its inputs.
+    /// path as resolved for its inputs, the coins of `chain` while the account syncs from
+    /// it.
     fn claim(
         inner: &MusigAccountInner,
+        chain: Option<&ChainView>,
         tx_template: &TransactionTemplate,
         spend: &MusigSpendLeaf,
         psbt: &mut bitcoin::Psbt,
@@ -1033,16 +1031,14 @@ impl MusigAccount {
             .iter()
             .map(|input| input.previous_output)
             .collect();
-        let spend = inner
-            .account
-            .spend_leaves(&outpoints)
+        let spend = spend_leaves(&inner.account, chain, &outpoints)
             .map_err(|error| format!("Cannot resolve selected spend path: {error}"))?
             .into_iter()
             .find(|leaf| leaf.path == path)
             .map(spend_leaf)
             .ok_or("Selected spend path is not available for these inputs")?;
         let network = inner.config.network.into();
-        pays_template(inner.account.scanner(), psbt, tx_template, network)?;
+        pays_template(inner.account.scanner(), chain, psbt, tx_template, network)?;
         // A recipient on one of the account's change addresses is no change.
         let recipients: BTreeSet<_> = tx_template
             .outputs
@@ -1050,10 +1046,8 @@ impl MusigAccount {
             .filter_map(|output| parse_recipient(&output.address, network).ok())
             .map(|address| address.script_pubkey())
             .collect();
-        register_change(inner.account.scanner(), psbt, &recipients)?;
-        inner
-            .account
-            .restrict_spend_path(psbt, path)
+        register_change(inner.account.scanner(), chain, psbt, &recipients)?;
+        restrict_spend_path(&inner.account, chain, psbt, path)
             .map_err(|e| format!("Failed to restrict the spend path: {e}"))?;
         Ok(spend)
     }
@@ -1081,10 +1075,11 @@ impl MusigAccount {
             ));
         };
 
-        if !matches!(self.chain_view(), Ok(None)) {
-            return failed(CHAIN_SPEND_PATHS_UNSUPPORTED.to_string());
-        }
-        let spend = match Self::claim(inner, &tx_template, &spend, &mut psbt) {
+        let chain = match self.chain_view() {
+            Ok(chain) => chain,
+            Err(error) => return failed(error),
+        };
+        let spend = match Self::claim(inner, chain.as_ref(), &tx_template, &spend, &mut psbt) {
             Ok(spend) => spend,
             Err(error) => return failed(error),
         };
@@ -1457,36 +1452,28 @@ impl MusigAccount {
             .iter()
             .map(|input| input.previous_output)
             .collect();
-        let leaves = inner
-            .account
-            .spend_leaves(&outpoints)
+        let chain = self.chain_view()?;
+        let chain = chain.as_ref();
+        let leaves = spend_leaves(&inner.account, chain, &outpoints)
             .map_err(|e| format!("The PSBT does not spend this account's coins: {e}"))?;
         // Restricting a PSBT to the path it is restricted to leaves it as it is.
         let spend = leaves
             .into_iter()
             .find(|leaf| {
                 let mut restricted = psbt.clone();
-                inner
-                    .account
-                    .restrict_spend_path(&mut restricted, leaf.path)
-                    .is_ok()
+                restrict_spend_path(&inner.account, chain, &mut restricted, leaf.path).is_ok()
                     && restricted == psbt
             })
             .map(spend_leaf)
             .ok_or("The PSBT is not restricted to one spend path of this account")?;
         let network: bitcoin::Network = inner.config.network.into();
         let scanner = inner.account.scanner();
-        let change: BTreeSet<_> = scanner
-            .address_entries()
-            .into_iter()
-            .filter(|entry| matches!(entry.account, KeyChain::Change))
-            .map(|entry| entry.script())
-            .collect();
+        let change = change_scripts(scanner, chain);
         let outputs = psbt
             .unsigned_tx
             .output
             .iter()
-            .filter(|output| !change.contains(&output.script_pubkey))
+            .filter(|output| !change.contains_key(&output.script_pubkey))
             .map(|output| {
                 bitcoin::Address::from_script(&output.script_pubkey, network)
                     .map(|address| Output {
@@ -1507,7 +1494,7 @@ impl MusigAccount {
                 .to_sat(),
             input_outpoints: outpoints.iter().map(ToString::to_string).collect(),
         };
-        import_change(scanner, &psbt)?;
+        import_change(scanner, chain, &psbt)?;
         let saved = self
             .saved_store()?
             .create(tx_template, spend, psbt_v2_hex)?;
@@ -1829,21 +1816,55 @@ impl MusigAccount {
         if self.inner.is_none() {
             return services::funds_failed(NOT_INITIALIZED.into());
         }
+        let chain = match self.chain_view() {
+            Ok(chain) => chain,
+            Err(error) => return services::funds_failed(error),
+        };
         // Coins first: a transaction written meanwhile still covers them.
-        let coins = self.coins();
+        let coins = match &chain {
+            Some(chain) => match self.chain_coins(chain) {
+                Ok(coins) => coins,
+                Err(error) => return services::funds_failed(error),
+            },
+            None => self.coins(),
+        };
         let balance = self.spendable_coins();
         match self.tx_snapshot() {
             Ok(snapshot) => {
-                let spendable = self.spendable_now(&coins);
+                let spendable = self.spendable_now(chain.as_ref(), &coins);
                 services::funds(coins, spendable, balance, wallet_history(snapshot.history))
             }
             Err(error) => services::funds_failed(error),
         }
     }
 
-    /// The unspent coins a spend path can spend at the validated tip: a timelocked path
-    /// counts only once its lock is met.
-    fn spendable_now(&self, coins: &[RustCoin]) -> Vec<String> {
+    /// Every coin of `chain`, spent ones included, labelled from the account's labels. The
+    /// backend reports no block time.
+    fn chain_coins(&self, chain: &ChainView) -> Result<Vec<RustCoin>, String> {
+        let inner = self.inner.as_ref().ok_or(NOT_INITIALIZED)?;
+        let labels = inner.account.scanner().label_store();
+        let labels = labels
+            .lock()
+            .map_err(|e| format!("Label lock failed: {e}"))?;
+        Ok(chain
+            .fundings()
+            .map(|(coin, _)| RustCoin {
+                outpoint: coin.outpoint.to_string(),
+                value: coin.value().to_sat(),
+                height: coin.height.unwrap_or(0) as u32,
+                timestamp: 0,
+                label: labels.outpoint(coin.outpoint).unwrap_or_default(),
+                spent: matches!(coin.status, CoinStatus::Spent | CoinStatus::BeingSpend),
+                // A musig account is a taproot wallet.
+                account_type: "Taproot".to_string(),
+            })
+            .collect())
+    }
+
+    /// The unspent coins a spend path can spend now: a timelocked path counts only once its
+    /// lock is met, at `chain`'s tip while the account syncs from it (where an immature
+    /// coinbase is not spendable either), at the validated tip otherwise.
+    fn spendable_now(&self, chain: Option<&ChainView>, coins: &[RustCoin]) -> Vec<String> {
         let Some(inner) = &self.inner else {
             return Vec::new();
         };
@@ -1852,10 +1873,9 @@ impl MusigAccount {
             .filter(|coin| !coin.spent)
             .filter(|coin| {
                 parse_outpoint(&coin.outpoint).is_ok_and(|outpoint| {
-                    inner
-                        .account
-                        .spend_leaves(&[outpoint])
-                        .is_ok_and(|leaves| leaves.iter().any(|leaf| leaf.spendable))
+                    chain.is_none_or(|chain| chain.spendable(&outpoint))
+                        && spend_leaves(&inner.account, chain, &[outpoint])
+                            .is_ok_and(|leaves| leaves.iter().any(|leaf| leaf.spendable))
                 })
             })
             .map(|coin| coin.outpoint.clone())
@@ -2089,7 +2109,7 @@ impl MusigAccount {
             is_ok: true,
             error: String::new(),
             descriptor: ACCOUNT_DESCRIPTOR,
-            keychain: crate::spending::keychain_branch(KeyChain::Receive),
+            keychain: u32::from(KeyChain::Receive),
             index,
             reveal: !chain.watches(KeyChain::Receive, index),
         }
@@ -2229,6 +2249,54 @@ fn generated(
     }
 }
 
+/// Every spend path for the coins at `outpoints`: those of `chain` at its tip while the
+/// account syncs from it, the Electrum scanner's at its validated tip otherwise.
+fn spend_leaves(
+    account: &BwkAccount,
+    chain: Option<&ChainView>,
+    outpoints: &[OutPoint],
+) -> Result<Vec<SpendLeaf>, String> {
+    let Some(chain) = chain else {
+        return account.spend_leaves(outpoints).map_err(|e| e.to_string());
+    };
+    let coins = outpoints
+        .iter()
+        .map(|outpoint| {
+            chain
+                .coin(outpoint)
+                .cloned()
+                .ok_or_else(|| format!("unknown coin {outpoint}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    account
+        .spend_leaves_for(&coins, chain.tip())
+        .map_err(|e| e.to_string())
+}
+
+/// Keeps only `path` in every input of `psbt` spending a coin of `chain` while the account
+/// syncs from it, of the Electrum scanner otherwise.
+fn restrict_spend_path(
+    account: &BwkAccount,
+    chain: Option<&ChainView>,
+    psbt: &mut bitcoin::Psbt,
+    path: SpendPath,
+) -> Result<(), String> {
+    let Some(chain) = chain else {
+        return account
+            .restrict_spend_path(psbt, path)
+            .map_err(|e| e.to_string());
+    };
+    let coins: Vec<_> = psbt
+        .unsigned_tx
+        .input
+        .iter()
+        .filter_map(|txin| chain.coin(&txin.previous_output).cloned())
+        .collect();
+    account
+        .restrict_spend_path_for(psbt, path, &coins)
+        .map_err(|e| e.to_string())
+}
+
 /// A TxBuilder over the coins of `chain`, its change past the index the chain used or the
 /// account registered last.
 fn chain_tx_builder(inner: &MusigAccountInner, chain: &ChainView) -> TxBuilder {
@@ -2269,19 +2337,48 @@ fn chain_spending_coins(
     })
 }
 
-/// The change index `psbt` pays to, found among the scanner's change addresses past the
-/// `recipients` scripts. None when it pays no change.
-fn change_index(
+/// The account's change scripts and their indexes: the scanner's change addresses and, while
+/// the account syncs from `chain`, every index up to the last one the backend watches or the
+/// next change index, whichever comes last, as a backend's used index can be past the
+/// scanner's look-ahead.
+fn change_scripts(
     scanner: &ElectrumScanner,
-    psbt: &bitcoin::Psbt,
-    recipients: &BTreeSet<ScriptBuf>,
-) -> Result<Option<u32>, String> {
-    let change: BTreeMap<_, _> = scanner
+    chain: Option<&ChainView>,
+) -> BTreeMap<ScriptBuf, u32> {
+    let mut change: BTreeMap<_, _> = scanner
         .address_entries()
         .into_iter()
         .filter(|entry| matches!(entry.account, KeyChain::Change))
         .map(|entry| (entry.script(), entry.index))
         .collect();
+    let Some(chain) = chain else {
+        return change;
+    };
+    let next = chain
+        .branch_tip(KeyChain::Change, change_tip(scanner))
+        .saturating_add(1);
+    let last = chain
+        .last_watched(KeyChain::Change)
+        .map_or(next, |watched| watched.max(next));
+    let first = change
+        .values()
+        .max()
+        .map_or(0, |index| index.saturating_add(1));
+    for index in first..=last {
+        change.insert(scanner.change_at(index).script_pubkey(), index);
+    }
+    change
+}
+
+/// The change index `psbt` pays to, found among the account's change scripts
+/// (`change_scripts`) past the `recipients` scripts. None when it pays no change.
+fn change_index(
+    scanner: &ElectrumScanner,
+    chain: Option<&ChainView>,
+    psbt: &bitcoin::Psbt,
+    recipients: &BTreeSet<ScriptBuf>,
+) -> Result<Option<u32>, String> {
+    let change = change_scripts(scanner, chain);
     let mut indices = psbt
         .unsigned_tx
         .output
@@ -2313,10 +2410,11 @@ fn prepared_psbt(psbt: &bitcoin::Psbt) -> Result<PsbtResult, String> {
 }
 
 /// Refuses a PSBT that does not pay `tx_template`: each output pays one of its recipients
-/// that recipient's amount (a MAX recipient whatever is left), or the account's change,
-/// and every recipient is paid.
+/// that recipient's amount (a MAX recipient whatever is left), or the account's change
+/// (`change_scripts`), and every recipient is paid.
 fn pays_template(
     scanner: &ElectrumScanner,
+    chain: Option<&ChainView>,
     psbt: &bitcoin::Psbt,
     tx_template: &TransactionTemplate,
     network: bitcoin::Network,
@@ -2335,12 +2433,7 @@ fn pays_template(
                 .map_err(|e| e.to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let change: BTreeSet<_> = scanner
-        .address_entries()
-        .into_iter()
-        .filter(|entry| matches!(entry.account, KeyChain::Change))
-        .map(|entry| entry.script())
-        .collect();
+    let change = change_scripts(scanner, chain);
     for output in &psbt.unsigned_tx.output {
         let value = output.value.to_sat();
         // An exact amount first, so a MAX recipient on the same script takes the rest.
@@ -2356,7 +2449,7 @@ fn pays_template(
             Some(index) => {
                 unpaid.swap_remove(index);
             }
-            None if change.contains(&output.script_pubkey) => {}
+            None if change.contains_key(&output.script_pubkey) => {}
             None => {
                 return Err(format!(
                     "The transaction pays {value} sat to an output its template does not list: \
@@ -2430,10 +2523,11 @@ fn carries_change_derivation(
 /// tip is another adopted transaction's: this one must be crafted again.
 fn register_change(
     scanner: &ElectrumScanner,
+    chain: Option<&ChainView>,
     psbt: &bitcoin::Psbt,
     recipients: &BTreeSet<ScriptBuf>,
 ) -> Result<(), String> {
-    let Some(index) = change_index(scanner, psbt, recipients)? else {
+    let Some(index) = change_index(scanner, chain, psbt, recipients)? else {
         return Ok(());
     };
     carries_change_derivation(scanner, psbt, recipients, index)?;
@@ -2452,9 +2546,13 @@ fn register_change(
 /// Registers the change index of an imported `psbt` durably once it is past the
 /// registered tip. One at or below it is kept as it is: the PSBT was built elsewhere,
 /// on that address.
-fn import_change(scanner: &ElectrumScanner, psbt: &bitcoin::Psbt) -> Result<(), String> {
+fn import_change(
+    scanner: &ElectrumScanner,
+    chain: Option<&ChainView>,
+    psbt: &bitcoin::Psbt,
+) -> Result<(), String> {
     let recipients = BTreeSet::new();
-    let Some(index) = change_index(scanner, psbt, &recipients)? else {
+    let Some(index) = change_index(scanner, chain, psbt, &recipients)? else {
         return Ok(());
     };
     carries_change_derivation(scanner, psbt, &recipients, index)?;
@@ -2512,7 +2610,7 @@ fn parse_recipient(
 fn verify_info(descriptor: &Descriptor, keychain: KeyChain, index: u32) -> AddressVerifyInfo {
     AddressVerifyInfo {
         descriptor: descriptor.to_string(),
-        path: format!("{}/{index}", crate::spending::keychain_branch(keychain)),
+        path: format!("{}/{index}", u32::from(keychain)),
     }
 }
 
@@ -2564,10 +2662,10 @@ mod tests {
     use crate::{
         config::Config,
         ffi::{
-            ChainOutput, ChainUsedIndex, ChainView, MusigAttemptSnapshot, Network, Output,
-            SpendAvailability, TransactionTemplate,
+            ChainOutput, ChainUsedIndex, ChainView, MusigAttemptSnapshot, MusigSpendLeaf, Network,
+            Output, SpendAvailability, TransactionTemplate,
         },
-        musig::{MusigAccount, CHAIN_SPEND_PATHS_UNSUPPORTED},
+        musig::MusigAccount,
         state_crypt,
     };
 
@@ -2889,21 +2987,39 @@ mod tests {
         );
     }
 
+    /// The master key of `seed`.
+    fn chain_master(seed: u8) -> Xpriv {
+        Xpriv::new_master(bitcoin::Network::Regtest, &[seed; 32]).expect("master")
+    }
+
+    /// The `[fingerprint]xpub/<receive;change>/*` text of `seed`'s master key.
+    fn chain_key(seed: u8, receive: u32) -> String {
+        let secp = Secp256k1::new();
+        let master = chain_master(seed);
+        format!(
+            "[{}]{}/<{receive};{}>/*",
+            master.fingerprint(&secp),
+            Xpub::from_priv(&secp, &master),
+            receive + 1
+        )
+    }
+
+    /// The seed of chain_account()'s one key.
+    const CHAIN_SEED: u8 = 91;
+
     /// A Multikey account of one fresh key, no coin in its Electrum scanner.
     fn chain_account() -> (TempDir, MusigAccount) {
+        chain_account_of(&format!("tr({})", chain_key(CHAIN_SEED, 0)))
+    }
+
+    /// A Multikey account of `descriptor`, no coin in its Electrum scanner.
+    fn chain_account_of(descriptor: &str) -> (TempDir, MusigAccount) {
         state_crypt::unlock_for_tests();
         let directory = TempDir::new().expect("isolated chain account");
-        let secp = Secp256k1::new();
-        let master = Xpriv::new_master(bitcoin::Network::Regtest, &[91; 32]).expect("master");
-        let descriptor = format!(
-            "tr([{}]{}/<0;1>/*)",
-            master.fingerprint(&secp),
-            Xpub::from_priv(&secp, &master)
-        );
         let mut config = Config::new(
             format!("chain_view_{}", std::process::id()),
             Network::Regtest,
-            descriptor,
+            descriptor.to_string(),
             String::new(),
             String::new(),
             None,
@@ -2974,6 +3090,38 @@ mod tests {
         }
     }
 
+    /// Adopts `unsigned`, the PSBT of `template`, on `spend`, signs it with the hot key of
+    /// `seed` and hands the answer back: the transaction it finalizes.
+    fn sign_adopted(
+        account: &MusigAccount,
+        template: TransactionTemplate,
+        spend: MusigSpendLeaf,
+        unsigned: &[u8],
+        seed: u8,
+    ) -> Transaction {
+        let prepared = account.adopt_transaction(template, spend, unsigned);
+        assert!(
+            prepared.is_ok(),
+            "the spend is adopted: {}",
+            prepared.get_psbt_error()
+        );
+        let mut psbt =
+            PsbtV2::deserialize(&hex::decode(prepared.bytes_v2_hex()).expect("hex")).expect("PSBT");
+        let descriptor = Descriptor::from_str(&account.descriptor()).expect("descriptor");
+        HotSigner::new_from_xpriv(bitcoin::Network::Regtest, chain_master(seed))
+            .sign_v2(&mut psbt, descriptor.as_miniscript().expect("policy"))
+            .expect("hot signature");
+        let snapshot =
+            account.accept_signed_progress(&hex::encode(psbt.serialize().expect("signed PSBT")));
+        assert!(
+            snapshot.is_ok && snapshot.finalize_error.is_empty(),
+            "the signature is accepted and finalizes: {} {}",
+            snapshot.error,
+            snapshot.finalize_error
+        );
+        deserialize_hex(&snapshot.tx_hex).expect("finalized transaction")
+    }
+
     fn payment(inputs: Vec<String>) -> TransactionTemplate {
         TransactionTemplate {
             outputs: vec![Output {
@@ -3019,7 +3167,7 @@ mod tests {
             );
         }
 
-        let unsigned = account.finalize_transaction(crafted.transaction);
+        let unsigned = account.finalize_transaction(crafted.transaction.clone());
         assert!(unsigned.is_ok, "finalize: {}", unsigned.error);
         let psbt = PsbtV2::deserialize(&unsigned.psbt)
             .expect("PSBTv2")
@@ -3084,10 +3232,29 @@ mod tests {
             "the coinbase is immature at the backend's tip: {availability:?}"
         );
 
-        let leaves = account.spend_leaves(vec![spendable.outpoint]);
+        let leaves = account.spend_leaves(vec![spendable.outpoint.clone()]);
+        assert!(leaves.is_ok, "spend paths: {}", leaves.error);
+        assert!(
+            leaves.leaves.len() == 1 && leaves.leaves[0].key_path && leaves.leaves[0].spendable,
+            "the backend's coin spends through the key path: {:?}",
+            leaves.leaves
+        );
+        let tx = sign_adopted(
+            &account,
+            crafted.transaction,
+            leaves.leaves[0].clone(),
+            &unsigned.psbt,
+            CHAIN_SEED,
+        );
         assert_eq!(
-            leaves.error, CHAIN_SPEND_PATHS_UNSUPPORTED,
-            "spend paths of the backend's coins are refused, not guessed"
+            tx.input[0].previous_output.to_string(),
+            spendable.outpoint,
+            "the finalized transaction spends the backend's coin"
+        );
+        assert_eq!(
+            tx.input[0].witness.len(),
+            1,
+            "a key path spend: one signature"
         );
 
         account.clear_chain_view();
@@ -3095,6 +3262,163 @@ mod tests {
         assert!(
             !selected.complete,
             "back on the Electrum scanner, which holds no coin, nothing pays"
+        );
+    }
+
+    #[test]
+    fn chain_view_spends_a_timelocked_leaf_at_the_backend_tip() {
+        // Key 91 on the key path, key 92 after 10 blocks.
+        let (_directory, account) = chain_account_of(&format!(
+            "tr({},and_v(v:pk({}),older(10)))",
+            chain_key(CHAIN_SEED, 0),
+            chain_key(92, 2)
+        ));
+        let mut view = chain_view(&account, 20);
+        let spendable = view.outputs[0].outpoint.clone();
+        view.has_tip = false;
+        assert!(account.set_chain_view(view), "report taken");
+        let leaves = account.spend_leaves(vec![spendable.clone()]);
+        assert!(leaves.is_ok, "spend paths: {}", leaves.error);
+        assert!(
+            leaves.leaves.len() == 2 && leaves.leaves[1].relative == 10,
+            "the key path then the older(10) leaf: {:?}",
+            leaves.leaves
+        );
+        assert!(
+            !leaves.leaves[1].spendable,
+            "with no tip from the backend the timelock is not met"
+        );
+
+        // Confirmed at 150, the backend at 200: older(10) is met.
+        assert!(
+            account.set_chain_view(chain_view(&account, 20)),
+            "report taken"
+        );
+        let leaves = account.spend_leaves(vec![spendable.clone()]);
+        let leaf = leaves.leaves[1].clone();
+        assert!(leaf.spendable, "at the backend's tip the timelock is met");
+        let template = payment(vec![spendable.clone()]);
+        let unsigned = account.finalize_transaction(template.clone());
+        assert!(unsigned.is_ok, "finalize: {}", unsigned.error);
+        let tx = sign_adopted(&account, template, leaf, &unsigned.psbt, 92);
+        assert_eq!(
+            (
+                tx.input[0].previous_output.to_string(),
+                tx.input[0].sequence
+            ),
+            (spendable, bitcoin::Sequence::from_height(10)),
+            "the finalized transaction spends the backend's coin after 10 blocks"
+        );
+        assert_eq!(
+            tx.input[0].witness.len(),
+            3,
+            "a leaf spend: the signature, the leaf script and its control block"
+        );
+    }
+
+    /// A change index the backend reports used, past the scanner's look-ahead of 20.
+    const CHAIN_USED_CHANGE: u32 = 60;
+
+    #[test]
+    fn chain_view_adopts_change_past_the_scanner_look_ahead() {
+        let (_directory, account) = chain_account();
+        let mut view = chain_view(&account, 20);
+        let spendable = view.outputs[0].outpoint.clone();
+        view.used[1].last = CHAIN_USED_CHANGE;
+        assert!(account.set_chain_view(view), "report taken");
+        let template = payment(vec![spendable.clone()]);
+        let unsigned = account.finalize_transaction(template.clone());
+        assert!(unsigned.is_ok, "finalize: {}", unsigned.error);
+        let leaves = account.spend_leaves(vec![spendable]);
+        assert!(leaves.is_ok, "spend paths: {}", leaves.error);
+        let tx = sign_adopted(
+            &account,
+            template,
+            leaves.leaves[0].clone(),
+            &unsigned.psbt,
+            CHAIN_SEED,
+        );
+        let scanner = account.inner.as_ref().expect("account").account.scanner();
+        let change = scanner.change_at(CHAIN_USED_CHANGE + 1).script_pubkey();
+        assert!(
+            tx.output
+                .iter()
+                .any(|output| output.script_pubkey == change),
+            "the change goes to the index after the one the backend reports used"
+        );
+        assert_eq!(
+            crate::musig::change_tip(scanner),
+            CHAIN_USED_CHANGE + 1,
+            "that change index is registered"
+        );
+    }
+
+    #[test]
+    fn chain_view_imports_a_psbt_of_the_backend_coins() {
+        let (_directory, account) = chain_account();
+        let mut view = chain_view(&account, 20);
+        let spendable = view.outputs[0].outpoint.clone();
+        view.used[1].last = CHAIN_USED_CHANGE;
+        assert!(account.set_chain_view(view), "report taken");
+        let unsigned = account.finalize_transaction(payment(vec![spendable.clone()]));
+        assert!(unsigned.is_ok, "finalize: {}", unsigned.error);
+        let imported = account.import_psbt(&unsigned.psbt);
+        assert!(
+            imported.is_ok && !imported.merged,
+            "a PSBT of the backend's coin matching no saved one is saved: {}",
+            imported.error
+        );
+        let saved = account.saved_psbts(false);
+        let template = &saved
+            .entries
+            .iter()
+            .find(|entry| entry.record.id == imported.record_id)
+            .expect("the imported PSBT is listed")
+            .record
+            .tx_template;
+        assert_eq!(
+            (
+                template.input_outpoints.clone(),
+                template.outputs.len(),
+                template.outputs[0].address.as_str()
+            ),
+            (vec![spendable], 1, EXTERNAL),
+            "its one recipient is the payment, the change past the scanner's look-ahead \
+             recognised as change"
+        );
+        let scanner = account.inner.as_ref().expect("account").account.scanner();
+        assert_eq!(
+            crate::musig::change_tip(scanner),
+            CHAIN_USED_CHANGE + 1,
+            "its change index is registered"
+        );
+    }
+
+    #[test]
+    fn chain_view_funds_list_the_backend_coins_spendable_now() {
+        let (_directory, account) = chain_account();
+        let view = chain_view(&account, 20);
+        let outpoints: Vec<String> = view
+            .outputs
+            .iter()
+            .map(|output| output.outpoint.clone())
+            .collect();
+        assert!(account.set_chain_view(view), "report taken");
+        let funds = account.funds_snapshot();
+        assert!(funds.is_ok, "funds: {}", funds.error);
+        let mut listed: Vec<String> = funds
+            .coins
+            .iter()
+            .map(|coin| coin.outpoint.clone())
+            .collect();
+        listed.sort();
+        let mut expected = outpoints.clone();
+        expected.sort();
+        assert_eq!(listed, expected, "the funds list the backend's coins");
+        assert_eq!(
+            funds.spendable,
+            vec![outpoints[0].clone()],
+            "spendable now: the confirmed coin, neither the immature coinbase nor the spent one"
         );
     }
 

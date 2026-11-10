@@ -36,7 +36,9 @@
 #include "modules/multikey/MusigAccountController.h"
 #include "modules/multikey/MusigAccountWidget.h"
 #include "modules/multikey/MusigPlugin.h"
+#include "modules/multikey/SignModal.h"
 
+#include <QApplication>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -47,6 +49,7 @@
 #include <QPointer>
 #include <QStringList>
 #include <QThread>
+#include <QTimer>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QWidget>
@@ -916,6 +919,9 @@ constexpr quint64 CHAIN_COIN_HEIGHT = 150;
 // Receive index 1, the first receive address, is the backend's used one: with the default
 // gap limit of 20 it watches up to index 21, and 22 needs a reveal.
 constexpr quint32 FIRST_UNWATCHED = 22;
+// The change index the backend reports used, past the account scanner's look-ahead of 20:
+// the spend's change goes to the one after, which adoption must take as change.
+constexpr quint32 CHAIN_USED_CHANGE = 60;
 const QString CHAIN_COIN =
     QStringLiteral("1111111111111111111111111111111111111111111111111111111111111111:0");
 
@@ -942,6 +948,118 @@ auto segwitScript(const QString &address) -> QByteArray {
     script.append(program);
     return script;
 }
+
+// The password sealing the chain spend's hot key.
+const char *const CHAIN_KEY_PASSWORD = "chain spend password";
+
+// The chain spend's hot key, of the BIP39 test mnemonic: its material for signing and the
+// account policy, MULTIKEY_DESCRIPTOR's musig(A,B) key path and a leaf of that key alone.
+struct ChainHotKey {
+    QString fingerprint;
+    QString descriptor;
+    std::optional<rust::Box<HotMaterial>> material;
+};
+
+auto chainHotKey() -> ChainHotKey {
+    auto key = std::make_shared<ChainHotKey>();
+    // hot_seal and hot_xpub block on Argon2id.
+    auto *worker = QThread::create([key] {
+        auto sealed = ::hot_seal("abandon abandon abandon abandon abandon abandon abandon abandon "
+                                 "abandon abandon abandon about",
+                                 CHAIN_KEY_PASSWORD, Network::Regtest);
+        require(sealed->is_ok(), "the chain spend's hot key seals");
+        key->fingerprint = QString::fromStdString(std::string(sealed->fingerprint()));
+        auto keys = ::new_keys_module(Network::Regtest);
+        require(keys->commit_hot_key(*sealed, "Chain spend key").is_ok,
+                "the chain spend's hot key commits");
+        key->material.emplace(keys->hot_material(sealed->fingerprint()));
+        auto xpub = ::hot_xpub(**key->material, CHAIN_KEY_PASSWORD, "m/87'/1'/0'/2");
+        require(xpub.is_ok, "the chain spend's hot key derives its policy xpub");
+        auto musigKeyPath =
+            QString::fromLatin1(MULTIKEY_DESCRIPTOR).section(QStringLiteral(",pk("), 0, 0);
+        key->descriptor = QStringLiteral("%1,pk([%2/87'/1'/0'/2]%3/<2;3>/*))")
+                              .arg(musigKeyPath, key->fingerprint,
+                                   QString::fromStdString(std::string(xpub.xpub)));
+        // The key signs only for the descriptors registered with it.
+        require(
+            keys->register_descriptor(sealed->fingerprint(), key->descriptor.toStdString()).is_ok,
+            "the account policy registers with the chain spend's hot key");
+        key->material.emplace(keys->hot_material(sealed->fingerprint()));
+    });
+    worker->start();
+    worker->wait();
+    delete worker;
+    return std::move(*key);
+}
+
+// `psbt_v2_hex` signed by `key`, off the GUI thread: hot_sign blocks on Argon2id.
+auto hotSigned(const ChainHotKey &key, const QString &psbt_v2_hex) -> QString {
+    auto result = std::make_shared<SignResult>();
+    auto *worker = QThread::create([&key, result, hex = psbt_v2_hex.toStdString()] {
+        *result = ::hot_sign(**key.material, CHAIN_KEY_PASSWORD, hex, {});
+    });
+    worker->start();
+    worker->wait();
+    delete worker;
+    if (!result->is_ok) {
+        qFatal("account services: the hot key signs the adopted spend: %s",
+               std::string(result->error).c_str());
+    }
+    return QString::fromStdString(std::string(result->psbt_v2_hex));
+}
+
+// How often SignModalDriver looks for the modal the adoption opens.
+constexpr int MODAL_POLL_MS = 10;
+
+// Signs the spend the account adopted while the Sign modal the adoption opens runs, its own
+// loop holding the GUI thread until it closes: imports `key`'s signature of the PSBT in
+// flight, waits for the account to finalize it, then closes the modal.
+class SignModalDriver final : public QObject {
+    Q_OBJECT
+
+public:
+    SignModalDriver(MusigAccountController *account, const ChainHotKey &key)
+        : m_account(account),
+          m_key(key) {
+        connect(&m_timer, &QTimer::timeout, this, &SignModalDriver::onPoll, qontrol::UNIQUE);
+        connect(account, &MusigAccountController::psbtImported, this,
+                &SignModalDriver::onPsbtImported, qontrol::UNIQUE);
+        m_timer.start(MODAL_POLL_MS);
+    }
+
+    // The transaction the account finalized, empty until the modal closed.
+    QString finalized;
+
+public slots:
+
+    void onPoll() {
+        auto *active = QApplication::activeModalWidget();
+        if (active == nullptr) {
+            return;
+        }
+        m_timer.stop();
+        auto *modal = qobject_cast<musig::SignModal *>(active);
+        require(modal != nullptr, "the adoption opens the Sign modal, no error");
+        m_account->importSavedPsbt(
+            QByteArray::fromHex(hotSigned(m_key, m_account->psbtInFlight()).toLatin1()));
+        waitFor([this] { return m_imported.has_value(); }, "the import answers");
+        require(m_imported->is_ok && m_imported->merged,
+                "the signed answer merges into the adopted spend");
+        waitFor([this] { return !m_account->finalizedTx().isEmpty(); }, "the spend finalizes");
+        finalized = m_account->finalizedTx();
+        modal->reject();
+    }
+
+    void onPsbtImported(const SavedPsbtImport &result) {
+        m_imported = result;
+    }
+
+private:
+    MusigAccountController *m_account;
+    const ChainHotKey &m_key;
+    QTimer m_timer;
+    std::optional<SavedPsbtImport> m_imported;
+};
 
 // The answers of the Multikey account's transaction and account services.
 class ChainReplies final : public QObject {
@@ -976,10 +1094,11 @@ auto statusLabel(MusigAccountWidget *widget) -> QString {
     return bar->m_electrum_item->m_label->text();
 }
 
-// The backend reports one coin at receive index 1, the account's first receive address,
-// that index used and its tip.
-void reportChainCoin(backend::IBlockchain *chain) {
-    auto first = ::musig_first_receive_address(rust::String(MULTIKEY_DESCRIPTOR), Network::Regtest);
+// The backend reports one coin at receive index 1, the first receive address of
+// `descriptor`, that index and change index CHAIN_USED_CHANGE used, and its tip.
+void reportChainCoin(backend::IBlockchain *chain, const QString &descriptor) {
+    auto first =
+        ::musig_first_receive_address(rust::String(descriptor.toStdString()), Network::Regtest);
     require(first.is_ok && std::string(first.path) == "0/1", "the first receive address derives");
     chain->setProperty(
         "fixtureOutputs",
@@ -990,8 +1109,11 @@ void reportChainCoin(backend::IBlockchain *chain) {
                                  {QStringLiteral("keychain"), 0},
                                  {QStringLiteral("index"), 1},
                                  {QStringLiteral("height"), CHAIN_COIN_HEIGHT}}});
-    chain->setProperty("fixtureUsed", QVariantList{QVariantMap{{QStringLiteral("keychain"), 0},
-                                                               {QStringLiteral("last"), 1}}});
+    chain->setProperty(
+        "fixtureUsed",
+        QVariantList{QVariantMap{{QStringLiteral("keychain"), 0}, {QStringLiteral("last"), 1}},
+                     QVariantMap{{QStringLiteral("keychain"), 1},
+                                 {QStringLiteral("last"), CHAIN_USED_CHANGE}}});
     chain->setProperty("fixtureTip", CHAIN_TIP);
     emit chain->coinsChanged();
 }
@@ -1000,6 +1122,25 @@ auto payment(const QStringList &inputs) -> backend::TransactionTemplate {
     return {.outputs = {backend::Output{.address = EXTERNAL, .amount = 40000}},
             .inputs = inputs,
             .feeRate = 2.0};
+}
+
+// Adopts `psbt`, ITransaction::finalize() of `crafted`, on the leaf of `key` alone, signs it
+// with that hot key and imports the answer: the account finalizes the spend of CHAIN_COIN.
+void spendThroughHotLeaf(MusigAccountController *account, const ChainHotKey &key,
+                         const backend::TransactionTemplate &crafted, const QByteArray &psbt) {
+    auto leaves = account->spendLeaves({CHAIN_COIN});
+    require(leaves.is_ok, "the backend's coin has spend paths");
+    auto leaf = std::find_if(leaves.leaves.begin(), leaves.leaves.end(), [&key](const auto &leaf) {
+        return leaf.fingerprints.size() == 1 &&
+               QString::fromStdString(std::string(leaf.fingerprints[0])) == key.fingerprint;
+    });
+    require(leaf != leaves.leaves.end() && leaf->spendable,
+            "the hot key's leaf spends the backend's coin");
+    SignModalDriver driver(account, key);
+    account->adoptTransaction(crafted, *leaf, psbt);
+    waitFor([&driver] { return !driver.finalized.isEmpty(); }, "the adopted spend is signed");
+    require(driver.finalized.contains(CHAIN_COIN.section(QLatin1Char(':'), 0, 0)),
+            "the finalized transaction spends the backend's coin");
 }
 
 // Hands out receive addresses until the one at FIRST_UNWATCHED: the backend reveals that
@@ -1026,10 +1167,12 @@ void receiveThroughReveal(backend::IAccountBackend *account, backend::IBlockchai
 } // namespace
 
 // A Multikey account on the chain fixture, an Electrum server saved: it opens no Electrum
-// connection, its status bar shows the backend, and it crafts and finalizes a spend from the
-// coin the backend reports, hands out receive addresses past what the backend used, revealing
-// the one past its window first, and keeps its labels in Multikey.
+// connection, its status bar shows the backend, and it crafts, adopts, signs with a hot key
+// and finalizes a spend from the coin the backend reports, hands out receive addresses past
+// what the backend used, revealing the one past its window first, and keeps its labels in
+// Multikey.
 void chainSpendSmoke() {
+    auto key = chainHotKey();
     auto *controller = AppController::get();
     auto multikey = std::make_unique<MusigPlugin>();
     auto *multikeyModule = qobject_cast<account::AccountModule *>(multikey->modules().first());
@@ -1040,7 +1183,7 @@ void chainSpendSmoke() {
     auto *chainModule = fixtureModule(registry, CHAIN);
     // Nothing listens there: a probe would fail, never connect.
     auto config = ::new_config(rust::String(MULTIKEY.toStdString()), Network::Regtest,
-                               rust::String(MULTIKEY_DESCRIPTOR), rust::String(""),
+                               rust::String(key.descriptor.toStdString()), rust::String(""),
                                rust::String("127.0.0.1:1"), 0, rust::String("musig"));
     require(config->save().empty(), "the Multikey account saves");
     require(::save_blockchain_backend(rust::String(MULTIKEY.toStdString()),
@@ -1075,7 +1218,7 @@ void chainSpendSmoke() {
     require(services.labels != nullptr && services.labels->parent() != chainModule,
             "the labels stay Multikey's");
 
-    reportChainCoin(services.blockchain);
+    reportChainCoin(services.blockchain, key.descriptor);
     ChainReplies replies;
     QObject::connect(services.transaction, &backend::ITransaction::coinsSelected, &replies,
                      &ChainReplies::onCoinsSelected, qontrol::UNIQUE);
@@ -1092,10 +1235,12 @@ void chainSpendSmoke() {
     auto signers = ::psbt_required_fingerprints(rust::Str(psbt->toHex().toStdString()));
     require(signers.is_ok && signers.fingerprints.size() == 3,
             "the input carries the derivation of the policy's three keys");
-    require(psbt->contains(segwitScript(QString::fromStdString(std::string(
-                ::musig_first_receive_address(rust::String(MULTIKEY_DESCRIPTOR), Network::Regtest)
-                    .address)))),
+    require(psbt->contains(segwitScript(QString::fromStdString(
+                std::string(::musig_first_receive_address(
+                                rust::String(key.descriptor.toStdString()), Network::Regtest)
+                                .address)))),
             "the input's witness UTXO is the backend's script");
+    spendThroughHotLeaf(account, key, crafted.transaction, *psbt);
 
     QObject::connect(services.account, &backend::IAccountBackend::addressCreated, &replies,
                      &ChainReplies::onAddressCreated, qontrol::UNIQUE);

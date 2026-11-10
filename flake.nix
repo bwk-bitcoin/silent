@@ -20,7 +20,7 @@
     };
 
     bwk = {
-      url = "github:bwk-bitcoin/bwk/79563c6fb0c56617ef21594b63d402f7ba90ecf1";
+      url = "github:bwk-bitcoin/bwk/479b1e6b84a8f2d3431a9758846de88154a67268";
       flake = false;
     };
 
@@ -121,9 +121,9 @@
 [source.crates-io]
 replace-with = "vendored-sources"
 
-[source."git+https://github.com/bwk-bitcoin/bwk.git?rev=79563c6fb0c56617ef21594b63d402f7ba90ecf1"]
+[source."git+https://github.com/bwk-bitcoin/bwk.git?rev=479b1e6b84a8f2d3431a9758846de88154a67268"]
 git = "https://github.com/bwk-bitcoin/bwk.git"
-rev = "79563c6fb0c56617ef21594b63d402f7ba90ecf1"
+rev = "479b1e6b84a8f2d3431a9758846de88154a67268"
 replace-with = "vendored-sources"
 
 [source."git+https://github.com/pythcoiner/blindbitd.git"]
