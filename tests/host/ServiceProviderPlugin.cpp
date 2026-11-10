@@ -5,8 +5,9 @@
 // can tell which provider served it. Payloads are heap copies: they outlive no unload.
 // The module records the last AccountWatch it was given in its properties, and its
 // blockchain reports one output per watched descriptor, paid at its birthday, unless a test
-// sets what it reports in its fixtureOutputs, fixtureUsed and fixtureTip properties. The
-// chain one alone advertises that its blockchain watches descriptors.
+// sets what it reports in its fixtureOutputs, fixtureUsed and fixtureTip properties, and
+// records the height of each rescan. The chain one alone advertises that its blockchain
+// watches descriptors.
 
 #include "interfaces/backend/account.h"
 #include "interfaces/backend/blockchain.h"
@@ -237,9 +238,16 @@ public:
         emit completed(request_id);
     }
 
-    void rescan(backend::RequestId request_id,
-                [[maybe_unused]] std::optional<quint64> from_height) override {
-        emit error(request_id, refusal());
+    // Records the height in the "rescanned" property, "none" for an unset one; refused
+    // once a test sets "fixtureRefuseRescan".
+    void rescan(backend::RequestId request_id, std::optional<quint64> from_height) override {
+        if (property("fixtureRefuseRescan").toBool()) {
+            emit error(request_id, refusal());
+            return;
+        }
+        setProperty("rescanned", from_height.has_value() ? QString::number(*from_height)
+                                                         : QString::fromLatin1("none"));
+        emit completed(request_id);
     }
 
     void setConnected(backend::RequestId request_id, [[maybe_unused]] QString connection_id,

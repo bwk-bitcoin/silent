@@ -2,7 +2,12 @@
 //!
 //! Wraps bwk-sp::Config with CXX-compatible interface for C++ bindings.
 
-use std::{path::PathBuf, str::FromStr, sync::OnceLock};
+use std::{
+    path::PathBuf,
+    str::FromStr,
+    sync::OnceLock,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use bitcoin::{
     bip32::{ChildNumber, Fingerprint, Xpub},
@@ -109,6 +114,10 @@ pub struct Config {
     /// None for the built-in Electrum.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blockchain_backend: Option<String>,
+    /// When a Multikey account was created, in unix seconds: None for an account created
+    /// before it was recorded, or restored from a backup that does not tell it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub birthday_time: Option<u64>,
     /// Base directory for account data
     #[serde(skip)]
     pub data_dir: PathBuf,
@@ -184,6 +193,7 @@ impl Config {
             scan_start: None,
             plugin_id: default_plugin_id(),
             blockchain_backend: None,
+            birthday_time: None,
             data_dir,
             load_error: None,
         }
@@ -426,6 +436,11 @@ impl Config {
         } else {
             Some(module_id)
         };
+    }
+
+    /// When the account was created, in unix seconds: 0 when unknown.
+    pub fn get_birthday_time(&self) -> u64 {
+        self.birthday_time.unwrap_or(0)
     }
 
     /// The bwk::Account config of a musig account (plugin id "musig").
@@ -746,6 +761,15 @@ pub fn create_sp_account(request: SpCreationRequest) -> AccountCreationResult {
 }
 
 pub fn create_musig_account(request: MusigCreationRequest) -> AccountCreationResult {
+    let created = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(elapsed) => elapsed.as_secs(),
+        Err(e) => {
+            return AccountCreationResult {
+                error: format!("the system clock is set before 1970: {e}"),
+                ..Default::default()
+            }
+        }
+    };
     let mut config = Config::new(
         request.account_name,
         request.network,
@@ -756,6 +780,7 @@ pub fn create_musig_account(request: MusigCreationRequest) -> AccountCreationRes
     );
     config.plugin_id = crate::musig::MUSIG_PLUGIN_ID.into();
     config.verify_certificate = request.verify_certificate;
+    config.birthday_time = Some(created);
     persist_creation(config)
 }
 

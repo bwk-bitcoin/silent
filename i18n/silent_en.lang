@@ -406,6 +406,8 @@ btn-save => "Save"
 
 btn-scan-again => "Scan Again"
 
+btn-rescan => "Rescan"
+
 btn-test-ok => "✓ Test"
 
 btn-remove-key => "Remove Key"
@@ -1295,6 +1297,12 @@ musig-backend-busy => "The blockchain backend cannot change while the account si
 musig-backend-save-failed => "Could not save the blockchain backend"
 
 musig-backend-no-electrum => "The account syncs from its blockchain backend plugin: it opens no Electrum connection."
+
+musig-rescan-label => "Rescan from height"
+
+musig-rescan-placeholder => "Block height"
+
+musig-rescan-started => "The blockchain backend scans again from block %1."
 
 musig-settings-cosigners => "Cosigners"
 

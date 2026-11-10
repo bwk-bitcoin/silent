@@ -1565,7 +1565,16 @@ name.
   id; absent means Electrum.
 - With a plugin chosen, every service but the blockchain still comes from Multikey; the
   blockchain comes from that module, its `AccountWatch` holding the account's descriptor
-  (checksummed, multipath) and no birthday, which a Multikey account does not record.
+  (checksummed, multipath) and its `birthdayTime` when the account records one. A Multikey
+  account created from now on records its creation time, in unix seconds, as
+  `birthday_time` in its config; a restored one takes it from the backup's `timestamp`, and
+  an older or restored one without it has none. It records no birthday height:
+  `birthdayHeight` stays unset.
+- While the chosen plugin supplies the blockchain, Settings shows "Rescan from height" under
+  the picker: a block height field, empty as the account records no birthday height, and
+  Rescan, which calls `IBlockchain::rescan()` from that height. Its `completed()` shows
+  that the backend scans again from that block, its `error()` the plugin's message. It is
+  hidden with Electrum chosen or the chosen plugin missing.
 - Changing the choice saves it, then the controller releases the shell and assembles again
   over the new backend, the old services handed back.
 - A chosen module no enabled plugin supplies leaves the blockchain the host's unsupported
@@ -1575,7 +1584,10 @@ name.
 
 `host_smoke --blockchain-backend` opens a Multikey account choosing the `services.chain`
 fixture (which advertises watching descriptors, `services.full` does not) before it is
-installed, then installs it, switches to Electrum and back, and disables it.
+installed, then installs it, switches to Electrum and back, and disables it. Its watch has
+no birthday; a second account, created as the creator does, hands the fixture its
+birthday time. Settings offers the rescan with the fixture chosen alone: a rescan reaches
+the fixture's blockchain with the height entered, and its refusal shows.
 
 With a plugin chosen, the account syncs from that plugin's blockchain alone:
 
@@ -1699,6 +1711,7 @@ payments. The document holds:
 | Descriptors              | `accounts`: the sp() one (`bip_392`), its sub-accounts or the policy (`bip_380`) |
 | Derivation state         | each sub-account's or policy's `receive_index` and `change_index`  |
 | SP scan start            | the SP account's `block_height`                                    |
+| Multikey creation time   | the Multikey account's `timestamp`, in unix seconds, when it records one |
 | Labels                   | `bip329_labels` of the first account, RAM edits included           |
 | Servers and settings     | `proprietary.silent`: module, BlindBit and Electrum servers, certificate check, dust limit |
 

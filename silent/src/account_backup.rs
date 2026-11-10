@@ -3,11 +3,12 @@
 //! to an SP account's scan secret.
 //!
 //! The document holds the account's descriptors, the receive and change indexes each one
-//! handed out, the block SP scanning starts from and every label, and in its
-//! `proprietary` object the servers and settings only Silent reads. It holds no signer
-//! secret: the keys stay in Keys. Coins and history are not in it either: a restored
-//! account finds them again by scanning. A Multikey account's saved PSBTs and signing
-//! sessions are left out, so a restore never brings back nonces a signer already used.
+//! handed out, the block SP scanning starts from, when a Multikey account was created and
+//! every label, and in its `proprietary` object the servers and settings only Silent
+//! reads. It holds no signer secret: the keys stay in Keys. Coins and history are not in
+//! it either: a restored account finds them again by scanning. A Multikey account's saved
+//! PSBTs and signing sessions are left out, so a restore never brings back nonces a signer
+//! already used.
 //!
 //! A restore reads, from the file's contents and in this order, BIP138(BIP139),
 //! BIP138(descriptor), a plain BIP139 document, then a plain descriptor, and restores
@@ -385,7 +386,10 @@ fn document(
 ) -> Result<WalletBackup, String> {
     let tip = |kind: &str| tips.iter().find(|tip| tip.kind == kind);
     let mut accounts = if config.plugin_id == MUSIG_PLUGIN_ID {
-        vec![bip380_account(&config.descriptor, tip(TAPROOT_KIND))]
+        vec![bip139::Account {
+            timestamp: config.birthday_time,
+            ..bip380_account(&config.descriptor, tip(TAPROOT_KIND))
+        }]
     } else {
         let mut accounts = vec![bip139::Account {
             kind: Some(bip139::TYPE_BIP392.into()),
@@ -620,6 +624,8 @@ struct Restorable {
     taproot_descriptor: String,
     settings: Settings,
     scan_start: Option<u32>,
+    /// When a Multikey account was created, in unix seconds.
+    birthday_time: Option<u64>,
     tips: Vec<Tip>,
     labels: Vec<Label>,
 }
@@ -705,6 +711,7 @@ fn multikey_account(document: &WalletBackup, restorable: &mut Restorable) -> Res
     };
     parse_musig_descriptor(descriptor).map_err(|e| Failure::InvalidDescriptor(e.to_string()))?;
     restorable.descriptor = (*descriptor).into();
+    restorable.birthday_time = account.timestamp;
     restorable.tips.extend(account_tip(account, descriptor));
     Ok(())
 }
@@ -809,6 +816,7 @@ impl Restorable {
         if self.plugin_id == SP_PLUGIN_ID {
             config.scan_start = self.scan_start;
         }
+        config.birthday_time = self.birthday_time;
         config
     }
 }

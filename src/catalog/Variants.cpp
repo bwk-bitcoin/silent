@@ -450,6 +450,10 @@ auto btnScanAgain() -> Button * {
     return make({.role = ButtonRole::Default, .label = TR("btn-scan-again"), .width = BtnWidth::M});
 }
 
+auto btnRescan() -> Button * {
+    return make({.role = ButtonRole::Default, .label = TR("btn-rescan"), .width = BtnWidth::M});
+}
+
 auto btnTest() -> Button * {
     return make({.role = ButtonRole::Default, .label = TR("common-test"), .width = BtnWidth::M});
 }

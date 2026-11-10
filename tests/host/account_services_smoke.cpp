@@ -5,8 +5,9 @@
 // service it was handed back is destroyed, the payloads it handed out outliving its unload,
 // and the account shell over one plugin and over two, its panels showing each one's data.
 // Apart, a Multikey account's blockchain backend: the plugins its Settings offers, its
-// services assembled over the chosen one with the account's watch, and a chosen backend
-// that is not installed.
+// services assembled over the chosen one with the account's watch, a created account's
+// birthday in it, the rescan from a height Settings offers with a plugin chosen alone, and a
+// chosen backend that is not installed.
 
 #include "AppController.h"
 #include "MainWindow.h"
@@ -15,8 +16,10 @@
 #include "account/AccountShell.h"
 #include "account/RequestId.h"
 #include "account/SendSigning.h"
+#include "catalog/Button.h"
 #include "catalog/display/Label.h"
 #include "catalog/form/LabelCell.h"
+#include "catalog/form/ValidatedInput.h"
 #include "catalog/inputs/ComboBox.h"
 #include "host/Host.h"
 #include "host/PluginRegistry.h"
@@ -35,6 +38,7 @@
 #include "modules/multikey/MusigPlugin.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
@@ -84,6 +88,10 @@ constexpr quint32 REVEALED_INDEX = GAP_LIMIT + 30;
 // What each output of the fixture blockchain pays, in satoshis.
 constexpr quint64 OUTPUT_SATS = 50000;
 const QString MULTIKEY = QStringLiteral("services-multikey");
+// A Multikey account created as the creator does, recording its birthday.
+const QString CREATED_MULTIKEY = QStringLiteral("services-multikey-created");
+// The height the rescan is asked from.
+constexpr quint64 RESCAN_HEIGHT = 150;
 // The chain fixture's module id: the backend the Multikey account chooses.
 const QString CHAIN_MODULE = CHAIN + QStringLiteral(".module");
 const char *const MULTIKEY_DESCRIPTOR =
@@ -765,7 +773,8 @@ void requireMissingBackend(MusigAccountWidget *widget, const char *message) {
                 !extras->m_backend_error->isHidden() &&
                 extras->m_backend_error->text() == TR("musig-backend-missing").arg(CHAIN_MODULE) &&
                 extras->m_backend_picker->currentData().toString() == CHAIN_MODULE &&
-                backendChoices(extras) == QStringList({QString(), CHAIN_MODULE}),
+                backendChoices(extras) == QStringList({QString(), CHAIN_MODULE}) &&
+                extras->m_rescan->isHidden(),
             message);
 }
 
@@ -811,6 +820,88 @@ auto savedBackend() -> QString {
 
 void deleteDeferred() {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+// Settings offers the rescan, its height empty: a Multikey account records no birthday
+// height. Each rescan asked reaches the chain plugin's blockchain with the height entered,
+// and Settings says it started, or shows the plugin's refusal.
+void rescanFromHeight(MusigAccountWidget *widget) {
+    auto *extras = backendExtras(widget);
+    auto *chain = assembledBlockchain(widget);
+    require(!extras->m_rescan->isHidden() && extras->m_rescan_input->input()->text().isEmpty() &&
+                !extras->m_rescan_btn->isEnabled() && extras->m_rescan_status->isHidden(),
+            "a plugin chosen, Settings offers a rescan from a height, empty until one is entered");
+    extras->m_rescan_input->input()->setText(QString::number(RESCAN_HEIGHT));
+    require(extras->m_rescan_btn->isEnabled(), "a height entered, the rescan can be asked");
+    emit extras->m_rescan_btn->clicked();
+    waitFor([extras] { return !extras->m_rescan_status->isHidden(); }, "the rescan is answered");
+    require(chain->property("rescanned").toString() == QString::number(RESCAN_HEIGHT) &&
+                extras->m_rescan_status->text() == TR("musig-rescan-started").arg(RESCAN_HEIGHT) &&
+                extras->m_rescan_btn->isEnabled(),
+            "the backend rescans from the height entered, and Settings says so");
+
+    chain->setProperty("rescanned", QVariant());
+    chain->setProperty("fixtureRefuseRescan", true);
+    emit extras->m_rescan_btn->clicked();
+    waitFor(
+        [extras] {
+            return extras->m_rescan_status->text() != TR("musig-rescan-started").arg(RESCAN_HEIGHT);
+        },
+        "the refused rescan is answered");
+    require(!chain->property("rescanned").isValid() &&
+                extras->m_rescan_status->text() ==
+                    QStringLiteral("services.chain refuses this request") &&
+                extras->m_rescan_btn->isEnabled(),
+            "a rescan the backend refuses shows its refusal");
+    chain->setProperty("fixtureRefuseRescan", QVariant());
+}
+
+// A Multikey account created as the creator does, the chain plugin its backend, hands the
+// plugin a watch carrying the time it was created at.
+void createdAccountBirthday(MainWindow &window, account::AccountModule *module, IModule *chain,
+                            MusigAccountWidget *opened, int watches) {
+    auto before = QDateTime::currentSecsSinceEpoch();
+    auto created = ::create_musig_account(
+        MusigCreationRequest{.account_name = rust::String(CREATED_MULTIKEY.toStdString()),
+                             .network = Network::Regtest,
+                             .descriptor = rust::String(MULTIKEY_DESCRIPTOR),
+                             .electrum_url = rust::String(""),
+                             .verify_certificate = true});
+    require(created.is_ok, "the Multikey account is created");
+    auto birthday = static_cast<qint64>(
+        ::config_from_file(rust::String(CREATED_MULTIKEY.toStdString()))->get_birthday_time());
+    require(birthday >= before && birthday <= QDateTime::currentSecsSinceEpoch(),
+            "the created account records when it was created");
+    require(::save_blockchain_backend(rust::String(CREATED_MULTIKEY.toStdString()),
+                                      rust::String(CHAIN_MODULE.toStdString())),
+            "the created account chooses the chain plugin");
+    module->startInstance(CREATED_MULTIKEY);
+    MusigAccountWidget *widget = nullptr;
+    waitFor(
+        [&window, opened, &widget] {
+            for (auto *candidate : window.findChildren<MusigAccountWidget *>()) {
+                if (candidate != opened && candidate->shell() != nullptr &&
+                    assembledBlockchain(candidate) != nullptr) {
+                    widget = candidate;
+                }
+            }
+            return widget != nullptr;
+        },
+        "the created account's services are assembled");
+    auto canonical = ::validate_musig_descriptor(rust::String(MULTIKEY_DESCRIPTOR));
+    requireWatch(chain,
+                 {.descriptors = {QString::fromStdString(std::string(canonical.descriptor))},
+                  .birthdayTime = birthday},
+                 watches, "the created account's watch carries its birthday time, no height");
+    Host::get()->removeInstance(CREATED_MULTIKEY, module);
+    waitFor(
+        [module] {
+            deleteDeferred();
+            return !module->accountUnavailable(CREATED_MULTIKEY);
+        },
+        "the created account closes");
+    require(::delete_musig_account(rust::String(CREATED_MULTIKEY.toStdString())).empty(),
+            "the created account is deleted");
 }
 
 // How long a probe of a server nothing listens on takes at most.
@@ -1096,10 +1187,12 @@ void blockchainBackendSmoke() {
             "name, the chosen one selected");
     waitFor([widget] { return widget->shell()->fundsOpen(); },
             "the funds panels open over the backend");
+    rescanFromHeight(widget);
 
     chooseBackend(widget, QString());
     require(assembledBlockchain(widget)->parent() != chain && !unsupportedBlockchain(widget),
             "Electrum chosen, the blockchain is Multikey's own");
+    require(backendExtras(widget)->m_rescan->isHidden(), "Electrum chosen, no rescan is offered");
     deleteDeferred();
     require(outstanding(chain) == 0 && savedBackend().isEmpty(),
             "Electrum chosen and saved, the chain plugin's blockchain is handed back");
@@ -1108,6 +1201,7 @@ void blockchainBackendSmoke() {
     requireChainBackend(widget, chain, 2,
                         "the plugin chosen again is handed the account's watch again");
     require(savedBackend() == CHAIN_MODULE, "the plugin choice is saved");
+    createdAccountBirthday(window, multikeyModule, chain, widget, 3);
 
     require(registry->setEnabled(CHAIN, false), "the chain plugin disable is admitted");
     waitFor(

@@ -46,6 +46,9 @@ pub struct Account {
     pub receive_index: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change_index: Option<u32>,
+    /// The account's creation time, in unix seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<u64>,
     /// The account's creation time, in block height.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_height: Option<u32>,

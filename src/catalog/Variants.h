@@ -82,6 +82,8 @@ auto btnOpenSavedPsbt(const QString &txid) -> Button *;
 auto btnOpenKeysTab() -> Button *;
 auto btnRevealMnemonic() -> Button *;
 auto btnScanAgain() -> Button *;
+// A Multikey account's Settings: rescan its blockchain backend from a height.
+auto btnRescan() -> Button *;
 auto btnTest() -> Button *;
 auto btnTestOk() -> Button *;
 auto btnTesting() -> Button *;

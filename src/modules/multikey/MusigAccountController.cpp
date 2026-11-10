@@ -208,7 +208,7 @@ auto MusigAccountController::backendModule() const -> IModule * {
     return nullptr;
 }
 
-// The account records no birthday: the backend watches the chain from its start.
+// The account records its creation time alone, no birthday height.
 auto MusigAccountController::accountWatch() const -> std::optional<backend::AccountWatch> {
     auto canonical = ::validate_musig_descriptor(accountDescriptor());
     if (!canonical.is_ok) {
@@ -216,7 +216,12 @@ auto MusigAccountController::accountWatch() const -> std::optional<backend::Acco
                    << toQString(canonical.error);
         return std::nullopt;
     }
-    return backend::AccountWatch{.descriptors = {toQString(canonical.descriptor)}};
+    backend::AccountWatch watch{.descriptors = {toQString(canonical.descriptor)}};
+    auto birthday = accountConfig().get_birthday_time();
+    if (birthday != 0) {
+        watch.birthdayTime = static_cast<qint64>(birthday);
+    }
+    return watch;
 }
 
 void MusigAccountController::reassemble() {

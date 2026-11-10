@@ -264,8 +264,8 @@ protected:
     // The module supplying the chosen blockchain backend, null for Electrum or when none
     // does.
     [[nodiscard]] auto backendModule() const -> IModule *;
-    // The account's descriptor for the backend to watch, checksummed. Unset when it does
-    // not parse.
+    // The account's descriptor for the backend to watch, checksummed, with the time it was
+    // created at when it records one. Unset when the descriptor does not parse.
     [[nodiscard]] auto accountWatch() const -> std::optional<backend::AccountWatch>;
     // Drops the panels and the services, then builds them again over the chosen backend.
     void reassemble();

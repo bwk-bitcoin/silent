@@ -2,14 +2,18 @@
 
 #include "AppController.h"
 #include "account/InterfaceEnums.h"
+#include "account/RequestId.h"
+#include "catalog/Button.h"
 #include "catalog/CopyButton.h"
 #include "catalog/Variants.h"
 #include "catalog/containers/Card.h"
 #include "catalog/containers/Section.h"
 #include "catalog/display/Label.h"
+#include "catalog/form/ValidatedInput.h"
 #include "catalog/inputs/ComboBox.h"
 #include "host/PluginRegistry.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/blockchain.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
 #include "modules/multikey/MusigAccountController.h"
@@ -17,11 +21,13 @@
 #include "modules/multikey/RegisterDescriptor.h"
 #include "theme/Palette.h"
 
+#include <QIntValidator>
 #include <QList>
 #include <QRegularExpression>
 #include <QStringList>
 #include <Qontrol>
 #include <common.h>
+#include <limits>
 #include <silent.h>
 #include <string>
 
@@ -222,6 +228,7 @@ void SettingsExtras::init() {
     m_register_btn->setEnabled(metadata.is_ok);
 
     initBackend();
+    initRescan();
 }
 
 void SettingsExtras::initBackend() {
@@ -257,6 +264,33 @@ void SettingsExtras::showSavedBackend() {
         m_backend_picker->findData(m_controller->blockchainBackend()));
 }
 
+// A Multikey account records no birthday height, so the field starts empty.
+void SettingsExtras::initRescan() {
+    m_backend = m_controller->blockchainBackendService();
+    m_rescan_input = new catalog::ValidatedInput(catalog::InputRole::Mono);
+    m_rescan_input->setWidth(Size::S);
+    m_rescan_input->setFixedWidth(resolve(Size::S));
+    m_rescan_input->input()->setPlaceholderText(TR("musig-rescan-placeholder"));
+    m_rescan_input->input()->setValidator(
+        new QIntValidator(0, std::numeric_limits<int>::max(), m_rescan_input));
+    m_rescan_btn = catalog::btnRescan();
+    m_rescan_btn->setEnabled(false);
+    m_rescan_status = new catalog::Label;
+    m_rescan_status->setWordWrap(true);
+    m_rescan_status->setVisible(false);
+    m_rescan =
+        (new qontrol::Column)
+            ->spacing(resolve(Spacing::S))
+            ->push(new catalog::Label(TR("musig-rescan-label"), catalog::LabelRole::InputLabel))
+            ->push((new qontrol::Row)
+                       ->spacing(resolve(Spacing::S))
+                       ->push(m_rescan_input)
+                       ->push(m_rescan_btn)
+                       ->pushSpacer())
+            ->push(m_rescan_status);
+    m_rescan->setVisible(m_backend != nullptr);
+}
+
 void SettingsExtras::doConnect() {
     connect(m_register_btn, &QPushButton::clicked, this, &SettingsExtras::onRegisterClicked,
             qontrol::UNIQUE);
@@ -264,6 +298,16 @@ void SettingsExtras::doConnect() {
             &SettingsExtras::onBackendActivated, qontrol::UNIQUE);
     connect(m_controller, &MusigAccountController::blockchainBackendFailed, this,
             &SettingsExtras::onBackendFailed, qontrol::UNIQUE);
+    connect(m_rescan_input, &catalog::ValidatedInput::textChanged, this,
+            &SettingsExtras::onRescanHeightChanged, qontrol::UNIQUE);
+    connect(m_rescan_btn, &QPushButton::clicked, this, &SettingsExtras::onRescanClicked,
+            qontrol::UNIQUE);
+    if (m_backend != nullptr) {
+        connect(m_backend.data(), &backend::IBlockchain::completed, this,
+                &SettingsExtras::onRescanCompleted, qontrol::UNIQUE);
+        connect(m_backend.data(), &backend::IBlockchain::error, this,
+                &SettingsExtras::onRescanError, qontrol::UNIQUE);
+    }
 }
 
 void SettingsExtras::view() {
@@ -272,7 +316,8 @@ void SettingsExtras::view() {
                             ->spacing(resolve(Spacing::S))
                             ->push(m_backend_text)
                             ->push((new qontrol::Row)->push(m_backend_picker)->pushSpacer())
-                            ->push(m_backend_error));
+                            ->push(m_backend_error)
+                            ->push(m_rescan));
 
     auto *registerRow = (new qontrol::Row)->pushSpacer()->push(m_register_btn);
     auto *policy = new catalog::Section(TR("musig-create-preview"));
@@ -329,6 +374,51 @@ void SettingsExtras::onBackendFailed(const QString &message) {
     showSavedBackend();
     m_backend_error->setText(message);
     m_backend_error->setVisible(true);
+}
+
+void SettingsExtras::onRescanHeightChanged(const QString &text) {
+    auto acceptable = m_rescan_input->input()->hasAcceptableInput();
+    if (text.isEmpty()) {
+        m_rescan_input->setState(catalog::ValidationMark::State::None);
+    } else {
+        m_rescan_input->setValid(acceptable);
+    }
+    m_rescan_btn->setEnabled(acceptable && m_rescan_req == 0);
+}
+
+// The backend may answer during the call: the request is recorded before it.
+void SettingsExtras::onRescanClicked() {
+    if (m_backend == nullptr || m_rescan_req != 0 ||
+        !m_rescan_input->input()->hasAcceptableInput()) {
+        return;
+    }
+    m_rescan_height = m_rescan_input->input()->text().toULongLong();
+    m_rescan_req = account::nextRequestId();
+    m_rescan_btn->setEnabled(false);
+    m_rescan_status->setVisible(false);
+    m_backend->rescan(m_rescan_req, m_rescan_height);
+}
+
+void SettingsExtras::onRescanCompleted(backend::RequestId request_id) {
+    if (request_id == 0 || request_id != m_rescan_req) {
+        return;
+    }
+    m_rescan_req = 0;
+    m_rescan_status->setTone(catalog::LabelTone::Secondary);
+    m_rescan_status->setText(TR("musig-rescan-started").arg(m_rescan_height));
+    m_rescan_status->setVisible(true);
+    onRescanHeightChanged(m_rescan_input->input()->text());
+}
+
+void SettingsExtras::onRescanError(backend::RequestId request_id, const QString &message) {
+    if (request_id == 0 || request_id != m_rescan_req) {
+        return;
+    }
+    m_rescan_req = 0;
+    m_rescan_status->setTone(catalog::LabelTone::Error);
+    m_rescan_status->setText(message);
+    m_rescan_status->setVisible(true);
+    onRescanHeightChanged(m_rescan_input->input()->text());
 }
 
 } // namespace musig

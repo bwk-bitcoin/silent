@@ -485,6 +485,14 @@ fn a_multikey_backup_restores_its_indexes_and_labels_without_saved_psbts() {
         accounts[0].get("block_height").is_none(),
         "a Multikey account scans from no block"
     );
+    let birthday = config
+        .birthday_time
+        .expect("a created account records its birthday");
+    assert_eq!(
+        accounts[0]["timestamp"],
+        serde_json::json!(birthday),
+        "the account's creation time is its BIP139 timestamp"
+    );
     let contents = inspect_account_backup(&bytes, vec![keys[0].1.clone()], String::new());
     assert!(contents.is_ok, "inspect the backup: {}", contents.error);
     assert_eq!(
@@ -535,6 +543,11 @@ fn a_multikey_backup_restores_its_indexes_and_labels_without_saved_psbts() {
         "the same addresses handed out"
     );
     assert_eq!(labels_of(account.labels()), labels, "the labels came back");
+    assert_eq!(
+        config.birthday_time,
+        Some(birthday),
+        "the restored account keeps the backup's birthday"
+    );
     assert!(
         account.shutdown_backend().is_empty(),
         "close the restored account"
@@ -803,9 +816,13 @@ fn a_plain_descriptor_restores_the_account_alone() {
     assert!(restored.is_ok, "restore a plain policy: {}", restored.error);
     let config = config_from_file(name.clone());
     assert_eq!(
-        (config.network, config.electrum_url.as_str()),
-        (Network::Signet, ""),
-        "on the network picked, with no server named"
+        (
+            config.network,
+            config.electrum_url.as_str(),
+            config.birthday_time
+        ),
+        (Network::Signet, "", None),
+        "on the network picked, with no server named and no birthday"
     );
     cleanup_test_account(&name);
 

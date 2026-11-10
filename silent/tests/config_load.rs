@@ -4,15 +4,21 @@
 //! carries an error message via `get_error()` when loading fails, instead of fabricating a
 //! usable default. These tests cover the valid, missing, and corrupt cases, plus the
 //! `plugin_id` default for a valid file that omits it, and the Multikey
-//! `blockchain_backend` round trip.
+//! `blockchain_backend` and `birthday_time` round trips.
 
 mod common;
 
-use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::{
+    path::PathBuf,
+    sync::OnceLock,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use common::{descriptor_from_mnemonic, TEST_MNEMONIC};
-use silent::{config_from_file, save_blockchain_backend, set_datadir, Config, Network};
+use silent::{
+    config_from_file, create_musig_account, save_blockchain_backend, set_datadir, Config,
+    MusigCreationRequest, Network,
+};
 use temp_dir::TempDir;
 
 // `set_datadir` uses a process-wide `OnceLock`, so every test in this binary must share a
@@ -208,13 +214,12 @@ fn to_sp_config_accepts_a_watch_only_descriptor() {
 
 // ===== Blockchain Backend Tests =====
 
-/// The `blockchain_backend` entry of the stored config of `config`'s account, None when
-/// the file has none.
-fn stored_blockchain_backend(config: &Config) -> Option<serde_json::Value> {
+/// The `key` entry of the stored config of `config`'s account, None when the file has none.
+fn stored_entry(config: &Config, key: &str) -> Option<serde_json::Value> {
     let stored: serde_json::Value =
         serde_json::from_slice(&common::logical::read(config, "config.json"))
             .expect("the stored config is JSON");
-    stored.get("blockchain_backend").cloned()
+    stored.get(key).cloned()
 }
 
 #[test]
@@ -244,7 +249,7 @@ fn blockchain_backend_round_trips_through_the_multikey_config() {
         "a config saved with no backend reads as Electrum"
     );
     assert_eq!(
-        stored_blockchain_backend(&saved),
+        stored_entry(&saved, "blockchain_backend"),
         None,
         "Electrum is stored as no blockchain_backend entry"
     );
@@ -261,7 +266,7 @@ fn blockchain_backend_round_trips_through_the_multikey_config() {
         "the chosen module id reads back"
     );
     assert_eq!(
-        stored_blockchain_backend(&chosen),
+        stored_entry(&chosen, "blockchain_backend"),
         Some(serde_json::Value::from("bitcoind")),
         "the module id is stored as blockchain_backend"
     );
@@ -282,7 +287,7 @@ fn blockchain_backend_round_trips_through_the_multikey_config() {
         "an empty module id reads back as Electrum"
     );
     assert_eq!(
-        stored_blockchain_backend(&electrum),
+        stored_entry(&electrum, "blockchain_backend"),
         None,
         "Electrum saved back leaves no blockchain_backend entry"
     );
@@ -295,5 +300,95 @@ fn blockchain_backend_of_a_missing_account_does_not_save() {
     assert!(
         !save_blockchain_backend("no_such_account".to_string(), "bitcoind".to_string()),
         "a missing account saves no backend"
+    );
+}
+
+// ===== Birthday Tests =====
+
+/// Unix seconds now.
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the clock is past 1970")
+        .as_secs()
+}
+
+#[test]
+fn a_created_multikey_account_records_its_birthday() {
+    shared_datadir();
+
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let master = bitcoin::bip32::Xpriv::new_master(bitcoin::Network::Regtest, &[23; 32])
+        .expect("test master");
+    let account_name = "multikey_birthday_account";
+    let before = now();
+    let created = create_musig_account(MusigCreationRequest {
+        account_name: account_name.into(),
+        network: Network::Regtest,
+        descriptor: format!(
+            "tr([{}]{}/<0;1>/*)",
+            master.fingerprint(&secp),
+            bitcoin::bip32::Xpub::from_priv(&secp, &master)
+        ),
+        electrum_url: String::new(),
+        verify_certificate: true,
+    });
+    assert!(created.is_ok, "create Multikey: {}", created.error);
+    let after = now();
+
+    let saved = config_from_file(account_name.to_string());
+    assert!(saved.is_ok(), "the config loads: {}", saved.get_error());
+    let birthday = saved.get_birthday_time();
+    assert!(
+        (before..=after).contains(&birthday),
+        "the birthday {birthday} is the creation time, between {before} and {after}"
+    );
+    assert_eq!(
+        stored_entry(&saved, "birthday_time"),
+        Some(serde_json::Value::from(birthday)),
+        "the birthday is stored as birthday_time"
+    );
+}
+
+#[test]
+fn a_multikey_config_without_a_birthday_loads_with_none() {
+    shared_datadir();
+
+    // A config written before the birthday was recorded has no birthday_time entry.
+    let account_name = "multikey_no_birthday_account";
+    let mut config = Config::new(
+        account_name.to_string(),
+        Network::Regtest,
+        "wpkh(tpubDEGU7K8ab62XbG1bKoCnHDtUx44DxVKyAQVS96EN1EUVTQRW2KnFEvTtmnUJSonudSK8HcXTexf56Kir1JzoQAzFRHfvNLEcqV7KxUHZVYa/<0;1>/*)".to_string(),
+        String::new(),
+        String::new(),
+        Some(546),
+    );
+    config.set_plugin_id("musig".to_string());
+    config.to_file();
+    assert_eq!(
+        stored_entry(&config, "birthday_time"),
+        None,
+        "no birthday is stored as no birthday_time entry"
+    );
+    let saved = config_from_file(account_name.to_string());
+    assert!(
+        saved.is_ok(),
+        "a config without a birthday loads: {}",
+        saved.get_error()
+    );
+    assert_eq!(saved.get_birthday_time(), 0, "it reads as no birthday");
+    assert!(
+        save_blockchain_backend(account_name.to_string(), "bitcoind".to_string()),
+        "the backend choice saves"
+    );
+    let rewritten = config_from_file(account_name.to_string());
+    assert_eq!(
+        (
+            rewritten.get_birthday_time(),
+            stored_entry(&rewritten, "birthday_time")
+        ),
+        (0, None),
+        "writing the config again records no birthday"
     );
 }

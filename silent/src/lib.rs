@@ -2469,6 +2469,9 @@ mod ffi {
 
         /// The module id of the blockchain backend, empty for Electrum.
         fn get_blockchain_backend(self: &Config) -> String;
+
+        /// When a Multikey account was created, in unix seconds: 0 when unknown.
+        fn get_birthday_time(self: &Config) -> u64;
     }
 
     // ===== Account Methods =====
