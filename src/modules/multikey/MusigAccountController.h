@@ -1,6 +1,7 @@
 #pragma once
 
 #include "account/ElectrumReconnect.h"
+#include "host/ServiceAssembly.h"
 #include "interfaces/backend/types.h"
 #include "interfaces/types.h"
 #include "modules/shared/AccountLifecycle.h"
@@ -67,8 +68,18 @@ public:
     [[nodiscard]] auto electrumUsable() const -> bool;
     // A signing request, a finalization, a reset or a broadcast runs.
     [[nodiscard]] auto endpointChangeRefusal() const -> QString override;
-    // What Settings shows below the endpoints: the descriptor, the cosigners and Delete.
+    // What Settings shows below the endpoints: the blockchain backend, the descriptor, the
+    // cosigners and Delete.
     auto settingsExtras() -> QWidget *;
+    // The module id of the blockchain backend chosen in Settings, empty for Electrum.
+    [[nodiscard]] auto blockchainBackend() const -> QString;
+    // A plugin is chosen as the blockchain backend but none supplies it: the services hold
+    // no blockchain until it is installed or another backend is chosen.
+    [[nodiscard]] auto blockchainBackendMissing() const -> bool;
+    // Saves `module_id`, empty for Electrum, as the blockchain backend, then assembles the
+    // services again over it, the old ones handed back. blockchainBackendFailed() answers a
+    // refusal or a failed save.
+    void chooseBlockchainBackend(const QString &module_id);
     [[nodiscard]] auto services() const -> account::ServiceContext *;
     auto module() -> IModule * override;
     // stop() waits for the worker before it drops the account.
@@ -144,6 +155,8 @@ signals:
     void savedPsbtDeleteConfirmationNeeded(QString id);
     void psbtImported(SavedPsbtImport result);
     void sessionCleared();
+    // chooseBlockchainBackend() was refused or could not save: the backend is unchanged.
+    void blockchainBackendFailed(QString message);
 
 public slots:
     void loadPanel(const QString &name);
@@ -190,6 +203,9 @@ public slots:
     void onSavedPsbtDeleteCancelled(const QString &id);
     // The first funds read answered: the panels reading them are built.
     void onFundsAnswered();
+    // A plugin was enabled or disabled: the services are assembled again when the chosen
+    // blockchain backend came or went.
+    void onEnabledPluginsChanged();
     void psbtClicked();
     void historyClicked();
     void coinsClicked();
@@ -224,6 +240,21 @@ protected:
     void refreshActiveWarning();
     void completeSavedPsbtDeletion(const QString &id, const SavedPsbtMutation &result);
     void listenNotifications();
+    // Assembles the account's services once: every one from Multikey, the blockchain from
+    // the chosen backend.
+    auto assembleServices() -> bool;
+    // Every service from Multikey but the blockchain, from the chosen backend: a plugin's
+    // is handed the account's watch, a missing one is the host's unsupported
+    // implementation, never Electrum.
+    auto serviceRequest() -> host::AssemblyRequest;
+    // The module supplying the chosen blockchain backend, null for Electrum or when none
+    // does.
+    [[nodiscard]] auto backendModule() const -> IModule *;
+    // The account's descriptor for the backend to watch, checksummed. Unset when it does
+    // not parse.
+    [[nodiscard]] auto accountWatch() const -> std::optional<backend::AccountWatch>;
+    // Drops the panels and the services, then builds them again over the chosen backend.
+    void reassemble();
     void changeEndpoint(uint64_t req_id, Endpoint endpoint, bool connected, bool retry = false);
     void startEndpointChange();
     void connectElectrum(bool retry) override;
@@ -287,4 +318,9 @@ private:
     bool m_reconnect_pending = false;
     QList<Notification> m_endpoint_notifications;
     bool m_endpoint_connect = false;
+    // The saved blockchain backend, a module id, empty for Electrum.
+    QString m_blockchain_backend;
+    // The module the assembled blockchain comes from, null for Electrum or a missing one.
+    QPointer<IModule> m_chain_module;
+    bool m_backend_saving = false;
 };

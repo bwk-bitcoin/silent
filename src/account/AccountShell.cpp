@@ -114,6 +114,16 @@ auto AccountShell::services() const -> Services {
     return m_assembly == nullptr ? Services{} : servicesOf(*m_assembly);
 }
 
+void AccountShell::release() {
+    m_panels.clear();
+    m_retired = false;
+    if (m_assembly != nullptr) {
+        // Its retirement no longer concerns this shell.
+        disconnect(m_assembly.get(), nullptr, this, nullptr);
+        m_assembly.release()->deleteLater();
+    }
+}
+
 void AccountShell::openSettings(QWidget *extras, bool lock_connected) {
     if (m_assembly == nullptr || m_panels.contains(QStringLiteral("settings"))) {
         delete extras;

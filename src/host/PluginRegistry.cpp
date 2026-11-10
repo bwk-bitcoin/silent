@@ -3,6 +3,7 @@
 #include "PluginLibrary.h"
 #include "i18n/I18nManager.h"
 #include "i18n/Tr.h"
+#include "interfaces/backend/provider.h"
 #include "interfaces/instance.h"
 
 #include <QCryptographicHash>
@@ -517,6 +518,21 @@ auto PluginRegistry::caller(IModule *module) const -> std::optional<plugin::Call
         .external = ownerIt->external,
         .pluginHash = ownerIt->plugin_hash,
     };
+}
+
+auto PluginRegistry::blockchainBackends() const -> QList<BlockchainBackend> {
+    QList<BlockchainBackend> backends;
+    for (auto *module : enabledModulesForLauncher()) {
+        auto ownerIt = m_module_owner.constFind(module);
+        if (ownerIt == m_module_owner.constEnd() || !ownerIt->watches_descriptors ||
+            !caller(module).has_value()) {
+            continue;
+        }
+        backends.append({.module = module,
+                         .moduleId = ownerIt->module_id,
+                         .name = pluginName(ownerIt->plugin_id)});
+    }
+    return backends;
 }
 
 auto PluginRegistry::creatorLaunchers() const -> QList<CreatorLauncher> {
@@ -1449,12 +1465,14 @@ void PluginRegistry::activateModule(IModule *module, const QString &plugin_id) {
         qWarning() << "Module activation has no plugin record:" << plugin_id;
         return;
     }
+    auto meta = module->meta();
     m_module_owner.insert(
-        module,
-        {.plugin_id = plugin_id,
-         .module_id = QString::fromUtf8(module->meta().value(QStringLiteral("id")).toUtf8()),
-         .plugin_hash = record->external ? record->plugin_hash : QString(),
-         .external = record->external});
+        module, {.plugin_id = plugin_id,
+                 .module_id = QString::fromUtf8(meta.value(QStringLiteral("id")).toUtf8()),
+                 .plugin_hash = record->external ? record->plugin_hash : QString(),
+                 .external = record->external,
+                 .watches_descriptors = meta.value(QString::fromLatin1(backend::WATCH_META)) ==
+                                        QLatin1String(backend::WATCH_DESCRIPTORS)});
     if (m_signer_polling) {
         module->setSignerPolling(true);
     }

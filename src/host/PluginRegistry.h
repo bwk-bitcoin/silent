@@ -37,6 +37,16 @@ public:
         QString restoreId;
     };
 
+    // A module an account can take its blockchain service from: an active module whose
+    // meta() holds backend::WATCH_META = backend::WATCH_DESCRIPTORS.
+    struct BlockchainBackend {
+        IModule *module = nullptr;
+        // Its meta() id.
+        QString moduleId;
+        // Its plugin's name.
+        QString name;
+    };
+
     void registerBuiltin(IPlugin *plugin);
     // Requests a checked background snapshot; pluginStateChanged reports completion/loading.
     void rescanDiscoveredPlugins();
@@ -70,6 +80,8 @@ public:
     // The account types of the enabled modules: the built-in ones, then the external
     // plugins' ones, each in launcher module order.
     [[nodiscard]] auto creatorLaunchers() const -> QList<CreatorLauncher>;
+    // The blockchain backends of the enabled plugins not stopping, in launcher order.
+    [[nodiscard]] auto blockchainBackends() const -> QList<BlockchainBackend>;
     bool startLauncherInstance(IModule *module, const QString &instance_id);
     void deleteInstance(IModule *module, const QString &instance_id);
     [[nodiscard]] auto accountDeletionPending(const QString &id) const -> bool;
@@ -173,6 +185,8 @@ private:
         // The library's sha256, empty for a built-in module.
         QString plugin_hash;
         bool external = false;
+        // Its meta() advertises a blockchain watching an AccountWatch.
+        bool watches_descriptors = false;
     };
 
     QString pluginId(IPlugin *plugin) const;

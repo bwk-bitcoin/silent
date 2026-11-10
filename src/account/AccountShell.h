@@ -62,6 +62,9 @@ public:
     auto assemble(const host::AssemblyRequest &request) -> bool;
     // The assembled services, while assemble() answers true.
     [[nodiscard]] auto services() const -> Services;
+    // Drops the panels, then hands the services back: the next assemble() asks for them
+    // again, even once a supplier retired them.
+    void release();
     // Settings over the services, once, `extras` under the endpoints. See view::Settings
     // for `lock_connected`.
     void openSettings(QWidget *extras, bool lock_connected);

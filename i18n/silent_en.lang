@@ -1278,6 +1278,18 @@ musig-settings-account => "Account"
 
 musig-settings-descriptor => "Descriptor"
 
+musig-settings-backend => "Blockchain backend"
+
+musig-settings-backend-text => "Where this account reads the blockchain: the built-in Electrum server, or a plugin watching its descriptors."
+
+musig-backend-electrum => "Electrum (built-in)"
+
+musig-backend-missing => "The blockchain backend %1 is not installed. Install it, or choose another backend."
+
+musig-backend-busy => "The blockchain backend cannot change while the account signs, broadcasts or changes its server."
+
+musig-backend-save-failed => "Could not save the blockchain backend"
+
 musig-settings-cosigners => "Cosigners"
 
 musig-settings-save-failed => "Could not save the Electrum server"

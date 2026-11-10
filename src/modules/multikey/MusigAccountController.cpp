@@ -8,6 +8,7 @@
 #include "account/services/ServiceContext.h"
 #include "account/views/Send.h"
 #include "catalog/feedback/MessageModal.h"
+#include "host/PluginRegistry.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
@@ -29,6 +30,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 
 namespace {
 
@@ -64,6 +66,11 @@ void MusigAccountController::init(const QString &account) {
             &MusigAccountController::onElectrumGaveUp, qontrol::UNIQUE);
     connect(this, &AccountLifecycle::settingsIdle, this, &MusigAccountController::onSettingsIdle,
             qontrol::UNIQUE);
+    auto *registry = AppController::get()->pluginRegistry();
+    if (registry != nullptr) {
+        connect(registry, &PluginRegistry::enabledPluginsChanged, this,
+                &MusigAccountController::onEnabledPluginsChanged, qontrol::UNIQUE);
+    }
 
     // Notifications come from a blocking recv() on a dedicated thread.
     connect(this, &MusigAccountController::notificationReceived, this,
@@ -77,6 +84,9 @@ void MusigAccountController::init(const QString &account) {
 
 void MusigAccountController::onAccountLoaded() {
     auto error = installLoadedConfig();
+    if (hasAccountMetadata()) {
+        m_blockchain_backend = toQString(accountConfig().get_blockchain_backend());
+    }
     m_account = std::move(*m_loading_account);
     m_loading_account = nullptr;
     if (m_account.has_value() && !m_account.value()->is_ok()) {
@@ -125,13 +135,16 @@ void MusigAccountController::listenNotifications() {
 void MusigAccountController::loadPanels() {
     m_panels_requested = true;
     // The account supplies its services once loaded.
-    if (shell() == nullptr || accountLoading() || !hasAccountMetadata() ||
-        !shell()->assemble(account::moduleServices(module(), m_services->account(),
-                                                   account::services::toNetwork(network())))) {
+    if (shell() == nullptr || accountLoading() || !hasAccountMetadata() || !assembleServices()) {
         return;
     }
     if (shell()->screen(QStringLiteral("settings")) == std::nullopt) {
         shell()->openSettings(settingsExtras(), true);
+    }
+    // No funds without a blockchain: Settings names the missing backend.
+    if (blockchainBackendMissing()) {
+        shell()->showPanel(QStringLiteral("settings"));
+        return;
     }
     if (shell()->fundsOpen() || !m_account.has_value() || !m_account.value()->is_ok()) {
         return;
@@ -149,6 +162,65 @@ void MusigAccountController::loadPanels() {
     shell()->insertPanel(new qontrol::Panel(new musig::SavedPsbts(this, services), "psbt"));
 }
 
+auto MusigAccountController::assembleServices() -> bool {
+    if (shell()->services().blockchain != nullptr) {
+        return true;
+    }
+    auto request = serviceRequest();
+    if (!shell()->assemble(request)) {
+        return false;
+    }
+    auto *const *chain = std::get_if<IModule *>(&request.blockchain);
+    m_chain_module = chain != nullptr && *chain != module() ? *chain : nullptr;
+    return true;
+}
+
+auto MusigAccountController::serviceRequest() -> host::AssemblyRequest {
+    auto request = account::moduleServices(module(), m_services->account(),
+                                           account::services::toNetwork(network()));
+    if (m_blockchain_backend.isEmpty()) {
+        return request;
+    }
+    auto *chain = backendModule();
+    auto watch = accountWatch();
+    if (chain == nullptr || !watch.has_value()) {
+        request.blockchain = host::Unsupported{};
+        return request;
+    }
+    request.blockchain = chain;
+    request.watch = watch;
+    return request;
+}
+
+auto MusigAccountController::backendModule() const -> IModule * {
+    auto *registry = AppController::get()->pluginRegistry();
+    if (m_blockchain_backend.isEmpty() || registry == nullptr) {
+        return nullptr;
+    }
+    for (const auto &backend : registry->blockchainBackends()) {
+        if (backend.moduleId == m_blockchain_backend) {
+            return backend.module;
+        }
+    }
+    return nullptr;
+}
+
+// The account records no birthday: the backend watches the chain from its start.
+auto MusigAccountController::accountWatch() const -> std::optional<backend::AccountWatch> {
+    auto canonical = ::validate_musig_descriptor(accountDescriptor());
+    if (!canonical.is_ok) {
+        qWarning() << "MusigAccountController: no descriptor to watch:"
+                   << toQString(canonical.error);
+        return std::nullopt;
+    }
+    return backend::AccountWatch{.descriptors = {toQString(canonical.descriptor)}};
+}
+
+void MusigAccountController::reassemble() {
+    shell()->release();
+    loadPanels();
+}
+
 void MusigAccountController::setShell(account::AccountShell *shell) {
     m_shell = shell;
 }
@@ -159,6 +231,17 @@ auto MusigAccountController::shell() const -> account::AccountShell * {
 
 void MusigAccountController::onFundsAnswered() {
     loadPanels();
+}
+
+void MusigAccountController::onEnabledPluginsChanged() {
+    if (m_blockchain_backend.isEmpty() || !m_panels_requested || shell() == nullptr || m_stopping ||
+        m_stop_requested || endpointsStopping() || accountDeletionPending()) {
+        return;
+    }
+    // Retired with its plugin, or the chosen backend came or went.
+    if (shell()->services().blockchain == nullptr || backendModule() != m_chain_module) {
+        reassemble();
+    }
 }
 
 auto MusigAccountController::screen(const QString &screen) const
@@ -246,6 +329,42 @@ auto MusigAccountController::module() -> IModule * {
 
 auto MusigAccountController::settingsExtras() -> QWidget * {
     return new musig::SettingsExtras(this);
+}
+
+auto MusigAccountController::blockchainBackend() const -> QString {
+    return m_blockchain_backend;
+}
+
+auto MusigAccountController::blockchainBackendMissing() const -> bool {
+    return !m_blockchain_backend.isEmpty() && m_chain_module == nullptr;
+}
+
+void MusigAccountController::chooseBlockchainBackend(const QString &module_id) {
+    if (module_id == m_blockchain_backend) {
+        return;
+    }
+    // The panels are rebuilt over the new services: nothing they run may be under way.
+    if (m_backend_saving || !m_account.has_value() || m_endpoint_busy || settingsBusy() ||
+        m_stopping || m_stop_requested || endpointsStopping() || accountDeletionPending() ||
+        !endpointChangeRefusal().isEmpty()) {
+        emit blockchainBackendFailed(TR("musig-backend-busy"));
+        return;
+    }
+    m_backend_saving = true;
+    auto saved = std::make_shared<bool>(false);
+    enqueueStorage(
+        [account = m_services->account().toStdString(), id = module_id.toStdString(), saved] {
+            *saved = ::save_blockchain_backend(rust::String(account), rust::String(id));
+        },
+        [this, module_id, saved] {
+            m_backend_saving = false;
+            if (!*saved) {
+                emit blockchainBackendFailed(TR("musig-backend-save-failed"));
+                return;
+            }
+            m_blockchain_backend = module_id;
+            reassemble();
+        });
 }
 
 auto MusigAccountController::services() const -> account::ServiceContext * {

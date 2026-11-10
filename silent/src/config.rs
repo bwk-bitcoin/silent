@@ -105,6 +105,10 @@ pub struct Config {
     /// Plugin/module identifier that owns this account
     #[serde(default = "default_plugin_id")]
     pub plugin_id: String,
+    /// The meta() id of the module a Multikey account takes its blockchain service from:
+    /// None for the built-in Electrum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blockchain_backend: Option<String>,
     /// Base directory for account data
     #[serde(skip)]
     pub data_dir: PathBuf,
@@ -179,6 +183,7 @@ impl Config {
             dust_limit,
             scan_start: None,
             plugin_id: default_plugin_id(),
+            blockchain_backend: None,
             data_dir,
             load_error: None,
         }
@@ -407,6 +412,20 @@ impl Config {
     /// Set plugin/module identifier.
     pub fn set_plugin_id(&mut self, plugin_id: String) {
         self.plugin_id = plugin_id;
+    }
+
+    /// The module id of the blockchain backend, empty for Electrum.
+    pub fn get_blockchain_backend(&self) -> String {
+        self.blockchain_backend.clone().unwrap_or_default()
+    }
+
+    /// Set the module id of the blockchain backend, empty for Electrum.
+    pub fn set_blockchain_backend(&mut self, module_id: String) {
+        self.blockchain_backend = if module_id.is_empty() {
+            None
+        } else {
+            Some(module_id)
+        };
     }
 
     /// The bwk::Account config of a musig account (plugin id "musig").
@@ -820,6 +839,23 @@ pub fn delete_config(account_name: String) -> bool {
         Ok(()) => true,
         Err(e) => {
             log::error!("failed to delete account '{account_name}': {e}");
+            false
+        }
+    }
+}
+
+/// Saves the blockchain backend of the account `account_name`, a module id, empty for
+/// Electrum. Blocks on storage I/O.
+pub fn save_blockchain_backend(account_name: String, module_id: String) -> bool {
+    match Config::from_file(account_name.clone())
+        .map_err(|e| e.to_string())
+        .and_then(|mut config| {
+            config.set_blockchain_backend(module_id);
+            config.write_file()
+        }) {
+        Ok(()) => true,
+        Err(e) => {
+            log::error!("failed to save the blockchain backend of '{account_name}': {e}");
             false
         }
     }

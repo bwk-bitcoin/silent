@@ -1548,6 +1548,34 @@ interface, and depends on no controller nor on `AccountLifecycle`.
 - When a supplier retires the assembly, the shell deletes every panel, then the assembly
   (`deleteLater()`), and assembles nothing again. Deleting the shell deletes the panels first
   too; the built-in pages delete it before their controller, which the signing steps use.
+- `release()` deletes every panel and hands the assembly back the same way, retired or not:
+  the next `assemble()` asks the providers again.
+
+### A Multikey account's blockchain backend
+
+A Multikey account takes its blockchain service from Multikey (Electrum) or from a plugin.
+A module offers itself as a blockchain backend by holding `backend::WATCH_META`
+(`"backend.watch"`) = `backend::WATCH_DESCRIPTORS` (`"descriptors"`) in its `meta()`, read
+once at activation (`src/interfaces/backend/provider.h`); the registry lists the enabled
+ones not stopping (`PluginRegistry::blockchainBackends()`). The account's Settings shows a
+Blockchain backend picker above its policy: Electrum, then each such module by its plugin's
+name.
+
+- The choice is saved in the account's config as `blockchain_backend`, the module's `meta()`
+  id; absent means Electrum.
+- With a plugin chosen, every service but the blockchain still comes from Multikey; the
+  blockchain comes from that module, its `AccountWatch` holding the account's descriptor
+  (checksummed, multipath) and no birthday, which a Multikey account does not record.
+- Changing the choice saves it, then the controller releases the shell and assembles again
+  over the new backend, the old services handed back.
+- A chosen module no enabled plugin supplies leaves the blockchain the host's unsupported
+  implementation, never Electrum: the account opens on Settings, which names the module
+  id, and opens no funds panel. Once a plugin supplying it is enabled, or it is disabled
+  while in use, the services are assembled again.
+
+`host_smoke --blockchain-backend` opens a Multikey account choosing the `services.chain`
+fixture (which advertises watching descriptors, `services.full` does not) before it is
+installed, then installs it, switches to Electrum and back, and disables it.
 
 The built-in SP and Multikey services (`account::AccountServices`) read and work on the
 controller's Rust account directly: funds, history, transaction details, labels, receive

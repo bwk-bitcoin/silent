@@ -204,6 +204,7 @@ void pluginRemovalUiSmoke(const QString &shots);
 void pluginRemovalReadFailureSmoke(const QString &shots);
 void pluginAccessSettingsFailureSmoke(const QString &shots);
 void accountServicesSmoke();
+void blockchainBackendSmoke();
 void backendServicesSmoke();
 void offlineSelectionSmoke(const QString &account, const QString &outpoint);
 void psbtTransferSmoke(const QString &account, const QString &psbt_file, const QString &txid,
@@ -363,6 +364,13 @@ auto main(int argc, char *argv[]) -> int {
         Theme::get()->apply();
         smoke::accountServicesSmoke();
         std::fprintf(stdout, "Account services smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.contains(QStringLiteral("--blockchain-backend"))) {
+        Theme::init();
+        Theme::get()->apply();
+        smoke::blockchainBackendSmoke();
+        std::fprintf(stdout, "Blockchain backend smoke: OK\n");
         return gOk ? 0 : 1;
     }
 #endif

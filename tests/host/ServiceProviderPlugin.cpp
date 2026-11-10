@@ -4,7 +4,8 @@
 // later. Every getter answers this plugin's id so a consumer
 // can tell which provider served it. Payloads are heap copies: they outlive no unload.
 // The module records the last AccountWatch it was given in its properties, and its
-// blockchain reports one output per watched descriptor, paid at its birthday.
+// blockchain reports one output per watched descriptor, paid at its birthday. The chain
+// one alone advertises that its blockchain watches descriptors.
 
 #include "interfaces/backend/account.h"
 #include "interfaces/backend/blockchain.h"
@@ -327,7 +328,13 @@ public:
     using IModule::IModule;
 
     [[nodiscard]] auto meta() const -> QMap<QString, QString> override {
-        return {{QString::fromLatin1("id"), pluginId() + QString::fromLatin1(".module")}};
+        QMap<QString, QString> meta{
+            {QString::fromLatin1("id"), pluginId() + QString::fromLatin1(".module")}};
+#ifdef SILENT_SERVICE_CHAIN_FIXTURE
+        meta.insert(QString::fromLatin1(backend::WATCH_META),
+                    QString::fromLatin1(backend::WATCH_DESCRIPTORS));
+#endif
+        return meta;
     }
 
     auto list() -> ReqId override {

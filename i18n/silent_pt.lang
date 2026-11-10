@@ -712,6 +712,16 @@ main-window-title
 => "Silent - Silent Payments Wallet";;
 musig-account-restore => "Restore Multikey Wallet" => "Restore Multikey Wallet"
 musig-account-type => "Multikey Wallet" => "NONE"
+musig-backend-busy
+=> "The blockchain backend cannot change while the account signs, broadcasts or changes its server."
+=> "The blockchain backend cannot change while the account signs, broadcasts or changes its server.";;
+musig-backend-electrum => "Electrum (built-in)" => "Electrum (built-in)"
+musig-backend-missing
+=> "The blockchain backend %1 is not installed. Install it, or choose another backend."
+=> "The blockchain backend %1 is not installed. Install it, or choose another backend.";;
+musig-backend-save-failed
+=> "Could not save the blockchain backend"
+=> "Could not save the blockchain backend";;
 musig-count-block => "1 block" => "1 block"
 musig-count-blocks => "%1 blocks" => "%1 blocks"
 musig-count-day => "1 day" => "1 day"
@@ -881,6 +891,10 @@ musig-send-session-lost
 => "NONE";;
 musig-send-spend-path => "Spend path" => "NONE"
 musig-settings-account => "Account" => "NONE"
+musig-settings-backend => "Blockchain backend" => "Blockchain backend"
+musig-settings-backend-text
+=> "Where this account reads the blockchain: the built-in Electrum server, or a plugin watching its descriptors."
+=> "Where this account reads the blockchain: the built-in Electrum server, or a plugin watching its descriptors.";;
 musig-settings-cosigners => "Cosigners" => "NONE"
 musig-settings-descriptor => "Descriptor" => "NONE"
 musig-settings-devices => "Signing Devices" => "Signing Devices"

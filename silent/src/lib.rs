@@ -2297,6 +2297,11 @@ mod ffi {
         /// Load config from file.
         fn config_from_file(account_name: String) -> Box<Config>;
 
+        /// Saves the blockchain backend of a Multikey account, a module id, empty for
+        /// Electrum. False, logged, when the config cannot be read or written. Blocks on
+        /// I/O.
+        fn save_blockchain_backend(account_name: String, module_id: String) -> bool;
+
         /// List all existing configs.
         fn list_configs() -> Vec<String>;
         fn list_module_configs(plugin_id: &str) -> Vec<String>;
@@ -2379,6 +2384,9 @@ mod ffi {
 
         /// Set plugin/module identifier.
         fn set_plugin_id(self: &mut Config, plugin_id: String);
+
+        /// The module id of the blockchain backend, empty for Electrum.
+        fn get_blockchain_backend(self: &Config) -> String;
     }
 
     // ===== Account Methods =====
@@ -3751,8 +3759,8 @@ pub use bbqr::{bbqr_frames, bbqr_scanner_new, bbqr_text_scanner_new, BbqrFrames,
 pub use camera::{camera_list, camera_open, CameraHandle};
 pub use config::{
     config_from_file, create_musig_account, create_sp_account, delete_config, list_configs,
-    list_module_configs, new_config, segwit_descriptor_for, set_datadir, taproot_descriptor_for,
-    Config, CONFIG_FILE,
+    list_module_configs, new_config, save_blockchain_backend, segwit_descriptor_for, set_datadir,
+    taproot_descriptor_for, Config, CONFIG_FILE,
 };
 pub use coordination::{
     coordination_accept, coordination_prepare, coordination_release, transaction_broadcast,

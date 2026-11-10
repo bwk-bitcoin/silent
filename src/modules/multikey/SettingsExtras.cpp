@@ -7,6 +7,8 @@
 #include "catalog/containers/Card.h"
 #include "catalog/containers/Section.h"
 #include "catalog/display/Label.h"
+#include "catalog/inputs/ComboBox.h"
+#include "host/PluginRegistry.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
@@ -218,14 +220,60 @@ void SettingsExtras::init() {
 
     m_register_btn = catalog::btnRegisterDescriptor();
     m_register_btn->setEnabled(metadata.is_ok);
+
+    initBackend();
+}
+
+void SettingsExtras::initBackend() {
+    m_backend_text = new catalog::Label(TR("musig-settings-backend-text"));
+    m_backend_text->setTone(catalog::LabelTone::Secondary);
+    m_backend_text->setWordWrap(true);
+
+    m_backend_picker = new catalog::ComboBox;
+    m_backend_picker->setMinimumWidth(metric::SETTINGS_PICKER_WIDTH);
+    m_backend_picker->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_backend_picker->addItem(TR("musig-backend-electrum"), QString());
+    auto *registry = AppController::get()->pluginRegistry();
+    auto backends = registry != nullptr ? registry->blockchainBackends()
+                                        : QList<PluginRegistry::BlockchainBackend>();
+    for (const auto &backend : backends) {
+        m_backend_picker->addItem(backend.name, backend.moduleId);
+    }
+    auto chosen = m_controller->blockchainBackend();
+    if (m_backend_picker->findData(chosen) < 0) {
+        m_backend_picker->addItem(chosen, chosen);
+    }
+
+    m_backend_error = new catalog::Label;
+    m_backend_error->setTone(catalog::LabelTone::Error);
+    m_backend_error->setWordWrap(true);
+    m_backend_error->setText(TR("musig-backend-missing").arg(chosen));
+    m_backend_error->setVisible(m_controller->blockchainBackendMissing());
+    showSavedBackend();
+}
+
+void SettingsExtras::showSavedBackend() {
+    m_backend_picker->setCurrentIndex(
+        m_backend_picker->findData(m_controller->blockchainBackend()));
 }
 
 void SettingsExtras::doConnect() {
     connect(m_register_btn, &QPushButton::clicked, this, &SettingsExtras::onRegisterClicked,
             qontrol::UNIQUE);
+    connect(m_backend_picker, qOverload<int>(&QComboBox::activated), this,
+            &SettingsExtras::onBackendActivated, qontrol::UNIQUE);
+    connect(m_controller, &MusigAccountController::blockchainBackendFailed, this,
+            &SettingsExtras::onBackendFailed, qontrol::UNIQUE);
 }
 
 void SettingsExtras::view() {
+    auto *backend = new catalog::Section(TR("musig-settings-backend"));
+    backend->setContent((new qontrol::Column)
+                            ->spacing(resolve(Spacing::S))
+                            ->push(m_backend_text)
+                            ->push((new qontrol::Row)->push(m_backend_picker)->pushSpacer())
+                            ->push(m_backend_error));
+
     auto *registerRow = (new qontrol::Row)->pushSpacer()->push(m_register_btn);
     auto *policy = new catalog::Section(TR("musig-create-preview"));
     policy->setContent(
@@ -241,7 +289,11 @@ void SettingsExtras::view() {
     auto *descriptor = new catalog::Section(TR("musig-settings-descriptor"));
     descriptor->setContent(descriptorCard);
 
-    auto *col = (new qontrol::Column)->spacing(resolve(Spacing::L))->push(policy)->push(descriptor);
+    auto *col = (new qontrol::Column)
+                    ->spacing(resolve(Spacing::L))
+                    ->push(backend)
+                    ->push(policy)
+                    ->push(descriptor);
     setLayout(col->layout());
 }
 
@@ -259,6 +311,24 @@ auto SettingsExtras::keyAliases(const QList<KeyEntry> &entries) -> QHash<QString
 
 void SettingsExtras::onRegisterClicked() {
     AppController::execModal(new modal::RegisterDescriptor(m_controller));
+}
+
+// A saved choice rebuilds Settings over the new services.
+void SettingsExtras::onBackendActivated(int index) {
+    auto moduleId = m_backend_picker->itemData(index).toString();
+    if (moduleId == m_controller->blockchainBackend()) {
+        return;
+    }
+    m_backend_picker->setEnabled(false);
+    m_backend_error->setVisible(false);
+    m_controller->chooseBlockchainBackend(moduleId);
+}
+
+void SettingsExtras::onBackendFailed(const QString &message) {
+    m_backend_picker->setEnabled(true);
+    showSavedBackend();
+    m_backend_error->setText(message);
+    m_backend_error->setVisible(true);
 }
 
 } // namespace musig

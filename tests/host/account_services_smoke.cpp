@@ -4,22 +4,34 @@
 // keep nothing, a supplying plugin retained until the assembly using it is deleted and every
 // service it was handed back is destroyed, the payloads it handed out outliving its unload,
 // and the account shell over one plugin and over two, its panels showing each one's data.
+// Apart, a Multikey account's blockchain backend: the plugins its Settings offers, its
+// services assembled over the chosen one with the account's watch, and a chosen backend
+// that is not installed.
 
 #include "AppController.h"
+#include "MainWindow.h"
 #include "PluginBundleFixture.h"
+#include "account/AccountModule.h"
 #include "account/AccountShell.h"
 #include "account/SendSigning.h"
+#include "catalog/display/Label.h"
 #include "catalog/form/LabelCell.h"
+#include "catalog/inputs/ComboBox.h"
 #include "host/Host.h"
 #include "host/PluginRegistry.h"
 #include "host/ServiceAssembly.h"
+#include "i18n/Tr.h"
 #include "interfaces/backend/account.h"
 #include "interfaces/backend/blockchain.h"
 #include "interfaces/backend/labels.h"
 #include "interfaces/backend/provider.h"
 #include "interfaces/backend/settings.h"
 #include "interfaces/backend/transaction.h"
+#include "interfaces/keys.h"
 #include "interfaces/module.h"
+#include "modules/multikey/MusigAccountController.h"
+#include "modules/multikey/MusigAccountWidget.h"
+#include "modules/multikey/MusigPlugin.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -38,6 +50,10 @@
 #include <optional>
 #include <silent.h>
 #include <utility>
+
+#define private public
+#include "modules/multikey/SettingsExtras.h"
+#undef private
 
 namespace smoke {
 namespace {
@@ -62,6 +78,15 @@ constexpr quint32 GAP_LIMIT = 50;
 constexpr quint32 REVEALED_INDEX = GAP_LIMIT + 30;
 // What each output of the fixture blockchain pays, in satoshis.
 constexpr quint64 OUTPUT_SATS = 50000;
+const QString MULTIKEY = QStringLiteral("services-multikey");
+// The chain fixture's module id: the backend the Multikey account chooses.
+const QString CHAIN_MODULE = CHAIN + QStringLiteral(".module");
+const char *const MULTIKEY_DESCRIPTOR =
+    "tr(musig([4ba43603/87'/1'/0'/2]tpubDFGmrfdE8Bya4CPLde4Q54gxkY4KKJzzs6y5tGWxVEcrfmzZb17aCamv"
+    "X9k1UwKPPHtd7u5WqyS5SiRwxBZvHhbCJumqwECQQycuAmYtfzZ,[8dfc9b34/87'/1'/0'/2]tpubDFWeBGy8cbQXd"
+    "CA37ePK189L12ML8fZCuuG9EZtwybxBx2jrVRLrWwsXvRHvXuCS5Q6sRyLB92TsidhBVbwWoeTAxDsDC2w5vQmPVnL2v"
+    "KB)/<0;1>/*,pk([56c4fac3/87'/1'/0'/2]tpubDE1s5mmJDMZQ9uwi2KHe99ioqqEpwwZbAmAWP1UK6Y6zHLTKQw"
+    "hkGLeSsQi38VaBwzfWtUrSL7v4tD1DPmHKjSfXBRbXVYUVboM7idebk7T/<2;3>/*))";
 
 void require(bool condition, const char *message) {
     if (!condition) {
@@ -687,6 +712,99 @@ void shellRetirement(PluginRegistry *registry, IModule *full) {
     require(replies.stopError.isEmpty(), "the chain plugin stops cleanly");
 }
 
+// The Settings extras of the open Multikey account of `widget`, once built.
+auto backendExtras(MusigAccountWidget *widget) -> musig::SettingsExtras * {
+    waitFor(
+        [widget] { return widget->controller()->screen(QStringLiteral("settings")).has_value(); },
+        "the Multikey Settings is built");
+    auto *extras = widget->controller()
+                       ->screen(QStringLiteral("settings"))
+                       .value()
+                       ->findChild<musig::SettingsExtras *>();
+    require(extras != nullptr, "the Multikey Settings shows its extras");
+    return extras;
+}
+
+// The module id of each entry of the backend picker, empty for Electrum.
+auto backendChoices(const musig::SettingsExtras *extras) -> QStringList {
+    QStringList choices;
+    for (int index = 0; index < extras->m_backend_picker->count(); ++index) {
+        choices.append(extras->m_backend_picker->itemData(index).toString());
+    }
+    return choices;
+}
+
+// The shell's blockchain, once assembled.
+auto assembledBlockchain(MusigAccountWidget *widget) -> backend::IBlockchain * {
+    return widget->shell()->services().blockchain;
+}
+
+// The account's blockchain is the host's unsupported implementation, which the assembly
+// owns: neither Electrum nor a plugin's.
+auto unsupportedBlockchain(MusigAccountWidget *widget) -> bool {
+    auto *blockchain = assembledBlockchain(widget);
+    return blockchain != nullptr &&
+           qobject_cast<host::ServiceAssembly *>(blockchain->parent()) != nullptr;
+}
+
+// Settings shows the chosen backend `CHAIN_MODULE` as missing, by its id, and the account
+// opens no funds panel.
+void requireMissingBackend(MusigAccountWidget *widget, const char *message) {
+    auto *extras = backendExtras(widget);
+    require(widget->controller()->blockchainBackendMissing() && unsupportedBlockchain(widget) &&
+                !widget->shell()->fundsOpen() &&
+                widget->shell()
+                    ->screen(QStringLiteral("settings"))
+                    .value()
+                    ->isVisibleTo(widget->shell()->widget()) &&
+                !extras->m_backend_error->isHidden() &&
+                extras->m_backend_error->text() == TR("musig-backend-missing").arg(CHAIN_MODULE) &&
+                extras->m_backend_picker->currentData().toString() == CHAIN_MODULE &&
+                backendChoices(extras) == QStringList({QString(), CHAIN_MODULE}),
+            message);
+}
+
+// Picks `module_id` in the backend picker as the user does, then waits for the services
+// assembled over it.
+void chooseBackend(MusigAccountWidget *widget, const QString &module_id) {
+    auto *picker = backendExtras(widget)->m_backend_picker;
+    auto index = picker->findData(module_id);
+    require(index >= 0, "the backend picker lists the backend");
+    picker->setCurrentIndex(index);
+    emit picker->activated(index);
+    require(!picker->isEnabled(), "the picker waits for the choice to save");
+    waitFor(
+        [widget, &module_id] {
+            return widget->controller()->blockchainBackend() == module_id &&
+                   assembledBlockchain(widget) != nullptr;
+        },
+        "the services are assembled again over the chosen backend");
+}
+
+// The chain plugin was asked its blockchain `watches` times, with the account's
+// checksummed descriptor, no birthday and the default gap limit, and supplies it alone.
+void requireChainBackend(MusigAccountWidget *widget, IModule *chain, int watches,
+                         const char *message) {
+    auto canonical = ::validate_musig_descriptor(rust::String(MULTIKEY_DESCRIPTOR));
+    auto descriptor = QString::fromStdString(std::string(canonical.descriptor));
+    require(canonical.is_ok && descriptor.contains(QLatin1Char('#')),
+            "the account's descriptor has a checksum");
+    requireWatch(chain, {.descriptors = {descriptor}}, watches, message);
+    require(assembledBlockchain(widget)->parent() == chain && outstanding(chain) == 1 &&
+                !widget->controller()->blockchainBackendMissing() &&
+                backendExtras(widget)->m_backend_error->isHidden(),
+            "the blockchain alone comes from the chain plugin");
+}
+
+auto savedBackend() -> QString {
+    return QString::fromStdString(std::string(
+        ::config_from_file(rust::String(MULTIKEY.toStdString()))->get_blockchain_backend()));
+}
+
+void deleteDeferred() {
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
 } // namespace
 
 void accountServicesSmoke() {
@@ -710,6 +828,84 @@ void accountServicesSmoke() {
     retention(host, registry, std::move(split), full, chain, builtin);
     shellOneProvider(full);
     shellRetirement(registry, full);
+}
+
+// A Multikey account choosing the chain fixture as its blockchain backend: missing until the
+// plugin is installed, then its blockchain watching the account; Electrum again hands it
+// back, and the plugin disabled shows the missing backend again.
+void blockchainBackendSmoke() {
+    auto *controller = AppController::get();
+    auto multikey = std::make_unique<MusigPlugin>();
+    auto *multikeyModule = qobject_cast<account::AccountModule *>(multikey->modules().first());
+    controller->registerBuiltinPlugin(std::move(multikey));
+    auto *registry = controller->pluginRegistry();
+    waitFor([registry] { return !registry->pluginStateLoading(); }, "the plugin state loads");
+    // Supplies a blockchain, but does not advertise that it watches descriptors.
+    enableFixture(registry, FULL, SILENT_SERVICE_FULL_FIXTURE);
+    auto *full = fixtureModule(registry, FULL);
+    auto config = ::new_config(rust::String(MULTIKEY.toStdString()), Network::Regtest,
+                               rust::String(MULTIKEY_DESCRIPTOR), rust::String(""),
+                               rust::String(""), 0, rust::String("musig"));
+    require(config->save().empty(), "the Multikey account saves");
+    require(::save_blockchain_backend(rust::String(MULTIKEY.toStdString()),
+                                      rust::String(CHAIN_MODULE.toStdString())),
+            "the account chooses the chain plugin as its blockchain backend");
+    MainWindow window;
+    controller->start(&window);
+    multikeyModule->startInstance(MULTIKEY);
+    auto *widget = window.findChild<MusigAccountWidget *>();
+    require(widget != nullptr, "the Multikey account opens in a tab");
+    waitFor([widget] { return assembledBlockchain(widget) != nullptr; },
+            "the account's services are assembled");
+    requireMissingBackend(widget, "a chosen backend not installed opens Settings naming it, with "
+                                  "no blockchain and no funds: no fallback to Electrum");
+    require(outstanding(full) == 0, "a plugin not advertising descriptor watching is not used");
+
+    enableFixture(registry, CHAIN, SILENT_SERVICE_CHAIN_FIXTURE);
+    auto *chain = fixtureModule(registry, CHAIN);
+    waitFor([widget, chain] { return assembledBlockchain(widget)->parent() == chain; },
+            "installing the chosen backend assembles the services over its blockchain");
+    requireChainBackend(widget, chain, 1, "the installed backend is handed the account's watch");
+    auto *extras = backendExtras(widget);
+    require(backendChoices(extras) == QStringList({QString(), CHAIN_MODULE}) &&
+                extras->m_backend_picker->itemText(0) == TR("musig-backend-electrum") &&
+                extras->m_backend_picker->itemText(1) == CHAIN &&
+                extras->m_backend_picker->currentIndex() == 1,
+            "Settings offers Electrum and the plugin advertising descriptor watching, by its "
+            "name, the chosen one selected");
+    waitFor([widget] { return widget->shell()->fundsOpen(); },
+            "the funds panels open over the backend");
+
+    chooseBackend(widget, QString());
+    require(assembledBlockchain(widget)->parent() != chain && !unsupportedBlockchain(widget),
+            "Electrum chosen, the blockchain is Multikey's own");
+    deleteDeferred();
+    require(outstanding(chain) == 0 && savedBackend().isEmpty(),
+            "Electrum chosen and saved, the chain plugin's blockchain is handed back");
+
+    chooseBackend(widget, CHAIN_MODULE);
+    requireChainBackend(widget, chain, 2,
+                        "the plugin chosen again is handed the account's watch again");
+    require(savedBackend() == CHAIN_MODULE, "the plugin choice is saved");
+
+    require(registry->setEnabled(CHAIN, false), "the chain plugin disable is admitted");
+    waitFor(
+        [registry, widget] {
+            deleteDeferred();
+            return !registry->isPluginEnabled(CHAIN) && unsupportedBlockchain(widget);
+        },
+        "the chain plugin stops");
+    requireMissingBackend(widget, "the chosen backend disabled, Settings names it again");
+
+    Host::get()->removeInstance(MULTIKEY, multikeyModule);
+    waitFor(
+        [multikeyModule] {
+            deleteDeferred();
+            return !multikeyModule->accountUnavailable(MULTIKEY);
+        },
+        "the Multikey account closes");
+    require(::delete_musig_account(rust::String(MULTIKEY.toStdString())).empty(),
+            "the Multikey account is deleted");
 }
 
 } // namespace smoke

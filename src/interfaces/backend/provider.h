@@ -24,6 +24,13 @@ enum class ServiceKind : quint8 {
     Settings
 };
 
+// The meta() entry of a module whose Blockchain service watches the AccountWatch it is
+// given: key WATCH_META, value WATCH_DESCRIPTORS. A descriptor-based account offers such a
+// module as its blockchain backend. Not inline: an inline variable is a unique symbol, which
+// keeps a plugin library from being unloaded.
+constexpr auto WATCH_META = "backend.watch";
+constexpr auto WATCH_DESCRIPTORS = "descriptors";
+
 // Optional facet of an IModule, found with qobject_cast<backend::IServiceProvider *>: a
 // module declaring it supplies some of an account UI's services. The host asks each
 // service from the provider it was assigned to, so one account UI can use services of
