@@ -25,7 +25,7 @@ public slots:
     // on bytes it defines, answered by rawResult(). An unknown operation answers error().
     virtual void raw(backend::RequestId request_id, QString operation, QByteArray payload) = 0;
 
-    // value() alike on Qt JSON, answered by valueResult().
+    // raw() alike on Qt JSON, answered by valueResult().
     virtual void value(backend::RequestId request_id, QString operation, QJsonValue payload) = 0;
 
 signals:

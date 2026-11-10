@@ -25,7 +25,9 @@ enum class Network : quint8 {
     Testnet,
     // Testnet4 (BIP94).
     Testnet4,
+    // The default signet (BIP325).
     Signet,
+    // A local regression test network.
     Regtest
 };
 
@@ -46,6 +48,7 @@ struct Output {
 
 // A transaction to build: its recipients, its inputs and its fee.
 struct TransactionTemplate {
+    // The recipients, in the order of the transaction's outputs; change is not among them.
     QList<Output> outputs;
     // Canonical txid:vout identifiers of the coins spent, empty while none is picked: such a
     // template stays incomplete until ITransaction::selectCoins() picks them.
@@ -70,6 +73,7 @@ struct CraftResult {
     // The template checked; once complete, the whole transaction: its inputs, the `maximum`
     // amount resolved and the absolute fee it pays in `fee`.
     TransactionTemplate transaction;
+    // Whether `transaction` can be built as it is, and why not.
     Completion completion;
 };
 
@@ -148,7 +152,10 @@ struct Balance {
     quint64 confirmed{};
     // Of the coins not yet confirmed.
     quint64 unconfirmed{};
+    // How many unspent coins `confirmed` sums: those with a block height at the account's
+    // last scanned tip.
     quint64 confirmedCount{};
+    // How many unspent coins `unconfirmed` sums: those with no block height yet.
     quint64 unconfirmedCount{};
 };
 
@@ -267,6 +274,7 @@ struct BlockchainState {
     QString error;
 };
 
+// The outcome of IBlockchain::broadcast().
 enum class BroadcastOutcome : quint8 {
     // The server took the transaction, or already held it.
     Accepted,
@@ -280,6 +288,7 @@ enum class BroadcastOutcome : quint8 {
 struct BroadcastResult {
     // Hex txid of the transaction, empty when its bytes do not decode.
     QString txid;
+    // Whether the server took it.
     BroadcastOutcome outcome{BroadcastOutcome::Unknown};
     // In words for the user: why it is not Accepted, empty when it is.
     QString error;
@@ -297,13 +306,18 @@ enum class LabelKind : quint8 {
     Transaction
 };
 
+// What a label is put on, as ILabels reads and sets it: one address, outpoint or
+// transaction of the account.
 struct LabelKey {
+    // Which kind of thing `id` names.
     LabelKind kind{LabelKind::Transaction};
     // The address, outpoint or txid `kind` names, in its form.
     QString id;
 };
 
+// A label of the account: a short user text put on an address, outpoint or transaction.
 struct Label {
+    // What it is put on.
     LabelKey key;
     // As ILabels::setLabel() set it: a label set to an empty text is removed.
     QString text;
@@ -356,6 +370,7 @@ struct Endpoint {
 
 // The settings of an account's blockchain service.
 struct Settings {
+    // The network the account is on.
     Network network{Network::Bitcoin};
     // save() may change `network`. False in the built-in accounts, which refuse it.
     bool networkEditable{};
