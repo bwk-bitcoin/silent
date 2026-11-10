@@ -318,7 +318,11 @@ void RestoreAccount::showDecrypt(const QStringList &derivation_paths) {
     // and the xpub field and file are left out.
     m_airgap_text->setText(scanKeyOnly() ? TR("restore-scan-key-help") : TR("restore-airgap-help"));
     m_option_fields->setVisible(!scanKeyOnly());
-    if (m_module != nullptr) {
+    // No device gives a scan key: a backup only one opens lists no device and leads with
+    // the keys of Keys.
+    m_decrypt_text->setVisible(!scanKeyOnly());
+    m_device_rows->setVisible(!scanKeyOnly());
+    if (m_module != nullptr && !scanKeyOnly()) {
         Host::get()->requestSignerPolling(m_module, true);
     }
     refreshDevices();
@@ -487,7 +491,7 @@ void RestoreAccount::listKeys() {
 void RestoreAccount::refreshKeyRows() {
     catalog::clearRows(m_key_rows);
     m_key_rows->spacing(resolve(Spacing::S));
-    m_keys_text->setVisible(!m_keys_tried.isEmpty());
+    m_keys_text->setVisible(scanKeyOnly() || !m_keys_tried.isEmpty());
     for (const auto &key : m_keys_tried) {
         auto *row = new catalog::SelectRow;
         row->setIcon(icon::key);

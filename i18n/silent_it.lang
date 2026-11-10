@@ -1183,8 +1183,8 @@ restore-key-failed
 => "Its scan key cannot decrypt this file"
 => "Its scan key cannot decrypt this file";;
 restore-keys-text
-=> "This backup opens with a silent payment scan key, which no connected device gives. Ask one of your keys for it:"
-=> "Or ask one of your keys for the silent payment scan key that opens this backup:";;
+=> "This backup opens only with the account's silent payment scan key, which no signing device gives: ask its key in Keys for it, or enter the key's mnemonic under Other options."
+=> "This backup opens only with the account's silent payment scan key, which no signing device gives: ask its key in Keys for it, or enter the key's mnemonic under Other options.";;
 restore-locked
 => "None of the keys given opens this backup."
 => "None of the keys given opens this backup.";;

@@ -656,12 +656,11 @@ void decryptWithScanKey(const QByteArray &backup, IModule *owner) {
     FakeDeviceInstance usb(QStringLiteral("fake.usb"), QStringLiteral("73c5da0a"),
                            {{SP_SPEND_PATH, SP_XPUB}});
     Host::get()->registerInstance(usb.id(), &usb, owner);
-    waitFor(
-        [&modal] {
-            return deviceRows(*modal).contains(QStringLiteral("Jade #73c5da0a ") +
-                                               TR("restore-device-no-scan-key"));
-        },
-        "a connected device is listed as giving no scan key");
+    QCoreApplication::processEvents();
+    require(modal->m_decrypt_text->isHidden() && modal->m_device_rows->isHidden() &&
+                !modal->m_keys_text->isHidden() &&
+                modal->m_keys_text->text() == TR("restore-keys-text"),
+            "no device gives a scan key: the view lists none and leads with the keys of Keys");
     require(usb.device()->asked().isEmpty(), "the device is asked no xpub for a scan key");
     require(modal->m_option_fields->isHidden() && !modal->m_mnemonic_fields->isHidden() &&
                 modal->m_airgap_text->text() == TR("restore-scan-key-help"),
