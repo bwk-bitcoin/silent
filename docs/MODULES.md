@@ -1442,8 +1442,8 @@ account's `account::ServiceContext`, which the account controller owns:
   test found. Both count as an endpoint operation while they run, and both answer `error()`
   while another runs or while the account would refuse an endpoint change.
   `IBlockchain::setConnected()`, `start()` and `stop()` drive the live connections.
-- `backup()` seals the account's backup under the password and `inspectBackup()` reads one,
-  both on a worker (see Backup and restore below). `restore()` on an open account answers
+- `backup()` makes the account's backup, encrypted to its keys, and `inspectBackup()` reads
+  one, both on a worker (see Backup and restore below). `restore()` on an open account answers
   `error()`: a restore makes a new account, through the module's restore target.
 - `rescan()`, `reveal()` and every `raw()` operation answer `error()` for now. A built-in
   account scans its own scripts: it is given no watch and `ownedOutputs()` and

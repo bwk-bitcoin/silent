@@ -10,7 +10,19 @@
 
 namespace backend {
 
-enum class ServiceKind : quint8 { Account, Blockchain, Transaction, Labels, Settings };
+// The interface of a service IServiceProvider::service() is asked for.
+enum class ServiceKind : quint8 {
+    // IAccountBackend.
+    Account,
+    // IBlockchain.
+    Blockchain,
+    // ITransaction.
+    Transaction,
+    // ILabels.
+    Labels,
+    // IBackendSettings.
+    Settings
+};
 
 // Optional facet of an IModule, found with qobject_cast<backend::IServiceProvider *>: a
 // module declaring it supplies some of an account UI's services. The host asks each
