@@ -306,6 +306,10 @@ auto MusigAccountController::endpointChangeRefusal() const -> QString {
     if (!m_sign_reqs.empty() || m_resetting || m_finalizing || m_broadcast_pending) {
         return QStringLiteral("Account is unavailable or signing is in progress");
     }
+    // The backend choice and the endpoints are saved in the same config file.
+    if (m_backend_saving) {
+        return QStringLiteral("The blockchain backend is being saved");
+    }
     return {};
 }
 

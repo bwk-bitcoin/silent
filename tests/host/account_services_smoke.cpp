@@ -773,6 +773,9 @@ void chooseBackend(MusigAccountWidget *widget, const QString &module_id) {
     picker->setCurrentIndex(index);
     emit picker->activated(index);
     require(!picker->isEnabled(), "the picker waits for the choice to save");
+    // Both saves write the account's config: a Settings save waits for the backend's.
+    require(!widget->controller()->endpointChangeRefusal().isEmpty(),
+            "a Settings save is refused while the backend choice saves");
     waitFor(
         [widget, &module_id] {
             return widget->controller()->blockchainBackend() == module_id &&
