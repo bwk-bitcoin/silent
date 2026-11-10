@@ -11,8 +11,8 @@
 #include "host/CallerHandles.h"
 #include "host/Host.h"
 #include "modules/keys/KeysModule.h"
-#include "modules/musig/MusigAccountController.h"
-#include "modules/musig/MusigPlugin.h"
+#include "modules/multikey/MusigAccountController.h"
+#include "modules/multikey/MusigPlugin.h"
 #include "modules/sp/SpPlugin.h"
 #include <QApplication>
 #include <QElapsedTimer>
@@ -27,9 +27,9 @@
 
 #define private public
 #define protected public
-#include "modules/musig/RegisterDescriptor.h"
-#include "modules/musig/SignModal.h"
-#include "modules/musig/creator/CreatePolicy.h"
+#include "modules/multikey/RegisterDescriptor.h"
+#include "modules/multikey/SignModal.h"
+#include "modules/multikey/creator/CreatePolicy.h"
 #include "modules/sp/modals/CreateAccount.h"
 #undef protected
 #undef private

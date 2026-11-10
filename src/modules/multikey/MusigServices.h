@@ -1,7 +1,7 @@
 #pragma once
 
 #include "account/services/AccountServices.h"
-#include "modules/musig/MusigAccountController.h"
+#include "modules/multikey/MusigAccountController.h"
 
 #include <QByteArray>
 #include <QString>

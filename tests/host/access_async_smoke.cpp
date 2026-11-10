@@ -13,7 +13,7 @@
 #include "interfaces/module.h"
 #include "listing_reentrancy_smoke.h"
 #include "modules/keys/KeysModule.h"
-#include "modules/musig/MusigPlugin.h"
+#include "modules/multikey/MusigPlugin.h"
 #include "modules/sp/SpPlugin.h"
 #include "registry_async_errors.h"
 #include "views/modals/PluginAccessPrompt.h"

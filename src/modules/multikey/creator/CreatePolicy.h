@@ -4,7 +4,7 @@
 #include "catalog/form/EndpointRow.h"
 #include "interfaces/keys.h"
 #include "interfaces/types.h"
-#include "modules/musig/creator/SpendPath.h"
+#include "modules/multikey/creator/SpendPath.h"
 
 #include <QHash>
 #include <QList>

@@ -1,8 +1,8 @@
-#include "modules/musig/MusigInstance.h"
+#include "modules/multikey/MusigInstance.h"
 
-#include "modules/musig/MusigAccountAdapter.h"
-#include "modules/musig/MusigAccountController.h"
-#include "modules/musig/MusigAccountWidget.h"
+#include "modules/multikey/MusigAccountAdapter.h"
+#include "modules/multikey/MusigAccountController.h"
+#include "modules/multikey/MusigAccountWidget.h"
 
 #include <QDebug>
 #include <Qontrol>

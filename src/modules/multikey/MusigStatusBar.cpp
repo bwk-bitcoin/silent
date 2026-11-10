@@ -1,9 +1,9 @@
-#include "modules/musig/MusigStatusBar.h"
+#include "modules/multikey/MusigStatusBar.h"
 
 #include "account/RequestId.h"
 #include "catalog/StatusBarItem.h"
 #include "i18n/Tr.h"
-#include "modules/musig/MusigAccountController.h"
+#include "modules/multikey/MusigAccountController.h"
 #include "views/BackendErrors.h"
 #include "views/utils.h"
 

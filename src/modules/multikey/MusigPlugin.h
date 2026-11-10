@@ -1,8 +1,8 @@
 #pragma once
 
 #include "interfaces/module.h"
-#include "modules/musig/MusigModule.h"
-#include "modules/musig/creator/MusigCreatorModule.h"
+#include "modules/multikey/MusigModule.h"
+#include "modules/multikey/creator/MusigCreatorModule.h"
 
 #include <QList>
 #include <QMap>

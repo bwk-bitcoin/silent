@@ -1,4 +1,4 @@
-#include "modules/musig/creator/PathEditor.h"
+#include "modules/multikey/creator/PathEditor.h"
 
 #include "catalog/Table.h"
 #include "catalog/display/Label.h"

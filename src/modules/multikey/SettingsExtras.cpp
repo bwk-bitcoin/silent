@@ -1,4 +1,4 @@
-#include "modules/musig/SettingsExtras.h"
+#include "modules/multikey/SettingsExtras.h"
 
 #include "AppController.h"
 #include "account/InterfaceEnums.h"
@@ -10,9 +10,9 @@
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
 #include "interfaces/keys.h"
-#include "modules/musig/MusigAccountController.h"
-#include "modules/musig/MusigModule.h"
-#include "modules/musig/RegisterDescriptor.h"
+#include "modules/multikey/MusigAccountController.h"
+#include "modules/multikey/MusigModule.h"
+#include "modules/multikey/RegisterDescriptor.h"
 #include "theme/Palette.h"
 
 #include <QList>

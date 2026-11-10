@@ -11,11 +11,11 @@
 #include "host/PluginRegistry.h"
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
-#include "modules/musig/MusigAccountController.h"
-#include "modules/musig/MusigAccountWidget.h"
-#include "modules/musig/MusigPlugin.h"
-#include "modules/musig/SavedPsbts.h"
-#include "modules/musig/SigningSection.h"
+#include "modules/multikey/MusigAccountController.h"
+#include "modules/multikey/MusigAccountWidget.h"
+#include "modules/multikey/MusigPlugin.h"
+#include "modules/multikey/SavedPsbts.h"
+#include "modules/multikey/SigningSection.h"
 
 #include <QApplication>
 #include <QClipboard>

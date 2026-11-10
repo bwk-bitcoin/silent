@@ -9,9 +9,9 @@
 #include "catalog/panels/home/RowClickTable.h"
 #include "host/Host.h"
 #include "i18n/Tr.h"
-#include "modules/musig/MusigAccountController.h"
-#include "modules/musig/MusigPlugin.h"
-#include "modules/musig/SavedPsbts.h"
+#include "modules/multikey/MusigAccountController.h"
+#include "modules/multikey/MusigPlugin.h"
+#include "modules/multikey/SavedPsbts.h"
 
 #include <QApplication>
 #include <QElapsedTimer>
@@ -25,7 +25,7 @@
 
 #define private public
 #define protected public
-#include "modules/musig/SignModal.h"
+#include "modules/multikey/SignModal.h"
 #undef protected
 #undef private
 

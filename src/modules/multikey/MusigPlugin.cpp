@@ -1,4 +1,4 @@
-#include "modules/musig/MusigPlugin.h"
+#include "modules/multikey/MusigPlugin.h"
 
 auto MusigPlugin::meta() const -> QMap<QString, QString> {
     return {{QStringLiteral("id"), QStringLiteral("musig")},

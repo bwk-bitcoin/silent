@@ -1,4 +1,4 @@
-#include "modules/musig/creator/MusigCreatorModule.h"
+#include "modules/multikey/creator/MusigCreatorModule.h"
 
 #include "AppController.h"
 #include "account/services/ServiceAdapters.h"
@@ -7,8 +7,8 @@
 #include "interfaces/backend/account.h"
 #include "interfaces/host.h"
 #include "modules/keys/DeviceName.h"
-#include "modules/musig/MusigModule.h"
-#include "modules/musig/creator/CreatePolicy.h"
+#include "modules/multikey/MusigModule.h"
+#include "modules/multikey/creator/CreatePolicy.h"
 
 #include <QList>
 #include <QPair>

@@ -226,40 +226,40 @@ set(SILENT_APP_SOURCES
     src/modules/sp/SpAccount.cpp
     src/modules/sp/StatusBar.h
     src/modules/sp/StatusBar.cpp
-    src/modules/musig/MusigPlugin.h
-    src/modules/musig/MusigPlugin.cpp
-    src/modules/musig/MusigModule.h
-    src/modules/musig/MusigModule.cpp
-    src/modules/musig/MusigInstance.h
-    src/modules/musig/MusigInstance.cpp
-    src/modules/musig/MusigAccountAdapter.h
-    src/modules/musig/MusigAccountAdapter.cpp
-    src/modules/musig/MusigAccountController.h
-    src/modules/musig/MusigAccountController.cpp
-    src/modules/musig/MusigServices.h
-    src/modules/musig/MusigServices.cpp
-    src/modules/musig/MusigAccountWidget.h
-    src/modules/musig/MusigAccountWidget.cpp
-    src/modules/musig/MusigStatusBar.h
-    src/modules/musig/MusigStatusBar.cpp
-    src/modules/musig/SettingsExtras.h
-    src/modules/musig/SettingsExtras.cpp
-    src/modules/musig/SigningSection.h
-    src/modules/musig/SigningSection.cpp
-    src/modules/musig/SavedPsbts.h
-    src/modules/musig/SavedPsbts.cpp
-    src/modules/musig/SignModal.h
-    src/modules/musig/SignModal.cpp
-    src/modules/musig/RegisterDescriptor.h
-    src/modules/musig/RegisterDescriptor.cpp
-    src/modules/musig/creator/MusigCreatorModule.h
-    src/modules/musig/creator/MusigCreatorModule.cpp
-    src/modules/musig/creator/CreatePolicy.h
-    src/modules/musig/creator/CreatePolicy.cpp
-    src/modules/musig/creator/PathEditor.h
-    src/modules/musig/creator/PathEditor.cpp
-    src/modules/musig/creator/SpendPath.h
-    src/modules/musig/creator/SpendPath.cpp
+    src/modules/multikey/MusigPlugin.h
+    src/modules/multikey/MusigPlugin.cpp
+    src/modules/multikey/MusigModule.h
+    src/modules/multikey/MusigModule.cpp
+    src/modules/multikey/MusigInstance.h
+    src/modules/multikey/MusigInstance.cpp
+    src/modules/multikey/MusigAccountAdapter.h
+    src/modules/multikey/MusigAccountAdapter.cpp
+    src/modules/multikey/MusigAccountController.h
+    src/modules/multikey/MusigAccountController.cpp
+    src/modules/multikey/MusigServices.h
+    src/modules/multikey/MusigServices.cpp
+    src/modules/multikey/MusigAccountWidget.h
+    src/modules/multikey/MusigAccountWidget.cpp
+    src/modules/multikey/MusigStatusBar.h
+    src/modules/multikey/MusigStatusBar.cpp
+    src/modules/multikey/SettingsExtras.h
+    src/modules/multikey/SettingsExtras.cpp
+    src/modules/multikey/SigningSection.h
+    src/modules/multikey/SigningSection.cpp
+    src/modules/multikey/SavedPsbts.h
+    src/modules/multikey/SavedPsbts.cpp
+    src/modules/multikey/SignModal.h
+    src/modules/multikey/SignModal.cpp
+    src/modules/multikey/RegisterDescriptor.h
+    src/modules/multikey/RegisterDescriptor.cpp
+    src/modules/multikey/creator/MusigCreatorModule.h
+    src/modules/multikey/creator/MusigCreatorModule.cpp
+    src/modules/multikey/creator/CreatePolicy.h
+    src/modules/multikey/creator/CreatePolicy.cpp
+    src/modules/multikey/creator/PathEditor.h
+    src/modules/multikey/creator/PathEditor.cpp
+    src/modules/multikey/creator/SpendPath.h
+    src/modules/multikey/creator/SpendPath.cpp
     src/views/MenuTab.h
     src/views/MenuTab.cpp
     src/views/modals/AppSettings.h

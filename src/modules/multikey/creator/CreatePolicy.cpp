@@ -1,4 +1,4 @@
-#include "modules/musig/creator/CreatePolicy.h"
+#include "modules/multikey/creator/CreatePolicy.h"
 
 #include "AppController.h"
 #include "account/InterfaceEnums.h"
@@ -25,9 +25,9 @@
 #include "interfaces/host.h"
 #include "metatypes.h"
 #include "modules/keys/KeysView.h"
-#include "modules/musig/MusigModule.h"
-#include "modules/musig/creator/MusigCreatorModule.h"
-#include "modules/musig/creator/PathEditor.h"
+#include "modules/multikey/MusigModule.h"
+#include "modules/multikey/creator/MusigCreatorModule.h"
+#include "modules/multikey/creator/PathEditor.h"
 #include "theme/Icon.h"
 #include "theme/Palette.h"
 #include "views/BackendErrors.h"

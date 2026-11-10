@@ -6,7 +6,7 @@
 #include "metatypes.h"
 #include "modules/hwi/HwiPlugin.h"
 #include "modules/keys/KeysModule.h"
-#include "modules/musig/MusigPlugin.h"
+#include "modules/multikey/MusigPlugin.h"
 #include "modules/sp/SpPlugin.h"
 #include "qr/QrTypes.h"
 #include "resources/font/noto_sans.h"

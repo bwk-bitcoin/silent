@@ -1,4 +1,4 @@
-#include "modules/musig/MusigServices.h"
+#include "modules/multikey/MusigServices.h"
 
 namespace musig {
 

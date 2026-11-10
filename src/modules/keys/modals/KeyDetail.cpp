@@ -10,7 +10,7 @@
 #include "modules/keys/DeviceName.h"
 #include "modules/keys/KeysModule.h"
 #include "modules/keys/KeysView.h"
-#include "modules/musig/MusigModule.h"
+#include "modules/multikey/MusigModule.h"
 #include "modules/sp/SpModule.h"
 
 #include "AppController.h"
@@ -249,11 +249,10 @@ auto KeyDetail::viewDetail() -> catalog::ScrollArea * {
                                        ->push(m_accounts_empty)
                                        ->push(m_register_error));
     m_nonces_section = denseSection(TR("keys-nonces"), true);
-    m_nonces_section->setContent(
-        (new qontrol::Column)->push(m_nonces_table)->push(m_nonces_error));
+    m_nonces_section->setContent((new qontrol::Column)->push(m_nonces_table)->push(m_nonces_error));
     m_nonces_section->setVisible(false);
-    for (auto *section :
-         {m_devices_section, m_routes_section, m_xpubs_section, m_accounts_section, m_nonces_section}) {
+    for (auto *section : {m_devices_section, m_routes_section, m_xpubs_section, m_accounts_section,
+                          m_nonces_section}) {
         connect(section->header(), &catalog::SectionHeader::toggled, this, &KeyDetail::adjustSize,
                 qontrol::UNIQUE);
     }
@@ -455,7 +454,8 @@ void KeyDetail::refreshNonces(const QList<KeyAccount> &accounts) {
     m_nonce_hot = info.has_value() && info->has_hot_secret;
     m_nonce_ledger = false;
     for (const auto &device : m_module->rust()->key_devices(m_fingerprint.toStdString())) {
-        if (KeysModule::toQt(device.kind).startsWith(QStringLiteral("ledger"), Qt::CaseInsensitive)) {
+        if (KeysModule::toQt(device.kind)
+                .startsWith(QStringLiteral("ledger"), Qt::CaseInsensitive)) {
             m_nonce_ledger = true;
             break;
         }
@@ -753,9 +753,9 @@ void KeyDetail::onFetchXpubClicked() {
 }
 
 void KeyDetail::onFetchNoncesClicked() {
-    AppController::execModal(
-        new FetchNonces(m_module, m_fingerprint, sender()->property(K_DESCRIPTOR).toString(),
-                        sender()->property("hot").toBool()));
+    AppController::execModal(new FetchNonces(m_module, m_fingerprint,
+                                             sender()->property(K_DESCRIPTOR).toString(),
+                                             sender()->property("hot").toBool()));
 }
 
 void KeyDetail::onNonceSessionsChanged() {

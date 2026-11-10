@@ -48,9 +48,9 @@
 #include <modules/hwi/HwiSigner.h>
 #include <modules/keys/DeviceName.h>
 #include <modules/keys/KeysModule.h>
-#include <modules/musig/MusigModule.h>
-#include <modules/musig/MusigPlugin.h>
-#include <modules/musig/creator/MusigCreatorModule.h>
+#include <modules/multikey/MusigModule.h>
+#include <modules/multikey/MusigPlugin.h>
+#include <modules/multikey/creator/MusigCreatorModule.h>
 #include <modules/sp/SpPlugin.h>
 #include <theme/Theme.h>
 

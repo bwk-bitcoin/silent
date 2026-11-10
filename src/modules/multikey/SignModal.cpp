@@ -20,8 +20,8 @@
 #include "interfaces/signer.h"
 #include "modules/keys/DeviceName.h"
 #include "modules/keys/KeysModule.h"
-#include "modules/musig/MusigAccountController.h"
-#include "modules/musig/MusigModule.h"
+#include "modules/multikey/MusigAccountController.h"
+#include "modules/multikey/MusigModule.h"
 #include "theme/Palette.h"
 
 #include <QByteArray>

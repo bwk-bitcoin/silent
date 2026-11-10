@@ -1,7 +1,7 @@
-#include "modules/musig/MusigAccountAdapter.h"
+#include "modules/multikey/MusigAccountAdapter.h"
 
 #include "account/Spending.h"
-#include "modules/musig/MusigAccountController.h"
+#include "modules/multikey/MusigAccountController.h"
 
 #include <QList>
 #include <QMap>

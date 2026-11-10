@@ -1,9 +1,9 @@
-#include "modules/musig/MusigModule.h"
+#include "modules/multikey/MusigModule.h"
 
 #include "i18n/Tr.h"
 #include "interfaces/host.h"
-#include "modules/musig/MusigAccountController.h"
-#include "modules/musig/MusigInstance.h"
+#include "modules/multikey/MusigAccountController.h"
+#include "modules/multikey/MusigInstance.h"
 
 #include <QDebug>
 #include <QStringList>

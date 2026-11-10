@@ -1,4 +1,4 @@
-#include "modules/musig/creator/SpendPath.h"
+#include "modules/multikey/creator/SpendPath.h"
 
 #include "i18n/Tr.h"
 

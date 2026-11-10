@@ -1,7 +1,7 @@
 #pragma once
 
 #include "interfaces/keys.h"
-#include "modules/musig/creator/SpendPath.h"
+#include "modules/multikey/creator/SpendPath.h"
 
 #include <QList>
 #include <QString>

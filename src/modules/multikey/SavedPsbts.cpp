@@ -16,7 +16,7 @@
 #include "catalog/inputs/Checkbox.h"
 #include "catalog/panels/home/RowClickTable.h"
 #include "i18n/Tr.h"
-#include "modules/musig/MusigAccountController.h"
+#include "modules/multikey/MusigAccountController.h"
 #include "views/utils.h"
 
 #include <QPointer>

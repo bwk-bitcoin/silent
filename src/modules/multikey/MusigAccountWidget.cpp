@@ -1,9 +1,9 @@
-#include "modules/musig/MusigAccountWidget.h"
+#include "modules/multikey/MusigAccountWidget.h"
 
 #include "account/AccountShell.h"
 #include "i18n/Tr.h"
-#include "modules/musig/MusigAccountController.h"
-#include "modules/musig/MusigStatusBar.h"
+#include "modules/multikey/MusigAccountController.h"
+#include "modules/multikey/MusigStatusBar.h"
 #include "theme/Icon.h"
 
 #include <QVBoxLayout>
