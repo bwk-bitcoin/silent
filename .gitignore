@@ -9,8 +9,6 @@ build-e2e/
 compile_commands.json
 i18n/*.ts
 lib/*
-!lib/include/
-!lib/include/*.h
 result
 scripts/__pycache__/*
 silent/target/
