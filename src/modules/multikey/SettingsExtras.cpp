@@ -264,7 +264,7 @@ void SettingsExtras::showSavedBackend() {
         m_backend_picker->findData(m_controller->blockchainBackend()));
 }
 
-// A Multikey account records no birthday height, so the field starts empty.
+// The field starts at the account's birthday height, empty when it has none.
 void SettingsExtras::initRescan() {
     m_backend = m_controller->blockchainBackendService();
     m_rescan_input = new catalog::ValidatedInput(catalog::InputRole::Mono);
@@ -273,8 +273,11 @@ void SettingsExtras::initRescan() {
     m_rescan_input->input()->setPlaceholderText(TR("musig-rescan-placeholder"));
     m_rescan_input->input()->setValidator(
         new QIntValidator(0, std::numeric_limits<int>::max(), m_rescan_input));
+    if (m_controller->birthdayHeight() != 0) {
+        m_rescan_input->input()->setText(QString::number(m_controller->birthdayHeight()));
+    }
     m_rescan_btn = catalog::btnRescan();
-    m_rescan_btn->setEnabled(false);
+    m_rescan_btn->setEnabled(m_rescan_input->input()->hasAcceptableInput());
     m_rescan_status = new catalog::Label;
     m_rescan_status->setWordWrap(true);
     m_rescan_status->setVisible(false);

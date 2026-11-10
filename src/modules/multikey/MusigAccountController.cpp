@@ -208,7 +208,7 @@ auto MusigAccountController::backendModule() const -> IModule * {
     return nullptr;
 }
 
-// The account records its creation time alone, no birthday height.
+// The account records its creation time, and a restored one its backup's birthday height.
 auto MusigAccountController::accountWatch() const -> std::optional<backend::AccountWatch> {
     auto canonical = ::validate_musig_descriptor(accountDescriptor());
     if (!canonical.is_ok) {
@@ -220,6 +220,9 @@ auto MusigAccountController::accountWatch() const -> std::optional<backend::Acco
     auto birthday = accountConfig().get_birthday_time();
     if (birthday != 0) {
         watch.birthdayTime = static_cast<qint64>(birthday);
+    }
+    if (birthdayHeight() != 0) {
+        watch.birthdayHeight = birthdayHeight();
     }
     return watch;
 }
@@ -346,6 +349,10 @@ auto MusigAccountController::settingsExtras() -> QWidget * {
 
 auto MusigAccountController::blockchainBackend() const -> QString {
     return m_blockchain_backend;
+}
+
+auto MusigAccountController::birthdayHeight() const -> quint32 {
+    return accountConfig().get_birthday_height();
 }
 
 auto MusigAccountController::blockchainBackendMissing() const -> bool {

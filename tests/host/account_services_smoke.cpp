@@ -46,6 +46,9 @@
 #include <QFile>
 #include <QJsonValue>
 #include <QLineEdit>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPointer>
 #include <QStringList>
 #include <QThread>
@@ -95,6 +98,14 @@ const QString MULTIKEY = QStringLiteral("services-multikey");
 const QString CREATED_MULTIKEY = QStringLiteral("services-multikey-created");
 // The height the rescan is asked from.
 constexpr quint64 RESCAN_HEIGHT = 150;
+// A Multikey account restored from a backup telling its birthday height and time.
+const QString RESTORED_MULTIKEY = QStringLiteral("services-multikey-restored");
+constexpr quint64 RESTORED_BIRTHDAY_HEIGHT = 812345;
+// The window size of a Settings shot, and how long it settles before it is taken.
+constexpr int SHOT_WIDTH = 1440;
+constexpr int SHOT_HEIGHT = 1000;
+constexpr int SHOT_SETTLE_MS = 500;
+constexpr qint64 RESTORED_BIRTHDAY_TIME = 1700000000;
 // The chain fixture's module id: the backend the Multikey account chooses.
 const QString CHAIN_MODULE = CHAIN + QStringLiteral(".module");
 const char *const MULTIKEY_DESCRIPTOR =
@@ -861,6 +872,58 @@ void rescanFromHeight(MusigAccountWidget *widget) {
 
 // A Multikey account created as the creator does, the chain plugin its backend, hands the
 // plugin a watch carrying the time it was created at.
+// Saves the whole window to `path`, showing the Settings of the account of `widget`.
+void captureSettings(MainWindow &window, MusigAccountWidget *widget, const QString &path) {
+    window.resize(SHOT_WIDTH, SHOT_HEIGHT);
+    window.show();
+    window.showTab(widget);
+    widget->controller()->settingsClicked();
+    spin(SHOT_SETTLE_MS);
+    require(window.grab().save(path), "the window showing Settings is saved");
+}
+
+// Opens the Multikey account `name` with the chain plugin as its backend, beside `opened`:
+// its widget once its services are assembled.
+auto openChainAccount(MainWindow &window, account::AccountModule *module, const QString &name,
+                      MusigAccountWidget *opened) -> MusigAccountWidget * {
+    require(::save_blockchain_backend(rust::String(name.toStdString()),
+                                      rust::String(CHAIN_MODULE.toStdString())),
+            "the account chooses the chain plugin");
+    module->startInstance(name);
+    MusigAccountWidget *widget = nullptr;
+    waitFor(
+        [&window, opened, &widget] {
+            for (auto *candidate : window.findChildren<MusigAccountWidget *>()) {
+                if (candidate != opened && candidate->shell() != nullptr &&
+                    assembledBlockchain(candidate) != nullptr) {
+                    widget = candidate;
+                }
+            }
+            return widget != nullptr;
+        },
+        "the account's services are assembled");
+    return widget;
+}
+
+// Closes the Multikey account `name` and deletes it.
+void closeAndDelete(account::AccountModule *module, const QString &name) {
+    Host::get()->removeInstance(name, module);
+    waitFor(
+        [module, name] {
+            deleteDeferred();
+            return !module->accountUnavailable(name);
+        },
+        "the account closes");
+    require(::delete_musig_account(rust::String(name.toStdString())).empty(),
+            "the account is deleted");
+}
+
+// The canonical MULTIKEY_DESCRIPTOR, as a watch holds it.
+auto watchedDescriptor() -> QString {
+    auto canonical = ::validate_musig_descriptor(rust::String(MULTIKEY_DESCRIPTOR));
+    return QString::fromStdString(std::string(canonical.descriptor));
+}
+
 void createdAccountBirthday(MainWindow &window, account::AccountModule *module, IModule *chain,
                             MusigAccountWidget *opened, int watches) {
     auto before = QDateTime::currentSecsSinceEpoch();
@@ -875,36 +938,50 @@ void createdAccountBirthday(MainWindow &window, account::AccountModule *module, 
         ::config_from_file(rust::String(CREATED_MULTIKEY.toStdString()))->get_birthday_time());
     require(birthday >= before && birthday <= QDateTime::currentSecsSinceEpoch(),
             "the created account records when it was created");
-    require(::save_blockchain_backend(rust::String(CREATED_MULTIKEY.toStdString()),
-                                      rust::String(CHAIN_MODULE.toStdString())),
-            "the created account chooses the chain plugin");
-    module->startInstance(CREATED_MULTIKEY);
-    MusigAccountWidget *widget = nullptr;
-    waitFor(
-        [&window, opened, &widget] {
-            for (auto *candidate : window.findChildren<MusigAccountWidget *>()) {
-                if (candidate != opened && candidate->shell() != nullptr &&
-                    assembledBlockchain(candidate) != nullptr) {
-                    widget = candidate;
-                }
-            }
-            return widget != nullptr;
-        },
-        "the created account's services are assembled");
-    auto canonical = ::validate_musig_descriptor(rust::String(MULTIKEY_DESCRIPTOR));
+    auto *widget = openChainAccount(window, module, CREATED_MULTIKEY, opened);
+    requireWatch(chain, {.descriptors = {watchedDescriptor()}, .birthdayTime = birthday}, watches,
+                 "the created account's watch carries its birthday time, no height");
+    require(backendExtras(widget)->m_rescan_input->input()->text().isEmpty(),
+            "with no birthday height the rescan field starts empty");
+    closeAndDelete(module, CREATED_MULTIKEY);
+}
+
+// A Multikey account restored from a BIP139 backup with a block height and a timestamp, the
+// chain plugin its backend, hands the plugin a watch carrying both, and its Settings rescan
+// field starts at that height. With SILENT_RESCAN_SHOT set, the whole window showing that
+// Settings is saved there.
+void restoredAccountBirthday(MainWindow &window, account::AccountModule *module, IModule *chain,
+                             MusigAccountWidget *opened, int watches) {
+    auto document = QJsonDocument(QJsonObject{
+        {QStringLiteral("network"), QStringLiteral("regtest")},
+        {QStringLiteral("accounts"),
+         QJsonArray{QJsonObject{
+             {QStringLiteral("type"), QStringLiteral("bip_380")},
+             {QStringLiteral("descriptor"), QString::fromLatin1(MULTIKEY_DESCRIPTOR)},
+             {QStringLiteral("timestamp"), RESTORED_BIRTHDAY_TIME},
+             {QStringLiteral("block_height"), static_cast<qint64>(RESTORED_BIRTHDAY_HEIGHT)}}}}});
+    auto bytes = document.toJson();
+    auto restored = ::restore_account_backup(
+        rust::Str("musig"),
+        rust::Slice<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(bytes.constData()),
+                                        static_cast<std::size_t>(bytes.size())),
+        {}, rust::String(""), rust::String(RESTORED_MULTIKEY.toStdString()), Network::Regtest);
+    require(restored.is_ok, "the Multikey backup restores");
+    auto *widget = openChainAccount(window, module, RESTORED_MULTIKEY, opened);
     requireWatch(chain,
-                 {.descriptors = {QString::fromStdString(std::string(canonical.descriptor))},
-                  .birthdayTime = birthday},
-                 watches, "the created account's watch carries its birthday time, no height");
-    Host::get()->removeInstance(CREATED_MULTIKEY, module);
-    waitFor(
-        [module] {
-            deleteDeferred();
-            return !module->accountUnavailable(CREATED_MULTIKEY);
-        },
-        "the created account closes");
-    require(::delete_musig_account(rust::String(CREATED_MULTIKEY.toStdString())).empty(),
-            "the created account is deleted");
+                 {.descriptors = {watchedDescriptor()},
+                  .birthdayHeight = RESTORED_BIRTHDAY_HEIGHT,
+                  .birthdayTime = RESTORED_BIRTHDAY_TIME},
+                 watches, "the restored account's watch carries its birthday height and time");
+    auto *extras = backendExtras(widget);
+    require(extras->m_rescan_input->input()->text() == QString::number(RESTORED_BIRTHDAY_HEIGHT) &&
+                extras->m_rescan_btn->isEnabled(),
+            "the rescan field starts at the birthday height, Rescan offered");
+    auto shot = qEnvironmentVariable("SILENT_RESCAN_SHOT");
+    if (!shot.isEmpty()) {
+        captureSettings(window, widget, shot);
+    }
+    closeAndDelete(module, RESTORED_MULTIKEY);
 }
 
 // How long a probe of a server nothing listens on takes at most.
@@ -1347,6 +1424,7 @@ void blockchainBackendSmoke() {
                         "the plugin chosen again is handed the account's watch again");
     require(savedBackend() == CHAIN_MODULE, "the plugin choice is saved");
     createdAccountBirthday(window, multikeyModule, chain, widget, 3);
+    restoredAccountBirthday(window, multikeyModule, chain, widget, 4);
 
     require(registry->setEnabled(CHAIN, false), "the chain plugin disable is admitted");
     waitFor(

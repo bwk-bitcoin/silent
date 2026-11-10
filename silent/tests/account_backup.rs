@@ -711,6 +711,59 @@ fn a_bip138_descriptor_restores_the_multikey_account_it_holds() {
 }
 
 #[test]
+fn a_multikey_backup_keeps_its_birthday_height() {
+    let name = test_account_name();
+    let document = serde_json::json!({
+        "network": "regtest",
+        "accounts": [{
+            "type": "bip_380",
+            "descriptor": multikey_descriptor(),
+            "timestamp": 1_700_000_000u64,
+            "block_height": 500,
+        }],
+    });
+    let bytes = serde_json::to_vec_pretty(&document).expect("json");
+    let restored = restore_account_backup(
+        MUSIG_PLUGIN_ID,
+        &bytes,
+        vec![],
+        String::new(),
+        name.clone(),
+        Network::Regtest,
+    );
+    assert!(restored.is_ok, "restore it: {}", restored.error);
+    let config = config_from_file(name.clone());
+    assert_eq!(
+        (config.birthday_height, config.birthday_time),
+        (Some(500), Some(1_700_000_000)),
+        "the restored account keeps the backup's block height and timestamp as its birthday"
+    );
+
+    let mut account = new_musig_account_offline(&config);
+    assert!(
+        account.is_ok(),
+        "open the restored account: {}",
+        account.get_error()
+    );
+    let backup = account.backup();
+    assert!(backup.is_ok, "back it up again: {}", backup.error);
+    assert!(account.shutdown_backend().is_empty(), "close the account");
+    let bytes: Vec<u8> = backup.bytes.into_iter().collect();
+    let keys = multikey_keys();
+    let document = document_of(&bytes, xpub_key(keys[2].1.split(']').nth(1).expect("xpub")));
+    let account = &document["accounts"][0];
+    assert_eq!(
+        (&account["block_height"], &account["timestamp"]),
+        (
+            &serde_json::json!(500),
+            &serde_json::json!(1_700_000_000u64)
+        ),
+        "its backup writes the birthday back as block_height and timestamp"
+    );
+    cleanup_test_account(&name);
+}
+
+#[test]
 fn a_plain_bip139_document_restores_what_it_carries() {
     let name = test_account_name();
     let (fingerprint, xpub) = key(7, SEGWIT_PATH);

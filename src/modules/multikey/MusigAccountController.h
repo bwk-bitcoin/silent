@@ -77,6 +77,8 @@ public:
     auto settingsExtras() -> QWidget *;
     // The module id of the blockchain backend chosen in Settings, empty for Electrum.
     [[nodiscard]] auto blockchainBackend() const -> QString;
+    // The first block that can pay the account, a restored backup's: 0 when unknown.
+    [[nodiscard]] auto birthdayHeight() const -> quint32;
     // A plugin is chosen as the blockchain backend but none supplies it: the services hold
     // no blockchain until it is installed or another backend is chosen.
     [[nodiscard]] auto blockchainBackendMissing() const -> bool;

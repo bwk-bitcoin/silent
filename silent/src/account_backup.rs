@@ -388,6 +388,7 @@ fn document(
     let mut accounts = if config.plugin_id == MUSIG_PLUGIN_ID {
         vec![bip139::Account {
             timestamp: config.birthday_time,
+            block_height: config.birthday_height,
             ..bip380_account(&config.descriptor, tip(TAPROOT_KIND))
         }]
     } else {
@@ -626,6 +627,8 @@ struct Restorable {
     scan_start: Option<u32>,
     /// When a Multikey account was created, in unix seconds.
     birthday_time: Option<u64>,
+    /// The first block that can pay a Multikey account.
+    birthday_height: Option<u32>,
     tips: Vec<Tip>,
     labels: Vec<Label>,
 }
@@ -712,6 +715,7 @@ fn multikey_account(document: &WalletBackup, restorable: &mut Restorable) -> Res
     parse_musig_descriptor(descriptor).map_err(|e| Failure::InvalidDescriptor(e.to_string()))?;
     restorable.descriptor = (*descriptor).into();
     restorable.birthday_time = account.timestamp;
+    restorable.birthday_height = account.block_height;
     restorable.tips.extend(account_tip(account, descriptor));
     Ok(())
 }
@@ -817,6 +821,7 @@ impl Restorable {
             config.scan_start = self.scan_start;
         }
         config.birthday_time = self.birthday_time;
+        config.birthday_height = self.birthday_height;
         config
     }
 }

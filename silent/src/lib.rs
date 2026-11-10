@@ -2491,6 +2491,10 @@ mod ffi {
         /// Start the scanner.
         fn start_scanner(self: &mut Account) -> bool;
 
+        /// The first block that can pay a Multikey account, a restored backup's: 0 when
+        /// unknown.
+        fn get_birthday_height(self: &Config) -> u32;
+
         /// Stop the scanner.
         fn stop_scanner(self: &mut Account);
 

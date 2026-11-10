@@ -1568,10 +1568,12 @@ name.
   (checksummed, multipath) and its `birthdayTime` when the account records one. A Multikey
   account created from now on records its creation time, in unix seconds, as
   `birthday_time` in its config; a restored one takes it from the backup's `timestamp`, and
-  an older or restored one without it has none. It records no birthday height:
-  `birthdayHeight` stays unset.
+  an older or restored one without it has none. A restored one also keeps the backup's
+  `block_height` as `birthday_height`, handed as `birthdayHeight` and written back as
+  `block_height` in its backups; a created one records none.
 - While the chosen plugin supplies the blockchain, Settings shows "Rescan from height" under
-  the picker: a block height field, empty as the account records no birthday height, and
+  the picker: a block height field, starting at the account's birthday height, empty
+  when it records none, and
   Rescan, which calls `IBlockchain::rescan()` from that height. Its `completed()` shows
   that the backend scans again from that block, its `error()` the plugin's message. It is
   hidden with Electrum chosen or the chosen plugin missing.
@@ -1586,7 +1588,8 @@ name.
 fixture (which advertises watching descriptors, `services.full` does not) before it is
 installed, then installs it, switches to Electrum and back, and disables it. Its watch has
 no birthday; a second account, created as the creator does, hands the fixture its
-birthday time. Settings offers the rescan with the fixture chosen alone: a rescan reaches
+birthday time, its rescan field empty; a third, restored from a backup with a block height
+and a timestamp, hands it both, its rescan field starting at that height. Settings offers the rescan with the fixture chosen alone: a rescan reaches
 the fixture's blockchain with the height entered, and its refusal shows.
 
 With a plugin chosen, the account syncs from that plugin's blockchain alone:
@@ -1725,6 +1728,7 @@ and leave out, as `BackupInfo` says:
 
 - the signing keys: they stay in Keys, which the restored account needs (`requirements`
   names their fingerprints);
+| Multikey birthday height | the Multikey account's `block_height`, when it records one         |
 - coins and history: the restored account finds them again by scanning;
 - a Multikey account's saved PSBTs and signing sessions (`warnings`): restoring them could
   bring back a signing round whose nonces a signer already used.

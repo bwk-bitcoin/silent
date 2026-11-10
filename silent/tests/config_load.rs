@@ -4,7 +4,7 @@
 //! carries an error message via `get_error()` when loading fails, instead of fabricating a
 //! usable default. These tests cover the valid, missing, and corrupt cases, plus the
 //! `plugin_id` default for a valid file that omits it, and the Multikey
-//! `blockchain_backend` and `birthday_time` round trips.
+//! `blockchain_backend`, `birthday_time` and `birthday_height` round trips.
 
 mod common;
 
@@ -390,5 +390,51 @@ fn a_multikey_config_without_a_birthday_loads_with_none() {
         ),
         (0, None),
         "writing the config again records no birthday"
+    );
+}
+
+#[test]
+fn a_multikey_birthday_height_round_trips_through_the_config() {
+    shared_datadir();
+
+    let account_name = "multikey_birthday_height_account";
+    let mut config = Config::new(
+        account_name.to_string(),
+        Network::Regtest,
+        "wpkh(tpubDEGU7K8ab62XbG1bKoCnHDtUx44DxVKyAQVS96EN1EUVTQRW2KnFEvTtmnUJSonudSK8HcXTexf56Kir1JzoQAzFRHfvNLEcqV7KxUHZVYa/<0;1>/*)".to_string(),
+        String::new(),
+        String::new(),
+        Some(546),
+    );
+    config.set_plugin_id("musig".to_string());
+    config.to_file();
+    assert_eq!(
+        (
+            config.get_birthday_height(),
+            stored_entry(&config, "birthday_height")
+        ),
+        (0, None),
+        "no birthday height is stored as no birthday_height entry and reads as 0"
+    );
+    config.birthday_height = Some(150);
+    config.to_file();
+    let saved = config_from_file(account_name.to_string());
+    assert!(saved.is_ok(), "the config loads: {}", saved.get_error());
+    assert_eq!(
+        (
+            saved.get_birthday_height(),
+            stored_entry(&saved, "birthday_height")
+        ),
+        (150, Some(serde_json::Value::from(150))),
+        "the birthday height is stored as birthday_height and reads back"
+    );
+    assert!(
+        save_blockchain_backend(account_name.to_string(), "bitcoind".to_string()),
+        "the backend choice saves"
+    );
+    assert_eq!(
+        config_from_file(account_name.to_string()).get_birthday_height(),
+        150,
+        "writing the config again keeps it"
     );
 }

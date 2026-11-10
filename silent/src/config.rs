@@ -118,6 +118,10 @@ pub struct Config {
     /// before it was recorded, or restored from a backup that does not tell it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub birthday_time: Option<u64>,
+    /// The height of the first block that can pay a Multikey account, a restored backup's
+    /// BIP139 `block_height`: None when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub birthday_height: Option<u32>,
     /// Base directory for account data
     #[serde(skip)]
     pub data_dir: PathBuf,
@@ -194,6 +198,7 @@ impl Config {
             plugin_id: default_plugin_id(),
             blockchain_backend: None,
             birthday_time: None,
+            birthday_height: None,
             data_dir,
             load_error: None,
         }
@@ -441,6 +446,11 @@ impl Config {
     /// When the account was created, in unix seconds: 0 when unknown.
     pub fn get_birthday_time(&self) -> u64 {
         self.birthday_time.unwrap_or(0)
+    }
+
+    /// The first block that can pay the account: 0 when unknown.
+    pub fn get_birthday_height(&self) -> u32 {
+        self.birthday_height.unwrap_or(0)
     }
 
     /// The bwk::Account config of a musig account (plugin id "musig").
