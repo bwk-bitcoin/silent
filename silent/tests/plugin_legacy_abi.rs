@@ -17,7 +17,7 @@ fn legacy_bundles_of_incompatible_abis_never_enable() {
     set_datadir(data.clone());
     state_crypt::create_with_password(Password::new("host smoke".into()))
         .expect("create the same encrypted state the Qt fixture unlocks");
-    let versions = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13];
+    let versions = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
     for version in versions {
         let id = format!("abi{version}");
         let library = fs::read(fixtures.join(format!("libplugin_abi{version}_fixture.so")))

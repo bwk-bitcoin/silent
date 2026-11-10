@@ -68,7 +68,7 @@ signals:
     void error(std::optional<ReqId> req_id, QString message);
 };
 
-#define SILENT_IPlugin_IID "dev.silent.IPlugin/12.0"
+#define SILENT_IPlugin_IID "dev.silent.IPlugin/1.0"
 Q_DECLARE_INTERFACE(IPlugin, SILENT_IPlugin_IID)
 
-#define SILENT_IModule_IID "dev.silent.IModule/3.0"
+#define SILENT_IModule_IID "dev.silent.IModule/1.0"

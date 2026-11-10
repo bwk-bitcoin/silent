@@ -646,7 +646,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         string(REPEAT "x" 65536 ABI_METADATA_PADDING)
         file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/PluginAbiFixture.json"
             CONTENT "{\"padding\":\"${ABI_METADATA_PADDING}\"}\n")
-        foreach(ABI_VERSION 2 3 4 5 6 7 8 9 10 11 12 13)
+        foreach(ABI_VERSION 1 2 3 4 5 6 7 8 9 10 11 12)
             qt_add_library(plugin_abi${ABI_VERSION}_fixture MODULE tests/host/PluginAbiFixture.cpp)
             add_dependencies(plugin_abi${ABI_VERSION}_fixture RunBeforeBuild)
             target_link_libraries(plugin_abi${ABI_VERSION}_fixture PRIVATE silent_interfaces)
@@ -655,6 +655,8 @@ if(SILENT_BUILD_HOST_SMOKE)
             target_compile_definitions(plugin_abi${ABI_VERSION}_fixture PRIVATE
                 $<TARGET_PROPERTY:Qt6::Core,INTERFACE_COMPILE_DEFINITIONS>)
         endforeach()
+        target_include_directories(plugin_abi1_fixture PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+        target_compile_definitions(plugin_abi1_fixture PRIVATE SILENT_ABI1_FIXTURE)
         target_compile_definitions(plugin_abi2_fixture PRIVATE SILENT_ABI2_FIXTURE)
         target_compile_definitions(plugin_abi3_fixture PRIVATE SILENT_ABI3_FIXTURE)
         target_compile_definitions(plugin_abi4_fixture PRIVATE SILENT_ABI4_FIXTURE)
@@ -665,9 +667,7 @@ if(SILENT_BUILD_HOST_SMOKE)
         target_compile_definitions(plugin_abi9_fixture PRIVATE SILENT_ABI9_FIXTURE)
         target_compile_definitions(plugin_abi10_fixture PRIVATE SILENT_ABI10_FIXTURE)
         target_compile_definitions(plugin_abi11_fixture PRIVATE SILENT_ABI11_FIXTURE)
-        target_include_directories(plugin_abi12_fixture PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
         target_compile_definitions(plugin_abi12_fixture PRIVATE SILENT_ABI12_FIXTURE)
-        target_compile_definitions(plugin_abi13_fixture PRIVATE SILENT_ABI13_FIXTURE)
         qt_add_library(price_feed_fixture MODULE tests/host/PriceFeedPlugin.cpp)
         add_dependencies(price_feed_fixture RunBeforeBuild)
         # Like real plugins, use Qt headers but resolve Qt symbols from the host.
@@ -767,8 +767,9 @@ if(SILENT_BUILD_HOST_SMOKE)
         SILENT_KEYS_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/host/fixtures")
     if(TARGET price_feed_fixture)
         target_sources(${SMOKE} PRIVATE tests/host/plugin_abi_smoke.cpp)
-        add_dependencies(${SMOKE} price_feed_fixture plugin_abi2_fixture plugin_abi3_fixture plugin_abi4_fixture plugin_abi5_fixture plugin_abi6_fixture plugin_abi7_fixture plugin_abi8_fixture plugin_abi9_fixture plugin_abi10_fixture plugin_abi11_fixture plugin_abi12_fixture plugin_abi13_fixture)
+        add_dependencies(${SMOKE} price_feed_fixture plugin_abi1_fixture plugin_abi2_fixture plugin_abi3_fixture plugin_abi4_fixture plugin_abi5_fixture plugin_abi6_fixture plugin_abi7_fixture plugin_abi8_fixture plugin_abi9_fixture plugin_abi10_fixture plugin_abi11_fixture plugin_abi12_fixture)
         target_compile_definitions(${SMOKE} PRIVATE
+            SILENT_ABI1_FIXTURE_PATH="$<TARGET_FILE:plugin_abi1_fixture>"
             SILENT_ABI2_FIXTURE_PATH="$<TARGET_FILE:plugin_abi2_fixture>"
             SILENT_ABI3_FIXTURE_PATH="$<TARGET_FILE:plugin_abi3_fixture>"
             SILENT_ABI4_FIXTURE_PATH="$<TARGET_FILE:plugin_abi4_fixture>"
@@ -780,7 +781,6 @@ if(SILENT_BUILD_HOST_SMOKE)
             SILENT_ABI10_FIXTURE_PATH="$<TARGET_FILE:plugin_abi10_fixture>"
             SILENT_ABI11_FIXTURE_PATH="$<TARGET_FILE:plugin_abi11_fixture>"
             SILENT_ABI12_FIXTURE_PATH="$<TARGET_FILE:plugin_abi12_fixture>"
-            SILENT_ABI13_FIXTURE_PATH="$<TARGET_FILE:plugin_abi13_fixture>"
             SILENT_PRICE_FEED_FIXTURE="$<TARGET_FILE:price_feed_fixture>")
     endif()
     if(TARGET storage_fixture)

@@ -58,4 +58,4 @@ signals:
     void error(std::optional<ReqId> req_id, QString message);
 };
 
-Q_DECLARE_INTERFACE(IFeed, "dev.silent.IFeed/3.0")
+Q_DECLARE_INTERFACE(IFeed, "dev.silent.IFeed/1.0")

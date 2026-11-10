@@ -130,7 +130,7 @@ built with Qt 6.8 and baseline x86-64 requirements:
     "kind": "native",
     "library": "payload/libmyplugin.so",
     "compatibility": {
-      "iid": "dev.silent.IPlugin/12.0",
+      "iid": "dev.silent.IPlugin/1.0",
       "target_os": "linux",
       "target_arch": "x86_64",
       "qt_major": 6,
@@ -196,12 +196,14 @@ cargo test --manifest-path silent/Cargo.toml --test storage_example -- --ignored
 The legacy installed-format gate has a separate driver:
 `SILENT_HOST_SMOKE=<absolute-host-smoke> cargo test --manifest-path silent/Cargo.toml
 --test plugin_legacy_abi -- --ignored`. It seeds encrypted version 1 bundles for
-ABIs 2 through 11 and future ABI 13, then verifies registry refusal, expected/found
+ABIs 2 through 12, then verifies registry refusal, expected/found
 diagnostics, retained metadata and absence of initializer/constructor side effects.
-The `--plugin-abi` host smoke uses ABI 12 as its accepted control and verifies that
+The `--plugin-abi` host smoke uses ABI 1 as its accepted control and verifies that
 refused imports preserve its installed bytes. ABIs 2 through 11 use frozen declarations from
-`tests/host/legacy/ModuleV2.h`, not the current root header. The compiled-fixture Rust
-tests expect `SILENT_ABI_FIXTURE_PATH` to point to `libplugin_abi12_fixture.so`.
+`tests/host/legacy/ModuleV2.h`, not the current root header; ABI 12 is the current header
+under the root IID of the previous snapshot. Each `plugin_abi<N>_fixture` declares
+`dev.silent.IPlugin/<N>.0`. The compiled-fixture Rust
+tests expect `SILENT_ABI_FIXTURE_PATH` to point to `libplugin_abi1_fixture.so`.
 
 ### Out-of-tree Plugin Repo Pattern
 
@@ -1230,7 +1232,7 @@ apart from the public `IAccount` other accounts use, which they leave unchanged:
 |-----------------|---------------------------------------------------------------------|-------------------------------------------|
 | `types.h`       | Payload structs, `backend::Network`, `backend::RequestId`           |                                           |
 | `service.h`     | `IService`: byte (`raw`) and Qt JSON (`value`) extensions, `error()` | none, base class only                     |
-| `account.h`     | `IAccountBackend`: identity, receiving, backup and restore          | `dev.silent.backend.IAccountBackend/2.0`  |
+| `account.h`     | `IAccountBackend`: identity, receiving, backup and restore          | `dev.silent.backend.IAccountBackend/1.0`  |
 | `blockchain.h`  | `IBlockchain`: scanning, coins, history, broadcast                  | `dev.silent.backend.IBlockchain/1.0`      |
 | `transaction.h` | `ITransaction`: crafting, unsigned PSBTs, coin selection            | `dev.silent.backend.ITransaction/1.0`     |
 | `labels.h`      | `ILabels`                                                           | `dev.silent.backend.ILabels/1.0`          |
@@ -1852,42 +1854,20 @@ they are not evidence of a supported funded signing combination.
 
 ## ABI & Linking Rules (Plugin Authors Must Read)
 
-The current plugin IID is `dev.silent.IPlugin/12.0`, the module IID is
-`dev.silent.IModule/3.0`, the signer IID is
-`dev.silent.ISigner/3.0`, the account IID is
-`dev.silent.IAccount/4.0`, the keys IID is `dev.silent.IKeys/4.0`, the transaction
-service IID is `dev.silent.ITransactions/2.0` and the theme provider IID is
-`dev.silent.IThemeProvider/2.0`. The feed IID remains
-`dev.silent.IFeed/3.0`. The account UI services carry their own IIDs (see Account UI
-Services) and change no existing one. Public Keys and spending enums are SDK-owned, not generated
-Rust types. Root ABI 10 changed `FeePreferences` to mode and one source, removing the
-global tier. Root ABI 11 adds the chain tip to `IAccount::coins` (IAccount/4.0), the
-`IKeys::prepareNonces` request and its `noncesPrepared` signal (IKeys/4.0), and the
-`theme::Palette` fields added since 1.0 to the `palette` signal (IThemeProvider/2.0).
-Root ABI 12 replaces the password of the account backups with the keys that open them:
-`IAccountBackend::backup()`, `inspectBackup()`, `restore()`, `backupCreated()` and the new
-`backupLocked()` (IAccountBackend/2.0, see Backup and restore).
-The `IFeed` methods, signals and IID are unchanged. Rebuild plugins
-against this checkout and use `SILENT_IPlugin_IID` in plugin metadata. Include both
-`src` only for public interfaces; generated `lib/include` and CXX headers are not needed.
-Only the exact root IID is accepted. Old 1.0 to 10.0 plugins and future 12.0 plugins
-are refused rather than called through incompatible vtables.
+The current plugin IID is `dev.silent.IPlugin/1.0`, the module IID is
+`dev.silent.IModule/1.0`, the signer IID is `dev.silent.ISigner/1.0`, the account IID
+is `dev.silent.IAccount/1.0`, the keys IID is `dev.silent.IKeys/1.0`, the transaction
+service IID is `dev.silent.ITransactions/1.0`, the theme provider IID is
+`dev.silent.IThemeProvider/1.0` and the feed IID is `dev.silent.IFeed/1.0`. The account
+UI services carry their own IIDs (see Account UI Services). Public Keys and spending
+enums are SDK-owned, not generated Rust types. Rebuild plugins against this checkout
+and use `SILENT_IPlugin_IID` in plugin metadata. Include both `src` only for public
+interfaces; generated `lib/include` and CXX headers are not needed. Only the exact
+root IID is accepted: a plugin declaring any other root IID, such as the 2.0 to 12.0
+of earlier snapshots, is refused rather than called through incompatible vtables.
 
-Every header under `src/interfaces/` is guarded by `src/interfaces/abi_hashes.txt`
-and `cargo test --manifest-path silent/Cargo.toml --test interface_abi`. Each row is
-a header, the IIDs it declares (`-` for none), the root plugin IID it shipped under and
-the sha256 of its declarations: comments, whitespace and IID literals are left out, so
-a comment edit is not a layout change. A header whose declarations change fails the
-test, naming the header and the IIDs to raise: its own IIDs and always the root
-`SILENT_IPlugin_IID`, since only the root IID is checked at admission. A header with
-no IID of its own (`types.h`, `enums.h`, `host.h`, `storage.h`, `tr.h`,
-`backend/service.h`, `backend/types.h`) raises only the root IID; when its types reach
-an interface, raise that interface's IID too. Raise the IIDs, then append the row the
-failure prints. Rows are append-only: a second layout under an IID already in the
-table fails as an IID that was not raised, and raising the root IID appends a
-`module.h` row. A type an interface carries from outside `interfaces/` joins that
-interface's layout: `struct Palette` of `src/theme/Palette.h` counts as part of
-`theme.h`, while the rest of `Palette.h` (UI constants) is not guarded.
+Silent is in prototype development: the interfaces change freely and no interface IID
+is raised until this stage ends.
 
 `interfaces/enums.h` defines the shared `plugin::Network`, `plugin::KeyRouteKind`
 and spending/coordination enums. Network wire integers are Bitcoin=0, Testnet=1,

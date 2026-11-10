@@ -25,4 +25,4 @@ signals:
     void cancelled(ReqId req_id);
 };
 
-Q_DECLARE_INTERFACE(ITransactions, "dev.silent.ITransactions/2.0")
+Q_DECLARE_INTERFACE(ITransactions, "dev.silent.ITransactions/1.0")

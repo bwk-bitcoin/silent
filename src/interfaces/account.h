@@ -66,4 +66,4 @@ private:
     plugin::Caller m_caller;
 };
 
-Q_DECLARE_INTERFACE(IAccount, "dev.silent.IAccount/4.0")
+Q_DECLARE_INTERFACE(IAccount, "dev.silent.IAccount/1.0")

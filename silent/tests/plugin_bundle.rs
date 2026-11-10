@@ -18,7 +18,7 @@ use silent::{
     plugin_bundle, set_datadir, state_crypt, PluginMetadataKind,
 };
 
-const IID: &str = "dev.silent.IPlugin/12.0";
+const IID: &str = "dev.silent.IPlugin/1.0";
 const MAX_ENTRIES: usize = 66;
 const MAX_ARCHIVE_BYTES: u64 = (256 + 16) * 1024 * 1024;
 const UNIX_REGULAR: u32 = 0o100_644;
@@ -770,7 +770,7 @@ fn the_manifest_schema_is_strict() {
     refused_bytes(
         dir,
         &zip(&minimal_items),
-        "plugin admission (expected dev.silent.IPlugin/12.0)",
+        "plugin admission (expected dev.silent.IPlugin/1.0)",
     );
 }
 
@@ -842,7 +842,7 @@ fn a_refused_bundle_leaves_installed_plugins_untouched() {
 }
 
 #[test]
-#[ignore = "requires SILENT_ABI_FIXTURE_PATH pointing to the compiled ABI 12 fixture"]
+#[ignore = "requires SILENT_ABI_FIXTURE_PATH pointing to the compiled ABI 1 fixture"]
 fn an_admitted_bundle_is_sealed_replaced_and_never_run() {
     let library = fs::read(
         std::env::var("SILENT_ABI_FIXTURE_PATH").expect("compiled fixture path is required"),
@@ -985,7 +985,7 @@ fn an_admitted_bundle_is_sealed_replaced_and_never_run() {
     let error = plugin_bundle::install(&first, &newer_host).unwrap_err();
     assert!(
         error.contains("expected dev.silent.IPlugin/13.0")
-            && error.contains("found dev.silent.IPlugin/12.0"),
+            && error.contains("found dev.silent.IPlugin/1.0"),
         "{error}"
     );
     assert_eq!(sealed_files(&state), replaced);
