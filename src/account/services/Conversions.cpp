@@ -315,9 +315,15 @@ auto toBackupInfo(const BackupContents &contents) -> backend::BackupInfo {
     for (const auto &signer : contents.signers) {
         signers.append(toQString(signer));
     }
-    info.requirements.append(
-        signers.isEmpty() ? TR("backup-requires-key")
-                          : TR("backup-requires-keys").arg(signers.join(QStringLiteral(", "))));
+    // An SP backup holds the scan key, never the spending key.
+    if (signers.isEmpty()) {
+        info.requirements.append(multikey ? TR("backup-requires-key")
+                                          : TR("backup-requires-sp-key"));
+    } else {
+        auto names = signers.join(QStringLiteral(", "));
+        info.requirements.append(multikey ? TR("backup-requires-keys").arg(names)
+                                          : TR("backup-requires-sp-keys").arg(names));
+    }
     info.requirements.append(contents.scan_start != 0
                                  ? TR("backup-requires-sp-scan").arg(contents.scan_start)
                                  : TR("backup-requires-scan"));

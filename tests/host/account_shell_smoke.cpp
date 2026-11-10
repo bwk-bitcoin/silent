@@ -635,6 +635,8 @@ void decryptWithScanKey(const QByteArray &backup, IModule *owner) {
     readBackup(*modal);
     require(modal->m_paths == QStringList{SP_SCAN_PATH},
             "an SP backup names the BIP352 scan path alone");
+    require(modal->m_airgap_text->text() == TR("restore-scan-key-help"),
+            "an SP backup's help points to the key or its mnemonic, not to an xpub");
 
     FakeDeviceInstance usb(QStringLiteral("fake.usb"), QStringLiteral("73c5da0a"),
                            {{SP_SPEND_PATH, SP_XPUB}});
@@ -681,6 +683,15 @@ void decryptWithScanKey(const QByteArray &backup, IModule *owner) {
             "the review says the key opened the backup");
     require(modal->m_xpubs == QStringList{QString::fromLatin1(SP_DESCRIPTOR)},
             "its answer is held for the restore");
+    QStringList review;
+    for (auto *label : modal->m_review_lists->findChildren<QLabel *>()) {
+        review.append(label->text());
+    }
+    require(
+        review.filter(QStringLiteral("holds no secret")).isEmpty() &&
+            (review.contains(TR("backup-requires-sp-key")) ||
+             !review.filter(QStringLiteral("holds the scan key, not the spending key")).isEmpty()),
+        "an SP backup's review says it holds the scan key, never that it holds no secret");
     Host::get()->removeInstance(usb.id(), owner);
     QCoreApplication::processEvents();
 }

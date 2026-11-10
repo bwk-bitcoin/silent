@@ -52,6 +52,12 @@ backup-requires-scan
 backup-requires-servers
 => "Servers: the backup names none, so the restored account uses the ones last used on its network. Change them in its Settings."
 => "Servers: the backup names none, so the restored account uses the ones last used on its network. Change them in its Settings.";;
+backup-requires-sp-key
+=> "The account's signing key, in Keys, to spend: the backup holds the scan key, not the spending key"
+=> "The account's signing key, in Keys, to spend: the backup holds the scan key, not the spending key";;
+backup-requires-sp-keys
+=> "The signing keys %1, in Keys, to spend: the backup holds the scan key, not the spending key"
+=> "The signing keys %1, in Keys, to spend: the backup holds the scan key, not the spending key";;
 backup-requires-sp-scan
 => "Its coins and history are found again by scanning from block %1"
 => "Its coins and history are found again by scanning from block %1";;
@@ -59,8 +65,8 @@ backup-save-failed => "The backup is not saved: %1" => "The backup is not saved:
 backup-save-title => "Save Account Backup" => "Save Account Backup"
 backup-saved => "The backup is saved to %1" => "The backup is saved to %1"
 backup-text
-=> "The backup is a BIP139 wallet backup encrypted with BIP138 to the account's keys: any one of them opens it, from its signing device, its xpub or its mnemonic. It holds the account's descriptors, servers, address indexes and labels, no signing secret."
-=> "The backup is a BIP139 wallet backup encrypted with BIP138 to the account's keys: any one of them opens it, from its signing device, its xpub or its mnemonic. It holds the account's descriptors, servers, address indexes and labels, no signing secret.";;
+=> "The backup is a BIP139 wallet backup encrypted with BIP138. It holds the account's descriptors, servers, address indexes and labels. A Multikey backup is encrypted to the policy's keys: any one of them opens it, from its signing device, its xpub or its mnemonic, and it holds no signing secret. A silent payment backup holds the account's scan key and is encrypted to it: only that key opens it, from its key in Keys or its mnemonic, and whoever opens it sees the account's payments. The spending keys are never in a backup."
+=> "The backup is a BIP139 wallet backup encrypted with BIP138. It holds the account's descriptors, servers, address indexes and labels. A Multikey backup is encrypted to the policy's keys: any one of them opens it, from its signing device, its xpub or its mnemonic, and it holds no signing secret. A silent payment backup holds the account's scan key and is encrypted to it: only that key opens it, from its key in Keys or its mnemonic, and whoever opens it sees the account's payments. The spending keys are never in a backup.";;
 backup-title => "Backup Account" => "Backup Account"
 backup-warning-saved-psbts
 => "Saved PSBTs and signing sessions are not in the backup: a transaction being signed is prepared again."
@@ -1159,8 +1165,8 @@ restore-file-filter
 => "Backups (*.bip138 *.json *.txt);;All files (*)"
 => "Backups (*.bip138 *.json *.txt);;All files (*)";;
 restore-file-text
-=> "Choose the account's backup file: a Silent backup, a BIP139 wallet backup or a descriptor, encrypted with BIP138 or not."
-=> "Choose the account's backup file: a Silent backup, a BIP139 wallet backup or a descriptor, encrypted with BIP138 or not.";;
+=> "Choose the account's backup file: a BIP139 wallet backup or a descriptor, encrypted with BIP138 or not."
+=> "Choose the account's backup file: a BIP139 wallet backup or a descriptor, encrypted with BIP138 or not.";;
 restore-import-xpub-title => "Open an Xpub File" => "Open an Xpub File"
 restore-includes => "In the Backup" => "In the Backup"
 restore-invalid-descriptor
@@ -1205,6 +1211,9 @@ restore-other-options => "Other options" => "Other options"
 restore-reading => "Reading the backup" => "Reading the backup"
 restore-requirements => "Restoring Needs" => "Restoring Needs"
 restore-restoring => "Restoring the account" => "Restoring the account"
+restore-scan-key-help
+=> "This backup opens only with the account's silent payment scan key, which no xpub gives: ask its key in Keys for it above, or enter the key's mnemonic below. Its scan path:"
+=> "This backup opens only with the account's silent payment scan key, which no xpub gives: ask its key in Keys for it above, or enter the key's mnemonic below. Its scan path:";;
 restore-title => "Restore Account" => "Restore Account"
 restore-unknown-format
 => "This file is not a backup Silent reads: expected a BIP138 encrypted backup of a BIP139 wallet backup or of a descriptor, a BIP139 wallet backup or a descriptor."
@@ -1274,8 +1283,8 @@ send-validation-error => "Validation Error" => "Validierungsfehler"
 settings-backend-info => "Backend Info:" => "Backend-Info:"
 settings-backup => "Backup" => "Backup"
 settings-backup-text
-=> "Saves this account to a file encrypted to its keys: its descriptors, servers, address indexes and labels. Any one of its keys opens it. The signing secrets are not in it: they stay in Keys."
-=> "Saves this account to a file encrypted to its keys: its descriptors, servers, address indexes and labels. Any one of its keys opens it. The signing secrets are not in it: they stay in Keys.";;
+=> "Saves this account to a file encrypted with BIP138: its descriptors, servers, address indexes and labels. A Multikey backup opens with any one of its keys and holds no signing secret. A silent payment backup holds the account's scan key and opens only with it, from its key in Keys or its mnemonic. The spending keys are never in it: they stay in Keys."
+=> "Saves this account to a file encrypted with BIP138: its descriptors, servers, address indexes and labels. A Multikey backup opens with any one of its keys and holds no signing secret. A silent payment backup holds the account's scan key and opens only with it, from its key in Keys or its mnemonic. The spending keys are never in it: they stay in Keys.";;
 settings-blindbit-address => "BlindBit URL" => "BlindBit-URL"
 settings-blindbit-url => "BlindBit URL:" => "BlindBit-URL:"
 settings-block-height => "Block Height:" => "Blockhoehe:"

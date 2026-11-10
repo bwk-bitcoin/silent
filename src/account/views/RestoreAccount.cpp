@@ -121,7 +121,7 @@ void RestoreAccount::retranslateUi() {
     m_decrypt_text->setText(TR("restore-device-description"));
     m_keys_text->setText(TR("restore-keys-text"));
     m_options->setTitle(TR("restore-other-options"));
-    m_airgap_text->setText(TR("restore-airgap-help"));
+    m_airgap_text->setText(scanKeyOnly() ? TR("restore-scan-key-help") : TR("restore-airgap-help"));
     m_option_fields->setFieldLabel(m_xpub_row, TR("restore-xpub-field"));
     m_option_fields->setFieldLabel(m_import_xpub, TR("restore-xpub-file-field"));
     m_mnemonic_fields->setFieldLabel(m_mnemonic_input, TR("restore-mnemonic-field"));
@@ -314,6 +314,8 @@ void RestoreAccount::showDecrypt(const QStringList &derivation_paths) {
         }
     }
     m_paths_label->setText(m_paths.join(QStringLiteral("\n")));
+    // No xpub opens a backup keyed by a scan key: the help points to the key or its mnemonic.
+    m_airgap_text->setText(scanKeyOnly() ? TR("restore-scan-key-help") : TR("restore-airgap-help"));
     if (m_module != nullptr) {
         Host::get()->requestSignerPolling(m_module, true);
     }
