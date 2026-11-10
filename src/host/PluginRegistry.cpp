@@ -8,6 +8,7 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QLoggingCategory>
@@ -1285,6 +1286,77 @@ void PluginRegistry::onModuleShutdownFinished(ReqId req_id, const QString &error
         }
         return;
     }
+}
+
+void PluginRegistry::shutdownAtQuit(int bound_ms) {
+    m_quit_deadline = QDeadlineTimer(bound_ms);
+    for (auto it = m_records.cbegin(); it != m_records.cend(); ++it) {
+        // A disable or removal under way shuts its modules down itself.
+        if (!it->enabled || m_stops.contains(it.key())) {
+            continue;
+        }
+        for (auto *module : it->modules) {
+            auto reqId = ++m_delete_req_id;
+            if (reqId == 0) {
+                reqId = ++m_delete_req_id;
+            }
+            m_quit_pending.insert(module, reqId);
+            connect(module, &IModule::shutdownFinished, this,
+                    &PluginRegistry::onQuitShutdownFinished, qontrol::UNIQUE);
+        }
+    }
+    // Every module is recorded before any is asked: one may answer from inside shutdown().
+    auto asked = m_quit_pending;
+    auto *host = dynamic_cast<HostImpl *>(Host::get());
+    for (auto it = asked.cbegin(); it != asked.cend(); ++it) {
+        if (host != nullptr) {
+            host->enterFrame(it.key());
+        }
+        it.key()->setSignerPolling(false);
+        it.key()->shutdown(it.value());
+        if (host != nullptr) {
+            host->leaveFrame(it.key());
+        }
+    }
+    if (!quitSettled()) {
+        QEventLoop loop;
+        QTimer tick;
+        tick.setInterval(PLUGIN_STOP_POLL_INTERVAL_MS);
+        connect(&tick, &QTimer::timeout, this, &PluginRegistry::onQuitTick, qontrol::UNIQUE);
+        m_quit_loop = &loop;
+        tick.start();
+        loop.exec();
+        m_quit_loop = nullptr;
+    }
+    if (!m_quit_pending.isEmpty()) {
+        qWarning() << "Quitting before" << m_quit_pending.size() << "modules shut down";
+    }
+}
+
+void PluginRegistry::onQuitShutdownFinished(ReqId req_id, [[maybe_unused]] const QString &error) {
+    auto *module = qobject_cast<IModule *>(sender());
+    if (module == nullptr || !m_quit_pending.contains(module) ||
+        m_quit_pending.value(module) != req_id) {
+        return;
+    }
+    // A refusal changes nothing at quit: the process exits either way.
+    m_quit_pending.remove(module);
+}
+
+void PluginRegistry::onQuitTick() {
+    if (m_quit_loop != nullptr && (quitSettled() || m_quit_deadline.hasExpired())) {
+        m_quit_loop->quit();
+    }
+}
+
+auto PluginRegistry::quitSettled() const -> bool {
+    if (!m_quit_pending.isEmpty()) {
+        return false;
+    }
+    return std::ranges::none_of(m_stops, [](const PluginStop &stop) {
+        return stop.phase == StopPhase::WaitingFrames ||
+               (stop.phase == StopPhase::Stopping && !stop.pending.isEmpty());
+    });
 }
 
 void PluginRegistry::advancePluginStops() {

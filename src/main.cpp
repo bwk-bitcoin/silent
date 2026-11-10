@@ -1,5 +1,6 @@
 #include "AppController.h"
 #include "MainWindow.h"
+#include "host/PluginRegistry.h"
 #include "i18n/I18nManager.h"
 #include "interfaces/host.h"
 #include "interfaces/types.h"
@@ -110,5 +111,10 @@ auto main(int argc, char *argv[]) -> int {
     // Show window
     window->show();
 
-    return QApplication::exec();
+    auto code = QApplication::exec();
+    // The modules shut down, and their storage writes land, before the process exits.
+    if (auto *registry = controller->pluginRegistry(); registry != nullptr) {
+        registry->shutdownAtQuit();
+    }
+    return code;
 }

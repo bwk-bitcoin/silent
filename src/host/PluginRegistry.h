@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDeadlineTimer>
 #include <QHash>
 #include <QList>
 #include <QMap>
@@ -18,12 +19,16 @@
 #include "interfaces/module.h"
 
 class PluginLibrary;
+class QEventLoop;
 enum class PluginRemovalPhase : std::uint8_t;
 
 class PluginRegistry final : public QObject {
     Q_OBJECT
 
 public:
+    // How long quitting waits for the modules to shut down (ws-plaude/silent#102).
+    static constexpr int QUIT_SHUTDOWN_BOUND_MS = 5000;
+
     explicit PluginRegistry(QObject *parent = nullptr);
     ~PluginRegistry() override;
 
@@ -48,6 +53,11 @@ public:
     };
 
     void registerBuiltin(IPlugin *plugin);
+    // Run once the event loop has returned. Shuts down every enabled module through
+    // IModule::shutdown(), then runs an event loop until each answered shutdownFinished,
+    // and every disable or removal under way has shut its modules down, or until
+    // `bound_ms`.
+    void shutdownAtQuit(int bound_ms = QUIT_SHUTDOWN_BOUND_MS);
     // Requests a checked background snapshot; pluginStateChanged reports completion/loading.
     void rescanDiscoveredPlugins();
     void reloadEnabledPlugins();
@@ -118,6 +128,8 @@ private slots:
     void onPluginStateJobFinished();
     void onPluginStateReadDeadline();
     void onModuleShutdownFinished(ReqId req_id, const QString &error);
+    void onQuitShutdownFinished(ReqId req_id, const QString &error);
+    void onQuitTick();
     void advancePluginStops();
     void onAccountDeleted(ReqId req_id, const QString &id, const QString &error);
     void onModuleInstances(ReqId req_id, QList<QPair<QString, QString>> instances);
@@ -133,6 +145,8 @@ protected:
     void startPluginStop(const QString &plugin_id, bool remove);
     void requestModuleShutdown(const QString &plugin_id);
     [[nodiscard]] auto drainPluginCallers(const QString &plugin_id) -> bool;
+    // Nothing shutdownAtQuit() waits for is left.
+    [[nodiscard]] auto quitSettled() const -> bool;
     void finishPluginShutdown(const QString &plugin_id);
     void requestPluginState(bool clear_errors);
     void startPluginStateJob();
@@ -255,4 +269,8 @@ private:
     bool m_reload_requested = false;
     QTimer m_state_deadline;
     QTimer m_stop_timer;
+    // The modules shutdownAtQuit() asked, with the request each one answers.
+    QHash<IModule *, ReqId> m_quit_pending;
+    QEventLoop *m_quit_loop = nullptr;
+    QDeadlineTimer m_quit_deadline;
 };

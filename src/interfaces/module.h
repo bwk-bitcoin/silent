@@ -48,7 +48,9 @@ public:
     // Stop accepting work and asynchronously drain every owned instance, including
     // already-closing ones, workers, callbacks and backend writes. Success promises
     // no owned work or callbacks can outlive plugin destruction. Never infer this from a
-    // removed host registration. Refusal keeps the library mapped and retryable.
+    // removed host registration. Refusal keeps the library mapped and retryable. Silent
+    // also calls it on every enabled module when it quits, once its event loop has
+    // returned, and waits up to 5 seconds for the answers before the process exits.
     virtual void shutdown(ReqId req_id) {
         emit shutdownFinished(req_id, QStringLiteral("Module shutdown is not supported"));
     }

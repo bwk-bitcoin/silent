@@ -62,6 +62,7 @@
 #include "access_async_smoke.h"
 #include "example_storage_smoke.h"
 #include "fee_persistence_smoke.h"
+#include "quit_shutdown_smoke.h"
 #include "registry_async_errors.h"
 
 namespace {
@@ -497,6 +498,11 @@ auto main(int argc, char *argv[]) -> int {
         Theme::init();
         smoke::qrCacheExchangeSmoke();
         std::fprintf(stdout, "QR cache exchange smoke: OK\n");
+        return gOk ? 0 : 1;
+    }
+    if (arguments.contains(QStringLiteral("--quit-shutdown"))) {
+        smoke::quitShutdownSmoke();
+        std::fprintf(stdout, "Quit shutdown smoke: OK\n");
         return gOk ? 0 : 1;
     }
     if (arguments.contains(QStringLiteral("--storage-contract"))) {
