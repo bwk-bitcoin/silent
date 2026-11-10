@@ -3,8 +3,8 @@
     "bwk": {
       "flake": false,
       "locked": {
-        "lastModified": 1794213505,
-        "narHash": "sha256-HnrU+dobDs5nk7kpUIAt1vvOI7n0KaMns8uUr7fp1/U=",
+        "lastModified": 1794300877,
+        "narHash": "sha256-dtDCu3eIIHCDDDMhtSAuIymIeO5rWejlRfD+CyM5EcE=",
         "owner": "bwk-bitcoin",
         "repo": "bwk",
         "rev": "479b1e6b84a8f2d3431a9758846de88154a67268",

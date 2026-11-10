@@ -87,7 +87,7 @@
         lockFile = ./silent/Cargo.lock;
         outputHashes = {
           "blindbitd-0.0.1" = "sha256-XfO7P9uVLbw8mpiqLZbUoKw8XsxqM1MyeBuq6TKeZ24=";
-          "bwk-sp-0.1.0" = "sha256-auNfaQ9GD+pUsrDaG7E23HxFwcIazck8u09GyyjD3qQ=";
+          "bwk-sp-0.1.0" = "sha256-rwtMC/DBggS27FpOX2WfFTM/xPyCn2RZWUH4+TvMj9w=";
           "electrsd-0.29.0" = "sha256-kpma4FwkvZxjvVlN/9TnpmWpABkN3iNgQZUtFNp65IM=";
         };
       };
