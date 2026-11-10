@@ -1746,6 +1746,24 @@ mod ffi {
         pub reveal: bool,
     }
 
+    /// The change a PSBT of a Multikey account on a blockchain backend plugin pays, before
+    /// adoption or export hands the PSBT out.
+    #[derive(Debug, Clone)]
+    pub struct ChainChange {
+        pub is_ok: bool,
+        pub error: String,
+        /// Index in the AccountWatch descriptors of the account's descriptor: 0.
+        pub descriptor: u32,
+        /// The multipath branch of the change: 1.
+        pub keychain: u32,
+        /// Its derivation index.
+        pub index: u32,
+        /// The backend does not watch `index` yet: IBlockchain::reveal() it before
+        /// adoption or export hands the PSBT out. False for a PSBT paying no change, or
+        /// off a chain view.
+        pub reveal: bool,
+    }
+
     /// What recording a broadcast its blockchain backend plugin accepted did.
     #[derive(Debug, Clone)]
     pub struct BroadcastRecord {
@@ -2472,6 +2490,10 @@ mod ffi {
 
         /// When a Multikey account was created, in unix seconds: 0 when unknown.
         fn get_birthday_time(self: &Config) -> u64;
+
+        /// The first block that can pay a Multikey account, a restored backup's: 0 when
+        /// unknown.
+        fn get_birthday_height(self: &Config) -> u32;
     }
 
     // ===== Account Methods =====
@@ -2490,10 +2512,6 @@ mod ffi {
 
         /// Start the scanner.
         fn start_scanner(self: &mut Account) -> bool;
-
-        /// The first block that can pay a Multikey account, a restored backup's: 0 when
-        /// unknown.
-        fn get_birthday_height(self: &Config) -> u32;
 
         /// Stop the scanner.
         fn stop_scanner(self: &mut Account);
@@ -3290,6 +3308,14 @@ mod ffi {
         /// answer, and saves it. Refused when an address at or past it was handed out
         /// meanwhile. Disk I/O.
         fn take_chain_receive(self: &MusigAccount, index: u32) -> ReceiveAddressResult;
+        /// The change `psbt`, a PSBTv2 of `tx_template`, pays, and whether the blockchain
+        /// backend must reveal it before adopt_transaction() or export_transaction() hands
+        /// the PSBT out. No I/O.
+        fn chain_change(
+            self: &MusigAccount,
+            tx_template: TransactionTemplate,
+            psbt: &[u8],
+        ) -> ChainChange;
         /// Marks the saved transaction of hex txid `txid` broadcast, once its blockchain
         /// backend plugin accepted it. Disk I/O.
         fn record_broadcast(self: &MusigAccount, txid: &str) -> BroadcastRecord;

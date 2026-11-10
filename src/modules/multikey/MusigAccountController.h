@@ -185,12 +185,14 @@ public slots:
     void stop();
     // Takes `psbt`, ITransaction::finalize() of the crafted `tx`, as the transaction in
     // flight: registers its change, restricts it to `spend` and saves it before round 1.
-    // A change index another adoption took refuses it: `tx` is to be crafted again.
+    // A change index another adoption took refuses it: `tx` is to be crafted again. A change
+    // past what a blockchain backend plugin watches is revealed to it first.
     void adoptTransaction(const backend::TransactionTemplate &tx, const MusigSpendLeaf &spend,
                           const QByteArray &psbt);
     // Hands `psbt`, ITransaction::finalize() of the crafted `tx`, out with no signing
     // session: registers its change and restricts it to `spend`, saving nothing. A change
-    // index another adoption or export took refuses it: `tx` is to be crafted again.
+    // index another adoption or export took refuses it: `tx` is to be crafted again. A
+    // change past what a blockchain backend plugin watches is revealed to it first.
     void exportTransaction(const backend::TransactionTemplate &tx, const MusigSpendLeaf &spend,
                            const QByteArray &psbt);
     // keys()->sign() with the key `fingerprint` alone, for the current round of the PSBT
@@ -245,6 +247,19 @@ protected:
     // PSBT, or that key already asked). Every key may be asked at once.
     [[nodiscard]] auto beginSignRequest(const QString &fingerprint) -> std::pair<IKeys *, ReqId>;
     void finalizeIfReady();
+    // An account is loaded and no endpoint change, stop or deletion keeps it from preparing
+    // a transaction.
+    [[nodiscard]] auto preparable() const -> bool;
+    // Answers `next` once the blockchain backend watches the change `psbt`, the PSBT of
+    // `tx`, pays: at once when it does already or the account syncs from Electrum, after
+    // revealing it otherwise; with the error that prevents it.
+    void whenChangeWatched(const backend::TransactionTemplate &tx, const QByteArray &psbt,
+                           const std::function<void(const QString &)> &next);
+    // adoptTransaction() and exportTransaction() once the change is watched.
+    void startAdoption(const backend::TransactionTemplate &tx, const MusigSpendLeaf &spend,
+                       const QByteArray &psbt);
+    void startExport(const backend::TransactionTemplate &tx, const MusigSpendLeaf &spend,
+                     const QByteArray &psbt);
     void retireSignRequests();
     // Re-reads the active attempt from Rust and refreshes everything that follows it.
     void refreshAttempt();

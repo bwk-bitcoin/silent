@@ -1638,14 +1638,21 @@ With a plugin chosen, the account syncs from that plugin's blockchain alone:
 - Adoption, export and import take as change every change index up to the last one the
   service watches (its gap limit past the change index it reports used) or the next one
   the account would pay, not only the scanner's look-ahead, and register it.
+- A change past what the service watches, as after more adopted or exported transactions
+  than its gap limit with none broadcast, is revealed to it before adoption or export
+  hands the PSBT out: `chain_change()` (bridge type `ChainChange`) names the change's
+  branch and index and whether it needs a reveal, `MusigServices::revealChange()` asks
+  `reveal()`, and adoption or export goes on once it is acknowledged; an `error()` fails
+  it with the service's message.
 
 `host_smoke --chain-spend` opens a Multikey account on the `services.chain` fixture with an
 Electrum server saved, checks that no Electrum connection opens and the status bar shows
 the plugin, crafts and finalizes a spend from the coin the fixture reports (its
 `fixtureOutputs`, `fixtureUsed` and `fixtureTip` properties, its used change index past
-the scanner's look-ahead), adopts it on the leaf of a hot key of the policy, signs it with
-that key and imports the answer until the account finalizes it, hands out receive addresses until the one the fixture reveals, then chooses
-Electrum again.
+the scanner's look-ahead), exports it once per change index the fixture watches, none
+revealed, then adopts it on the leaf of a hot key of the policy, its change revealed first,
+signs it with that key and imports the answer until the account finalizes it, hands out
+receive addresses until the one the fixture reveals, then chooses Electrum again.
 
 The built-in SP and Multikey services (`account::AccountServices`) read and work on the
 controller's Rust account directly: funds, history, transaction details, labels, receive
@@ -1721,6 +1728,7 @@ payments. The document holds:
 | Derivation state         | each sub-account's or policy's `receive_index` and `change_index`  |
 | SP scan start            | the SP account's `block_height`                                    |
 | Multikey creation time   | the Multikey account's `timestamp`, in unix seconds, when it records one |
+| Multikey birthday height | the Multikey account's `block_height`, when it records one         |
 | Labels                   | `bip329_labels` of the first account, RAM edits included           |
 | Servers and settings     | `proprietary.silent`: module, BlindBit and Electrum servers, certificate check, dust limit |
 
@@ -1728,7 +1736,6 @@ and leave out, as `BackupInfo` says:
 
 - the signing keys: they stay in Keys, which the restored account needs (`requirements`
   names their fingerprints);
-| Multikey birthday height | the Multikey account's `block_height`, when it records one         |
 - coins and history: the restored account finds them again by scanning;
 - a Multikey account's saved PSBTs and signing sessions (`warnings`): restoring them could
   bring back a signing round whose nonces a signer already used.

@@ -50,6 +50,8 @@ auto chainView(const backend::IBlockchain &chain, quint32 gap_limit) -> ChainVie
     return view;
 }
 
+const QString CHAIN_CHANGED = QStringLiteral("The blockchain backend changed");
+
 } // namespace
 
 MusigServices::MusigServices(const QString &account, MusigAccountController *controller)
@@ -96,7 +98,12 @@ void MusigServices::attachChain(backend::IBlockchain *chain, quint32 gap_limit) 
     auto reveals = std::move(m_reveals);
     m_reveals.clear();
     for (const auto &reveal : reveals) {
-        emit failed(reveal.token, QStringLiteral("The blockchain backend changed"));
+        emit failed(reveal.token, CHAIN_CHANGED);
+    }
+    auto changeReveals = std::move(m_change_reveals);
+    m_change_reveals.clear();
+    for (const auto &done : changeReveals) {
+        done(CHAIN_CHANGED);
     }
     m_chain = chain;
     m_gap_limit = gap_limit;
@@ -129,6 +136,18 @@ void MusigServices::feedChain() {
     }
 }
 
+void MusigServices::revealChange(quint32 descriptor, quint32 keychain, quint32 index,
+                                 const std::function<void(const QString &error)> &done) {
+    if (m_chain == nullptr) {
+        done(QStringLiteral("The account syncs from no blockchain backend plugin"));
+        return;
+    }
+    auto request = account::nextRequestId();
+    // Registered before the request: the answer may come during the call.
+    m_change_reveals.insert(request, done);
+    m_chain->reveal(request, descriptor, keychain, index);
+}
+
 void MusigServices::takeReceive(backend::RequestId token, quint32 index) {
     auto *wallet = rustAccount();
     if (wallet == nullptr) {
@@ -150,6 +169,10 @@ void MusigServices::onChainChanged() {
 }
 
 void MusigServices::onChainCompleted(backend::RequestId request_id) {
+    if (m_change_reveals.contains(request_id)) {
+        m_change_reveals.take(request_id)(QString());
+        return;
+    }
     if (!m_reveals.contains(request_id)) {
         return;
     }
@@ -158,6 +181,10 @@ void MusigServices::onChainCompleted(backend::RequestId request_id) {
 }
 
 void MusigServices::onChainError(backend::RequestId request_id, const QString &message) {
+    if (m_change_reveals.contains(request_id)) {
+        m_change_reveals.take(request_id)(message);
+        return;
+    }
     if (!m_reveals.contains(request_id)) {
         return;
     }

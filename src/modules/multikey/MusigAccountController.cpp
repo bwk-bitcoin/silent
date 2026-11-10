@@ -738,10 +738,45 @@ void MusigAccountController::stop() {
     drainAccount(std::move(account), notif, workers);
 }
 
+auto MusigAccountController::preparable() const -> bool {
+    return m_account.has_value() && !m_endpoint_busy && !endpointsStopping() &&
+           !accountDeletionPending();
+}
+
+void MusigAccountController::whenChangeWatched(const backend::TransactionTemplate &tx,
+                                               const QByteArray &psbt,
+                                               const std::function<void(const QString &)> &next) {
+    auto change = m_account.value()->chain_change(account::services::toTemplate(tx),
+                                                  account::services::toSlice(psbt));
+    if (!change.is_ok) {
+        next(toQString(change.error));
+        return;
+    }
+    if (!change.reveal) {
+        next(QString());
+        return;
+    }
+    m_services->revealChange(change.descriptor, change.keychain, change.index, next);
+}
+
 void MusigAccountController::adoptTransaction(const backend::TransactionTemplate &tx,
                                               const MusigSpendLeaf &spend, const QByteArray &psbt) {
-    if (!m_account.has_value() || m_endpoint_busy || endpointsStopping() ||
-        accountDeletionPending()) {
+    if (!preparable()) {
+        emit prepareFailed(TR("send-no-account-loaded"));
+        return;
+    }
+    whenChangeWatched(tx, psbt, [this, tx, spend, psbt](const QString &error) {
+        if (!error.isEmpty()) {
+            emit prepareFailed(error);
+            return;
+        }
+        startAdoption(tx, spend, psbt);
+    });
+}
+
+void MusigAccountController::startAdoption(const backend::TransactionTemplate &tx,
+                                           const MusigSpendLeaf &spend, const QByteArray &psbt) {
+    if (!preparable()) {
         emit prepareFailed(TR("send-no-account-loaded"));
         return;
     }
@@ -779,8 +814,22 @@ void MusigAccountController::adoptTransaction(const backend::TransactionTemplate
 void MusigAccountController::exportTransaction(const backend::TransactionTemplate &tx,
                                                const MusigSpendLeaf &spend,
                                                const QByteArray &psbt) {
-    if (!m_account.has_value() || m_endpoint_busy || endpointsStopping() ||
-        accountDeletionPending()) {
+    if (!preparable()) {
+        emit exportFailed(TR("send-no-account-loaded"));
+        return;
+    }
+    whenChangeWatched(tx, psbt, [this, tx, spend, psbt](const QString &error) {
+        if (!error.isEmpty()) {
+            emit exportFailed(error);
+            return;
+        }
+        startExport(tx, spend, psbt);
+    });
+}
+
+void MusigAccountController::startExport(const backend::TransactionTemplate &tx,
+                                         const MusigSpendLeaf &spend, const QByteArray &psbt) {
+    if (!preparable()) {
         emit exportFailed(TR("send-no-account-loaded"));
         return;
     }

@@ -14,6 +14,7 @@
 #include "PluginBundleFixture.h"
 #include "account/AccountModule.h"
 #include "account/AccountShell.h"
+#include "account/PsbtTransfer.h"
 #include "account/RequestId.h"
 #include "account/SendSigning.h"
 #include "catalog/Button.h"
@@ -41,14 +42,15 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDialog>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
-#include <QJsonValue>
-#include <QLineEdit>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
+#include <QLineEdit>
 #include <QPointer>
 #include <QStringList>
 #include <QThread>
@@ -96,8 +98,6 @@ constexpr quint64 OUTPUT_SATS = 50000;
 const QString MULTIKEY = QStringLiteral("services-multikey");
 // A Multikey account created as the creator does, recording its birthday.
 const QString CREATED_MULTIKEY = QStringLiteral("services-multikey-created");
-// The height the rescan is asked from.
-constexpr quint64 RESCAN_HEIGHT = 150;
 // A Multikey account restored from a backup telling its birthday height and time.
 const QString RESTORED_MULTIKEY = QStringLiteral("services-multikey-restored");
 constexpr quint64 RESTORED_BIRTHDAY_HEIGHT = 812345;
@@ -106,6 +106,8 @@ constexpr int SHOT_WIDTH = 1440;
 constexpr int SHOT_HEIGHT = 1000;
 constexpr int SHOT_SETTLE_MS = 500;
 constexpr qint64 RESTORED_BIRTHDAY_TIME = 1700000000;
+// The height the rescan is asked from.
+constexpr quint64 RESCAN_HEIGHT = 150;
 // The chain fixture's module id: the backend the Multikey account chooses.
 const QString CHAIN_MODULE = CHAIN + QStringLiteral(".module");
 const char *const MULTIKEY_DESCRIPTOR =
@@ -870,8 +872,6 @@ void rescanFromHeight(MusigAccountWidget *widget) {
     chain->setProperty("fixtureRefuseRescan", QVariant());
 }
 
-// A Multikey account created as the creator does, the chain plugin its backend, hands the
-// plugin a watch carrying the time it was created at.
 // Saves the whole window to `path`, showing the Settings of the account of `widget`.
 void captureSettings(MainWindow &window, MusigAccountWidget *widget, const QString &path) {
     window.resize(SHOT_WIDTH, SHOT_HEIGHT);
@@ -924,6 +924,8 @@ auto watchedDescriptor() -> QString {
     return QString::fromStdString(std::string(canonical.descriptor));
 }
 
+// A Multikey account created as the creator does, the chain plugin its backend, hands the
+// plugin a watch carrying the time it was created at.
 void createdAccountBirthday(MainWindow &window, account::AccountModule *module, IModule *chain,
                             MusigAccountWidget *opened, int watches) {
     auto before = QDateTime::currentSecsSinceEpoch();
@@ -1164,6 +1166,46 @@ public slots:
     }
 };
 
+// The answers of the Multikey account's exports. Each export opens the modal handing the
+// PSBT out, its own loop holding the GUI thread until it closes: closed once it runs, any
+// other modal taken as a failure.
+class ExportReplies final : public QObject {
+    Q_OBJECT
+
+public:
+    ExportReplies() {
+        connect(&m_timer, &QTimer::timeout, this, &ExportReplies::onPoll, qontrol::UNIQUE);
+        m_timer.start(MODAL_POLL_MS);
+    }
+
+    int exported = 0;
+    QString failure;
+
+public slots:
+
+    void onPoll() {
+        auto *active = QApplication::activeModalWidget();
+        if (active == nullptr) {
+            return;
+        }
+        if (qobject_cast<account::ExportPsbt *>(active) == nullptr) {
+            failure = QStringLiteral("the export shows another modal");
+        }
+        qobject_cast<QDialog *>(active)->reject();
+    }
+
+    void onExported([[maybe_unused]] const QByteArray &psbt) {
+        ++exported;
+    }
+
+    void onExportFailed(const QString &message) {
+        failure = message;
+    }
+
+private:
+    QTimer m_timer;
+};
+
 // The label the account's status bar item shows.
 auto statusLabel(MusigAccountWidget *widget) -> QString {
     auto *bar = widget->findChild<MusigStatusBar *>();
@@ -1201,10 +1243,8 @@ auto payment(const QStringList &inputs) -> backend::TransactionTemplate {
             .feeRate = 2.0};
 }
 
-// Adopts `psbt`, ITransaction::finalize() of `crafted`, on the leaf of `key` alone, signs it
-// with that hot key and imports the answer: the account finalizes the spend of CHAIN_COIN.
-void spendThroughHotLeaf(MusigAccountController *account, const ChainHotKey &key,
-                         const backend::TransactionTemplate &crafted, const QByteArray &psbt) {
+// The leaf of `key` alone, spending CHAIN_COIN.
+auto hotLeaf(MusigAccountController *account, const ChainHotKey &key) -> MusigSpendLeaf {
     auto leaves = account->spendLeaves({CHAIN_COIN});
     require(leaves.is_ok, "the backend's coin has spend paths");
     auto leaf = std::find_if(leaves.leaves.begin(), leaves.leaves.end(), [&key](const auto &leaf) {
@@ -1213,11 +1253,48 @@ void spendThroughHotLeaf(MusigAccountController *account, const ChainHotKey &key
     });
     require(leaf != leaves.leaves.end() && leaf->spendable,
             "the hot key's leaf spends the backend's coin");
+    return *leaf;
+}
+
+// Exports a spend of `crafted` for each change index the backend watches past the one it
+// reports used, CHAIN_USED_CHANGE: none needs a reveal, and the next change is past the
+// backend's window.
+void exportThroughWindow(MusigAccountController *account, backend::ITransaction *transaction,
+                         backend::IBlockchain *chain, const backend::TransactionTemplate &crafted,
+                         const MusigSpendLeaf &leaf) {
+    ExportReplies replies;
+    QObject::connect(account, &MusigAccountController::transactionExported, &replies,
+                     &ExportReplies::onExported, qontrol::UNIQUE);
+    QObject::connect(account, &MusigAccountController::exportFailed, &replies,
+                     &ExportReplies::onExportFailed, qontrol::UNIQUE);
+    auto window = static_cast<int>(backend::AccountWatch{}.gapLimit);
+    for (int count = 1; count <= window; ++count) {
+        auto psbt = transaction->finalize(crafted);
+        require(psbt.has_value(), "the spend finalizes on the next change index");
+        account->exportTransaction(crafted, leaf, *psbt);
+        waitFor(
+            [&replies, count] { return replies.exported == count || !replies.failure.isEmpty(); },
+            "the export answers");
+        require(replies.failure.isEmpty(), "the spend is exported");
+    }
+    require(!chain->property("revealed").isValid(),
+            "no change index the backend watches is revealed");
+}
+
+// Adopts `psbt`, ITransaction::finalize() of `crafted`, on the leaf of `key` alone, signs it
+// with that hot key and imports the answer: the account finalizes the spend of CHAIN_COIN.
+// Its change, `change_index`, is past what the backend watches: it is revealed first.
+void spendThroughHotLeaf(MusigAccountController *account, backend::IBlockchain *chain,
+                         const ChainHotKey &key, const backend::TransactionTemplate &crafted,
+                         const QByteArray &psbt, quint32 change_index) {
     SignModalDriver driver(account, key);
-    account->adoptTransaction(crafted, *leaf, psbt);
+    account->adoptTransaction(crafted, hotLeaf(account, key), psbt);
     waitFor([&driver] { return !driver.finalized.isEmpty(); }, "the adopted spend is signed");
     require(driver.finalized.contains(CHAIN_COIN.section(QLatin1Char(':'), 0, 0)),
             "the finalized transaction spends the backend's coin");
+    require(chain->property("revealed").toString() == QStringLiteral("0/1/%1").arg(change_index),
+            "the change past the backend's window is revealed before the spend is handed out");
+    chain->setProperty("revealed", QVariant());
 }
 
 // Hands out receive addresses until the one at FIRST_UNWATCHED: the backend reveals that
@@ -1317,7 +1394,12 @@ void chainSpendSmoke() {
                                 rust::String(key.descriptor.toStdString()), Network::Regtest)
                                 .address)))),
             "the input's witness UTXO is the backend's script");
-    spendThroughHotLeaf(account, key, crafted.transaction, *psbt);
+    exportThroughWindow(account, services.transaction, services.blockchain, crafted.transaction,
+                        hotLeaf(account, key));
+    auto outside = services.transaction->finalize(crafted.transaction);
+    require(outside.has_value(), "the spend finalizes past the backend's change window");
+    spendThroughHotLeaf(account, services.blockchain, key, crafted.transaction, *outside,
+                        CHAIN_USED_CHANGE + backend::AccountWatch{}.gapLimit + 1);
 
     QObject::connect(services.account, &backend::IAccountBackend::addressCreated, &replies,
                      &ChainReplies::onAddressCreated, qontrol::UNIQUE);

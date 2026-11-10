@@ -42,14 +42,15 @@ use crate::{
     chain_view::{ChainView, ACCOUNT_DESCRIPTOR},
     config::{parse_electrum_url, Config},
     ffi::{
-        AccountBackup, AddressVerifyInfo, BroadcastRecord, BroadcastReport, ChainReceive,
-        CoinState, CraftOutcome, FundsSnapshot, LabelEditResult, LabelKind, LabelSnapshot,
-        MusigAttemptSnapshot, MusigCosignerStatus, MusigDescriptorResult, MusigElectrumUrlResult,
-        MusigFinalizeResult, MusigReceiveAddress, MusigRound, MusigRoundStatus, MusigSpendLeaf,
-        MusigSpendLeaves, Network, Output, ReceiveAddress, ReceiveAddressResult, ReceiveKind,
-        RustChainTip, RustCoin, RustTx, RustTxDetails, SavedPsbtAttemptState, SavedPsbtEntry,
-        SavedPsbtImport, SavedPsbtList, SavedPsbtMutation, SavedPsbtRecord, SavedPsbtReset,
-        SavedPsbtRestore, TransactionSimulation, TransactionTemplate, UnsignedPsbt,
+        AccountBackup, AddressVerifyInfo, BroadcastRecord, BroadcastReport, ChainChange,
+        ChainReceive, CoinState, CraftOutcome, FundsSnapshot, LabelEditResult, LabelKind,
+        LabelSnapshot, MusigAttemptSnapshot, MusigCosignerStatus, MusigDescriptorResult,
+        MusigElectrumUrlResult, MusigFinalizeResult, MusigReceiveAddress, MusigRound,
+        MusigRoundStatus, MusigSpendLeaf, MusigSpendLeaves, Network, Output, ReceiveAddress,
+        ReceiveAddressResult, ReceiveKind, RustChainTip, RustCoin, RustTx, RustTxDetails,
+        SavedPsbtAttemptState, SavedPsbtEntry, SavedPsbtImport, SavedPsbtList, SavedPsbtMutation,
+        SavedPsbtRecord, SavedPsbtReset, SavedPsbtRestore, TransactionSimulation,
+        TransactionTemplate, UnsignedPsbt,
     },
     keys::{
         bridge::{merge_signed_psbt, musig_session_restart},
@@ -1039,13 +1040,7 @@ impl MusigAccount {
             .ok_or("Selected spend path is not available for these inputs")?;
         let network = inner.config.network.into();
         pays_template(inner.account.scanner(), chain, psbt, tx_template, network)?;
-        // A recipient on one of the account's change addresses is no change.
-        let recipients: BTreeSet<_> = tx_template
-            .outputs
-            .iter()
-            .filter_map(|output| parse_recipient(&output.address, network).ok())
-            .map(|address| address.script_pubkey())
-            .collect();
+        let recipients = template_recipients(tx_template, network);
         register_change(inner.account.scanner(), chain, psbt, &recipients)?;
         restrict_spend_path(&inner.account, chain, psbt, path)
             .map_err(|e| format!("Failed to restrict the spend path: {e}"))?;
@@ -2115,6 +2110,44 @@ impl MusigAccount {
         }
     }
 
+    pub fn chain_change(&self, tx_template: TransactionTemplate, psbt: &[u8]) -> ChainChange {
+        let failed = |error: String| ChainChange {
+            is_ok: false,
+            error,
+            descriptor: 0,
+            keychain: 0,
+            index: 0,
+            reveal: false,
+        };
+        let Some(inner) = &self.inner else {
+            return failed(NOT_INITIALIZED.into());
+        };
+        let chain = match self.chain_view() {
+            Ok(chain) => chain,
+            Err(error) => return failed(error),
+        };
+        let psbt = match parse_unsigned_psbt(psbt) {
+            Ok(psbt) => psbt,
+            Err(error) => return failed(error),
+        };
+        let recipients = template_recipients(&tx_template, inner.config.network.into());
+        let index = match change_index(inner.account.scanner(), chain.as_ref(), &psbt, &recipients)
+        {
+            Ok(index) => index,
+            Err(error) => return failed(error),
+        };
+        ChainChange {
+            is_ok: true,
+            error: String::new(),
+            descriptor: ACCOUNT_DESCRIPTOR,
+            keychain: u32::from(KeyChain::Change),
+            index: index.unwrap_or(0),
+            reveal: chain
+                .zip(index)
+                .is_some_and(|(chain, index)| !chain.watches(KeyChain::Change, index)),
+        }
+    }
+
     pub fn take_chain_receive(&self, index: u32) -> ReceiveAddressResult {
         let Some(inner) = &self.inner else {
             return services::address_failed(NOT_INITIALIZED.into());
@@ -2588,6 +2621,20 @@ fn advance_branch_tip(
     // The coin view follows the new address entries, as bwk's own change tip does.
     coins.generate();
     persisted.map(|()| true).map_err(|e| e.to_string())
+}
+
+/// The scripts `tx_template` pays: a recipient on one of the account's change addresses is
+/// no change.
+fn template_recipients(
+    tx_template: &TransactionTemplate,
+    network: bitcoin::Network,
+) -> BTreeSet<ScriptBuf> {
+    tx_template
+        .outputs
+        .iter()
+        .filter_map(|output| parse_recipient(&output.address, network).ok())
+        .map(|address| address.script_pubkey())
+        .collect()
 }
 
 /// A recipient as a bitcoin address of `network`; a silent payment address is refused.
@@ -3419,6 +3466,58 @@ mod tests {
             funds.spendable,
             vec![outpoints[0].clone()],
             "spendable now: the confirmed coin, neither the immature coinbase nor the spent one"
+        );
+    }
+
+    #[test]
+    fn chain_view_asks_a_reveal_of_change_past_the_backend_window() {
+        let (_directory, account) = chain_account();
+        // A gap limit of 1: the backend watches change up to index 3, past its used 2.
+        let view = chain_view(&account, 1);
+        let spendable = view.outputs[0].outpoint.clone();
+        assert!(account.set_chain_view(view), "report taken");
+        let leaves = account.spend_leaves(vec![spendable.clone()]);
+        assert!(leaves.is_ok, "spend paths: {}", leaves.error);
+        let template = payment(vec![spendable]);
+        let change_of = |psbt: &[u8]| {
+            let change = account.chain_change(template.clone(), psbt);
+            assert!(change.is_ok, "the change: {}", change.error);
+            (
+                change.descriptor,
+                change.keychain,
+                change.index,
+                change.reveal,
+            )
+        };
+
+        let first = account.finalize_transaction(template.clone());
+        assert!(first.is_ok, "finalize: {}", first.error);
+        assert_eq!(
+            change_of(&first.psbt),
+            (0, 1, 3, false),
+            "change index 3 is the last the backend watches: no reveal"
+        );
+        let exported =
+            account.export_transaction(template.clone(), leaves.leaves[0].clone(), &first.psbt);
+        assert!(
+            exported.is_ok(),
+            "the export registers change 3: {}",
+            exported.get_psbt_error()
+        );
+
+        let second = account.finalize_transaction(template.clone());
+        assert!(second.is_ok, "finalize: {}", second.error);
+        assert_eq!(
+            change_of(&second.psbt),
+            (0, 1, 4, true),
+            "change index 4 is past the backend's window: it is revealed before the PSBT is \
+             handed out"
+        );
+
+        account.clear_chain_view();
+        assert!(
+            !change_of(&second.psbt).3,
+            "on the Electrum scanner no change is revealed"
         );
     }
 

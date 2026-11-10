@@ -9,6 +9,7 @@
 #include <QPointer>
 #include <QString>
 #include <QtGlobal>
+#include <functional>
 #include <silent.h>
 
 namespace backend {
@@ -22,8 +23,9 @@ namespace musig {
 // (MusigAccountController::startBroadcast()), refusing it as its own broadcast was.
 // Once attachChain() hands it a blockchain backend plugin's service, the account syncs
 // from that service instead of its Electrum scanner: what the service reports reaches the
-// Rust account on every coinsChanged() and stateChanged(), a receive address is revealed to
-// it before it is handed out, and a broadcast it accepts is recorded.
+// Rust account on every coinsChanged() and stateChanged(), a receive address, and the change
+// of a PSBT, past what it watches is revealed to it before it is handed out, and a broadcast
+// it accepts is recorded.
 class MusigServices final : public account::AccountServices<MusigAccountController, MusigAccount> {
     Q_OBJECT
 
@@ -34,16 +36,22 @@ public:
     void newAddress(backend::RequestId token, QString kind) override;
     // Syncs the account from `chain`, a blockchain backend plugin's service watching it with
     // gap limit `gap_limit`, or from the Electrum scanner again with `chain` null. A receive
-    // address still waiting for the old service's reveal fails.
+    // address or a change still waiting for the old service's reveal fails.
     void attachChain(backend::IBlockchain *chain, quint32 gap_limit);
     // Hands the account what the attached service reports, or takes it back to the
     // Electrum scanner with none attached: done on every change of the service, and again
     // once the account comes back from an endpoint change.
     void feedChain();
+    // Reveals change index `index` of branch `keychain` of descriptor `descriptor` to the
+    // attached service, then answers `done` with no error, or with the service's error. With
+    // no service attached it answers the error at once.
+    void revealChange(quint32 descriptor, quint32 keychain, quint32 index,
+                      const std::function<void(const QString &error)> &done);
 
 public slots:
     void onChainChanged();
-    // The reveal of a receive address answered: the address is handed out.
+    // The reveal of a receive address answered: the address is handed out. The reveal of a
+    // change answered: its PSBT is handed out.
     void onChainCompleted(backend::RequestId request_id);
     void onChainError(backend::RequestId request_id, const QString &message);
     // The service accepted a transaction: the account records it as broadcast.
@@ -64,6 +72,8 @@ private:
     quint32 m_gap_limit = 0;
     // Receive addresses waiting for their reveal, by the reveal's request id.
     QHash<backend::RequestId, Reveal> m_reveals;
+    // What each change waiting for its reveal answers, by the reveal's request id.
+    QHash<backend::RequestId, std::function<void(const QString &)>> m_change_reveals;
 };
 
 } // namespace musig
