@@ -11,6 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <variant>
 
 class HostImpl;
@@ -47,6 +48,8 @@ struct AssemblyRequest {
     ServiceSource transaction;
     ServiceSource labels;
     ServiceSource settings;
+    // What the blockchain provider watches, for a descriptor-based account.
+    std::optional<backend::AccountWatch> watch;
 };
 
 class ServiceAssembly;

@@ -3,6 +3,8 @@
 #include <QString>
 #include <QtGlobal>
 
+#include <optional>
+
 #include "service.h"
 #include "types.h"
 
@@ -20,9 +22,10 @@ public:
 
     // This provider's `kind` service for `account` on `network`, or null when it supplies
     // none. The object declares Q_INTERFACES for the interface of `kind`, belongs to the
-    // provider, and stays valid until it is handed back to releaseService().
-    [[nodiscard]] virtual auto service(const QString &account, Network network, ServiceKind kind)
-        -> IService * = 0;
+    // provider, and stays valid until it is handed back to releaseService(). `watch` is set
+    // for the Blockchain kind of a descriptor-based account, unset otherwise.
+    [[nodiscard]] virtual auto service(const QString &account, Network network, ServiceKind kind,
+                                       const std::optional<AccountWatch> &watch) -> IService * = 0;
 
     // Hands back one non-null service() answer: the host holds no reference to it any
     // more. The plugin cannot stop while a service it supplied is not handed back.

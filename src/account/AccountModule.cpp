@@ -100,7 +100,9 @@ void AccountModule::watchAccount(const QString &id, AccountLifecycle *lifecycle,
 }
 
 auto AccountModule::service(const QString &account, backend::Network network,
-                            backend::ServiceKind kind) -> backend::IService * {
+                            backend::ServiceKind kind,
+                            [[maybe_unused]] const std::optional<backend::AccountWatch> &watch)
+    -> backend::IService * {
     auto runtime = m_runtimes.value(account);
     if (runtime.lifecycle == nullptr || runtime.stopped || m_pending.contains(account) ||
         runtime.lifecycle->accountLoading() || !runtime.lifecycle->hasAccountMetadata()) {

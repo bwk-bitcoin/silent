@@ -171,9 +171,11 @@ protected:
     [[nodiscard]] auto callerCurrent(IModule *caller, const plugin::Caller &known,
                                      uint64_t revision) const -> bool;
     void rememberClosedUi(IModule *module, QWidget *widget);
-    // Asks `source` for the `kind` service of `assembly`. Empty on success.
+    // Asks `source` for the `kind` service of `assembly`, handing it `watch`. Empty on
+    // success.
     auto supplyService(host::ServiceAssembly &assembly, backend::ServiceKind kind,
-                       const host::ServiceSource &source) -> QString;
+                       const host::ServiceSource &source,
+                       const std::optional<backend::AccountWatch> &watch) -> QString;
 
 private:
     struct TabEntry {

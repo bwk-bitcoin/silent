@@ -1,6 +1,7 @@
 // Account UI service assembly: one provider, split providers (two external plugins, a
-// built-in module and the host's explicit unsupported implementation), refusals that keep
-// nothing, a supplying plugin retained until the assembly using it is deleted and every
+// built-in module and the host's explicit unsupported implementation), the account watch
+// handed to the blockchain provider only and its outputs, indexes and reveal, refusals that
+// keep nothing, a supplying plugin retained until the assembly using it is deleted and every
 // service it was handed back is destroyed, the payloads it handed out outliving its unload,
 // and the account shell over one plugin and over two, its panels showing each one's data.
 
@@ -36,6 +37,7 @@
 #include <memory>
 #include <optional>
 #include <silent.h>
+#include <utility>
 
 namespace smoke {
 namespace {
@@ -47,6 +49,19 @@ const QString FULL = QStringLiteral("services.full");
 const QString CHAIN = QStringLiteral("services.chain");
 const QString BUILTIN = QStringLiteral("services.builtin");
 const QString ACCOUNT = QStringLiteral("account-1");
+const QString MULTIPATH_DESCRIPTOR = QStringLiteral(
+    "wpkh(tpubDEGU7K8ab62XbG1bKoCnHDtUx44DxVKyAQVS96EN1EUVTQRW2KnFEvTtmnUJSonudSK8HcXTexf56Kir1Jzo"
+    "QAzFRHfvNLEcqV7KxUHZVYa/<0;1>/*)#tyvpyexd");
+const QString SINGLE_DESCRIPTOR = QStringLiteral(
+    "tr(tpubDEGU7K8ab62XbG1bKoCnHDtUx44DxVKyAQVS96EN1EUVTQRW2KnFEvTtmnUJSonudSK8HcXTexf56Kir1JzoQ"
+    "AzFRHfvNLEcqV7KxUHZVYa/2/*)#uw7h9w88");
+constexpr quint64 BIRTHDAY_HEIGHT = 840000;
+constexpr qint64 BIRTHDAY_TIME = 1713571767;
+constexpr quint32 GAP_LIMIT = 50;
+// Past the gap limit.
+constexpr quint32 REVEALED_INDEX = GAP_LIMIT + 30;
+// What each output of the fixture blockchain pays, in satoshis.
+constexpr quint64 OUTPUT_SATS = 50000;
 
 void require(bool condition, const char *message) {
     if (!condition) {
@@ -133,7 +148,8 @@ public:
     }
 
     [[nodiscard]] auto service([[maybe_unused]] const QString &account,
-                               [[maybe_unused]] backend::Network network, backend::ServiceKind kind)
+                               [[maybe_unused]] backend::Network network, backend::ServiceKind kind,
+                               [[maybe_unused]] const std::optional<backend::AccountWatch> &watch)
         -> backend::IService * override {
         if (kind != backend::ServiceKind::Settings) {
             return nullptr;
@@ -175,6 +191,7 @@ class Replies final : public QObject {
 
 public:
     backend::RequestId errorRequest = 0;
+    backend::RequestId completedRequest = 0;
     backend::RequestId valueRequest = 0;
     QJsonValue value;
     QString valueOperation;
@@ -191,6 +208,10 @@ public slots:
 
     void onError(backend::RequestId request_id, [[maybe_unused]] const QString &message) {
         errorRequest = request_id;
+    }
+
+    void onCompleted(backend::RequestId request_id) {
+        completedRequest = request_id;
     }
 
     void onValueResult(backend::RequestId request_id, const QJsonValue &payload) {
@@ -260,6 +281,59 @@ void enableFixture(PluginRegistry *registry, const QString &id, const char *path
     require(registry->isPluginEnabled(id), "the provider fixture is enabled");
 }
 
+// `module` was asked `watches` services with a watch, the last one `watch`.
+void requireWatch(const IModule *module, const backend::AccountWatch &watch, int watches,
+                  const char *message) {
+    auto height = module->property("watchBirthdayHeight");
+    auto time = module->property("watchBirthdayTime");
+    require(module->property("watches").toInt() == watches &&
+                module->property("watchDescriptors").toStringList() == watch.descriptors &&
+                (height.isValid() ? std::optional(height.toULongLong()) : std::nullopt) ==
+                    watch.birthdayHeight &&
+                (time.isValid() ? std::optional(time.toLongLong()) : std::nullopt) ==
+                    watch.birthdayTime &&
+                module->property("watchGapLimit").toUInt() == watch.gapLimit,
+            message);
+}
+
+// The chain plugin got the watch of the split assembly for its blockchain only, and its
+// blockchain reports the outputs and indexes of the watched descriptors and reveals.
+void watchedChain(const host::ServiceAssembly &assembly, const IModule *chain,
+                  const backend::AccountWatch &watch) {
+    requireWatch(chain, watch, 1,
+                 "the blockchain provider receives the watch intact, its labels none");
+    auto *blockchain = assembly.blockchain();
+    auto outputs = blockchain->ownedOutputs();
+    require(outputs.size() == watch.descriptors.size(), "one output per watched descriptor");
+    for (qsizetype descriptor = 0; descriptor < outputs.size(); ++descriptor) {
+        const auto &output = outputs.at(descriptor);
+        require(output.outpoint == QStringLiteral("%1:%2").arg(CHAIN).arg(descriptor) &&
+                    output.amount == OUTPUT_SATS && output.scriptPubKey == CHAIN.toLatin1() &&
+                    std::cmp_equal(output.descriptor, descriptor) && output.keychain == 0 &&
+                    output.index == 0 && output.height == BIRTHDAY_HEIGHT && output.coinbase &&
+                    output.spentBy.isEmpty(),
+                "each owned output reaches the consumer as the provider reports it");
+    }
+    auto used = blockchain->usedIndexes();
+    require(used.size() == watch.descriptors.size() && used.at(1).descriptor == 1 &&
+                used.at(1).keychain == 0 && used.at(1).last == 0U,
+            "the used indexes reach the consumer as the provider reports them");
+    Replies replies;
+    QObject::connect(blockchain, &backend::IBlockchain::completed, &replies, &Replies::onCompleted,
+                     qontrol::UNIQUE);
+    QObject::connect(blockchain, &backend::IService::error, &replies, &Replies::onError,
+                     qontrol::UNIQUE);
+    auto revealed = QStringLiteral("1/1/%1").arg(REVEALED_INDEX);
+    blockchain->reveal(7, 1, 1, REVEALED_INDEX);
+    require(replies.completedRequest == 7 &&
+                blockchain->property("revealed").toString() == revealed,
+            "a reveal reaches the provider and is acknowledged");
+    blockchain->reveal(8, 2, 0, 1);
+    require(replies.errorRequest == 8 && replies.completedRequest == 7 &&
+                blockchain->property("revealed").toString() == revealed,
+            "a reveal of a descriptor not watched is refused");
+}
+
 void requireSupplier(const host::ServiceAssembly &assembly, backend::ServiceKind kind,
                      const QString &plugin_id, bool external, const char *message) {
     auto caller = assembly.supplier(kind);
@@ -270,16 +344,24 @@ void requireSupplier(const host::ServiceAssembly &assembly, backend::ServiceKind
 }
 
 void oneProvider(HostImpl *host, IModule *full) {
+    backend::AccountWatch watch{.descriptors = {SINGLE_DESCRIPTOR}};
     auto result = host->assembleServices({.account = ACCOUNT,
                                           .network = backend::Network::Regtest,
                                           .account_backend = full,
                                           .blockchain = full,
                                           .transaction = full,
                                           .labels = full,
-                                          .settings = full});
+                                          .settings = full,
+                                          .watch = watch});
     require(result.assembly != nullptr && result.error.isEmpty(),
             "one provider supplies a complete assembly");
     auto &assembly = *result.assembly;
+    requireWatch(full, watch, 1,
+                 "of five services, the blockchain alone is given the watch, its birthday unset "
+                 "and its gap limit the default");
+    require(assembly.blockchain()->ownedOutputs().size() == 1 &&
+                !assembly.blockchain()->ownedOutputs().first().height.has_value(),
+            "the blockchain watches the descriptor it was given");
     require(assembly.accountBackend() != nullptr && assembly.blockchain() != nullptr &&
                 assembly.transaction() != nullptr && assembly.labels() != nullptr &&
                 assembly.settings() != nullptr,
@@ -324,16 +406,22 @@ void oneProvider(HostImpl *host, IModule *full) {
 
 auto splitProviders(HostImpl *host, IModule *full, IModule *chain, IModule *builtin)
     -> std::unique_ptr<host::ServiceAssembly> {
+    backend::AccountWatch watch{.descriptors = {MULTIPATH_DESCRIPTOR, SINGLE_DESCRIPTOR},
+                                .birthdayHeight = BIRTHDAY_HEIGHT,
+                                .birthdayTime = BIRTHDAY_TIME,
+                                .gapLimit = GAP_LIMIT};
     auto result = host->assembleServices({.account = ACCOUNT,
                                           .network = backend::Network::Regtest,
                                           .account_backend = full,
                                           .blockchain = chain,
                                           .transaction = host::Unsupported{},
                                           .labels = chain,
-                                          .settings = builtin});
+                                          .settings = builtin,
+                                          .watch = watch});
     require(result.assembly != nullptr && result.error.isEmpty(),
             "independent providers supply one assembly");
     auto &assembly = *result.assembly;
+    watchedChain(assembly, chain, watch);
     requireSupplier(assembly, backend::ServiceKind::Account, FULL, true,
                     "the account comes from the full plugin");
     requireSupplier(assembly, backend::ServiceKind::Blockchain, CHAIN, true,
@@ -571,6 +659,9 @@ void shellRetirement(PluginRegistry *registry, IModule *full) {
                 services.labels->label({}) == CHAIN &&
                 services.settings->settings().endpoints.first().id == FULL,
             "each service the shell holds comes from the plugin the request names");
+    require(services.blockchain->ownedOutputs().isEmpty() &&
+                services.blockchain->usedIndexes().isEmpty(),
+            "a blockchain given no watch reports no owned output nor used index");
     require(services.account->parent() == full && services.blockchain->parent() == chain,
             "the shell parents no service: each stays its provider's");
     require(outstanding(full) == 3 && outstanding(chain) == 2, "five services handed out");

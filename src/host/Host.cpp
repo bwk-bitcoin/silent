@@ -787,8 +787,11 @@ auto HostImpl::assembleServices(const host::AssemblyRequest &request) -> host::A
     // Listed before any provider is asked, so a supplier that starts stopping meanwhile (a
     // provider may spin a nested event loop) waits for it and sees it retired.
     m_assemblies.append(assembly.get());
+    std::optional<backend::AccountWatch> unwatched;
     for (const auto &[kind, source] : sources) {
-        auto error = supplyService(*assembly, kind, source);
+        // Only the blockchain provider watches the account's scripts.
+        const auto &watch = kind == backend::ServiceKind::Blockchain ? request.watch : unwatched;
+        auto error = supplyService(*assembly, kind, source, watch);
         if (!error.isEmpty()) {
             // Deleting the partial assembly hands back what it was given.
             return {.error = error};
@@ -807,7 +810,8 @@ auto HostImpl::assembleServices(const host::AssemblyRequest &request) -> host::A
 }
 
 auto HostImpl::supplyService(host::ServiceAssembly &assembly, backend::ServiceKind kind,
-                             const host::ServiceSource &source) -> QString {
+                             const host::ServiceSource &source,
+                             const std::optional<backend::AccountWatch> &watch) -> QString {
     auto name = serviceName(kind);
     if (std::holds_alternative<std::monostate>(source)) {
         return QStringLiteral("No source was chosen for the %1 service").arg(name);
@@ -829,7 +833,7 @@ auto HostImpl::supplyService(host::ServiceAssembly &assembly, backend::ServiceKi
     }
     enterFrame(module);
     auto frame = qScopeGuard([this, module] { leaveFrame(module); });
-    auto *service = provider->service(assembly.account(), assembly.network(), kind);
+    auto *service = provider->service(assembly.account(), assembly.network(), kind, watch);
     if (service == nullptr) {
         return QStringLiteral("Module %1 supplies no %2 service for this account")
             .arg(known->moduleId, name);

@@ -444,6 +444,15 @@ public:
         return context()->transactionDetails(txid);
     }
 
+    // A built-in account is given no AccountWatch: it scans its own scripts.
+    [[nodiscard]] auto ownedOutputs() const -> QList<backend::OwnedOutput> override {
+        return {};
+    }
+
+    [[nodiscard]] auto usedIndexes() const -> QList<backend::UsedIndex> override {
+        return {};
+    }
+
     void start(backend::RequestId request_id) override {
         if (context() == nullptr) {
             emit error(request_id, closed());
@@ -496,6 +505,11 @@ public:
             return;
         }
         context()->broadcast(track(request_id), transaction);
+    }
+
+    void reveal(backend::RequestId request_id, [[maybe_unused]] quint32 descriptor,
+                [[maybe_unused]] quint32 keychain, [[maybe_unused]] quint32 index) override {
+        emit error(request_id, QStringLiteral("Revealing is not supported by this account"));
     }
 
     // extension::TRANSACTION_EXTRAS, answered at once from the fetched details.

@@ -130,6 +130,14 @@ public:
         return std::nullopt;
     }
 
+    [[nodiscard]] auto ownedOutputs() const -> QList<backend::OwnedOutput> override {
+        return {};
+    }
+
+    [[nodiscard]] auto usedIndexes() const -> QList<backend::UsedIndex> override {
+        return {};
+    }
+
     void start(backend::RequestId request_id) override {
         emit error(request_id, unsupportedMessage());
     }
@@ -160,6 +168,11 @@ public:
 
     void broadcast(backend::RequestId request_id,
                    [[maybe_unused]] QByteArray transaction) override {
+        emit error(request_id, unsupportedMessage());
+    }
+
+    void reveal(backend::RequestId request_id, [[maybe_unused]] quint32 descriptor,
+                [[maybe_unused]] quint32 keychain, [[maybe_unused]] quint32 index) override {
         emit error(request_id, unsupportedMessage());
     }
 };

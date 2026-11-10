@@ -39,7 +39,8 @@ enum class Answer : std::uint8_t {
 
 // One request a fake received, in the order received. Its payload is what the request
 // carried: an Endpoint, Settings, TransactionTemplate, LabelKey, QByteArray or QString,
-// or the QJsonValue of a value() call (the operation is then in `operation`).
+// the QList<quint32> of a reveal() (descriptor, keychain, index), or the QJsonValue of a
+// value() call (the operation is then in `operation`).
 struct Request {
     backend::RequestId id = 0;
     // The interface method: "testEndpoint", "save", "craft", "selectCoins", ...
@@ -188,6 +189,8 @@ public:
         QHash<QString, backend::TransactionDetails> details;
         // What a broadcast answers.
         backend::BroadcastResult broadcast{.outcome = backend::BroadcastOutcome::Accepted};
+        QList<backend::OwnedOutput> ownedOutputs;
+        QList<backend::UsedIndex> usedIndexes;
     };
 
     [[nodiscard]] auto state() const -> backend::BlockchainState override;
@@ -196,6 +199,8 @@ public:
     [[nodiscard]] auto history() const -> QList<backend::Transaction> override;
     [[nodiscard]] auto transactionDetails(const QString &txid) const
         -> std::optional<backend::TransactionDetails> override;
+    [[nodiscard]] auto ownedOutputs() const -> QList<backend::OwnedOutput> override;
+    [[nodiscard]] auto usedIndexes() const -> QList<backend::UsedIndex> override;
 
     void setState(const backend::BlockchainState &state);
     void setCoins(const QList<backend::Coin> &coins);
@@ -218,6 +223,9 @@ public:
     // Publishes the details of `txid`, then transactionDetailsFetched().
     void fetchTransactionDetails(backend::RequestId request_id, QString txid) override;
     void broadcast(backend::RequestId request_id, QByteArray transaction) override;
+    // Answers completed().
+    void reveal(backend::RequestId request_id, quint32 descriptor, quint32 keychain,
+                quint32 index) override;
 
     Model model;
 

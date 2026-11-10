@@ -3,6 +3,8 @@
 // only the blockchain and labels, and deletes a service it is handed back only a while
 // later. Every getter answers this plugin's id so a consumer
 // can tell which provider served it. Payloads are heap copies: they outlive no unload.
+// The module records the last AccountWatch it was given in its properties, and its
+// blockchain reports one output per watched descriptor, paid at its birthday.
 
 #include "interfaces/backend/account.h"
 #include "interfaces/backend/blockchain.h"
@@ -18,7 +20,9 @@
 #include <QMap>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
+#include <QVariant>
 #include <optional>
 #include <utility>
 
@@ -31,6 +35,9 @@ constexpr int HELD_MS = 1500;
 #else
 constexpr auto PLUGIN_ID = "services.full";
 #endif
+
+// What each output of the blockchain pays, in satoshis.
+constexpr quint64 OUTPUT_SATS = 50000;
 
 auto pluginId() -> QString {
     return QString::fromLatin1(PLUGIN_ID);
@@ -139,7 +146,10 @@ class Q_DECL_HIDDEN FixtureBlockchain final : public FixtureService<backend::IBl
     Q_INTERFACES(backend::IBlockchain)
 
 public:
-    using FixtureService::FixtureService;
+    FixtureBlockchain(std::optional<backend::AccountWatch> watch, QObject *parent)
+        : FixtureService(parent),
+          m_watch(std::move(watch)) {
+    }
 
     [[nodiscard]] auto state() const -> backend::BlockchainState override {
         return {};
@@ -160,6 +170,30 @@ public:
     [[nodiscard]] auto transactionDetails([[maybe_unused]] const QString &txid) const
         -> std::optional<backend::TransactionDetails> override {
         return std::nullopt;
+    }
+
+    // One coinbase output per watched descriptor, at index 0 of its first branch, its
+    // script this plugin's id.
+    [[nodiscard]] auto ownedOutputs() const -> QList<backend::OwnedOutput> override {
+        QList<backend::OwnedOutput> outputs;
+        for (quint32 descriptor = 0; descriptor < watchedCount(); ++descriptor) {
+            outputs.append(
+                {.outpoint = QString::fromLatin1("%1:%2").arg(pluginId()).arg(descriptor),
+                 .amount = OUTPUT_SATS,
+                 .scriptPubKey = pluginId().toLatin1(),
+                 .descriptor = descriptor,
+                 .height = m_watch->birthdayHeight,
+                 .coinbase = true});
+        }
+        return outputs;
+    }
+
+    [[nodiscard]] auto usedIndexes() const -> QList<backend::UsedIndex> override {
+        QList<backend::UsedIndex> used;
+        for (quint32 descriptor = 0; descriptor < watchedCount(); ++descriptor) {
+            used.append({.descriptor = descriptor, .last = 0});
+        }
+        return used;
     }
 
     void start(backend::RequestId request_id) override {
@@ -194,6 +228,27 @@ public:
                    [[maybe_unused]] QByteArray transaction) override {
         emit error(request_id, refusal());
     }
+
+    // Records the window in the "revealed" property as descriptor/keychain/index; a
+    // descriptor not watched is refused.
+    void reveal(backend::RequestId request_id, quint32 descriptor, quint32 keychain,
+                quint32 index) override {
+        if (descriptor >= watchedCount()) {
+            emit error(request_id, refusal());
+            return;
+        }
+        setProperty("revealed",
+                    QString::fromLatin1("%1/%2/%3").arg(descriptor).arg(keychain).arg(index));
+        emit completed(request_id);
+    }
+
+protected:
+    [[nodiscard]] auto watchedCount() const -> quint32 {
+        return m_watch.has_value() ? static_cast<quint32>(m_watch->descriptors.size()) : 0;
+    }
+
+private:
+    std::optional<backend::AccountWatch> m_watch;
 };
 
 class Q_DECL_HIDDEN FixtureTransaction final : public FixtureService<backend::ITransaction> {
@@ -294,9 +349,14 @@ public:
     }
 
     [[nodiscard]] auto service(const QString &account, [[maybe_unused]] backend::Network network,
-                               backend::ServiceKind kind) -> backend::IService * override {
+                               backend::ServiceKind kind,
+                               const std::optional<backend::AccountWatch> &watch)
+        -> backend::IService * override {
         if (!supplies(kind)) {
             return nullptr;
+        }
+        if (watch.has_value()) {
+            recordWatch(*watch);
         }
         backend::IService *service = nullptr;
         switch (kind) {
@@ -304,7 +364,7 @@ public:
             service = new FixtureAccount(account, this);
             break;
         case backend::ServiceKind::Blockchain:
-            service = new FixtureBlockchain(this);
+            service = new FixtureBlockchain(watch, this);
             break;
         case backend::ServiceKind::Transaction:
             service = new FixtureTransaction(this);
@@ -330,8 +390,24 @@ public:
 #endif
     }
 
+protected:
+    // "watches" counts the services asked with a watch; an unset birthday is an invalid
+    // property.
+    void recordWatch(const backend::AccountWatch &watch) {
+        setProperty("watches", ++m_watches);
+        setProperty("watchDescriptors", watch.descriptors);
+        setProperty("watchBirthdayHeight", watch.birthdayHeight.has_value()
+                                               ? QVariant::fromValue(*watch.birthdayHeight)
+                                               : QVariant());
+        setProperty("watchBirthdayTime", watch.birthdayTime.has_value()
+                                             ? QVariant::fromValue(*watch.birthdayTime)
+                                             : QVariant());
+        setProperty("watchGapLimit", watch.gapLimit);
+    }
+
 private:
     int m_outstanding = 0;
+    int m_watches = 0;
 };
 
 class Q_DECL_HIDDEN FixturePlugin final : public QObject, public IPlugin {

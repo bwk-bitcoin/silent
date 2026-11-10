@@ -11,6 +11,7 @@
 #include <QStringList>
 #include <QThread>
 #include <memory>
+#include <optional>
 #include <silent.h>
 #include <string>
 
@@ -36,9 +37,12 @@ public:
     [[nodiscard]] auto accountUnavailable(const QString &id) const -> bool;
     // Follows the open account `id`: its lifecycle, and the context its services read.
     void watchAccount(const QString &id, AccountLifecycle *lifecycle, ServiceContext *services);
-    // A service of the open, loaded account `account` on `network`, null otherwise.
+    // A service of the open, loaded account `account` on `network`, null otherwise. A
+    // built-in account watches its own scripts: `watch` is not used.
     [[nodiscard]] auto service(const QString &account, backend::Network network,
-                               backend::ServiceKind kind) -> backend::IService * override;
+                               backend::ServiceKind kind,
+                               const std::optional<backend::AccountWatch> &watch)
+        -> backend::IService * override;
     void releaseService(backend::IService *service) override;
 
 signals:

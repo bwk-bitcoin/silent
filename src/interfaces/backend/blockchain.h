@@ -29,6 +29,14 @@ public:
     [[nodiscard]] virtual auto transactionDetails(const QString &txid) const
         -> std::optional<TransactionDetails> = 0;
 
+    // Every output paying the AccountWatch descriptors the service was given, spent ones
+    // included. Empty without a watch. Changes with coinsChanged().
+    [[nodiscard]] virtual auto ownedOutputs() const -> QList<OwnedOutput> = 0;
+
+    // How far each branch of those descriptors is used, one entry per branch. Empty without
+    // a watch. Changes with coinsChanged().
+    [[nodiscard]] virtual auto usedIndexes() const -> QList<UsedIndex> = 0;
+
 public slots:
     virtual void start(backend::RequestId request_id) = 0;
     virtual void stop(backend::RequestId request_id) = 0;
@@ -44,6 +52,11 @@ public slots:
 
     virtual void broadcast(backend::RequestId request_id, QByteArray transaction) = 0;
 
+    // Watches the branch `keychain` of the descriptor at `descriptor` in AccountWatch up to
+    // derivation index `index`, past the gap limit if needed. Acknowledged by completed().
+    virtual void reveal(backend::RequestId request_id, quint32 descriptor, quint32 keychain,
+                        quint32 index) = 0;
+
 signals:
     void stateChanged();
     void coinsChanged();
@@ -51,7 +64,7 @@ signals:
     void historyChanged();
     void transactionDetailsChanged(QString txid);
 
-    // Acknowledges start, stop, rescan, connection or tip requests.
+    // Acknowledges start, stop, rescan, connection, tip or reveal requests.
     // Current state is read through state().
     void completed(backend::RequestId request_id);
 

@@ -52,6 +52,53 @@ struct Coin {
     bool spendable{};
 };
 
+// What a blockchain service watches for a descriptor-based account.
+struct AccountWatch {
+    // The account's public BIP-380 descriptors, each with its checksum. A multipath one
+    // (`<0;1>/*`) stands for each of its branches.
+    QStringList descriptors;
+    // Height of the first block that can pay the account: scanning starts there. Unset when
+    // unknown.
+    std::optional<quint64> birthdayHeight;
+    // Unix time, in seconds, the account was created at. Unset when unknown.
+    std::optional<qint64> birthdayTime;
+    // Unused indexes watched past the last used one of each branch.
+    quint32 gapLimit{20};
+};
+
+// One output paying a script of the watched descriptors, spent or not.
+struct OwnedOutput {
+    // Canonical txid:vout identifier.
+    QString outpoint;
+    // In satoshis.
+    quint64 amount{};
+    // The serialized output script.
+    QByteArray scriptPubKey;
+    // Index in AccountWatch::descriptors of the descriptor deriving the script.
+    quint32 descriptor{};
+    // The multipath branch of that descriptor (0 receive, 1 change for `<0;1>/*`), 0 for a
+    // single-path one.
+    quint32 keychain{};
+    // The derivation index of the script in that branch.
+    quint32 index{};
+    // Height of the block confirming the output, unset while unconfirmed.
+    std::optional<quint64> height;
+    // The output is from a coinbase transaction.
+    bool coinbase{};
+    // The txid of the transaction spending the output, empty while it is unspent.
+    QString spentBy;
+};
+
+// How far one branch of a watched descriptor is used.
+struct UsedIndex {
+    // Index in AccountWatch::descriptors.
+    quint32 descriptor{};
+    // The multipath branch, as OwnedOutput::keychain.
+    quint32 keychain{};
+    // The highest derivation index whose script has a transaction, unset when none has.
+    std::optional<quint32> last;
+};
+
 struct Balance {
     quint64 confirmed{};
     quint64 unconfirmed{};

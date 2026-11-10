@@ -179,6 +179,14 @@ auto FakeBlockchain::transactionDetails(const QString &txid) const
     return found.value();
 }
 
+auto FakeBlockchain::ownedOutputs() const -> QList<backend::OwnedOutput> {
+    return model.ownedOutputs;
+}
+
+auto FakeBlockchain::usedIndexes() const -> QList<backend::UsedIndex> {
+    return model.usedIndexes;
+}
+
 void FakeBlockchain::setState(const backend::BlockchainState &state) {
     model.state = state;
     emit stateChanged();
@@ -281,6 +289,14 @@ void FakeBlockchain::fetchTransactionDetails(backend::RequestId request_id, QStr
 void FakeBlockchain::broadcast(backend::RequestId request_id, QByteArray transaction) {
     request({.id = request_id, .kind = QStringLiteral("broadcast"), .payload = transaction},
             [this, request_id] { emit broadcastFinished(request_id, model.broadcast); });
+}
+
+void FakeBlockchain::reveal(backend::RequestId request_id, quint32 descriptor, quint32 keychain,
+                            quint32 index) {
+    request({.id = request_id,
+             .kind = QStringLiteral("reveal"),
+             .payload = QVariant::fromValue(QList<quint32>{descriptor, keychain, index})},
+            [this, request_id] { emit completed(request_id); });
 }
 
 // ===== FakeTransaction =====

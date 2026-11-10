@@ -1233,7 +1233,7 @@ apart from the public `IAccount` other accounts use, which they leave unchanged:
 | `types.h`       | Payload structs, `backend::Network`, `backend::RequestId`           |                                           |
 | `service.h`     | `IService`: byte (`raw`) and Qt JSON (`value`) extensions, `error()` | none, base class only                     |
 | `account.h`     | `IAccountBackend`: identity, receiving, backup and restore          | `dev.silent.backend.IAccountBackend/1.0`  |
-| `blockchain.h`  | `IBlockchain`: scanning, coins, history, broadcast                  | `dev.silent.backend.IBlockchain/1.0`      |
+| `blockchain.h`  | `IBlockchain`: scanning, coins, owned outputs, history, broadcast   | `dev.silent.backend.IBlockchain/1.0`      |
 | `transaction.h` | `ITransaction`: crafting, unsigned PSBTs, coin selection            | `dev.silent.backend.ITransaction/1.0`     |
 | `labels.h`      | `ILabels`                                                           | `dev.silent.backend.ILabels/1.0`          |
 | `settings.h`    | `IBackendSettings`: network and endpoints                           | `dev.silent.backend.IBackendSettings/1.0` |
@@ -1262,12 +1262,13 @@ class ChainModule final : public IModule, public backend::IServiceProvider {
     Q_INTERFACES(backend::IServiceProvider)
 
 public:
-    auto service(const QString &account, backend::Network network, backend::ServiceKind kind)
+    auto service(const QString &account, backend::Network network, backend::ServiceKind kind,
+                 const std::optional<backend::AccountWatch> &watch)
         -> backend::IService * override {
         if (kind != backend::ServiceKind::Blockchain) {
             return nullptr; // this module supplies the blockchain only
         }
-        return new ChainBlockchain(account, network, this);
+        return new ChainBlockchain(account, network, watch, this);
     }
 
     void releaseService(backend::IService *service) override {
@@ -1281,13 +1282,15 @@ class ChainBlockchain final : public backend::IBlockchain {
     Q_INTERFACES(backend::IBlockchain)
 
 public:
-    ChainBlockchain(QString account, backend::Network network, QObject *parent);
+    ChainBlockchain(QString account, backend::Network network,
+                    std::optional<backend::AccountWatch> watch, QObject *parent);
 
     // Getters copy local state: no I/O, no lock held for long.
     auto history() const -> QList<backend::Transaction> override {
         return m_history;
     }
-    // state(), coins(), balance(), transactionDetails() alike; empty data is a valid answer.
+    // state(), coins(), balance(), transactionDetails(), ownedOutputs(), usedIndexes()
+    // alike; empty data is a valid answer.
 
     // A request answers once, possibly during the call.
     void refreshTip(backend::RequestId request_id, QString connection_id) override {
@@ -1309,7 +1312,8 @@ public:
     }
     // raw() alike with bytes; rawEvent() and valueEvent() publish unrequested updates.
 
-    // start(), stop(), setConnected(), fetchTransactionDetails(), broadcast() as above.
+    // start(), stop(), setConnected(), fetchTransactionDetails(), broadcast(), reveal() as
+    // above.
 };
 ```
 
@@ -1331,6 +1335,16 @@ this way (the host smoke build lays the SDK out under `build-smoke/sdk/include/s
   a network, or null. GUI thread, no I/O. Each non-null answer is handed back exactly once
   through `releaseService()`, which destroys it, at once or later (`deleteLater()`, a timer):
   the plugin is not unloaded while a service it was handed back still lives.
+- `watch` is set only for the Blockchain kind of a descriptor-based account: a
+  `backend::AccountWatch` holding the account's public BIP-380 descriptors (checksummed, a
+  multipath `<0;1>/*` one standing for each of its branches), its birthday height and time
+  when known, and the gap limit (20 unless the account says otherwise). The blockchain then
+  reports what it found for them: `ownedOutputs()`, every output paying one of the scripts,
+  spent ones included, with its descriptor (an index into `descriptors`), branch, derivation
+  index, height, coinbase flag and spending txid; `usedIndexes()`, the last used derivation
+  index of each branch. Both change with `coinsChanged()`. `reveal()` watches a branch up to
+  an index past the gap limit, acknowledged by `completed()`. Without a watch both getters
+  answer empty lists.
 - Each service class declares `Q_INTERFACES` for its interface. The host checks the kind and
   its IID version with `qobject_cast`, so a service built against another version is refused.
 - The facet is optional. `IPlugin`, `IModule`, `IInstance` and the root plugin IID are
@@ -1345,7 +1359,8 @@ request names the account, its network and, for each of the five services, its s
 provider module, or `host::Unsupported`, the host's explicit implementation whose getters
 answer empty data (the account id and network for identity) and whose requests answer
 `error()`. Sources are independent: the account from its own module, the blockchain from
-another plugin, the settings from a built-in module.
+another plugin, the settings from a built-in module. The request's optional `watch` is
+handed to the blockchain provider only; every other provider is asked with none.
 
 Assembly is all or nothing. It is refused, handing back every service already obtained, when a
 source is not an active module or is stopping, does not implement the facet, supplies no
@@ -1373,7 +1388,9 @@ of a retired assembly keep running.
 (`tests/host/ServiceProviderPlugin.cpp`, whose include path holds the SDK layout and the
 guard headers that fail on generated Rust/CXX includes, nothing else of `src/`). It checks
 one-provider and split-provider assembly, attribution, the byte and JSON results and events
-of a plugin, the unsupported implementation, refusals and retention through a plugin stop,
+of a plugin, the account watch reaching the blockchain provider intact and no other one, the
+owned outputs and used indexes it reports and a reveal it acknowledges or refuses, the
+unsupported implementation, refusals and retention through a plugin stop,
 a service its provider deletes a while after its release included, and the payloads a
 plugin handed out read once its library is unmapped. The account shell runs over one plugin
 supplying all five services and over two, its History and Settings showing the data of the
@@ -1428,7 +1445,9 @@ account's `account::ServiceContext`, which the account controller owns:
 - `backup()` seals the account's backup under the password and `inspectBackup()` reads one,
   both on a worker (see Backup and restore below). `restore()` on an open account answers
   `error()`: a restore makes a new account, through the module's restore target.
-- `rescan()` and every `raw()` operation answer `error()` for now. The
+- `rescan()`, `reveal()` and every `raw()` operation answer `error()` for now. A built-in
+  account scans its own scripts: it is given no watch and `ownedOutputs()` and
+  `usedIndexes()` answer empty lists. The
   `value()` operations below are the only ones the built-in services answer; each is listed
   in `src/account/Extensions.h`:
 
